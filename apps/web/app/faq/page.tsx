@@ -43,8 +43,20 @@ const faqItems = [
   {
     question: "What if a score was entered wrong?",
     answer: "Report the issue to the organizer or use the data-correction page. Corrections are reviewed by staff; the public site does not directly mutate rating data."
+  },
+  {
+    question: "How should I use my JUPR rating?",
+    answer: "Use it to choose leveled sessions, seed ladders and tournaments fairly, follow progress, and create competitive matches. It reflects recorded club performance, not a guarantee of any single result."
+  },
+  {
+    question: "Why can JUPR differ from DUPR or my bracket level?",
+    answer: "JUPR uses the official matches recorded in this club system. Other ratings and brackets use different data, eligibility rules, scales, and update policies."
   }
 ];
+
+function anchorFor(question: string): string {
+  return question.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
 
 export default function FaqPage() {
   return (
@@ -56,10 +68,11 @@ export default function FaqPage() {
       <p style={{ color: "#334155", maxWidth: "760px" }}>
         Answers about ratings, recorded play, player movement, and how to request a correction.
       </p>
+      <p><Link href="/how-ratings-work">Read the canonical Rating Rules</Link></p>
 
       <div style={{ display: "grid", gap: "1rem" }}>
         {faqItems.map((item) => (
-          <article key={item.question} style={cardStyle}>
+          <article id={anchorFor(item.question)} key={item.question} style={cardStyle}>
             <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>{item.question}</h2>
             <p style={{ color: "#475569", marginBottom: 0 }}>{item.answer}</p>
           </article>

@@ -64,6 +64,34 @@ export type PublicRegistrationPlayer = {
   singles_skill?: number | null;
 };
 
+export type PublicRegistrationProfileResolutionPayload = {
+  tournament_id?: string | null;
+  registration_slug?: string | null;
+  first_name: string;
+  last_name: string;
+  email: string;
+  age: number;
+  gender: string;
+  website?: string | null;
+};
+
+export type PublicRegistrationProfileResolutionResponse = {
+  club: { id: string; slug: string; name: string };
+  ok: boolean;
+  status: "ready" | "existing_registration" | "closed";
+  can_start_new: boolean;
+  registration_open: boolean;
+  registration_closed_reason?: string | null;
+  masked_email: string;
+  profile_match_kind: "email_exact" | "name_exact" | "none";
+  profile_candidates: PublicRegistrationPlayer[];
+  profile_policy: {
+    linkage: "staff_review_required";
+    public_submission_links_player: false;
+  };
+  message: string;
+};
+
 export type TournamentRegistrationResponse = {
   club: { id: string; slug: string; name: string };
   available: boolean;
@@ -85,44 +113,30 @@ export type TournamentRegistrationResponse = {
 };
 
 export type PublicTournamentRosterMember = {
-  registration_id?: string | null;
-  selection_id?: string | null;
-  player_id?: string | number | null;
   display_name: string;
   skill?: string | number | null;
-  age?: number | null;
   age_bracket?: string | null;
-  dupr_id?: string | null;
 };
 
 export type PublicTournamentRosterEntry = {
-  event_day_id?: string | null;
+  public_entry_key?: string | null;
   event_day_label?: string | null;
   event_family: string;
   division: string;
   event_label: string;
   status?: string | null;
   entry_type?: string | null;
-  partner_request_id?: string | null;
-  partner_link_id?: string | null;
-  source_registration_ids?: string[];
-  source_selection_ids?: string[];
-  source_player_ids?: Array<string | number>;
   members: PublicTournamentRosterMember[];
 };
 
 export type PublicTournamentNeedsPartnerEntry = {
   player_name?: string | null;
-  selection_id?: string | null;
-  registration_id?: string | null;
-  player_id?: string | number | null;
-  event_option_id?: string | null;
+  board_entry_key?: string | null;
   event_day_label?: string | null;
   event_family?: string | null;
   division?: string | null;
   event_label?: string | null;
   skill?: string | number | null;
-  age?: number | null;
   age_bracket?: string | null;
   note?: string | null;
 };
@@ -133,10 +147,12 @@ export type PublicTournamentRosterState = {
   pending_partner_requests: PublicTournamentRosterEntry[];
   unresolved_partner_entries: PublicTournamentRosterEntry[];
   players_needing_partners: PublicTournamentNeedsPartnerEntry[];
+  partner_board_entries: PublicTournamentNeedsPartnerEntry[];
   summary: {
     total_registrations?: number | null;
     total_players?: number | null;
     players_needing_partners?: number | null;
+    partner_board_entries?: number | null;
     waitlist?: number | null;
   };
 };
@@ -209,9 +225,13 @@ export type PublicRegistrationEditRegistration = {
   status?: string | null;
   payment_status?: string | null;
   submitted_at?: string | null;
+  updated_at: string;
 };
 
-export type PublicRegistrationEditSelection = PublicRegistrationSelectionPayload & { id: string };
+export type PublicRegistrationEditSelection = PublicRegistrationSelectionPayload & {
+  id: string;
+  updated_at: string;
+};
 
 export type PublicRegistrationEditResponse = TournamentRegistrationResponse & {
   edit_mode: boolean;
@@ -222,9 +242,12 @@ export type PublicRegistrationEditResponse = TournamentRegistrationResponse & {
   total_price_usd: number;
 };
 
-export type PublicRegistrationEditSubmitPayload = Omit<PublicRegistrationSubmitPayload, "email"> & {
+export type PublicRegistrationEditSubmitPayload = Omit<PublicRegistrationSubmitPayload, "email" | "selections"> & {
   edit_token: string;
   email?: string | null;
+  expected_updated_at: string;
+  expected_selection_versions: Array<{ id: string; updated_at: string }>;
+  selections: Array<PublicRegistrationSelectionPayload & { id?: string | null }>;
 };
 
 export type PublicRegistrationEditLinkRequestPayload = {
@@ -252,6 +275,17 @@ export type PublicRegistrationSubmitResponse = {
   registration_id: string;
   submitted_at?: string | null;
   selection_count?: number | null;
+  updated_at?: string | null;
+  confirmation_delivery?: {
+    status: "sent" | "staging_redirect" | "dry_run" | "failed" | "unknown";
+    delivered: boolean;
+  } | null;
+  confirmation_available?: boolean | null;
+  confirmation_token?: string | null;
+  email_delivery?: {
+    status?: "dry_run" | "staging_redirect" | "sent" | "failed" | string | null;
+    message?: string | null;
+  } | null;
 };
 
 export type PublicRegistrationConfirmationResponse = {
@@ -259,26 +293,33 @@ export type PublicRegistrationConfirmationResponse = {
   tournament: PublicTournamentSummary;
   settings?: PublicTournamentSettings | null;
   registration: {
-    id: string;
     display_name: string;
-    email: string;
     status?: string | null;
     payment_status?: string | null;
     submitted_at?: string | null;
   };
   selections: Array<{
-    selection_id: string;
     event_label: string;
     event_family_label: string;
     day_label: string;
+    event_date?: string | null;
+    skill_label?: string | null;
+    age_label?: string | null;
+    price_usd?: number | null;
     partner_mode?: string | null;
     partner_name?: string | null;
     show_on_partner_board?: boolean | null;
   }>;
   total_price_usd: number;
+  payment_note: string;
+  confirmation_expires_at?: string | null;
+  notification_sender?: {
+    from_name?: string | null;
+    from_email?: string | null;
+  } | null;
 };
 
-type ApiResult<T> = { data: T | null; error: string | null };
+type ApiResult<T> = { data: T | null; error: string | null; status?: number | null };
 
 function baseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
@@ -306,14 +347,14 @@ async function apiErrorMessage(response: Response): Promise<string> {
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
   const apiBase = baseUrl();
-  if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
+  if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable.", status: null };
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
     const response = await fetch(url, init ?? { next: { revalidate: 60 } });
-    if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
-    return { data: (await response.json()) as T, error: null };
+    if (!response.ok) return { data: null, error: await apiErrorMessage(response), status: response.status };
+    return { data: (await response.json()) as T, error: null, status: response.status };
   } catch (error) {
-    return { data: null, error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}` };
+    return { data: null, error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}`, status: null };
   }
 }
 
@@ -328,6 +369,20 @@ export async function getClubTournamentRegistration(
   return fetchJson<TournamentRegistrationResponse>(`/clubs/${clubSlug}/tournament-registration${suffix}`);
 }
 
+export async function resolveClubTournamentRegistrationProfile(
+  clubSlug: string,
+  payload: PublicRegistrationProfileResolutionPayload
+): Promise<ApiResult<PublicRegistrationProfileResolutionResponse>> {
+  return fetchJson<PublicRegistrationProfileResolutionResponse>(
+    `/clubs/${clubSlug}/tournament-registration/profile-resolution`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
 export async function getClubTournamentRegistrationEdit(
   clubSlug: string,
   params: { editToken: string; tournamentId?: string | null; registrationSlug?: string | null }
@@ -335,7 +390,9 @@ export async function getClubTournamentRegistrationEdit(
   const query = new URLSearchParams({ edit_token: params.editToken });
   if (params?.tournamentId) query.set("tournament_id", params.tournamentId);
   if (params?.registrationSlug) query.set("registration_slug", params.registrationSlug);
-  return fetchJson<PublicRegistrationEditResponse>(`/clubs/${clubSlug}/tournament-registration/edit?${query.toString()}`);
+  return fetchJson<PublicRegistrationEditResponse>(`/clubs/${clubSlug}/tournament-registration/edit?${query.toString()}`, {
+    cache: "no-store"
+  });
 }
 
 export async function requestClubTournamentRegistrationEditLink(
@@ -384,14 +441,10 @@ export async function submitClubTournamentRegistrationEdit(
 
 export async function getClubTournamentRegistrationConfirmation(
   clubSlug: string,
-  registrationId: string,
-  params?: { tournamentId?: string | null; registrationSlug?: string | null }
+  confirmationToken: string
 ): Promise<ApiResult<PublicRegistrationConfirmationResponse>> {
-  const query = new URLSearchParams();
-  if (params?.tournamentId) query.set("tournament_id", params.tournamentId);
-  if (params?.registrationSlug) query.set("registration_slug", params.registrationSlug);
-  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const query = new URLSearchParams({ confirmation_token: confirmationToken });
   return fetchJson<PublicRegistrationConfirmationResponse>(
-    `/clubs/${clubSlug}/tournament-registration/confirmations/${encodeURIComponent(registrationId)}${suffix}`
+    `/clubs/${clubSlug}/tournament-registration/confirmation?${query.toString()}`
   );
 }

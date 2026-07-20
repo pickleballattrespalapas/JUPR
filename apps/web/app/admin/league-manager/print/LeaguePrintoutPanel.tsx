@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { AdminLeagueManagerDetailResponse, AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
+import type { AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse, AdminLeaguePrintoutResponse } from "@/lib/adminLeagueManagerApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };
@@ -19,11 +19,18 @@ function ratingLabel(value?: number | null): string {
   return Number(value).toFixed(3);
 }
 
+function signedRatingDelta(value?: number | null): string {
+  if (value == null) return "—";
+  const numeric = Number(value);
+  return `${numeric >= 0 ? "+" : ""}${numeric.toFixed(3)}`;
+}
+
 export default function LeaguePrintoutPanel({ apiBase, clubId, status }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [leagues, setLeagues] = useState<string[]>([]);
   const [leagueName, setLeagueName] = useState("");
-  const [detail, setDetail] = useState<AdminLeagueManagerDetailResponse | null>(null);
+  const [printout, setPrintout] = useState<AdminLeaguePrintoutResponse | null>(null);
+  const [weekNum, setWeekNum] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -60,9 +67,11 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status }: Props) 
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}`);
-      setDetail(payload);
-      setMessage("Printout loaded.");
+      const weekQuery = weekNum ? `?week_num=${encodeURIComponent(weekNum)}` : "";
+      const payload = await requestJson<AdminLeaguePrintoutResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}/printout${weekQuery}`);
+      setPrintout(payload);
+      setWeekNum(payload.selected_week == null ? "" : String(payload.selected_week));
+      setMessage(`Printout loaded${payload.selected_week ? ` for Week ${payload.selected_week}` : ""}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load league printout.");
     } finally {
@@ -81,7 +90,7 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status }: Props) 
 
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
-      <style>{`@media print { nav, header, footer, .no-print { display: none !important; } body { background: white !important; } article { break-inside: avoid; } table { font-size: 12px; } }`}</style>
+      <style>{`@media print { nav, header, footer, .no-print { display: none !important; } body { background: white !important; } [data-print-surface] { display: block !important; } .print-section { break-inside: avoid; page-break-inside: avoid; } .print-break-before { break-before: page; page-break-before: always; } table { font-size: 11px; } thead { display: table-header-group; } tr { break-inside: avoid; page-break-inside: avoid; } @page { size: auto; margin: 10mm; } }`}</style>
       <article className="no-print" style={{ ...cardStyle, background: "#f8fafc" }}>
         <h2 style={{ marginTop: 0 }}>Admin session</h2>
         <p style={{ color: "#475569" }}>{adminSessionLabel(session)}</p>
@@ -92,42 +101,57 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status }: Props) 
       <article className="no-print" style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Load printout</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>League<br /><select value={leagueName} onChange={(event) => setLeagueName(event.target.value)} style={inputStyle}>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+          <label>League<br /><select value={leagueName} onChange={(event) => { setLeagueName(event.target.value); setPrintout(null); setWeekNum(""); }} style={inputStyle}>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+          <label>Scored week<br /><select value={weekNum} onChange={(event) => setWeekNum(event.target.value)} disabled={!printout?.available_weeks.length} style={inputStyle}><option value="">Latest scored week</option>{(printout?.available_weeks || []).map((week) => <option key={week} value={String(week)}>Week {week}</option>)}</select></label>
           <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Loading…" : "Load leagues"}</button>
           <button type="button" onClick={loadDetail} disabled={busy || !leagueName} style={buttonStyle}>{busy ? "Loading…" : "Load selected"}</button>
-          <button type="button" onClick={() => window.print()} disabled={!detail} style={buttonStyle}>Print</button>
+          <button type="button" onClick={() => window.print()} disabled={!printout} style={buttonStyle}>Print or save PDF</button>
         </div>
         {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
 
-      {detail ? (
-        <section>
-          <h1 style={{ marginBottom: "0.25rem" }}>{detail.league.league_name} league night printout</h1>
-          <p style={{ color: "#475569" }}>Status: {detail.league.status} · K-factor: {detail.league.k_factor ?? "—"} · Min games: {detail.league.min_games ?? "—"}</p>
+      {printout ? (
+        <section data-print-surface="league-night">
+          <h1 style={{ marginBottom: "0.25rem" }}>{printout.detail.league.league_name} league night printout</h1>
+          <p style={{ color: "#475569" }}>Status: {printout.detail.league.status} · {printout.selected_week ? `Week ${printout.selected_week}` : "No scored week"} · K-factor: {printout.detail.league.k_factor ?? "—"} · Min games: {printout.detail.league.min_games ?? "—"}</p>
+          {printout.warnings.length ? <ul className="no-print" style={{ color: "#92400e" }}>{printout.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
 
-          <article style={cardStyle}>
+          <article className="print-section" style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Schedule</h2>
-            {detail.schedule_preview?.length ? (
+            {printout.detail.schedule_preview?.length ? (
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr><th align="left">Session</th><th align="left">Date</th><th align="left">Start</th><th align="left">End</th></tr></thead>
-                <tbody>{detail.schedule_preview.map((row) => <tr key={`${row.session}-${row.date}`}><td>{row.session}</td><td>{row.date}</td><td>{row.start || "—"}</td><td>{row.end || "—"}</td></tr>)}</tbody>
+                <tbody>{printout.detail.schedule_preview.map((row) => <tr key={`${row.session}-${row.date}`}><td>{row.session}</td><td>{row.date}</td><td>{row.start || "—"}</td><td>{row.end || "—"}</td></tr>)}</tbody>
               </table>
             ) : <p style={{ color: "#64748b" }}>No schedule preview configured.</p>}
           </article>
 
-          <article style={{ ...cardStyle, marginTop: "1rem" }}>
+          <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
+            <h2 style={{ marginTop: 0 }}>Weekly leaders</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
+              <div><h3>Highest rating gained</h3>{printout.weekly_rating_leaders.length ? <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Player</th><th align="right">Δ JUPR</th><th align="right">Games</th></tr></thead><tbody>{printout.weekly_rating_leaders.map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{signedRatingDelta(row.rating_delta_jupr)}</td><td align="right">{row.games}</td></tr>)}</tbody></table> : <p>No rating leaders for this week.</p>}</div>
+              <div><h3>Most wins</h3>{printout.weekly_win_leaders.length ? <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Player</th><th align="right">Wins</th><th align="right">Games</th></tr></thead><tbody>{printout.weekly_win_leaders.map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{row.wins}</td><td align="right">{row.games}</td></tr>)}</tbody></table> : <p>No win leaders for this week.</p>}</div>
+            </div>
+          </article>
+
+          <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
+            <h2 style={{ marginTop: 0 }}>Season leaders (Top Performers)</h2>
+            {printout.season_top_performers.length ? <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Category</th><th align="right">Place</th><th align="left">Player</th><th align="right">Metric</th><th align="right">Min games</th></tr></thead><tbody>{printout.season_top_performers.map((row) => <tr key={`${row.category_key}-${row.rank}-${row.player_id}`}><td>{row.category_label}</td><td align="right">{row.rank}</td><td>{row.player_name}</td><td align="right">{row.metric_display}</td><td align="right">{row.min_games}</td></tr>)}</tbody></table> : <p>No configured Top Performer winners are eligible yet.</p>}
+          </article>
+
+          <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
             <h2 style={{ marginTop: 0 }}>Standings</h2>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr><th align="left">Rank</th><th align="left">Player</th><th align="right">JUPR</th><th align="right">Record</th><th align="right">Matches</th></tr></thead>
-              <tbody>{detail.standings.map((row) => <tr key={row.player_id}><td>{row.rank}</td><td>{row.player_name}</td><td align="right">{ratingLabel(row.rating_jupr)}</td><td align="right">{row.wins ?? 0}-{row.losses ?? 0}</td><td align="right">{row.matches_played ?? 0}</td></tr>)}</tbody>
+              <tbody>{printout.detail.standings.map((row) => <tr key={row.player_id}><td>{row.rank}</td><td>{row.player_name}</td><td align="right">{ratingLabel(row.rating_jupr)}</td><td align="right">{row.wins ?? 0}-{row.losses ?? 0}</td><td align="right">{row.matches_played ?? 0}</td></tr>)}</tbody>
             </table>
           </article>
 
-          <article style={{ ...cardStyle, marginTop: "1rem" }}>
+          <article className="print-section print-break-before" style={{ ...cardStyle, marginTop: "1rem" }}>
             <h2 style={{ marginTop: 0 }}>Roster checklist</h2>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr><th align="left">Player</th><th align="right">JUPR</th><th align="right">Record</th><th align="left">Present</th><th align="left">Notes</th></tr></thead>
-              <tbody>{(detail.roster || []).filter((row) => row.in_league).map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{ratingLabel(row.rating_jupr)}</td><td align="right">{row.wins ?? 0}-{row.losses ?? 0}</td><td>□</td><td>________________</td></tr>)}</tbody>
+              <tbody>{(printout.detail.roster || []).filter((row) => row.in_league).map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{ratingLabel(row.rating_jupr)}</td><td align="right">{row.wins ?? 0}-{row.losses ?? 0}</td><td>□</td><td>________________</td></tr>)}</tbody>
             </table>
           </article>
         </section>

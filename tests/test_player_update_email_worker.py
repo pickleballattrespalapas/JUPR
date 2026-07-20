@@ -6,7 +6,7 @@ from jupr_app.workers.player_update_email_worker import main, run_player_update_
 def test_run_player_update_email_worker_passes_club_and_limit(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role")
-    monkeypatch.setenv("JUPR_PUBLIC_BASE_URL", "https://jupr.example.com")
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://jupr.example.com")
 
     captured = {}
 
@@ -61,6 +61,8 @@ def test_run_player_update_email_worker_passes_club_and_limit(monkeypatch):
         "sent": 5,
         "skipped": 2,
         "errors": 1,
+        "stale": 0,
+        "uncertain": 0,
         "email_mode": "dry_run",
     }
 

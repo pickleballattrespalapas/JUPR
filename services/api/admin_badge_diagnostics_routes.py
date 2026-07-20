@@ -5,18 +5,20 @@ from typing import Any
 from fastapi import HTTPException, Query
 from pydantic import BaseModel
 
-from jupr_app.domain.admin.roles import PERMISSION_MANAGE_ROLES, PERMISSION_RUN_REPLAY, PERMISSION_VIEW_AUDIT_LOG, has_permission, resolve_admin_role
+from jupr_app.domain.admin.roles import PERMISSION_RUN_REPLAY, PERMISSION_VIEW_AUDIT_LOG, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_badge_diagnostics_service import (
     build_admin_badge_audit,
     build_admin_badge_debug,
     build_admin_badge_diagnostics_status,
+    get_admin_badge_operation,
     is_admin_badge_diagnostics_enabled,
     list_admin_badge_diagnostic_options,
     revoke_admin_player_badge,
     run_admin_badge_recompute,
     update_admin_badge_definition_state,
 )
+from jupr_app.services.admin_guarded_write_service import GuardedWriteRecoveryRequired
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -32,6 +34,7 @@ class BadgeRecomputeRequest(BaseModel):
     match_limit: int = 5000
     revoke_reason: str | None = None
     confirmation_text: str = ""
+    operation_key: str = ""
     source: str = "next_badge_recompute"
 
 
@@ -42,6 +45,7 @@ class BadgeRevokeRequest(BaseModel):
     context_id: str | None = None
     revoke_reason: str | None = None
     confirmation_text: str = ""
+    operation_key: str = ""
     source: str = "next_badge_revoke"
 
 
@@ -51,6 +55,7 @@ class BadgeDefinitionStateRequest(BaseModel):
     reason: str
     force: bool = False
     confirmation_text: str = ""
+    operation_key: str = ""
     source: str = "next_badge_definition_state"
 
 
@@ -89,6 +94,11 @@ def _resolve_badge_diagnostics_role_or_403(
 
 
 def _handle_common(exc: Exception) -> None:
+    if isinstance(exc, GuardedWriteRecoveryRequired):
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(exc), "operation_key": exc.operation_key, "recovery_required": True},
+        ) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, ValueError):
@@ -160,7 +170,7 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
             club_id=str(club_id),
             authorization=authorization,
             source=payload.source,
-            permission=PERMISSION_MANAGE_ROLES,
+            permission=PERMISSION_RUN_REPLAY,
         )
         try:
             return update_admin_badge_definition_state(
@@ -174,6 +184,7 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
+                operation_key=payload.operation_key,
                 source=payload.source,
             )
         except Exception as exc:
@@ -223,12 +234,17 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
         if not is_admin_badge_diagnostics_enabled():
             raise HTTPException(status_code=403, detail="Next Badge Diagnostics is disabled.")
         supabase = get_supabase_client()
+        required_permission = (
+            PERMISSION_VIEW_AUDIT_LOG
+            if str(payload.mode or "dry-run").strip().lower() == "dry-run"
+            else PERMISSION_RUN_REPLAY
+        )
         actor_email, actor_role = _resolve_badge_diagnostics_role_or_403(
             supabase=supabase,
             club_id=str(club_id),
             authorization=authorization,
             source=payload.source,
-            permission=PERMISSION_RUN_REPLAY,
+            permission=required_permission,
         )
         try:
             return run_admin_badge_recompute(
@@ -238,6 +254,7 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
+                operation_key=payload.operation_key,
                 league_id=payload.league_id,
                 player_id=payload.player_id,
                 badge_id=payload.badge_id,
@@ -275,12 +292,38 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
+                operation_key=payload.operation_key,
                 player_badge_id=payload.player_badge_id,
                 player_id=payload.player_id,
                 badge_id=payload.badge_id,
                 context_id=payload.context_id,
                 revoke_reason=payload.revoke_reason,
                 source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.get("/admin/clubs/{club_id}/badges/operations/{operation_key}")
+    def get_admin_badge_operation_status(
+        club_id: str,
+        operation_key: str,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_badge_diagnostics_enabled():
+            raise HTTPException(status_code=403, detail="Next Badge Diagnostics is disabled.")
+        supabase = get_supabase_client()
+        _resolve_badge_diagnostics_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_badge_operation_status",
+            permission=PERMISSION_VIEW_AUDIT_LOG,
+        )
+        try:
+            return get_admin_badge_operation(
+                supabase,
+                club_id=str(club_id),
+                operation_key=str(operation_key),
             )
         except Exception as exc:
             _handle_common(exc)

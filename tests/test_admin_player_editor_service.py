@@ -119,11 +119,14 @@ def test_player_editor_status_disabled_is_db_free(monkeypatch) -> None:
 
 def test_player_editor_status_enabled_counts_players(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
 
     payload = build_admin_player_editor_status(FakeSupabase(fake_storage()), club_id="club")
 
     assert payload["enabled"] is True
-    assert payload["status"] == "ready_for_player_create_update_foundation"
+    assert payload["status"] == "ready_for_transactional_player_editor_pilot"
+    assert payload["transactional_merge_ready"] is True
+    assert payload["player_merge_endpoint"] == "/admin/clubs/{club_id}/players/editor/merge"
     assert payload["player_count"] == 2
 
 

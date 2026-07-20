@@ -195,7 +195,7 @@ def _maybe_cleanup_expired_live_sessions(ctx, config: LivePageConfig) -> None:
     if st.session_state.get(cleanup_key):
         return
     try:
-        abandon_expired_live_sessions(ctx.supabase)
+        abandon_expired_live_sessions(ctx.supabase, club_id=str(ctx.club_id))
     except Exception:
         pass
     st.session_state[cleanup_key] = True

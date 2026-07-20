@@ -71,5 +71,5 @@ def test_public_live_sessions_filters_abandoned_and_expired_rows():
     assert not is_public_live_session_row(abandoned, now=now)
     assert not is_public_live_session_row(expired, now=now)
 
-    summaries = public_live_sessions_from_rows([active, abandoned, expired], limit=10)
+    summaries = public_live_sessions_from_rows([active, abandoned, expired], limit=10, now=now)
     assert [row["session_key"] for row in summaries] == ["active"]

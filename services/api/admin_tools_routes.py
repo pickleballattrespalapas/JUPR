@@ -25,11 +25,14 @@ from jupr_app.services.admin_tools_service import (
     build_admin_tools_status,
     build_admin_tournament_match_backfill_preview,
     build_admin_worker_status,
+    get_admin_tools_operation,
     is_admin_tools_enabled,
+    recover_admin_tournament_match_backfill,
     run_admin_badge_queue_worker,
     run_admin_badge_recompute_job,
     update_admin_role_assignment,
 )
+from jupr_app.services.admin_guarded_write_service import GuardedWriteRecoveryRequired
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -39,6 +42,7 @@ class AdminRoleAssignmentRequest(BaseModel):
     user_id: str | None = None
     action: str = "upsert"
     confirmation_text: str = ""
+    operation_key: str = ""
     source: str = "next_admin_tools_roles"
 
 
@@ -47,6 +51,7 @@ class AdminBadgeQueueRequest(BaseModel):
     max_jobs: int = 10
     time_budget_seconds: float = 5.0
     confirmation_text: str = ""
+    operation_key: str = ""
     source: str = "next_admin_tools_workers"
 
 
@@ -62,6 +67,7 @@ class AdminBadgeRecomputeRequest(BaseModel):
     allow_strict_global: bool = False
     match_limit: int = 5000
     confirmation_text: str = ""
+    operation_key: str = ""
     source: str = "next_admin_tools_badge_recompute"
 
 
@@ -70,6 +76,7 @@ class AdminTournamentMatchBackfillApplyRequest(BaseModel):
     preview_fingerprint: str = ""
     preview_limit: int = Field(default=500, ge=1, le=1000)
     confirmation_text: str = ""
+    operation_key: str = ""
     source: str = "next_admin_tools_tournament_match_backfill"
 
 
@@ -78,7 +85,13 @@ class AdminSocialSubmissionModerationRequest(BaseModel):
     expected_status: str
     rejection_reason: str = ""
     confirmation_text: str = ""
+    operation_key: str = ""
     source: str = "next_admin_tools_social_review"
+
+
+class AdminTournamentMatchBackfillRecoveryRequest(BaseModel):
+    confirmation_text: str = ""
+    source: str = "next_admin_tools_tournament_match_backfill_recovery"
 
 
 def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str, permission: str) -> tuple[str, str]:
@@ -109,6 +122,11 @@ def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | No
 
 
 def _handle(exc: Exception) -> None:
+    if isinstance(exc, GuardedWriteRecoveryRequired):
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(exc), "operation_key": exc.operation_key, "recovery_required": True},
+        ) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, ValueError):
@@ -221,6 +239,7 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
+                operation_key=payload.operation_key,
                 source=payload.source,
             )
         except Exception as exc:
@@ -289,6 +308,7 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
                 preview_fingerprint=payload.preview_fingerprint,
                 preview_limit=payload.preview_limit,
                 confirmation_text=payload.confirmation_text,
+                operation_key=payload.operation_key,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 source=payload.source,
@@ -317,6 +337,7 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
+                operation_key=payload.operation_key,
                 source=payload.source,
             )
         except Exception as exc:
@@ -342,6 +363,7 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
+                operation_key=payload.operation_key,
                 source=payload.source,
             )
         except Exception as exc:
@@ -356,7 +378,12 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
         if not is_admin_tools_enabled():
             raise HTTPException(status_code=403, detail="Next Admin Tools are disabled.")
         supabase = get_supabase_client()
-        actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source, permission=PERMISSION_RUN_REPLAY)
+        required_permission = (
+            PERMISSION_VIEW_AUDIT_LOG
+            if str(payload.mode or "dry-run").strip().lower() == "dry-run"
+            else PERMISSION_RUN_REPLAY
+        )
+        actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source, permission=required_permission)
         try:
             return run_admin_badge_recompute_job(
                 supabase,
@@ -371,6 +398,62 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
                 include_non_live=payload.include_non_live,
                 allow_strict_global=payload.allow_strict_global,
                 match_limit=payload.match_limit,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                operation_key=payload.operation_key,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.get("/admin/clubs/{club_id}/tools/operations/{operation_key}")
+    def get_admin_tools_operation_status(
+        club_id: str,
+        operation_key: str,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tools_enabled():
+            raise HTTPException(status_code=403, detail="Next Admin Tools are disabled.")
+        supabase = get_supabase_client()
+        _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_admin_tools_operation_status",
+            permission=PERMISSION_VIEW_AUDIT_LOG,
+        )
+        try:
+            return get_admin_tools_operation(
+                supabase,
+                club_id=str(club_id),
+                operation_key=str(operation_key),
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tools/backfills/tournament-matches/operations/{operation_key}/recover")
+    def post_admin_tools_tournament_match_backfill_recovery(
+        club_id: str,
+        operation_key: str,
+        payload: AdminTournamentMatchBackfillRecoveryRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tools_enabled():
+            raise HTTPException(status_code=403, detail="Next Admin Tools are disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+            permission=PERMISSION_RUN_REPLAY,
+        )
+        try:
+            return recover_admin_tournament_match_backfill(
+                supabase,
+                club_id=str(club_id),
+                operation_key=str(operation_key),
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,

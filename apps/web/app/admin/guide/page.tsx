@@ -162,6 +162,34 @@ const recoverySequence = [
   "Use Streamlit production/fallback only for the established recovery workflow; do not copy staging-only data into production.",
 ];
 
+type MigratedSafetyContract = {
+  area: string;
+  route: string;
+  action: string;
+  permission: string;
+  phrase: string;
+  stop: string;
+  fallback: string;
+};
+
+const migratedSafetyContracts: MigratedSafetyContract[] = [
+  { area: "Badge Diagnostics", route: "GET /admin/clubs/{club_id}/badges/options|debug|audit", action: "Read options, evaluator trace, or expected-vs-actual audit", permission: "view_audit_log", phrase: "None — read-only", stop: "Any response attempts a domain write or club scope is wrong.", fallback: "Streamlit Badge Debug / Badge Audit" },
+  { area: "Badge Diagnostics", route: "PATCH /admin/clubs/{club_id}/badges/{badge_id}/state", action: "Change one reviewed badge definition state", permission: "run_replay", phrase: "UPDATE BADGE STATE", stop: "Expected state is stale, audit intent fails, or readback differs.", fallback: "Inspect Badge Audit; recover in Streamlit only after state is known." },
+  { area: "Badge Diagnostics", route: "POST /admin/clubs/{club_id}/badges/recompute", action: "Dry-run or apply badge recompute", permission: "view_audit_log (dry-run); run_replay (apply)", phrase: "None for dry-run; RECOMPUTE BADGES for apply", stop: "Dry-run writes anything, scope is broader than reviewed, or operation is incomplete.", fallback: "Streamlit Badge Audit plus Replay History" },
+  { area: "Badge Diagnostics", route: "PATCH /admin/clubs/{club_id}/badges/revoke", action: "Revoke one exact player badge row", permission: "run_replay", phrase: "REVOKE BADGE", stop: "Exact row/version cannot be proved or compensation fails.", fallback: "Inspect guarded operation and Badge Audit before Streamlit recovery." },
+  { area: "Badge Diagnostics", route: "GET /admin/clubs/{club_id}/badges/operations/{operation_key}", action: "Inspect a durable badge write result", permission: "view_audit_log", phrase: "None — read-only", stop: "Status is incomplete or recovery_required; do not retry.", fallback: "Badge Audit / Replay History / Streamlit" },
+  { area: "Match Canonical Audit", route: "GET options; POST /admin/clubs/{club_id}/match-canonical-audit/run", action: "Load players or compare canonical facts", permission: "view_audit_log", phrase: "None — read-only", stop: "Read scope is wrong or canonical facts cannot be loaded.", fallback: "Streamlit Match Canonical Audit" },
+  { area: "Match Canonical Audit", route: "POST /admin/clubs/{club_id}/match-canonical-audit/normalize", action: "Dry-run exact proposals or atomically apply the same proposal set", permission: "view_audit_log (dry-run); manage_matches (apply)", phrase: "None for dry-run; APPLY NORMALIZE for apply", stop: "Fingerprint, exact IDs, expected values, or readback differ.", fallback: "Match Log then Replay History; Streamlit only after reconciliation." },
+  { area: "Match Canonical Audit", route: "GET /admin/clubs/{club_id}/match-canonical-audit/operations/{operation_key}", action: "Inspect canonical normalize completion", permission: "view_audit_log", phrase: "None — read-only", stop: "Status is not completed; do not rerun with a new key.", fallback: "Match Log / Replay History / Streamlit" },
+  { area: "Admin Tools", route: "GET overview|reports/ratings|social-submissions|workers/status|backfills/tournament-matches/preview", action: "Read health, roles/activity, safe CSV, queues, and previews", permission: "view_audit_log", phrase: "None — read-only", stop: "Any read route mutates rows or returns the wrong club.", fallback: "Streamlit Admin Tools" },
+  { area: "Admin Tools", route: "POST /admin/clubs/{club_id}/tools/social-submissions/{event_id}/moderate", action: "Approve or reject one current Club Social submission", permission: "manage_matches", phrase: "APPROVE SOCIAL SUBMISSION or REJECT SOCIAL SUBMISSION", stop: "Expected status is stale or required audit cannot be completed/compensated.", fallback: "Inspect submission/activity, then Streamlit Club Social review." },
+  { area: "Admin Tools", route: "PATCH /admin/clubs/{club_id}/tools/roles", action: "Save or revoke one staff assignment", permission: "manage_roles", phrase: "SAVE ROLE or REVOKE ROLE", stop: "Final super_admin support, version, readback, or audit is uncertain.", fallback: "Preserve the operation key and inspect role/activity state before recovery." },
+  { area: "Admin Tools", route: "POST /admin/clubs/{club_id}/tools/workers/badge-queue", action: "Process or drain the badge evaluation queue", permission: "run_replay", phrase: "PROCESS BADGE QUEUE or DRAIN BADGE QUEUE", stop: "Partial work or completion audit is uncertain.", fallback: "Inspect worker status and Badge Audit; do not blindly retry." },
+  { area: "Admin Tools", route: "POST /admin/clubs/{club_id}/tools/workers/badge-recompute", action: "Dry-run or apply a badge recompute", permission: "view_audit_log (dry-run); run_replay (apply)", phrase: "None for dry-run; RUN BADGE RECOMPUTE for apply", stop: "Dry-run writes anything or applying result is incomplete.", fallback: "Badge Audit / Replay History / Streamlit" },
+  { area: "Admin Tools", route: "POST /admin/clubs/{club_id}/tools/backfills/tournament-matches/apply", action: "Backfill only exact reviewed ready tournament games", permission: "run_replay", phrase: "BACKFILL TOURNAMENT MATCHES", stop: "Preview is stale, duplicate state changes, or inserted IDs/count cannot be proved.", fallback: "Inspect operation, Match Log, and Replay History." },
+  { area: "Admin Tools", route: "GET /tools/operations/{operation_key}; POST .../operations/{operation_key}/recover", action: "Inspect any Tools operation; reconcile an uncertain tournament backfill", permission: "view_audit_log (inspect); run_replay (recover)", phrase: "None to inspect; RECOVER TOURNAMENT BACKFILL to reconcile", stop: "Each selected game does not have exactly one official match.", fallback: "Stop writes; use Match Log / Replay History / Streamlit with the key." },
+];
+
 export default function AdminGuidePage() {
   return (
     <section>
@@ -212,6 +240,15 @@ export default function AdminGuidePage() {
       <article style={{ ...cardStyle, borderColor: "#fecaca", background: "#fef2f2" }}>
         <ul style={{ color: "#991b1b", margin: 0, paddingLeft: "1.25rem" }}>{globalStopConditions.map((condition) => <li key={condition} style={{ marginBottom: "0.5rem" }}>{condition}</li>)}</ul>
       </article>
+
+      <h2>Migrated route safety contracts</h2>
+      <p style={{ color: "#475569", maxWidth: "900px" }}>These are the exact FastAPI gates for Badge Debug/Audit, Match Canonical Audit, and Admin Tools. Status and dry-run routes are read-only. Every applying route is staging-only, service-role server mediated, intent-audited, operation-keyed, and completion-audited.</p>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1100px", fontSize: "0.88rem" }}>
+          <thead><tr>{["Area", "Route", "Action", "Permission", "Exact phrase", "Stop condition", "Fallback/recovery"].map((heading) => <th key={heading} align="left" style={{ borderBottom: "2px solid #cbd5e1", padding: "0.55rem", verticalAlign: "bottom" }}>{heading}</th>)}</tr></thead>
+          <tbody>{migratedSafetyContracts.map((contract) => <tr key={`${contract.area}:${contract.route}`}><td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.55rem", verticalAlign: "top" }}><strong>{contract.area}</strong></td><td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.55rem", verticalAlign: "top" }}><code>{contract.route}</code></td><td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.55rem", verticalAlign: "top" }}>{contract.action}</td><td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.55rem", verticalAlign: "top" }}><code>{contract.permission}</code></td><td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.55rem", verticalAlign: "top" }}>{contract.phrase}</td><td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.55rem", verticalAlign: "top", color: "#991b1b" }}>{contract.stop}</td><td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.55rem", verticalAlign: "top" }}>{contract.fallback}</td></tr>)}</tbody>
+        </table>
+      </div>
 
       <h2>Recovery sequence</h2>
       <article style={cardStyle}>

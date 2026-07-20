@@ -8,6 +8,15 @@ export type AdminTournamentStatusResponse = {
   bulk_registration_update_endpoint?: string | null;
   registration_export_endpoint?: string | null;
   broadcast_preview_endpoint?: string | null;
+  tournament_update_endpoint?: string | null;
+  import_handoff_endpoint?: string | null;
+  mutation_runtime?: {
+    environment: string;
+    staging_only: boolean;
+    service_role_ready: boolean;
+    surface_flags: Record<string, { name: string; enabled: boolean }>;
+  };
+  streamlit_fallback_url?: string;
   tournament_count?: number | null;
   warnings: string[];
 };
@@ -86,6 +95,7 @@ export type AdminTournamentOpsTeam = {
   seed?: number | null;
   source?: string | null;
   notes?: string | null;
+  updated_at?: string | null;
 };
 
 export type AdminTournamentListResponse = {
@@ -111,6 +121,7 @@ export type AdminTournamentDetailResponse = {
     by_registration_status: Record<string, number>;
     by_payment_status: Record<string, number>;
   };
+  state_fingerprint?: string;
   warnings?: string[];
 };
 
@@ -130,8 +141,105 @@ export type AdminTournamentOpsSnapshotResponse = {
   teams: AdminTournamentOpsTeam[];
   games: Array<Record<string, unknown>>;
   podium: Array<Record<string, unknown>>;
+  registration_days?: Array<Record<string, unknown>>;
+  event_options?: Array<Record<string, unknown>>;
   players?: AdminTournamentOpsPlayer[];
+  state_fingerprint?: string | null;
+  state_ready?: boolean;
+  operation_runtime?: {
+    environment: string;
+    operations_mutations_enabled: boolean;
+    official_publish_enabled: boolean;
+    email_handoff_enabled: boolean;
+    auto_player_updates_enabled: boolean;
+    email_mode: string;
+    staging_only: boolean;
+  };
+  streamlit_fallback_url?: string;
   warnings?: string[];
+};
+
+export type AdminTournamentLiveStatusResponse = {
+  enabled: boolean;
+  status: "staging_write_ready" | "read_only_fallback" | string;
+  authority: "python_fastapi";
+  product_boundary: "draw_scoped_tournament_runner_not_jupr_live";
+  club_id: string;
+  environment: string;
+  staging_only: true;
+  writes_enabled: boolean;
+  service_role_ready: boolean;
+  operation_store_ready: boolean;
+  audit_store_ready: boolean;
+  write_flag: { name: string; enabled: boolean };
+  snapshot_endpoint?: string;
+  command_endpoint?: string;
+  reconcile_endpoint?: string;
+  streamlit_fallback_url: string;
+  warnings: string[];
+};
+
+export type AdminTournamentLiveReadiness = {
+  ready: boolean;
+  confirmation: string;
+  blockers: string[];
+};
+
+export type AdminTournamentLiveOperation = {
+  operation_key: string;
+  request_fingerprint: string;
+  client_idempotency_key: string;
+  action: string;
+  command?: string | null;
+  status: "intent" | "mutated" | "completed" | "failed" | "recovery_required" | string;
+  expected_state: string;
+  attempt_count: number;
+  error_text?: string | null;
+  result_mode?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  completion_audited_at?: string | null;
+  audit_evidence: {
+    actions: string[];
+    intent_present: boolean;
+    completion_present: boolean;
+    failure_present: boolean;
+    latest_at?: string | null;
+  };
+};
+
+export type AdminTournamentLiveSnapshotResponse = AdminTournamentOpsSnapshotResponse & {
+  mode: "tournament_live_draw_selector" | "tournament_live_draw_snapshot";
+  scope: "tournament_selector" | "draw";
+  authority: "python_fastapi";
+  product_boundary: "draw_scoped_tournament_runner_not_jupr_live";
+  state_fingerprint?: string | null;
+  runtime: AdminTournamentLiveStatusResponse;
+  progression?: {
+    phase: string;
+    open_games: number;
+    completed_games: number;
+    published_games: number;
+    expected_awards: number;
+    verified_awards: number;
+  };
+  publication_evidence?: {
+    available: boolean;
+    published_game_ids: string[];
+    match_count: number;
+    duplicate_game_ids: string[];
+    complete: boolean;
+  };
+  award_evidence?: {
+    available: boolean;
+    expected: Array<{ player_id: number; badge_id: string; context_id: string }>;
+    verified_count: number;
+    active_row_count: number;
+    unexpected_count: number;
+  };
+  readiness: Record<string, AdminTournamentLiveReadiness>;
+  active_operation?: AdminTournamentLiveOperation | null;
+  operations: AdminTournamentLiveOperation[];
 };
 
 export type AdminTournamentWriteResponse = {
@@ -165,9 +273,44 @@ export type AdminTournamentWriteResponse = {
   awarded_count?: number;
   import_mode?: string;
   updated_count?: number;
+  team_count?: number;
+  podium_count?: number;
+  created_player_count?: number;
+  review_fingerprint?: string;
+  auto_player_updates?: Record<string, unknown>;
   registration_ids?: string[];
   skipped?: string[];
+  operation_key?: string;
+  request_fingerprint?: string;
+  client_idempotency_key?: string;
+  idempotent_replay?: boolean;
+  reconciled?: boolean;
+  recovery_disposition?: string;
+  recovery_evidence?: Record<string, unknown>;
   warnings?: string[];
+};
+
+export type AdminTournamentResultsImportPreviewResponse = {
+  ok: boolean;
+  mode: "tournament_results_import_preview";
+  dry_run: true;
+  write_count: 0;
+  tournament_id: string;
+  draw_id: string;
+  import_mode: string;
+  review_fingerprint: string;
+  players: Array<Record<string, unknown>>;
+  player_options: Array<{ id: string | number; name: string; dupr_id?: string | null }>;
+  suggestions: Record<string, Record<string, unknown>>;
+  mapping_decisions: Record<string, { action?: string; player_id?: string | number | null }>;
+  matches: Array<Record<string, unknown>>;
+  match_reviews: Record<string, { include?: boolean; stage?: string }>;
+  teams: Array<Record<string, unknown>>;
+  podium_candidates: string[];
+  podium_refs: Record<string, string | null>;
+  summary: { imported_players: number; teams: number; matches: number; create_players: number };
+  errors: string[];
+  warnings: string[];
 };
 
 export type AdminTournamentBroadcastRecipient = {
@@ -240,4 +383,8 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
 
 export async function getAdminTournamentStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminTournamentStatusResponse>> {
   return fetchJson<AdminTournamentStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/status`);
+}
+
+export async function getAdminTournamentLiveStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminTournamentLiveStatusResponse>> {
+  return fetchJson<AdminTournamentLiveStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/status`);
 }

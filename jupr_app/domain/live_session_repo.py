@@ -204,13 +204,18 @@ def mark_live_session_abandoned(
 def abandon_expired_live_sessions(
     supabase,
     *,
+    club_id: str,
     now_iso: str | None = None,
 ) -> int:
-    """Mark active rows past expires_at as abandoned. Intended for opportunistic cleanup."""
+    """Mark one club's active rows past expires_at as abandoned."""
+    clean_club_id = str(club_id or "").strip()
+    if not clean_club_id:
+        raise ValueError("club_id is required for expired live-session cleanup")
     cutoff = now_iso or _now_iso()
     resp = (
         supabase.table(LIVE_SESSIONS_TABLE)
         .update({"status": "abandoned", "updated_at": cutoff})
+        .eq("club_id", clean_club_id)
         .eq("status", "active")
         .lt("expires_at", cutoff)
         .execute()

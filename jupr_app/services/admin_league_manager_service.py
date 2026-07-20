@@ -4,12 +4,20 @@ import json
 import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from jupr_app.services.staging_write_guard import staging_league_manager_writes_enabled
 
 from jupr_app.domain.leagues import normalize_league_status
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 LEAGUE_MANAGER_EXTENDED_SELECT = "league_name,league_type,description,min_weeks,is_active,status,started_at,ended_at,ended_by,schedule_config,court_board_defaults,rules_config,awards_config,k_factor,min_games,event_tags"
 LEAGUE_MANAGER_MINIMAL_SELECT = "league_name,is_active,k_factor,min_games"
+LEAGUE_LIFECYCLE_ACTIONS = {
+    "draft": ["start"],
+    "active": ["pause", "end"],
+    "paused": ["resume", "end"],
+    "ended": ["archive"],
+    "archived": [],
+}
 
 
 def _truthy_env(name: str) -> bool:
@@ -18,6 +26,10 @@ def _truthy_env(name: str) -> bool:
 
 def is_admin_league_manager_enabled() -> bool:
     return _truthy_env("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER")
+
+
+def is_admin_league_awards_write_enabled() -> bool:
+    return is_admin_league_manager_enabled() and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE")
 
 
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
@@ -330,6 +342,73 @@ def _league_roster(supabase: Any, *, club_id: str, league_name: str, standings: 
     return sorted(roster, key=lambda row: (not bool(row.get("in_league")), str(row.get("player_name") or "").lower()))
 
 
+def admin_league_manager_lifecycle_state_error(league: dict[str, Any]) -> str | None:
+    status = normalize_league_status(league)
+    expected_active = status == "active"
+    if bool(league.get("is_active", False)) == expected_active:
+        return None
+    return (
+        f"League lifecycle state is inconsistent: status {status} requires "
+        f"is_active={str(expected_active).lower()}."
+    )
+
+
+def validate_admin_league_manager_lifecycle_state(league: dict[str, Any]) -> str:
+    error = admin_league_manager_lifecycle_state_error(league)
+    if error:
+        raise ValueError(error)
+    return normalize_league_status(league)
+
+
+def build_admin_league_manager_validation(
+    league: dict[str, Any],
+    *,
+    roster: list[dict[str, Any]],
+    schedule_preview: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Describe server-authoritative edit/lifecycle capabilities and state warnings."""
+
+    status = normalize_league_status(league)
+    errors: list[str] = []
+    warnings: list[str] = []
+    lifecycle_error = admin_league_manager_lifecycle_state_error(league)
+    if lifecycle_error:
+        errors.append(lifecycle_error)
+
+    schedule_config = _json_value(league.get("schedule_config"), {}) or {}
+    if schedule_config and not schedule_preview:
+        errors.append("The saved schedule configuration does not produce any playable sessions.")
+    if status in {"active", "paused"} and not league.get("started_at"):
+        warnings.append("This running league has no recorded start timestamp.")
+    if status in {"ended", "archived"} and not league.get("ended_at"):
+        warnings.append("This closed league has no recorded end timestamp.")
+
+    active_roster_count = len([row for row in roster if row.get("in_league")])
+    if status in {"active", "paused"} and active_roster_count < 4:
+        warnings.append("Fewer than four active roster members are available for doubles play.")
+    if status == "draft" and active_roster_count == 0:
+        warnings.append("Add roster members before opening a League Live session.")
+
+    if status == "draft":
+        settings_mode = "full"
+    elif status in {"active", "paused"}:
+        settings_mode = "description_only"
+    else:
+        settings_mode = "read_only"
+
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "capabilities": {
+            "settings_mode": settings_mode,
+            "roster_mutable": status in {"draft", "active", "paused"},
+            "lifecycle_actions": list(LEAGUE_LIFECYCLE_ACTIONS.get(status, [])),
+            "printable": True,
+        },
+    }
+
+
 def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
     if not is_admin_league_manager_enabled():
         return {
@@ -343,7 +422,12 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
             "league_settings_update_endpoint": None,
             "league_schedule_preview_endpoint": None,
             "league_roster_update_endpoint": None,
+            "league_printout_endpoint": None,
+            "top_players_printable_endpoint": None,
             "league_live_sessions_endpoint": None,
+            "league_awards_endpoint": None,
+            "awards_write_enabled": False,
+            "league_manager_writes_enabled": False,
             "warnings": ["Next League Manager is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER on FastAPI for a closed-club pilot."],
         }
     leagues: list[dict[str, Any]] = []
@@ -363,10 +447,19 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
         "league_settings_update_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}",
         "league_schedule_preview_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/schedule/preview",
         "league_roster_update_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/roster/{player_id}",
+        "league_printout_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/printout",
+        "top_players_printable_endpoint": "/admin/clubs/{club_id}/league-manager/top-players-printable",
         "league_live_sessions_endpoint": "/admin/clubs/{club_id}/league-manager/live-sessions",
+        "league_awards_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards",
+        "awards_write_enabled": is_admin_league_awards_write_enabled(),
+        "league_manager_writes_enabled": staging_league_manager_writes_enabled(),
         "league_count": len(leagues),
         "active_count": len([league for league in leagues if league.get("status") == "active"]),
-        "warnings": ["Settings, explicit lifecycle actions, roster membership, browser-print exports, and persisted League Live sessions are enabled through guarded FastAPI. Corrections still route through Match Log/Replay History."],
+        "warnings": [
+            "Settings, explicit lifecycle actions, roster membership, Python-authoritative leader exports, "
+            "browser-print output, persisted League Live sessions, and staging-flagged League Awards are enabled through guarded FastAPI. "
+            "Corrections still route through Match Log/Replay History."
+        ],
     }
 
 
@@ -388,11 +481,17 @@ def get_admin_league_manager_detail(supabase: Any, *, club_id: str, league_name:
     standings = _league_standings(supabase, club_id=str(club_id), league_name=clean_league)
     roster = _league_roster(supabase, club_id=str(club_id), league_name=clean_league, standings=standings)
     schedule_config = league.get("schedule_config")
+    schedule_preview = _schedule_preview(schedule_config)
+    validation = build_admin_league_manager_validation(
+        league,
+        roster=roster,
+        schedule_preview=schedule_preview,
+    )
     return {
         "ok": True,
         "mode": "league_manager_detail",
         "league": league,
-        "schedule_preview": _schedule_preview(schedule_config),
+        "schedule_preview": schedule_preview,
         "schedule_ics": build_league_schedule_ics(schedule_config, league_name=clean_league),
         "schedule_ics_filename": league_schedule_ics_filename(clean_league),
         "standings": standings,
@@ -400,4 +499,6 @@ def get_admin_league_manager_detail(supabase: Any, *, club_id: str, league_name:
         "roster": roster,
         "roster_count": len(roster),
         "league_roster_count": len([row for row in roster if row.get("in_league")]),
+        "validation": validation,
+        "capabilities": validation["capabilities"],
     }

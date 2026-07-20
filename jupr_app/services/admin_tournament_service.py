@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
@@ -14,6 +15,7 @@ from jupr_app.domain.tournament_registration_repo import (
     update_admin_registration,
     update_admin_registration_selection,
 )
+from jupr_app.domain.tournament_admin_operations import stable_tournament_admin_fingerprint
 from jupr_app.services.public_tournament_registration_service import (
     build_tournament_registration_player_profile,
     validate_and_clean_tournament_selection,
@@ -48,6 +50,7 @@ EVENT_OPTION_SELECT = (
 DAY_SELECT = "id,tournament_id,label,event_date,enabled,sort_order,created_at"
 CONFIRM_REGISTRATION_UPDATE = "SAVE REGISTRATION"
 CONFIRM_SELECTION_UPDATE = "SAVE SELECTION"
+CONFIRM_TOURNAMENT_UPDATE = "SAVE TOURNAMENT"
 
 
 def _truthy_env(name: str) -> bool:
@@ -234,6 +237,33 @@ def _summary_counts(registrations: list[dict[str, Any]], selections: list[dict[s
     }
 
 
+def _admin_detail_state_fingerprint(
+    *,
+    tournament: dict[str, Any],
+    settings: dict[str, Any],
+    registrations: list[dict[str, Any]],
+    selections: list[dict[str, Any]],
+) -> str:
+    return stable_tournament_admin_fingerprint(
+        {
+            "tournament": {
+                "id": tournament.get("id"),
+                "status": tournament.get("status"),
+                "updated_at": tournament.get("updated_at"),
+            },
+            "settings_updated_at": settings.get("updated_at"),
+            "registrations": sorted(
+                (str(row.get("id") or ""), str(row.get("updated_at") or ""))
+                for row in registrations
+            ),
+            "selections": sorted(
+                (str(row.get("id") or ""), str(row.get("updated_at") or ""))
+                for row in selections
+            ),
+        }
+    )
+
+
 def _tournament_payload(row: dict[str, Any], *, registration_count: int | None = None, selection_count: int | None = None, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     tournament_id = _clean_text(row.get("id"), limit=120)
     return {
@@ -366,6 +396,9 @@ def _required_registration_settings(supabase: Any, *, tournament_id: str) -> dic
 
 
 def build_admin_tournament_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
+    from jupr_app.services.admin_tournament_guarded_operation import tournament_admin_mutation_status
+    from jupr_app.services.admin_tournament_ops_service import build_admin_tournament_ops_runtime_status
+
     if not is_admin_tournament_admin_enabled():
         return {
             "enabled": False,
@@ -376,7 +409,12 @@ def build_admin_tournament_status(supabase: Any | None, *, club_id: str) -> dict
             "selection_update_endpoint": None,
             "registration_export_endpoint": None,
             "broadcast_preview_endpoint": None,
+            "tournament_update_endpoint": None,
+            "import_handoff_endpoint": None,
             "warnings": ["Next Tournament Admin is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS on FastAPI for a closed-club pilot."],
+            "mutation_runtime": tournament_admin_mutation_status(),
+            "operations_runtime": build_admin_tournament_ops_runtime_status(),
+            "streamlit_fallback_url": os.getenv("JUPR_STREAMLIT_FALLBACK_URL", "").strip() or "https://juprtrespalapas.streamlit.app",
         }
     tournament_count = None
     warnings: list[str] = []
@@ -392,8 +430,13 @@ def build_admin_tournament_status(supabase: Any | None, *, club_id: str) -> dict
         "selection_update_endpoint": "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}",
         "registration_export_endpoint": "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/export.csv",
         "broadcast_preview_endpoint": "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/broadcast-preview",
+        "tournament_update_endpoint": "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}",
+        "import_handoff_endpoint": "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/import-handoff",
         "tournament_count": tournament_count,
         "warnings": warnings,
+        "mutation_runtime": tournament_admin_mutation_status(),
+        "operations_runtime": build_admin_tournament_ops_runtime_status(),
+        "streamlit_fallback_url": os.getenv("JUPR_STREAMLIT_FALLBACK_URL", "").strip() or "https://juprtrespalapas.streamlit.app",
     }
 
 
@@ -434,6 +477,12 @@ def get_admin_tournament_detail(supabase: Any, *, club_id: str, tournament_id: s
             selections_by_registration[registration_id] = selections_by_registration.get(registration_id, 0) + 1
     registrations = [_registration_payload(row, selection_count=selections_by_registration.get(_clean_text(row.get("id"), limit=120), 0)) for row in registrations_raw]
     selections = [_selection_payload(row, event_options=event_options) for row in selections_raw]
+    state_fingerprint = _admin_detail_state_fingerprint(
+        tournament=tournament,
+        settings=settings,
+        registrations=registrations_raw,
+        selections=selections_raw,
+    )
     return {
         "ok": True,
         "mode": "tournament_admin_detail",
@@ -444,8 +493,128 @@ def get_admin_tournament_detail(supabase: Any, *, club_id: str, tournament_id: s
         "registrations": registrations,
         "selections": selections,
         "summary": _summary_counts(registrations_raw, selections_raw),
+        "state_fingerprint": state_fingerprint,
         "warnings": [],
     }
+
+
+def build_admin_tournament_registration_import_handoff(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+) -> dict[str, Any]:
+    """Build a read-only handoff; registration admin never mutates draw teams."""
+
+    detail = get_admin_tournament_detail(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=str(tournament_id),
+    )
+    imported_selection_ids = [
+        str(selection.get("id") or "")
+        for selection in detail.get("selections") or []
+        if registration_is_imported_to_draw(
+            supabase,
+            tournament_id=str(tournament_id),
+            selection_id=str(selection.get("id") or ""),
+        )
+    ]
+    confirmed = [
+        row
+        for row in detail.get("registrations") or []
+        if str(row.get("registration_status") or "").lower() == "confirmed"
+    ]
+    return {
+        "ok": True,
+        "mode": "tournament_registration_import_handoff",
+        "dry_run": True,
+        "write_count": 0,
+        "tournament": detail["tournament"],
+        "state_fingerprint": detail["state_fingerprint"],
+        "confirmed_registration_count": len(confirmed),
+        "imported_selection_count": len(imported_selection_ids),
+        "imported_selection_ids": imported_selection_ids,
+        "direct_import_available": False,
+        "ops_path": f"/admin/tournaments/ops?tournament_id={str(tournament_id)}",
+        "required_ops_confirmation": "IMPORT REGISTRATIONS",
+        "integrity_notice": "Tournament Ops rechecks draw scope, confirmed player links, duplicates, and existing games. Registration Admin cannot bypass those draw-integrity guards.",
+    }
+
+
+def update_admin_tournament(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    patch: dict[str, Any],
+    expected_updated_at: str | None,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_tournament_admin_tournament_update",
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    if not is_admin_tournament_admin_enabled():
+        raise PermissionError("Next Tournament Admin is disabled.")
+    if str(confirmation_text or "").strip().upper() != CONFIRM_TOURNAMENT_UPDATE:
+        raise ValueError(f"Type {CONFIRM_TOURNAMENT_UPDATE} to confirm tournament changes.")
+    clean_tournament_id = _clean_text(tournament_id, limit=120)
+    before = _first_row(supabase, "tournaments", TOURNAMENT_SELECT, key="id", value=clean_tournament_id)
+    if not before or str(before.get("club_id") or "") != str(club_id):
+        raise ValueError("tournament not found")
+    update_payload: dict[str, Any] = {}
+    if "name" in patch:
+        name = _clean_text(patch.get("name"), limit=180)
+        if not name:
+            raise ValueError("Tournament name is required.")
+        update_payload["name"] = name
+    for field in ("start_date", "end_date"):
+        if field in patch:
+            update_payload[field] = _clean_text(patch.get(field), limit=40) or None
+    if not update_payload:
+        raise ValueError("No supported tournament fields were provided.")
+    next_start_date = update_payload.get("start_date", before.get("start_date"))
+    next_end_date = update_payload.get("end_date", before.get("end_date"))
+    if next_start_date and next_end_date and str(next_end_date) < str(next_start_date):
+        raise ValueError("Tournament end date cannot be before its start date.")
+    if dry_run:
+        return {"ok": True, "mode": "tournament_update_preflight", "dry_run": True, "write_count": 0, "patch": update_payload}
+    update_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    query = (
+        supabase.table("tournaments")
+        .update(update_payload)
+        .eq("club_id", str(club_id))
+        .eq("id", clean_tournament_id)
+    )
+    if expected_updated_at:
+        query = query.eq("updated_at", str(expected_updated_at))
+    updated_rows = _safe_rows(query.execute())
+    if not updated_rows:
+        if expected_updated_at:
+            from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
+
+            raise StaleTournamentAdminStateError("Tournament changed after it was loaded. Reload and try again.")
+        raise ValueError("tournament not found")
+    updated = updated_rows[0]
+    tournament = _tournament_payload(updated)
+    audit_payload = build_activity_payload(
+        club_id=str(club_id),
+        actor_email=str(actor_email or ""),
+        actor_role=str(actor_role or ""),
+        action_type="update_tournament_admin",
+        entity_type="tournament",
+        entity_id=clean_tournament_id,
+        before_json={"tournament": _tournament_payload(before)},
+        after_json={"source_client": "fastapi/nextjs", "source_page": source, "patch": update_payload, "tournament": tournament},
+        source_page=source,
+        flagged_for_review=True,
+    )
+    audit_write = write_admin_activity_log(supabase, audit_payload)
+    warnings = [audit_write.warning] if audit_write.warning else []
+    if not audit_write.ok and is_api_audit_log_required():
+        raise RuntimeError("audit log write required but unavailable")
+    return {"ok": True, "mode": "tournament_update", "tournament": tournament, "warnings": warnings}
 
 
 def update_admin_tournament_registration(
@@ -455,10 +624,12 @@ def update_admin_tournament_registration(
     tournament_id: str,
     registration_id: str,
     patch: dict[str, Any],
+    expected_updated_at: str | None = None,
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
     source: str = "next_tournament_admin_registration_update",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -489,11 +660,23 @@ def update_admin_tournament_registration(
     if not update_payload:
         raise ValueError("No supported registration fields were provided.")
 
+    if "status" in update_payload and registration_is_imported_to_draw(
+        supabase,
+        tournament_id=clean_tournament_id,
+        registration_id=clean_registration_id,
+    ):
+        raise ValueError(
+            "This registration is already imported into a draw. Change draw membership in Tournament Ops before changing registration status."
+        )
+    if dry_run:
+        return {"ok": True, "mode": "tournament_registration_update_preflight", "dry_run": True, "write_count": 0, "patch": update_payload}
+
     updated = update_admin_registration(
         supabase,
         tournament_id=clean_tournament_id,
         registration_id=clean_registration_id,
         payload=update_payload,
+        expected_updated_at=expected_updated_at,
     )
     selection_count = _selection_count_for_registration(supabase, tournament_id=clean_tournament_id, registration_id=clean_registration_id)
     registration = _registration_payload(updated, selection_count=selection_count)
@@ -530,6 +713,7 @@ def update_admin_tournament_selection(
     actor_role: str,
     confirmation_text: str,
     source: str = "next_tournament_admin_selection_update",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -638,12 +822,12 @@ def update_admin_tournament_selection(
         )
         if relationship_lock:
             raise ValueError(relationship_lock)
-    if event_changed and registration_is_imported_to_draw(
+    if registration_is_imported_to_draw(
         supabase,
         tournament_id=clean_tournament_id,
         selection_id=clean_selection_id,
     ):
-        raise ValueError("This event entry is already imported into a draw. Remove the draw team before moving divisions.")
+        raise ValueError("This event entry is already imported into a draw. Make the corresponding team change in Tournament Ops; this registration editor will not bypass draw integrity.")
     if next_partner_mode == "HAS_PARTNER" and current_partner_mode != "HAS_PARTNER":
         raise ValueError("Creating a partner link requires the canonical partner-link workflow.")
     if event_changed and next_partner_mode == "HAS_PARTNER":
@@ -705,6 +889,8 @@ def update_admin_tournament_selection(
         update_payload["partner_note"] = _clean_text(patch.get("partner_note"), limit=500)
     if not update_payload:
         raise ValueError("No supported event-entry fields were provided.")
+    if dry_run:
+        return {"ok": True, "mode": "tournament_selection_update_preflight", "dry_run": True, "write_count": 0, "patch": update_payload}
 
     updated = update_admin_registration_selection(
         supabase,

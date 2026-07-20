@@ -3,8 +3,6 @@ export type AdminWeeklyRecapStatusResponse = {
   status: string;
   list_endpoint?: string | null;
   generate_endpoint?: string | null;
-  recap_count?: number | null;
-  published_count?: number | null;
   warnings: string[];
 };
 
@@ -21,6 +19,7 @@ export type AdminWeeklyRecapRow = {
   published_by?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  row_version: number;
 };
 
 export type AdminWeeklyRecapCandidate = {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -110,12 +111,19 @@ def test_public_weekly_recaps_contract(client):
     payload = response.json()
     assert payload["club"] == {"id": "club-1", "slug": "tres-palapas", "name": "Tres Palapas"}
     assert len(payload["recaps"]) == 1
+    assert payload["pagination"] == {"page": 1, "page_size": 8, "has_previous": False, "has_next": False}
     assert payload["recaps"][0]["week_start"] == "2026-02-08"
     assert payload["selected_recap"]["recap"]["numbers"] == {"matches": 12, "players": 18}
+    assert len(payload["selected_recap"]["recap"]["numbers_cards"]) == 6
     assert payload["selected_recap"]["recap"]["spotlight"][0]["players"] == ["Alex"]
     assert "candidate_ids" not in payload["selected_recap"]["recap"]["spotlight"][0]
     assert "internal_notes" not in payload["selected_recap"]["recap"]
     assert "admin_notes" not in payload["club"]
+    serialized = json.dumps(payload)
+    assert "draft should not appear" not in serialized
+    assert "generated_json" not in serialized
+    assert "edits_json" not in serialized
+    assert "private" not in serialized
 
 
 def test_public_weekly_recap_detail_contract(client):
@@ -137,3 +145,24 @@ def test_public_weekly_recap_missing_detail_returns_404(client):
     response = client.get("/clubs/tres-palapas/weekly-recaps/2026-01-01")
 
     assert response.status_code == 404
+
+
+def test_public_weekly_recap_draft_detail_is_not_public(client):
+    response = client.get("/clubs/tres-palapas/weekly-recaps/2026-02-01")
+
+    assert response.status_code == 404
+
+
+def test_public_weekly_recap_paging_contract(client):
+    response = client.get("/clubs/tres-palapas/weekly-recaps", params={"page": 2, "page_size": 1})
+
+    assert response.status_code == 200
+    assert response.json()["recaps"] == []
+    assert response.json()["selected_recap"] is None
+    assert response.json()["pagination"] == {"page": 2, "page_size": 1, "has_previous": True, "has_next": False}
+
+
+def test_public_weekly_recap_page_size_is_bounded(client):
+    response = client.get("/clubs/tres-palapas/weekly-recaps", params={"page_size": 13})
+
+    assert response.status_code == 422

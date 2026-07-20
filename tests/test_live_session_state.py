@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from jupr_app.domain.live_session_repo import (
+    abandon_expired_live_sessions,
     is_live_session_expired,
     is_missing_live_sessions_table_error,
     is_restorable_live_session,
@@ -116,3 +119,41 @@ def test_missing_live_sessions_table_error_detection():
         message = "Could not find the table 'public.live_sessions' in the schema cache"
 
     assert is_missing_live_sessions_table_error(FakePostgrestError("live_sessions missing"))
+
+
+def test_expired_cleanup_is_explicitly_club_scoped():
+    class QuerySpy:
+        def __init__(self):
+            self.filters = []
+
+        def update(self, _payload):
+            return self
+
+        def eq(self, key, value):
+            self.filters.append((key, value))
+            return self
+
+        def lt(self, key, value):
+            self.filters.append((key, value))
+            return self
+
+        def execute(self):
+            return type("Response", (), {"data": []})()
+
+    query = QuerySpy()
+    supabase = type("Supabase", (), {"table": lambda self, _name: query})()
+
+    abandon_expired_live_sessions(
+        supabase,
+        club_id="club-a",
+        now_iso="2026-07-19T12:00:00+00:00",
+    )
+
+    assert ("club_id", "club-a") in query.filters
+
+
+def test_expired_cleanup_rejects_empty_club_scope():
+    supabase = type("Supabase", (), {"table": lambda self, _name: None})()
+
+    with pytest.raises(ValueError, match="club_id is required"):
+        abandon_expired_live_sessions(supabase, club_id="")

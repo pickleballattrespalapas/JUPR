@@ -6,6 +6,12 @@ from typing import Any
 from uuid import uuid4
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.league_live_orchestration import (
+    LeagueLiveDomainError,
+    build_league_live_roster_suggestion,
+    build_league_live_round_plan,
+    normalize_league_live_roster,
+)
 from jupr_app.services.admin_league_manager_service import is_admin_league_manager_enabled
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
@@ -16,8 +22,43 @@ SESSION_STATUSES = {"setup", "active", "paused", "complete", "archived"}
 ROUND_STATUSES = {"draft", "generated", "submitted", "voided"}
 
 
+class LeagueLiveConflictError(RuntimeError):
+    """Optimistic-state or idempotency conflict."""
+
+
+class LeagueLivePersistenceError(RuntimeError):
+    """A required League Live write did not persist."""
+
+
 def _truthy_env(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in TRUTHY_ENV_VALUES
+
+
+def is_admin_league_live_domain_enabled() -> bool:
+    return is_admin_league_manager_enabled() and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN")
+
+
+def is_admin_league_live_submit_enabled() -> bool:
+    runtime = str(os.getenv("JUPR_ENV") or os.getenv("ENVIRONMENT") or "").strip().lower()
+    return (
+        runtime == "staging"
+        and is_admin_league_live_domain_enabled()
+        and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT")
+    )
+
+
+def ensure_admin_league_live_submit_enabled() -> None:
+    if not is_admin_league_live_submit_enabled():
+        raise PermissionError(
+            "Next League Live all-match publish is disabled. Keep the Streamlit League Manager fallback available."
+        )
+
+
+def _ensure_live_domain_enabled() -> None:
+    if not is_admin_league_live_domain_enabled():
+        raise PermissionError(
+            "Next League Live domain writes are disabled. Use the Streamlit League Manager fallback."
+        )
 
 
 def _now_iso() -> str:
@@ -90,6 +131,7 @@ def _round_payload(row: dict[str, Any]) -> dict[str, Any]:
         "preview_json": _as_dict(row.get("preview_json")),
         "matches_json": _as_list(row.get("matches_json")),
         "movement_json": _as_dict(row.get("movement_json")),
+        "operation_key": str(row.get("operation_key") or _as_dict(row.get("movement_json")).get("operation_key") or ""),
         "submitted_match_count": _safe_int(row.get("submitted_match_count"), 0) or 0,
         "submitted_match_ids": _as_list(row.get("submitted_match_ids")),
         "submitted_at": row.get("submitted_at"),
@@ -105,7 +147,7 @@ def _court_payload(row: dict[str, Any]) -> dict[str, Any]:
         "session_id": str(row.get("session_id") or ""),
         "round_number": _safe_int(row.get("round_number"), 1) or 1,
         "court_number": _safe_int(row.get("court_number"), 1) or 1,
-        "format_type": str(row.get("format_type") or "4-player"),
+        "format_type": str(row.get("format_type") or "4-Player"),
         "player_names": _as_list(row.get("player_names")),
         "players_json": _as_list(row.get("players_json")),
         "created_at": row.get("created_at"),
@@ -128,17 +170,182 @@ def _normalize_courts(courts: list[dict[str, Any]], *, default_round: int) -> li
             names = [name.strip() for name in player_names.replace(",", "\n").split("\n") if name.strip()]
         else:
             names = [str(name or "").strip() for name in _as_list(player_names) if str(name or "").strip()]
+        format_type = _clean_text(raw.get("format_type", raw.get("formatType") or ""), limit=80)
+        if not format_type:
+            format_type = f"{len(names)}-Player" if len(names) in {4, 5} else "4-Player"
+        elif format_type.lower() in {"4-player", "5-player"}:
+            format_type = f"{format_type[0]}-Player"
         normalized.append(
             {
                 "round_number": _safe_int(raw.get("round_number"), default_round) or default_round,
                 "court_number": int(court_number),
-                "format_type": _clean_text(raw.get("format_type", raw.get("formatType") or "4-player"), limit=80) or "4-player",
+                "format_type": format_type,
                 "player_names": names,
                 "players_json": _as_list(raw.get("players_json", raw.get("players"))),
             }
         )
     normalized.sort(key=lambda row: int(row.get("court_number") or 0))
     return normalized
+
+
+def _expected_session_version(before: dict[str, Any], expected_updated_at: Any) -> str:
+    expected = _clean_text(expected_updated_at, limit=120)
+    current = _clean_text(before.get("updated_at"), limit=120)
+    if not expected:
+        raise LeagueLiveConflictError("expected_updated_at is required; reload this League Live session and retry.")
+    if expected != current:
+        raise LeagueLiveConflictError("League Live session changed in another browser. Reload before continuing.")
+    return expected
+
+
+def _session_restore_payload(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: row.get(key)
+        for key in (
+            "league_name",
+            "week_tag",
+            "status",
+            "total_rounds",
+            "current_round",
+            "roster_json",
+            "current_court_state_json",
+            "notes",
+            "created_by",
+            "updated_by",
+            "started_at",
+            "completed_at",
+            "created_at",
+            "updated_at",
+        )
+        if key in row
+    }
+
+
+def _round_restore_payload(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: row.get(key)
+        for key in (
+            "club_id",
+            "session_id",
+            "round_number",
+            "round_label",
+            "status",
+            "match_date",
+            "preview_json",
+            "matches_json",
+            "movement_json",
+            "operation_key",
+            "submitted_match_count",
+            "submitted_match_ids",
+            "submitted_at",
+            "created_at",
+            "updated_at",
+        )
+        if key in row
+    }
+
+
+def _normalize_roster_and_courts(
+    *,
+    roster: list[dict[str, Any]],
+    courts: list[dict[str, Any]],
+    round_number: int,
+    bench_player_ids: list[Any] | None = None,
+    bench_override_reason: str | None = None,
+) -> dict[str, Any]:
+    normalized_roster = normalize_league_live_roster(roster)
+    if not normalized_roster:
+        raise LeagueLiveDomainError("League Live requires a roster before a session can be saved.")
+    if courts:
+        sizes: list[int] = []
+        requested_bench: list[int] = []
+        court_player_ids: list[int] = []
+        by_name = {str(row["player_name"]).strip().casefold(): int(row["player_id"]) for row in normalized_roster}
+        for raw in courts:
+            players = raw.get("players_json", raw.get("players")) if isinstance(raw, dict) else None
+            ids: list[int] = []
+            if isinstance(players, list) and players:
+                ids = [
+                    int(_safe_int(player.get("player_id", player.get("id"))) or 0)
+                    for player in players
+                    if isinstance(player, dict)
+                ]
+            else:
+                names = raw.get("player_names") if isinstance(raw, dict) else []
+                if isinstance(names, str):
+                    names = [value.strip() for value in names.replace(",", "\n").splitlines() if value.strip()]
+                ids = [by_name.get(str(name).strip().casefold(), 0) for name in (names or [])]
+            if any(player_id <= 0 for player_id in ids):
+                raise LeagueLiveDomainError("Every court player must resolve to the session roster.")
+            sizes.append(len(ids))
+            court_player_ids.extend(ids)
+        if len(set(court_player_ids)) != len(court_player_ids):
+            raise LeagueLiveDomainError("A rostered player cannot appear on multiple courts.")
+        roster_ids = {int(row["player_id"]) for row in normalized_roster}
+        if not set(court_player_ids).issubset(roster_ids):
+            raise LeagueLiveDomainError("Court assignments contain a player outside the session roster.")
+        assignment_by_id: dict[int, tuple[int, int]] = {}
+        cursor = 0
+        for court_number, size in enumerate(sizes, start=1):
+            for slot, player_id in enumerate(court_player_ids[cursor : cursor + size], start=1):
+                assignment_by_id[int(player_id)] = (court_number, slot)
+            cursor += size
+        normalized_roster = [
+            {
+                **row,
+                "court_number": assignment_by_id.get(int(row["player_id"]), (None, None))[0],
+                "slot": assignment_by_id.get(int(row["player_id"]), (None, None))[1],
+                "status": "active" if int(row["player_id"]) in assignment_by_id else "bench",
+            }
+            for row in normalized_roster
+        ]
+        requested_bench = sorted(roster_ids - set(court_player_ids))
+        return build_league_live_roster_suggestion(
+            normalized_roster,
+            court_sizes=sizes,
+            prefer_keep_player_ids=court_player_ids,
+            bench_player_ids=list(bench_player_ids or requested_bench),
+            bench_override_reason=bench_override_reason or ("Preserve operator-provided court assignments." if requested_bench else None),
+            round_number=round_number,
+            preserve_assignment_order=True,
+        )
+    return build_league_live_roster_suggestion(
+        normalized_roster,
+        bench_player_ids=bench_player_ids,
+        bench_override_reason=bench_override_reason,
+        round_number=round_number,
+    )
+
+
+def _verified_club_roster(supabase: Any, *, club_id: str, roster: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = normalize_league_live_roster(roster)
+    requested_ids = [int(row["player_id"]) for row in normalized]
+    if not requested_ids:
+        raise LeagueLiveDomainError("League Live requires at least four club players.")
+    try:
+        rows = _safe_rows(
+            supabase.table("players")
+            .select("*")
+            .eq("club_id", str(club_id))
+            .in_("id", requested_ids)
+            .execute()
+        )
+    except Exception as exc:
+        raise LeagueLivePersistenceError("Unable to verify the League Live roster against club players.") from exc
+    verified = {int(row.get("id")): row for row in rows if _safe_int(row.get("id")) is not None}
+    missing = sorted(set(requested_ids) - set(verified))
+    if missing:
+        raise LeagueLiveDomainError(f"Roster contains player IDs outside this club: {missing}.")
+    return [
+        {
+            **row,
+            "player_name": _clean_text(verified[int(row["player_id"])].get("name"), limit=160) or row["player_name"],
+            "rating": verified[int(row["player_id"])].get("rating")
+            if verified[int(row["player_id"])].get("rating") is not None
+            else verified[int(row["player_id"])].get("rating_jupr", row.get("rating")),
+        }
+        for row in normalized
+    ]
 
 
 def _fetch_session_row(supabase: Any, *, club_id: str, session_id: str) -> dict[str, Any] | None:
@@ -151,8 +358,8 @@ def _fetch_session_row(supabase: Any, *, club_id: str, session_id: str) -> dict[
             .limit(1)
             .execute()
         )
-    except Exception:
-        return None
+    except Exception as exc:
+        raise LeagueLivePersistenceError("Unable to load the League Live session from private storage.") from exc
 
 
 def _fetch_rounds(supabase: Any, *, club_id: str, session_id: str) -> list[dict[str, Any]]:
@@ -164,8 +371,8 @@ def _fetch_rounds(supabase: Any, *, club_id: str, session_id: str) -> list[dict[
             .eq("session_id", str(session_id))
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise LeagueLivePersistenceError("Unable to load League Live round history from private storage.") from exc
     return sorted((_round_payload(row) for row in rows), key=lambda row: int(row.get("round_number") or 0))
 
 
@@ -178,8 +385,8 @@ def _fetch_courts(supabase: Any, *, club_id: str, session_id: str) -> list[dict[
             .eq("session_id", str(session_id))
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise LeagueLivePersistenceError("Unable to load League Live court snapshots from private storage.") from exc
     return sorted(
         (_court_payload(row) for row in rows),
         key=lambda row: (int(row.get("round_number") or 0), int(row.get("court_number") or 0)),
@@ -195,17 +402,14 @@ def _replace_court_snapshots(
     courts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     normalized = _normalize_courts(courts, default_round=int(round_number))
-    try:
-        (
-            supabase.table("league_live_courts")
-            .delete()
-            .eq("club_id", str(club_id))
-            .eq("session_id", str(session_id))
-            .eq("round_number", int(round_number))
-            .execute()
-        )
-    except Exception:
-        pass
+    (
+        supabase.table("league_live_courts")
+        .delete()
+        .eq("club_id", str(club_id))
+        .eq("session_id", str(session_id))
+        .eq("round_number", int(round_number))
+        .execute()
+    )
     if not normalized:
         return []
     payloads = [
@@ -215,18 +419,48 @@ def _replace_court_snapshots(
             "session_id": str(session_id),
             "round_number": int(round_number),
             "court_number": int(row["court_number"]),
-            "format_type": str(row.get("format_type") or "4-player"),
+            "format_type": str(row.get("format_type") or "4-Player"),
             "player_names": row.get("player_names") or [],
             "players_json": row.get("players_json") or [],
             "updated_at": _now_iso(),
         }
         for row in normalized
     ]
-    try:
-        inserted = _safe_rows(supabase.table("league_live_courts").insert(payloads).execute())
-    except Exception:
-        inserted = payloads
+    inserted = _safe_rows(supabase.table("league_live_courts").insert(payloads).execute())
+    if len(inserted) != len(payloads):
+        raise LeagueLivePersistenceError("League Live court snapshots did not persist completely.")
     return [_court_payload(row) for row in inserted]
+
+
+def _court_rows_for_round(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_id: str,
+    round_number: int,
+) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in _fetch_courts(supabase, club_id=club_id, session_id=session_id)
+        if int(row.get("round_number") or 0) == int(round_number)
+    ]
+
+
+def _restore_court_snapshots(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_id: str,
+    round_number: int,
+    courts: list[dict[str, Any]],
+) -> None:
+    _replace_court_snapshots(
+        supabase,
+        club_id=club_id,
+        session_id=session_id,
+        round_number=round_number,
+        courts=courts,
+    )
 
 
 def _audit(
@@ -260,25 +494,70 @@ def _audit(
 
 
 def build_admin_league_live_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
+    # This endpoint is intentionally configuration-only. It is rendered before
+    # browser authentication and must never project private session metadata.
+    del supabase, club_id
     if not is_admin_league_manager_enabled():
         return {
             "enabled": False,
             "status": "guarded_off",
             "sessions_endpoint": None,
+            "roster_suggestion_endpoint": None,
+            "round_plan_endpoint": None,
+            "streamlit_fallback": "league_manager",
             "warnings": ["Next League Manager is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER on FastAPI."],
         }
-    count = 0
-    if supabase is not None:
-        try:
-            count = len(_safe_rows(supabase.table("league_live_sessions").select("id").eq("club_id", str(club_id)).execute()))
-        except Exception:
-            count = 0
+    if not is_admin_league_live_domain_enabled():
+        return {
+            "enabled": False,
+            "status": "streamlit_fallback",
+            "sessions_endpoint": None,
+            "roster_suggestion_endpoint": None,
+            "round_plan_endpoint": None,
+            "streamlit_fallback": "league_manager",
+            "warnings": [
+                "Python-authoritative League Live is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN on staging FastAPI only."
+            ],
+        }
+    submit_enabled = is_admin_league_live_submit_enabled()
     return {
         "enabled": True,
-        "status": "ready_for_persistent_league_live_sessions",
+        "status": "ready_for_durable_all_match_publish" if submit_enabled else "ready_for_python_authoritative_league_live",
         "sessions_endpoint": "/admin/clubs/{club_id}/league-manager/live-sessions",
-        "session_count": count,
-        "warnings": [],
+        "roster_suggestion_endpoint": "/admin/clubs/{club_id}/league-manager/live/roster-suggestion",
+        "round_plan_endpoint": "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/plan",
+        "submit_enabled": submit_enabled,
+        "round_submit_endpoint": (
+            "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/submit"
+            if submit_enabled
+            else None
+        ),
+        "round_reconcile_endpoint": (
+            "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/reconcile"
+            if submit_enabled
+            else None
+        ),
+        "round_compensate_endpoint": (
+            "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/compensate"
+            if submit_enabled
+            else None
+        ),
+        "guest_endpoint": (
+            "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/guests" if submit_enabled else None
+        ),
+        "export_endpoint": (
+            "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/export" if submit_enabled else None
+        ),
+        "movement_authority": "python_fastapi",
+        "publish_authority": "python_fastapi",
+        "streamlit_fallback": "league_manager",
+        "warnings": (
+            []
+            if submit_enabled
+            else [
+                "Durable all-match publish is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT on staging FastAPI only."
+            ]
+        ),
     }
 
 
@@ -289,23 +568,27 @@ def list_admin_league_live_sessions(
     status: str | None = None,
     limit: int = 50,
 ) -> dict[str, Any]:
-    if not is_admin_league_manager_enabled():
-        raise PermissionError("Next League Manager is disabled.")
-    query = supabase.table("league_live_sessions").select("*").eq("club_id", str(club_id))
-    clean_status = _clean_text(status, limit=40).lower()
-    if clean_status:
-        query = query.eq("status", clean_status)
+    _ensure_live_domain_enabled()
+    query: Any | None = None
     try:
+        query = supabase.table("league_live_sessions").select("*").eq("club_id", str(club_id))
+        clean_status = _clean_text(status, limit=40).lower()
+        if clean_status:
+            query = query.eq("status", clean_status)
         rows = _safe_rows(query.order("updated_at", desc=True).limit(max(1, min(int(limit or 50), 200))).execute())
-    except Exception:
-        rows = _safe_rows(query.execute())
+    except Exception as first_exc:
+        try:
+            if query is None:
+                raise first_exc
+            rows = _safe_rows(query.execute())
+        except Exception as exc:
+            raise LeagueLivePersistenceError("Unable to list League Live sessions from private storage.") from exc
     sessions = [_session_payload(row) for row in rows]
     return {"ok": True, "mode": "league_live_sessions_list", "sessions": sessions, "count": len(sessions)}
 
 
 def get_admin_league_live_session(supabase: Any, *, club_id: str, session_id: str) -> dict[str, Any]:
-    if not is_admin_league_manager_enabled():
-        raise PermissionError("Next League Manager is disabled.")
+    _ensure_live_domain_enabled()
     row = _fetch_session_row(supabase, club_id=str(club_id), session_id=str(session_id))
     if row is None:
         raise ValueError("league live session not found")
@@ -313,6 +596,101 @@ def get_admin_league_live_session(supabase: Any, *, club_id: str, session_id: st
     rounds = _fetch_rounds(supabase, club_id=str(club_id), session_id=str(session_id))
     courts = _fetch_courts(supabase, club_id=str(club_id), session_id=str(session_id))
     return {"ok": True, "mode": "league_live_session_detail", "session": session, "rounds": rounds, "courts": courts}
+
+
+def suggest_admin_league_live_roster(
+    supabase: Any,
+    *,
+    club_id: str,
+    roster: list[dict[str, Any]],
+    court_sizes: list[int] | None = None,
+    prefer_keep_player_ids: list[Any] | None = None,
+    bench_player_ids: list[Any] | None = None,
+    bench_override_reason: str | None = None,
+    round_number: int = 1,
+) -> dict[str, Any]:
+    _ensure_live_domain_enabled()
+    canonical_roster = _verified_club_roster(supabase, club_id=club_id, roster=roster)
+    return build_league_live_roster_suggestion(
+        canonical_roster,
+        court_sizes=court_sizes,
+        prefer_keep_player_ids=prefer_keep_player_ids,
+        bench_player_ids=bench_player_ids,
+        bench_override_reason=bench_override_reason,
+        round_number=round_number,
+    )
+
+
+def build_admin_league_live_round_plan(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_id: str,
+    round_number: int,
+    expected_updated_at: str,
+    matches: list[dict[str, Any]],
+    courts: list[dict[str, Any]] | None = None,
+    movement_overrides: list[dict[str, Any]] | None = None,
+    override_reason: str | None = None,
+    roster_change: dict[str, Any] | None = None,
+    bench_player_ids: list[Any] | None = None,
+    bench_override_reason: str | None = None,
+) -> dict[str, Any]:
+    _ensure_live_domain_enabled()
+    session_row = _fetch_session_row(supabase, club_id=str(club_id), session_id=str(session_id))
+    if session_row is None:
+        raise LeagueLiveDomainError("league live session not found")
+    _expected_session_version(session_row, expected_updated_at)
+    safe_round = max(1, _safe_int(round_number, 1) or 1)
+    if safe_round != (_safe_int(session_row.get("current_round"), 1) or 1):
+        raise LeagueLiveConflictError("This round is no longer current. Reload the League Live session.")
+    if str(session_row.get("status") or "").lower() not in {"active", "setup"}:
+        raise LeagueLiveConflictError("League Live movement is available only for an active session.")
+
+    resolved_roster_change = dict(roster_change or {}) or None
+    if resolved_roster_change:
+        incoming = resolved_roster_change.get("player")
+        if not isinstance(incoming, dict):
+            raise LeagueLiveDomainError("Roster change requires a player.")
+        incoming_id = _safe_int(incoming.get("player_id", incoming.get("id")))
+        if incoming_id is None or incoming_id <= 0:
+            raise LeagueLiveDomainError("Roster change requires a positive incoming player ID.")
+        try:
+            verified = _first_row(
+                supabase.table("players")
+                .select("*")
+                .eq("club_id", str(club_id))
+                .eq("id", int(incoming_id))
+                .limit(1)
+                .execute()
+            )
+        except Exception as exc:
+            raise LeagueLivePersistenceError("Unable to verify the incoming roster player.") from exc
+        if verified is None:
+            raise LeagueLiveDomainError("Incoming roster player does not belong to this club.")
+        resolved_roster_change["player"] = {
+            "player_id": int(incoming_id),
+            "player_name": _clean_text(verified.get("name"), limit=160),
+            "rating": verified.get("rating")
+            if verified.get("rating") is not None
+            else verified.get("rating_jupr", 1200.0),
+        }
+
+    effective_courts = list(courts or _as_list(session_row.get("current_court_state_json")))
+    return build_league_live_round_plan(
+        session_id=str(session_id),
+        round_number=safe_round,
+        total_rounds=_safe_int(session_row.get("total_rounds"), safe_round) or safe_round,
+        session_updated_at=str(session_row.get("updated_at") or ""),
+        roster=_as_list(session_row.get("roster_json")),
+        courts=effective_courts,
+        matches=matches,
+        movement_overrides=movement_overrides,
+        override_reason=override_reason,
+        roster_change=resolved_roster_change,
+        bench_player_ids=bench_player_ids,
+        bench_override_reason=bench_override_reason,
+    )
 
 
 def create_admin_league_live_session(
@@ -325,14 +703,15 @@ def create_admin_league_live_session(
     current_round: int = 1,
     roster: list[dict[str, Any]] | None = None,
     courts: list[dict[str, Any]] | None = None,
+    bench_player_ids: list[Any] | None = None,
+    bench_override_reason: str | None = None,
     notes: str | None = None,
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
     source: str = "next_league_live_session_create",
 ) -> dict[str, Any]:
-    if not is_admin_league_manager_enabled():
-        raise PermissionError("Next League Manager is disabled.")
+    _ensure_live_domain_enabled()
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_CREATE_SESSION:
         raise ValueError(f"Type {CONFIRM_CREATE_SESSION} to create a persisted league live session.")
     clean_league = _clean_text(league_name, limit=120)
@@ -342,7 +721,19 @@ def create_admin_league_live_session(
     safe_current_round = max(1, min(_safe_int(current_round, 1) or 1, safe_total_rounds))
     session_id = str(uuid4())
     now = _now_iso()
-    normalized_courts = _normalize_courts(courts or [], default_round=safe_current_round)
+    canonical_roster = _verified_club_roster(
+        supabase,
+        club_id=str(club_id),
+        roster=list(roster or []),
+    )
+    roster_plan = _normalize_roster_and_courts(
+        roster=canonical_roster,
+        courts=list(courts or []),
+        round_number=safe_current_round,
+        bench_player_ids=bench_player_ids,
+        bench_override_reason=bench_override_reason,
+    )
+    normalized_courts = list(roster_plan["courts"])
     payload = {
         "id": session_id,
         "club_id": str(club_id),
@@ -351,7 +742,7 @@ def create_admin_league_live_session(
         "status": "active",
         "total_rounds": safe_total_rounds,
         "current_round": safe_current_round,
-        "roster_json": _as_list(roster),
+        "roster_json": list(roster_plan["roster"]),
         "current_court_state_json": normalized_courts,
         "notes": _clean_text(notes, limit=1000) or None,
         "created_by": str(actor_email or ""),
@@ -360,19 +751,48 @@ def create_admin_league_live_session(
         "created_at": now,
         "updated_at": now,
     }
-    inserted = _first_row(supabase.table("league_live_sessions").insert(payload).execute()) or payload
-    court_rows = _replace_court_snapshots(supabase, club_id=str(club_id), session_id=session_id, round_number=safe_current_round, courts=normalized_courts)
-    warnings = _audit(
-        supabase,
-        club_id=str(club_id),
-        actor_email=actor_email,
-        actor_role=actor_role,
-        action_type="create_league_live_session_admin",
-        entity_id=session_id,
-        after_json={"session": _session_payload(inserted), "court_count": len(court_rows)},
-        source=source,
-    )
-    return {"ok": True, "mode": "league_live_session_create", "session": _session_payload(inserted), "courts": court_rows, "warnings": warnings}
+    inserted = _first_row(supabase.table("league_live_sessions").insert(payload).execute())
+    if inserted is None:
+        raise LeagueLivePersistenceError("League Live session did not persist.")
+    try:
+        court_rows = _replace_court_snapshots(
+            supabase,
+            club_id=str(club_id),
+            session_id=session_id,
+            round_number=safe_current_round,
+            courts=normalized_courts,
+        )
+        warnings = _audit(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="create_league_live_session_admin",
+            entity_id=session_id,
+            after_json={
+                "session": _session_payload(inserted),
+                "court_count": len(court_rows),
+                "bench_player_ids": roster_plan["bench_player_ids"],
+                "roster_fingerprint": roster_plan["fingerprint"],
+            },
+            source=source,
+        )
+    except Exception:
+        try:
+            supabase.table("league_live_courts").delete().eq("club_id", str(club_id)).eq("session_id", session_id).execute()
+            supabase.table("league_live_sessions").delete().eq("club_id", str(club_id)).eq("id", session_id).execute()
+        except Exception:
+            pass
+        raise
+    return {
+        "ok": True,
+        "mode": "league_live_session_create",
+        "session": _session_payload(inserted),
+        "courts": court_rows,
+        "roster_suggestion": roster_plan,
+        "recovery": {"streamlit_fallback": "league_manager", "session_detail": f"/admin/clubs/{{club_id}}/league-manager/live-sessions/{session_id}"},
+        "warnings": warnings,
+    }
 
 
 def update_admin_league_live_session_snapshot(
@@ -386,59 +806,122 @@ def update_admin_league_live_session_snapshot(
     confirmation_text: str,
     source: str = "next_league_live_session_snapshot",
 ) -> dict[str, Any]:
-    if not is_admin_league_manager_enabled():
-        raise PermissionError("Next League Manager is disabled.")
+    _ensure_live_domain_enabled()
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_SAVE_SESSION:
         raise ValueError(f"Type {CONFIRM_SAVE_SESSION} to save the league live session snapshot.")
     before = _fetch_session_row(supabase, club_id=str(club_id), session_id=str(session_id))
     if before is None:
         raise ValueError("league live session not found")
+    expected_updated_at = _expected_session_version(before, patch.get("expected_updated_at"))
     current_round = _safe_int(patch.get("current_round"), _safe_int(before.get("current_round"), 1) or 1) or 1
     total_rounds = max(1, min(_safe_int(patch.get("total_rounds"), _safe_int(before.get("total_rounds"), 1) or 1) or 1, 50))
     current_round = max(1, min(current_round, total_rounds))
     status = _clean_text(patch.get("status") or before.get("status") or "active", limit=40).lower()
     if status not in SESSION_STATUSES:
         raise ValueError("unsupported session status")
-    normalized_courts = _normalize_courts(patch.get("courts") or patch.get("current_court_state_json") or [], default_round=current_round)
+    current_status = _clean_text(before.get("status") or "setup", limit=40).lower()
+    allowed_transitions = {
+        "setup": {"setup", "active", "archived"},
+        "active": {"active", "paused", "complete"},
+        "paused": {"paused", "active", "complete"},
+        "complete": {"complete", "archived"},
+        "archived": {"archived"},
+    }
+    if status not in allowed_transitions.get(current_status, {current_status}):
+        raise LeagueLiveConflictError(f"Cannot change League Live status from {current_status} to {status}.")
+
+    requested_roster = patch.get("roster", patch.get("roster_json", before.get("roster_json")))
+    requested_courts = patch.get("courts", patch.get("current_court_state_json", before.get("current_court_state_json")))
+    canonical_roster = _verified_club_roster(
+        supabase,
+        club_id=str(club_id),
+        roster=_as_list(requested_roster),
+    )
+    roster_plan = _normalize_roster_and_courts(
+        roster=canonical_roster,
+        courts=_as_list(requested_courts),
+        round_number=current_round,
+        bench_player_ids=_as_list(patch.get("bench_player_ids")),
+        bench_override_reason=patch.get("bench_override_reason"),
+    )
+    normalized_courts = list(roster_plan["courts"])
     payload: dict[str, Any] = {
         "status": status,
         "total_rounds": total_rounds,
         "current_round": current_round,
         "updated_by": str(actor_email or ""),
         "updated_at": _now_iso(),
+        "roster_json": list(roster_plan["roster"]),
+        "current_court_state_json": normalized_courts,
     }
     if "week_tag" in patch:
         payload["week_tag"] = _clean_text(patch.get("week_tag"), limit=80)
     if "notes" in patch:
         payload["notes"] = _clean_text(patch.get("notes"), limit=1000) or None
-    if "roster" in patch or "roster_json" in patch:
-        payload["roster_json"] = _as_list(patch.get("roster", patch.get("roster_json")))
-    if normalized_courts:
-        payload["current_court_state_json"] = normalized_courts
     if status == "complete" and not before.get("completed_at"):
         payload["completed_at"] = _now_iso()
+    before_courts = _court_rows_for_round(
+        supabase,
+        club_id=str(club_id),
+        session_id=str(session_id),
+        round_number=current_round,
+    )
     updated = _first_row(
         supabase.table("league_live_sessions")
         .update(payload)
         .eq("club_id", str(club_id))
         .eq("id", str(session_id))
+        .eq("updated_at", expected_updated_at)
         .execute()
-    ) or {**before, **payload}
-    court_rows = []
-    if normalized_courts:
-        court_rows = _replace_court_snapshots(supabase, club_id=str(club_id), session_id=str(session_id), round_number=current_round, courts=normalized_courts)
-    warnings = _audit(
-        supabase,
-        club_id=str(club_id),
-        actor_email=actor_email,
-        actor_role=actor_role,
-        action_type="update_league_live_session_snapshot_admin",
-        entity_id=str(session_id),
-        before_json={"session": _session_payload(before)},
-        after_json={"session": _session_payload(updated), "court_count": len(court_rows)},
-        source=source,
     )
-    return {"ok": True, "mode": "league_live_session_snapshot_update", "session": _session_payload(updated), "courts": court_rows, "warnings": warnings}
+    if updated is None:
+        raise LeagueLiveConflictError("League Live session changed while this snapshot was saving. Reload and retry.")
+    try:
+        court_rows = _replace_court_snapshots(
+            supabase,
+            club_id=str(club_id),
+            session_id=str(session_id),
+            round_number=current_round,
+            courts=normalized_courts,
+        )
+        warnings = _audit(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="update_league_live_session_snapshot_admin",
+            entity_id=str(session_id),
+            before_json={"session": _session_payload(before), "courts": before_courts},
+            after_json={
+                "session": _session_payload(updated),
+                "court_count": len(court_rows),
+                "bench_player_ids": roster_plan["bench_player_ids"],
+                "roster_fingerprint": roster_plan["fingerprint"],
+            },
+            source=source,
+        )
+    except Exception:
+        try:
+            supabase.table("league_live_sessions").update(_session_restore_payload(before)).eq("club_id", str(club_id)).eq("id", str(session_id)).execute()
+            _restore_court_snapshots(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                round_number=current_round,
+                courts=before_courts,
+            )
+        except Exception:
+            pass
+        raise
+    return {
+        "ok": True,
+        "mode": "league_live_session_snapshot_update",
+        "session": _session_payload(updated),
+        "courts": court_rows,
+        "roster_suggestion": roster_plan,
+        "recovery": {"streamlit_fallback": "league_manager", "previous_session": _session_payload(before)},
+        "warnings": warnings,
+    }
 
 
 def save_admin_league_live_round(
@@ -452,6 +935,13 @@ def save_admin_league_live_round(
     preview: dict[str, Any] | None = None,
     matches: list[dict[str, Any]] | None = None,
     movement: dict[str, Any] | None = None,
+    movement_overrides: list[dict[str, Any]] | None = None,
+    override_reason: str | None = None,
+    roster_change: dict[str, Any] | None = None,
+    bench_player_ids: list[Any] | None = None,
+    bench_override_reason: str | None = None,
+    expected_updated_at: str = "",
+    expected_operation_key: str = "",
     submitted_match_count: int | None = None,
     submitted_match_ids: list[Any] | None = None,
     courts: list[dict[str, Any]] | None = None,
@@ -461,19 +951,23 @@ def save_admin_league_live_round(
     confirmation_text: str,
     source: str = "next_league_live_round_save",
 ) -> dict[str, Any]:
-    if not is_admin_league_manager_enabled():
-        raise PermissionError("Next League Manager is disabled.")
+    _ensure_live_domain_enabled()
+    if (
+        is_admin_league_live_submit_enabled()
+        and source not in {"next_league_live_round_publish", "next_league_live_round_reconcile"}
+        and (_as_list(matches) or submitted_match_count is not None)
+    ):
+        raise PermissionError(
+            "Direct League Live round submission is disabled. Use the durable all-match publish endpoint."
+        )
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_SAVE_ROUND:
         raise ValueError(f"Type {CONFIRM_SAVE_ROUND} to save the league live round state.")
+    if _as_dict(movement):
+        raise LeagueLiveDomainError("Client-supplied movement is not accepted; use the Python round-plan contract.")
     session_row = _fetch_session_row(supabase, club_id=str(club_id), session_id=str(session_id))
     if session_row is None:
         raise ValueError("league live session not found")
     safe_round = max(1, _safe_int(round_number, 1) or 1)
-    matches_list = _as_list(matches)
-    count = submitted_match_count if submitted_match_count is not None else len(matches_list)
-    count = max(0, _safe_int(count, 0) or 0)
-    status = "submitted" if count > 0 else "generated"
-    now = _now_iso()
     existing = _first_row(
         supabase.table("league_live_rounds")
         .select("*")
@@ -483,6 +977,64 @@ def save_admin_league_live_round(
         .limit(1)
         .execute()
     )
+    existing_operation_key = str(
+        (existing or {}).get("operation_key")
+        or _as_dict((existing or {}).get("movement_json")).get("operation_key")
+        or ""
+    )
+    if existing and existing_operation_key and existing_operation_key == str(expected_operation_key):
+        return {
+            "ok": True,
+            "mode": "league_live_round_save",
+            "idempotent_replay": True,
+            "operation_key": existing_operation_key,
+            "session": _session_payload(session_row),
+            "round": _round_payload(existing),
+            "courts": _court_rows_for_round(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                round_number=safe_round,
+            ),
+            "movement": _as_dict(existing.get("movement_json")),
+            "bench": [
+                row for row in _as_list(session_row.get("roster_json")) if str(row.get("status") or "") == "bench"
+            ],
+            "recovery": {
+                "session_detail": f"/admin/clubs/{{club_id}}/league-manager/live-sessions/{session_id}",
+                "match_log": "/admin/match-log",
+                "replay_history": "/admin/replay-history",
+            },
+            "warnings": [],
+        }
+    expected_version = _expected_session_version(session_row, expected_updated_at)
+    matches_list = _as_list(matches)
+    plan = build_admin_league_live_round_plan(
+        supabase,
+        club_id=str(club_id),
+        session_id=str(session_id),
+        round_number=safe_round,
+        expected_updated_at=expected_version,
+        matches=matches_list,
+        courts=list(courts or []),
+        movement_overrides=movement_overrides,
+        override_reason=override_reason,
+        roster_change=roster_change,
+        bench_player_ids=bench_player_ids,
+        bench_override_reason=bench_override_reason,
+    )
+    operation_key = str(plan["operation_key"])
+    if not _clean_text(expected_operation_key, limit=128):
+        raise LeagueLiveConflictError("expected_operation_key is required; preview Python movement again.")
+    if str(expected_operation_key) != operation_key:
+        raise LeagueLiveConflictError("League Live plan changed. Preview Python movement again before saving.")
+    count = plan["scored_match_count"]
+    if submitted_match_count is not None and int(submitted_match_count) != int(count):
+        raise LeagueLiveConflictError("Submitted match count does not match the Python round plan.")
+    status = "submitted"
+    now = _now_iso()
+    if existing and str(existing.get("status") or "") == "submitted":
+        raise LeagueLiveConflictError("This round was already saved with a different operation key. Reload before retrying.")
     payload = {
         "club_id": str(club_id),
         "session_id": str(session_id),
@@ -492,26 +1044,23 @@ def save_admin_league_live_round(
         "match_date": _clean_text(match_date, limit=20) or None,
         "preview_json": _as_dict(preview),
         "matches_json": matches_list,
-        "movement_json": _as_dict(movement),
+        "movement_json": plan["movement"],
+        "operation_key": operation_key,
         "submitted_match_count": count,
         "submitted_match_ids": _as_list(submitted_match_ids),
         "submitted_at": now if count > 0 else None,
         "updated_at": now,
     }
-    if existing:
-        saved = _first_row(
-            supabase.table("league_live_rounds")
-            .update(payload)
-            .eq("id", str(existing.get("id")))
-            .execute()
-        ) or {**existing, **payload}
-    else:
-        insert_payload = {"id": str(uuid4()), "created_at": now, **payload}
-        saved = _first_row(supabase.table("league_live_rounds").insert(insert_payload).execute()) or insert_payload
-    court_rows = _replace_court_snapshots(supabase, club_id=str(club_id), session_id=str(session_id), round_number=safe_round, courts=courts or [])
-    next_round = min(max(safe_round + 1, _safe_int(session_row.get("current_round"), 1) or 1), _safe_int(session_row.get("total_rounds"), safe_round) or safe_round)
+    before_courts = _court_rows_for_round(
+        supabase,
+        club_id=str(club_id),
+        session_id=str(session_id),
+        round_number=safe_round,
+    )
+    next_round = int(plan["next_round"])
     session_patch: dict[str, Any] = {
-        "current_court_state_json": _normalize_courts(courts or [], default_round=next_round) or _as_list(session_row.get("current_court_state_json")),
+        "current_court_state_json": list(plan["next_courts"]),
+        "roster_json": list(plan["next_roster"]),
         "updated_by": str(actor_email or ""),
         "updated_at": now,
     }
@@ -524,24 +1073,88 @@ def save_admin_league_live_round(
         .update(session_patch)
         .eq("club_id", str(club_id))
         .eq("id", str(session_id))
+        .eq("updated_at", expected_version)
         .execute()
-    ) or {**session_row, **session_patch}
-    warnings = _audit(
-        supabase,
-        club_id=str(club_id),
-        actor_email=actor_email,
-        actor_role=actor_role,
-        action_type="save_league_live_round_admin",
-        entity_id=str(session_id),
-        before_json={"session": _session_payload(session_row), "round": _round_payload(existing or {}) if existing else None},
-        after_json={"session": _session_payload(updated_session), "round": _round_payload(saved), "court_count": len(court_rows)},
-        source=source,
     )
+    if updated_session is None:
+        raise LeagueLiveConflictError("League Live session changed while the round was saving. Reload and recover through Match Log if scores were already submitted.")
+    saved: dict[str, Any] | None = None
+    court_rows: list[dict[str, Any]] = []
+    try:
+        if existing:
+            saved = _first_row(
+                supabase.table("league_live_rounds")
+                .update(payload)
+                .eq("id", str(existing.get("id")))
+                .execute()
+            )
+        else:
+            insert_payload = {"id": str(uuid4()), "created_at": now, **payload}
+            saved = _first_row(supabase.table("league_live_rounds").insert(insert_payload).execute())
+        if saved is None:
+            raise LeagueLivePersistenceError("League Live round state did not persist.")
+        court_rows = _replace_court_snapshots(
+            supabase,
+            club_id=str(club_id),
+            session_id=str(session_id),
+            round_number=safe_round,
+            courts=list(plan["current_courts"]),
+        )
+        warnings = _audit(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="save_league_live_round_admin",
+            entity_id=str(session_id),
+            before_json={
+                "session": _session_payload(session_row),
+                "round": _round_payload(existing or {}) if existing else None,
+                "courts": before_courts,
+            },
+            after_json={
+                "session": _session_payload(updated_session),
+                "round": _round_payload(saved),
+                "court_count": len(court_rows),
+                "operation_key": operation_key,
+                "movement_authority": "python_fastapi",
+                "override_reason": plan["movement"].get("override_reason"),
+                "bench_player_ids": plan["bench_player_ids"],
+            },
+            source=source,
+        )
+    except Exception:
+        try:
+            supabase.table("league_live_sessions").update(_session_restore_payload(session_row)).eq("club_id", str(club_id)).eq("id", str(session_id)).execute()
+            if existing:
+                supabase.table("league_live_rounds").update(_round_restore_payload(existing)).eq("id", str(existing.get("id"))).execute()
+            elif saved:
+                supabase.table("league_live_rounds").delete().eq("id", str(saved.get("id"))).execute()
+            _restore_court_snapshots(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                round_number=safe_round,
+                courts=before_courts,
+            )
+        except Exception:
+            pass
+        raise
     return {
         "ok": True,
         "mode": "league_live_round_save",
+        "idempotent_replay": False,
+        "operation_key": operation_key,
         "session": _session_payload(updated_session),
         "round": _round_payload(saved),
         "courts": court_rows,
+        "movement": plan["movement"],
+        "bench": plan["bench"],
+        "recovery": {
+            **plan["recovery"],
+            "previous_session": _session_payload(session_row),
+            "submitted_match_ids": _as_list(submitted_match_ids),
+            "streamlit_fallback": "league_manager",
+        },
         "warnings": warnings,
     }

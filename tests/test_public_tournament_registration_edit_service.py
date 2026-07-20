@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 
 from jupr_app.domain.tournament_registration_edit_tokens import build_registration_edit_token
+from jupr_app.domain.tournament_registration_repo import (
+    PUBLIC_REGISTRATION_EDIT_RPC,
+    TournamentRegistrationEditConflictError,
+    TournamentRegistrationImportedDrawError,
+)
 from jupr_app.services import public_tournament_registration_edit_service as edit_service
 from jupr_app.services.public_tournament_registration_edit_service import (
+    PublicRegistrationEditUnavailableError,
     build_public_tournament_registration_edit_page,
     request_public_tournament_registration_edit_link,
     submit_public_tournament_registration_edit,
@@ -14,7 +22,9 @@ from tests.test_public_tournament_registration_service import FakeSupabase, fake
 
 
 def _registered_supabase(monkeypatch):
-    monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", "test-secret")
+    monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", "test-registration-edit-secret-32bytes")
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://next.example.com")
     storage = fake_storage()
     supabase = FakeSupabase(storage)
     result = submit_public_tournament_registration(
@@ -35,9 +45,21 @@ def _registered_supabase(monkeypatch):
         tournament_id="t1",
         registration_id=result["registration_id"],
         email="alex@example.com",
-        secret="test-secret",
+        secret="test-registration-edit-secret-32bytes",
     )
     return supabase, storage, result["registration_id"], token
+
+
+def _edit_versions(storage):
+    registration = storage["tournament_registrations"][0]
+    return {
+        "expected_updated_at": registration["updated_at"],
+        "expected_selection_versions": [
+            {"id": row["id"], "updated_at": row["updated_at"]}
+            for row in storage["tournament_registration_selections"]
+            if row["registration_id"] == registration["id"]
+        ],
+    }
 
 
 def test_registration_edit_page_verifies_token_and_hydrates_registration(monkeypatch) -> None:
@@ -62,12 +84,15 @@ def test_registration_edit_page_verifies_token_and_hydrates_registration(monkeyp
 
 def test_registration_edit_submit_updates_existing_registration_and_locks_email(monkeypatch) -> None:
     supabase, storage, registration_id, token = _registered_supabase(monkeypatch)
+    storage["tournament_registrations"][0]["age_bracket"] = "50+"
+    selection_id = storage["tournament_registration_selections"][0]["id"]
 
     result = submit_public_tournament_registration_edit(
         supabase,
         club_id="club-1",
         edit_token=token,
         payload={
+            **_edit_versions(storage),
             "tournament_id": "t1",
             "registration_slug": "tres-open",
             "first_name": "Alexis",
@@ -75,8 +100,9 @@ def test_registration_edit_submit_updates_existing_registration_and_locks_email(
             "display_name": "Alexis R",
             "email": "evil@example.com",
             "phone": "555-9999",
-            "doubles_skill": 4.25,
-            "terms_accepted": True,
+                "doubles_skill": 4.25,
+                "wants_partner_board_contact": True,
+                "terms_accepted": True,
             "selections": [
                 {
                     "event_option_id": "event1",
@@ -90,15 +116,223 @@ def test_registration_edit_submit_updates_existing_registration_and_locks_email(
 
     assert result["ok"] is True
     assert result["registration_id"] == registration_id
+    assert result["confirmation_delivery"] == {"status": "dry_run", "delivered": False}
+    assert result["confirmation_token"]
+    assert result["email_delivery"]["status"] == "dry_run"
+    assert "provider_message_id" not in str(result)
+    assert "to_email" not in str(result)
+    assert supabase.rpc_calls[0][0] == PUBLIC_REGISTRATION_EDIT_RPC
     registrations = storage["tournament_registrations"]
     assert len(registrations) == 1
     assert registrations[0]["display_name"] == "Alexis R"
     assert registrations[0]["email"] == "alex@example.com"
     assert registrations[0]["phone"] == "555-9999"
+    assert registrations[0]["age_bracket"] == "50+"
     selections = storage["tournament_registration_selections"]
     assert len(selections) == 1
+    assert selections[0]["id"] == selection_id
     assert selections[0]["partner_mode"] == "NEEDS_PARTNER"
     assert selections[0]["show_on_partner_board"] is True
+
+
+def test_registration_edit_rejects_stale_versions_without_mutation(monkeypatch) -> None:
+    supabase, storage, _registration_id, token = _registered_supabase(monkeypatch)
+    before = deepcopy(storage)
+    versions = _edit_versions(storage)
+    versions["expected_updated_at"] = "2020-01-01T00:00:00Z"
+
+    with pytest.raises(TournamentRegistrationEditConflictError, match="Refresh"):
+        submit_public_tournament_registration_edit(
+            supabase,
+            club_id="club-1",
+            edit_token=token,
+            payload={
+                **versions,
+                "tournament_id": "t1",
+                "first_name": "Changed",
+                "last_name": "Rivera",
+                "email": "alex@example.com",
+                "terms_accepted": True,
+                "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+            },
+        )
+
+    assert storage == before
+    assert supabase.rpc_calls == []
+
+
+def test_registration_edit_switches_division_in_place_within_event_family(monkeypatch) -> None:
+    supabase, storage, _registration_id, token = _registered_supabase(monkeypatch)
+    selection_id = storage["tournament_registration_selections"][0]["id"]
+    replacement_event = {
+        **deepcopy(storage["tournament_event_options"][0]),
+        "id": "event2",
+        "sort_order": 2,
+        "label": "Intermediate Doubles",
+        "division_name": "Intermediate",
+    }
+    storage["tournament_event_options"].append(replacement_event)
+
+    result = submit_public_tournament_registration_edit(
+        supabase,
+        club_id="club-1",
+        edit_token=token,
+        payload={
+            **_edit_versions(storage),
+            "tournament_id": "t1",
+            "first_name": "Alex",
+            "last_name": "Rivera",
+            "email": "alex@example.com",
+            "terms_accepted": True,
+            "selections": [
+                {
+                    "id": selection_id,
+                    "event_option_id": "event2",
+                    "registration_day_id": "day1",
+                    "partner_mode": "NONE",
+                }
+            ],
+        },
+    )
+
+    assert result["ok"] is True
+    saved_selections = storage["tournament_registration_selections"]
+    assert len(saved_selections) == 1
+    assert saved_selections[0]["id"] == selection_id
+    assert saved_selections[0]["event_option_id"] == "event2"
+
+
+def test_registration_edit_save_survives_confirmation_delivery_failure(monkeypatch) -> None:
+    supabase, storage, registration_id, token = _registered_supabase(monkeypatch)
+
+    monkeypatch.setattr(
+        edit_service,
+        "build_registration_confirmation_delivery",
+        lambda *_args, **_kwargs: {
+            "confirmation_available": True,
+            "confirmation_token": "confirmation-token",
+            "email_delivery": {"status": "failed", "message": "Registration was saved, but email failed."},
+        },
+    )
+
+    result = submit_public_tournament_registration_edit(
+        supabase,
+        club_id="club-1",
+        edit_token=token,
+        payload={
+            **_edit_versions(storage),
+            "tournament_id": "t1",
+            "first_name": "Saved",
+            "last_name": "Rivera",
+            "email": "alex@example.com",
+            "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+
+    assert result["registration_id"] == registration_id
+    assert result["confirmation_delivery"] == {"status": "failed", "delivered": False}
+    assert storage["tournament_registrations"][0]["first_name"] == "Saved"
+
+
+def test_registration_edit_rpc_failure_leaves_registration_unchanged(monkeypatch) -> None:
+    supabase, storage, _registration_id, token = _registered_supabase(monkeypatch)
+    storage["_fail_public_registration_edit_rpc"] = True
+    before = deepcopy(storage)
+
+    with pytest.raises(RuntimeError, match="without changing"):
+        submit_public_tournament_registration_edit(
+            supabase,
+            club_id="club-1",
+            edit_token=token,
+            payload={
+                **_edit_versions(storage),
+                "tournament_id": "t1",
+                "first_name": "Must not persist",
+                "last_name": "Rivera",
+                "email": "alex@example.com",
+                "terms_accepted": True,
+                "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+            },
+        )
+
+    assert storage == before
+
+
+def test_imported_draw_blocks_get_and_post_without_mutation(monkeypatch) -> None:
+    supabase, storage, _registration_id, token = _registered_supabase(monkeypatch)
+    second_event = {
+        **deepcopy(storage["tournament_event_options"][0]),
+        "id": "event2",
+        "sort_order": 2,
+        "label": "Open Singles",
+        "event_family_label": "Singles",
+        "division_name": "Open Singles",
+        "event_type": "SINGLES",
+    }
+    storage["tournament_event_options"].append(second_event)
+    storage["tournament_registration_selections"].append(
+        {
+            **deepcopy(storage["tournament_registration_selections"][0]),
+            "id": "sel-second-event",
+            "event_option_id": "event2",
+            "sort_order": 2,
+        }
+    )
+    storage["tournament_teams"].append(
+        {
+            "id": "team-imported",
+            "tournament_id": "t1",
+            "draw_id": "draw-1",
+            "registration_day_id": "day1",
+            "event_option_id": "event2",
+            "source": "REGISTRATION",
+        }
+    )
+    before = deepcopy(storage)
+    sends = {"count": 0}
+    monkeypatch.setattr(
+        edit_service,
+        "send_tournament_registration_edit_email",
+        lambda **_kwargs: sends.__setitem__("count", sends["count"] + 1),
+    )
+
+    link_result = request_public_tournament_registration_edit_link(
+        supabase,
+        club_id="club-1",
+        club_slug="tres-palapas",
+        registration_slug="tres-open",
+        email="alex@example.com",
+    )
+    assert link_result["accepted"] is True
+    assert sends["count"] == 0
+
+    with pytest.raises(TournamentRegistrationImportedDrawError, match="imported into a draw"):
+        build_public_tournament_registration_edit_page(
+            supabase,
+            club_id="club-1",
+            edit_token=token,
+            registration_slug="tres-open",
+        )
+
+    with pytest.raises(TournamentRegistrationImportedDrawError, match="imported into a draw"):
+        submit_public_tournament_registration_edit(
+            supabase,
+            club_id="club-1",
+            edit_token=token,
+            payload={
+                **_edit_versions(storage),
+                "tournament_id": "t1",
+                "first_name": "Changed",
+                "last_name": "Rivera",
+                "email": "alex@example.com",
+                "terms_accepted": True,
+                "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+            },
+        )
+
+    assert storage == before
+    assert supabase.rpc_calls == []
 
 
 def test_registration_edit_rejects_wrong_club(monkeypatch) -> None:
@@ -190,6 +424,20 @@ def test_registration_edit_link_request_honeypot_is_silent(monkeypatch) -> None:
     assert calls["send"] == 0
 
 
+def test_public_edit_api_requires_explicit_stable_secret(monkeypatch) -> None:
+    monkeypatch.delenv("JUPR_REGISTRATION_EDIT_SECRET", raising=False)
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "rotatable-service-role-key")
+
+    with pytest.raises(PublicRegistrationEditUnavailableError, match="stable signing secret"):
+        request_public_tournament_registration_edit_link(
+            FakeSupabase(fake_storage()),
+            club_id="club-1",
+            club_slug="tres-palapas",
+            registration_slug="tres-open",
+            email="alex@example.com",
+        )
+
+
 def test_registration_edit_preserves_existing_closed_division_but_cannot_add_it(monkeypatch) -> None:
     supabase, storage, registration_id, token = _registered_supabase(monkeypatch)
     storage["tournament_event_options"][0]["status"] = "draft"
@@ -209,6 +457,7 @@ def test_registration_edit_preserves_existing_closed_division_but_cannot_add_it(
         club_id="club-1",
         edit_token=token,
         payload={
+            **_edit_versions(storage),
             "tournament_id": "t1",
             "first_name": "Alex",
             "last_name": "Rivera",
@@ -236,7 +485,7 @@ def test_registration_edit_preserves_existing_closed_division_but_cannot_add_it(
 
 
 def test_registration_edit_locks_player_link_and_revalidates_eligibility(monkeypatch) -> None:
-    monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", "test-secret")
+    monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", "test-registration-edit-secret-32bytes")
     storage = fake_storage()
     storage["players"] = [
         {"id": 10, "club_id": "club-1", "name": "Alex Rivera", "email": "alex@example.com", "rating": 1200, "active": True, "inactive_at": None},
@@ -263,7 +512,7 @@ def test_registration_edit_locks_player_link_and_revalidates_eligibility(monkeyp
         tournament_id="t1",
         registration_id=created["registration_id"],
         email="alex@example.com",
-        secret="test-secret",
+        secret="test-registration-edit-secret-32bytes",
     )
 
     edit_page = build_public_tournament_registration_edit_page(
@@ -280,6 +529,7 @@ def test_registration_edit_locks_player_link_and_revalidates_eligibility(monkeyp
             club_id="club-1",
             edit_token=token,
             payload={
+                **_edit_versions(storage),
                 "tournament_id": "t1",
                 "first_name": "Alex",
                 "email": "alex@example.com",
@@ -314,6 +564,7 @@ def test_registration_edit_rejects_slug_for_another_open_tournament(monkeypatch)
             club_id="club-1",
             edit_token=token,
             payload={
+                **_edit_versions(storage),
                 "tournament_id": "t1",
                 "registration_slug": "other-open",
                 "first_name": "Alex",

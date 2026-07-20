@@ -11,6 +11,9 @@ CANCELLED_STATUS = "CANCELLED"
 ADMIN_CONFIRMED_STATUS = "ADMIN_CONFIRMED"
 ACTIVE_MEMBER_STATUS = "ACTIVE"
 CONFIRMED_LINK_STATUSES = {"CONFIRMED", "ADMIN_CONFIRMED"}
+CREATE_PARTNER_REQUEST_RPC = "create_tournament_partner_request"
+TRANSITION_PARTNER_REQUEST_RPC = "transition_tournament_partner_request"
+PARTNER_TRANSACTION_ERROR_MARKER = "JUPR_PARTNER_TRANSACTION"
 
 
 def _uid(prefix: str) -> str:
@@ -33,8 +36,58 @@ def _safe_first(resp: Any) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
+def _safe_rpc_payload(resp: Any) -> dict[str, Any] | None:
+    """Normalize PostgREST JSON function responses across supabase-py versions."""
+
+    try:
+        data = resp.data
+    except Exception:
+        return None
+    if isinstance(data, dict):
+        return dict(data)
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        return dict(data[0])
+    return None
+
+
+def _database_error_contains(exc: Exception, marker: str) -> bool:
+    values: list[str] = [str(exc or "")]
+    for attr in ("code", "message", "details", "hint"):
+        value = getattr(exc, attr, None)
+        if value is not None:
+            values.append(str(value))
+    for arg in getattr(exc, "args", ()):
+        if isinstance(arg, dict):
+            values.extend(str(value) for value in arg.values() if value is not None)
+        elif arg is not None:
+            values.append(str(arg))
+    return str(marker).upper() in "\n".join(values).upper()
+
+
+def _execute_partner_rpc(rpc_call: Any) -> Any:
+    try:
+        return rpc_call.execute()
+    except Exception as exc:
+        if _database_error_contains(exc, PARTNER_TRANSACTION_ERROR_MARKER) or _database_error_contains(
+            exc,
+            "JUPR_RELATION_",
+        ):
+            raise ValueError(
+                "Partner request state changed or is invalid. Refresh the board and try again."
+            ) from exc
+        raise RuntimeError("Partner request transaction failed.") from exc
+
+
 def _safe_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _safe_bool(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return _safe_text(value).lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _table(supabase, table_name: str):
@@ -116,9 +169,12 @@ def _pending_requests_for_event(supabase, *, event_option_id: str) -> list[dict[
 
 
 def _update_selection_partner_mode(supabase, *, selection_id: str, partner_mode: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {"partner_mode": partner_mode}
+    if _safe_text(partner_mode).upper() == "HAS_PARTNER":
+        payload["show_on_partner_board"] = False
     updated = _safe_first(
         _table(supabase, "tournament_registration_selections")
-        .update({"partner_mode": partner_mode})
+        .update(payload)
         .eq("id", _safe_text(selection_id))
         .execute()
     )
@@ -389,6 +445,258 @@ def cancel_partner_request(
         status=CANCELLED_STATUS,
         actor_user_id=admin_user_id,
     )
+
+
+def _pending_request_for_pair(
+    supabase,
+    *,
+    event_option_id: str,
+    requester_selection_id: str,
+    target_selection_id: str,
+) -> dict[str, Any] | None:
+    for request in _pending_requests_for_event(supabase, event_option_id=event_option_id):
+        if _safe_text(request.get("requester_selection_id")) != _safe_text(requester_selection_id):
+            continue
+        if _safe_text(request.get("target_selection_id")) == _safe_text(target_selection_id):
+            return request
+    return None
+
+
+def create_partner_request_atomic(
+    supabase,
+    *,
+    request_id: str,
+    tournament_id: str,
+    event_option_id: str,
+    requester_selection_id: str,
+    target_selection_id: str,
+    target_display_name_snapshot: str | None,
+    source: str,
+) -> dict[str, Any]:
+    """Create a request through the transactional Supabase RPC.
+
+    The table-based fallback is retained only for local fakes and the Streamlit
+    compatibility harness. A real supabase-py client always exposes ``rpc`` and
+    therefore uses the database transaction, row locks, and pending-pair unique
+    index defined by the canonical migration.
+    """
+
+    rpc = getattr(supabase, "rpc", None)
+    if callable(rpc):
+        payload = _safe_rpc_payload(
+            _execute_partner_rpc(
+                rpc(
+                    CREATE_PARTNER_REQUEST_RPC,
+                    {
+                        "p_request_id": _safe_text(request_id),
+                        "p_tournament_id": _safe_text(tournament_id),
+                        "p_event_option_id": _safe_text(event_option_id),
+                        "p_requester_selection_id": _safe_text(requester_selection_id),
+                        "p_target_selection_id": _safe_text(target_selection_id),
+                        "p_target_display_name_snapshot": _safe_text(target_display_name_snapshot) or None,
+                        "p_source": _safe_text(source),
+                    },
+                )
+            )
+        )
+        if not payload:
+            raise ValueError("Partner request transaction returned no result.")
+        return payload
+
+    existing = _pending_request_for_pair(
+        supabase,
+        event_option_id=event_option_id,
+        requester_selection_id=requester_selection_id,
+        target_selection_id=target_selection_id,
+    )
+    if existing:
+        return {**existing, "idempotent": True, "outcome": "existing"}
+    created = create_partner_request(
+        supabase,
+        tournament_id=tournament_id,
+        event_option_id=event_option_id,
+        requester_selection_id=requester_selection_id,
+        target_selection_id=target_selection_id,
+        target_display_name_snapshot=target_display_name_snapshot,
+        source=source,
+    )
+    return {**created, "idempotent": False, "outcome": "created"}
+
+
+def transition_partner_request_atomic(
+    supabase,
+    *,
+    request_id: str,
+    actor_selection_id: str,
+    action: str,
+) -> dict[str, Any]:
+    """Accept, decline, or cancel a request in one database transaction."""
+
+    clean_action = _safe_text(action).lower()
+    if clean_action not in {"accept", "decline", "cancel"}:
+        raise ValueError("Unsupported partner request action.")
+    rpc = getattr(supabase, "rpc", None)
+    if callable(rpc):
+        payload = _safe_rpc_payload(
+            _execute_partner_rpc(
+                rpc(
+                    TRANSITION_PARTNER_REQUEST_RPC,
+                    {
+                        "p_request_id": _safe_text(request_id),
+                        "p_actor_selection_id": _safe_text(actor_selection_id),
+                        "p_action": clean_action,
+                    },
+                )
+            )
+        )
+        if not payload:
+            raise ValueError("Partner request transaction returned no result.")
+        return payload
+
+    request = _get_request(supabase, request_id)
+    desired_status = {
+        "accept": ACCEPTED_STATUS,
+        "decline": DECLINED_STATUS,
+        "cancel": CANCELLED_STATUS,
+    }[clean_action]
+    current_status = _safe_text(request.get("status")).upper()
+    if current_status == desired_status:
+        link = next(
+            (
+                row
+                for row in _safe_data(
+                    _table(supabase, "tournament_registration_team_links")
+                    .select("*")
+                    .eq("accepted_request_id", _safe_text(request_id))
+                    .limit(1)
+                    .execute()
+                )
+            ),
+            None,
+        )
+        return {
+            "outcome": "idempotent",
+            "idempotent": True,
+            "status": current_status,
+            "partner_request_id": _safe_text(request_id),
+            "team_link_id": _safe_text((link or {}).get("id")) or None,
+            "cancelled_request_ids": [],
+        }
+    if current_status != PENDING_STATUS:
+        return {
+            "outcome": "stale",
+            "idempotent": False,
+            "status": current_status,
+            "partner_request_id": _safe_text(request_id),
+            "team_link_id": None,
+            "cancelled_request_ids": [],
+        }
+
+    if clean_action == "accept" and _safe_text(request.get("source")).upper() == "PUBLIC_PARTNER_BOARD":
+        requester_selection = _get_selection(supabase, _safe_text(request.get("requester_selection_id")))
+        target_selection = _get_selection(supabase, _safe_text(request.get("target_selection_id")))
+        requester_registration = _get_registration(supabase, _safe_text(requester_selection.get("registration_id")))
+        target_registration = _get_registration(supabase, _safe_text(target_selection.get("registration_id")))
+        event = _safe_first(
+            _table(supabase, "tournament_event_options")
+            .select("*")
+            .eq("id", _safe_text(request.get("event_option_id")))
+            .limit(1)
+            .execute()
+        ) or {}
+        settings = _safe_first(
+            _table(supabase, "tournament_registration_settings")
+            .select("*")
+            .eq("tournament_id", _safe_text(request.get("tournament_id")))
+            .limit(1)
+            .execute()
+        ) or {}
+        inactive_statuses = {"CANCELLED", "WITHDRAWN"}
+        stale_public_target = (
+            _safe_text(requester_registration.get("status") or "CONFIRMED").upper() in inactive_statuses
+            or _safe_text(target_registration.get("status") or "CONFIRMED").upper() in inactive_statuses
+            or not event
+            or not _safe_bool(event.get("enabled"), default=True)
+            or not _safe_bool(event.get("partner_board_enabled", event.get("public_partner_board")))
+            or _safe_text(event.get("status") or "draft").lower()
+            not in {"open", "tentative", "confirmed", "published", "active"}
+            or not settings
+            or not _safe_bool(settings.get("partner_board_enabled"))
+            or _safe_text(target_selection.get("partner_mode") or "NONE").upper() != "NEEDS_PARTNER"
+            or not _safe_bool(target_selection.get("show_on_partner_board"))
+            or not _safe_bool(target_registration.get("wants_partner_board_contact"))
+            or bool(
+                _active_team_members_for_selection(
+                    supabase,
+                    event_option_id=_safe_text(request.get("event_option_id")),
+                    selection_id=_safe_text(requester_selection.get("id")),
+                )
+            )
+            or bool(
+                _active_team_members_for_selection(
+                    supabase,
+                    event_option_id=_safe_text(request.get("event_option_id")),
+                    selection_id=_safe_text(target_selection.get("id")),
+                )
+            )
+        )
+        if stale_public_target:
+            _update_request_status(
+                supabase,
+                request_id=_safe_text(request_id),
+                status=CANCELLED_STATUS,
+            )
+            return {
+                "outcome": "stale",
+                "idempotent": False,
+                "status": CANCELLED_STATUS,
+                "partner_request_id": _safe_text(request_id),
+                "team_link_id": None,
+                "cancelled_request_ids": [],
+            }
+
+    before_pending = {
+        _safe_text(row.get("id"))
+        for row in _pending_requests_for_event(
+            supabase,
+            event_option_id=_safe_text(request.get("event_option_id")),
+        )
+    }
+    team_link: dict[str, Any] | None = None
+    if clean_action == "accept":
+        team_link = accept_partner_request(
+            supabase,
+            request_id=request_id,
+            accepted_by_selection_id=actor_selection_id,
+        )
+    elif clean_action == "decline":
+        decline_partner_request(
+            supabase,
+            request_id=request_id,
+            declined_by_selection_id=actor_selection_id,
+        )
+    else:
+        cancel_partner_request(
+            supabase,
+            request_id=request_id,
+            cancelled_by_selection_id=actor_selection_id,
+        )
+    after_pending = {
+        _safe_text(row.get("id"))
+        for row in _pending_requests_for_event(
+            supabase,
+            event_option_id=_safe_text(request.get("event_option_id")),
+        )
+    }
+    cancelled_ids = sorted(before_pending - after_pending - {_safe_text(request_id)})
+    return {
+        "outcome": "applied",
+        "idempotent": False,
+        "status": desired_status,
+        "partner_request_id": _safe_text(request_id),
+        "team_link_id": _safe_text((team_link or {}).get("id")) or None,
+        "cancelled_request_ids": cancelled_ids,
+    }
 
 
 def admin_confirm_partner_link(

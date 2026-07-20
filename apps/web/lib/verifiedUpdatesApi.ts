@@ -19,6 +19,14 @@ export type VerifiedUpdateRequestResponse = {
   request_status?: string | null;
   player?: VerifiedUpdatePlayer | null;
   subscription_id?: string | null;
+  deduplicated?: boolean | null;
+};
+
+export type VerifiedUpdateStatusResponse = {
+  ok: boolean;
+  mode?: string;
+  player?: VerifiedUpdatePlayer | null;
+  club?: { id: string; slug: string; name: string };
 };
 
 export type ApiResult<T> = { data: T | null; error: string | null };
@@ -39,7 +47,7 @@ async function apiError(response: Response): Promise<string> {
   }
 }
 
-export async function loadVerifiedUpdatePlayers(clubSlug = "tres-palapas"): Promise<ApiResult<VerifiedUpdateOptionsResponse>> {
+export async function loadVerifiedUpdatePlayers(clubSlug: string): Promise<ApiResult<VerifiedUpdateOptionsResponse>> {
   const apiBase = verifiedUpdatesApiBaseUrl();
   if (!apiBase) return { data: null, error: "Missing JUPR API base URL." };
   try {

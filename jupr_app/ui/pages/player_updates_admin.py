@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
-from jupr_app.config import SMTPConfig, get_email_mode, get_env_or_default, get_public_base_url
+from jupr_app.config import SMTPConfig, get_email_mode, get_env_or_default, get_next_web_base_url
 from jupr_app.domain.notifications.player_profile_update_repo import (
     REQUEST_STATUS_UNSUBSCRIBED,
     approve_request,
@@ -231,8 +231,7 @@ def _resolve_smtp_config_from_ui() -> SMTPConfig | None:
     )
 
 def _resolve_public_base_url() -> str:
-    base = str(st.session_state.get("base_url", "") or "").strip().rstrip("/")
-    return base or get_public_base_url()
+    return get_next_web_base_url()
 
 def _friendly_error(exc: Exception) -> str:
     text = str(exc or "").strip()

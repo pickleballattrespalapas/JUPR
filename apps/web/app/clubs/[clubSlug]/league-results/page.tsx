@@ -1,6 +1,11 @@
 import Link from "next/link";
 import { getClubLeagueResults } from "@/lib/api";
-import type { LeagueResultsStatRow, LeagueResultsStanding } from "@/lib/api";
+import type {
+  LeagueResultsHighlights,
+  LeagueResultsRecentMatch,
+  LeagueResultsStatRow,
+  LeagueResultsStanding
+} from "@/lib/api";
 import PrintButton from "./PrintButton";
 
 type LeagueResultsPageProps = {
@@ -68,9 +73,22 @@ function parsePositiveInt(value: string | null): number | null {
   return Math.round(n);
 }
 
+function boundedInt(value: string | null, fallback: number, min: number, max: number): number {
+  const parsed = parsePositiveInt(value);
+  if (parsed == null) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
 function ratingLabel(value?: number | null): string {
   if (value == null || Number.isNaN(Number(value))) return "—";
   return Number(value).toFixed(3);
+}
+
+function dateLabel(value?: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
+  return date.toISOString().slice(0, 10);
 }
 
 function percentLabel(value?: number | null): string {
@@ -94,6 +112,7 @@ function pageHref({
   section,
   week,
   player,
+  weeklyMinGames,
   print
 }: {
   clubSlug: string;
@@ -101,6 +120,7 @@ function pageHref({
   section?: SectionKey | null;
   week?: number | null;
   player?: string | number | null;
+  weeklyMinGames?: number | null;
   print?: boolean;
 }): string {
   const params = new URLSearchParams();
@@ -108,6 +128,7 @@ function pageHref({
   if (section && section !== "overall") params.set("section", section);
   if (week) params.set("week", String(week));
   if (player) params.set("player", String(player));
+  if (weeklyMinGames) params.set("weekly_min_games", String(weeklyMinGames));
   if (print) params.set("print", "1");
   const query = params.toString();
   return `/clubs/${clubSlug}/league-results${query ? `?${query}` : ""}`;
@@ -128,6 +149,47 @@ function HighlightList({ title, rows, clubSlug }: { title: string; rows: LeagueR
         ))}
       </ol>
     </article>
+  );
+}
+
+function HighlightGrid({ highlights, clubSlug }: { highlights: LeagueResultsHighlights; clubSlug: string }) {
+  const qualifier = Math.max(1, Number(highlights.min_games || 1));
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
+      <HighlightList title="Biggest climbers" rows={highlights.biggest_climbers} clubSlug={clubSlug} />
+      <HighlightList title={`Best win % (${qualifier}+ games)`} rows={highlights.best_win_pct} clubSlug={clubSlug} />
+      <HighlightList title="Most active" rows={highlights.most_active} clubSlug={clubSlug} />
+    </div>
+  );
+}
+
+function RecentMatchesTable({ rows, clubSlug }: { rows: LeagueResultsRecentMatch[]; clubSlug: string }) {
+  if (!rows.length) return <p style={{ color: "#64748b" }}>No recent league matches found for this player.</p>;
+  return (
+    <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "14px", background: "white" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "760px" }}>
+        <thead>
+          <tr>
+            {["Date", "Week", "Partner", "Opponents", "Result", "Score", "Rating Δ"].map((heading) => (
+              <th key={heading} style={{ textAlign: "left", padding: "0.6rem", borderBottom: "1px solid #cbd5e1", fontSize: "0.8rem", color: "#475569" }}>{heading}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={String(row.match_id)}>
+              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}><Link href={`/clubs/${clubSlug}/matches/${row.match_id}`}>{dateLabel(row.date)}</Link></td>
+              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.week_label || (row.week_num ? `Week ${row.week_num}` : "—")}</td>
+              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.partner ? <Link href={playerHref(clubSlug, row.partner.player_id)}>{row.partner.player_name}</Link> : "—"}</td>
+              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.opponents.map((opponent, index) => <span key={String(opponent.player_id)}>{index ? ", " : ""}<Link href={playerHref(clubSlug, opponent.player_id)}>{opponent.player_name}</Link></span>)}</td>
+              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>{row.result}</td>
+              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.score_for}-{row.score_against}</td>
+              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{deltaLabel(row.rating_delta_jupr)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -208,6 +270,8 @@ function StatTable({ rows, clubSlug, title }: { rows: LeagueResultsStatRow[]; cl
             {[
               "Player",
               "Week",
+              "Rank",
+              "Rank Δ",
               "Games",
               "Wins",
               "Losses",
@@ -223,6 +287,8 @@ function StatTable({ rows, clubSlug, title }: { rows: LeagueResultsStatRow[]; cl
             <tr key={`${row.week_num ?? "all"}-${row.player_id}`}>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}><Link href={playerHref(clubSlug, row.player_id)}>{row.player_name}</Link></td>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.week_num ? `Week ${row.week_num}` : "Season"}</td>
+              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.rank ?? "—"}</td>
+              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.rank_delta == null ? "—" : `${row.rank_delta >= 0 ? "+" : ""}${row.rank_delta}`}</td>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.games ?? 0}</td>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}</td>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.losses ?? 0}</td>
@@ -269,6 +335,14 @@ function StandingsCharts({ standings, clubSlug }: { standings: LeagueResultsStan
 
 function PlayerTrend({ rows, playerName }: { rows: LeagueResultsStatRow[]; playerName: string }) {
   const sortedRows = [...rows].sort((a, b) => safeNumber(a.week_num) - safeNumber(b.week_num));
+  const ranked = sortedRows.filter((row) => row.rank != null);
+  const maxRank = Math.max(...ranked.map((row) => safeNumber(row.rank)), 0);
+  const rankRows = ranked.map((row) => ({
+    key: `rank-${row.week_num}`,
+    label: row.week_num ? `Week ${row.week_num}` : "Season",
+    value: maxRank - safeNumber(row.rank) + 1,
+    detail: `#${row.rank}${row.rank_delta == null ? "" : ` (${row.rank_delta >= 0 ? "+" : ""}${row.rank_delta})`}`
+  }));
   const gamesRows = sortedRows.map((row) => ({
     key: `games-${row.week_num}`,
     label: row.week_num ? `Week ${row.week_num}` : "Season",
@@ -294,6 +368,7 @@ function PlayerTrend({ rows, playerName }: { rows: LeagueResultsStatRow[]; playe
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginTop: "1rem" }}>
+      <BarList title={`${playerName} — rating rank by week`} rows={rankRows} emptyText="Weekly rank snapshots are unavailable." />
       <BarList title={`${playerName} — games by week`} rows={gamesRows} />
       <BarList title={`${playerName} — win % by week`} rows={winRows} />
       <BarList title={`${playerName} — weekly rating Δ`} rows={deltaRows} />
@@ -306,23 +381,23 @@ export default async function LeagueResultsPage({ params, searchParams }: League
   const leagueName = decodeParam(firstParam(searchParams, "league"));
   const activeSection = normalizeSection(firstParam(searchParams, "section"));
   const printMode = firstParam(searchParams, "print") === "1";
-  const { data, error } = await getClubLeagueResults(clubSlug, leagueName);
-  const selectedLeague = data?.selected_league ?? null;
-  const recentWeek = data?.weeks?.length ? data.weeks[data.weeks.length - 1]?.week_num : null;
   const requestedWeek = parsePositiveInt(firstParam(searchParams, "week"));
-  const selectedWeek = requestedWeek ?? recentWeek;
-  const recentWeeklyRows = selectedWeek ? (data?.weekly_results ?? []).filter((row) => row.week_num === selectedWeek) : [];
   const requestedPlayer = firstParam(searchParams, "player");
-  const playerCandidates = [...(data?.standings ?? []), ...(data?.cumulative ?? [])];
-  const selectedPlayerId = requestedPlayer && playerCandidates.some((row) => String(row.player_id) === requestedPlayer)
-    ? requestedPlayer
-    : playerCandidates[0]?.player_id ?? null;
-  const selectedPlayerName = selectedPlayerId
-    ? playerCandidates.find((row) => String(row.player_id) === String(selectedPlayerId))?.player_name ?? `#${selectedPlayerId}`
-    : "Player";
-  const playerWeeklyRows = selectedPlayerId
-    ? (data?.weekly_results ?? []).filter((row) => String(row.player_id) === String(selectedPlayerId))
-    : [];
+  const weeklyMinGames = boundedInt(firstParam(searchParams, "weekly_min_games"), 4, 1, 20);
+  const { data, error } = await getClubLeagueResults(
+    clubSlug,
+    leagueName,
+    requestedWeek,
+    requestedPlayer,
+    weeklyMinGames
+  );
+  const selectedLeague = data?.selected_league ?? null;
+  const selectedWeek = data?.selected_week ?? null;
+  const recentWeeklyRows = selectedWeek ? (data?.weekly_results ?? []).filter((row) => row.week_num === selectedWeek) : [];
+  const playerCandidates = data?.players ?? [];
+  const selectedPlayerId = data?.selected_player_id ?? null;
+  const selectedPlayerName = data?.player_summary?.player_name ?? "Player";
+  const playerWeeklyRows = data?.player_weekly ?? [];
   const showOverall = printMode || activeSection === "overall";
   const showWeekly = printMode || activeSection === "weekly";
   const showPlayer = printMode || activeSection === "player";
@@ -355,7 +430,7 @@ export default async function LeagueResultsPage({ params, searchParams }: League
             {data.leagues.map((league) => {
               const active = league.name === selectedLeague;
               return (
-                <Link key={league.name} href={pageHref({ clubSlug, league: league.name, section: activeSection, week: selectedWeek, player: selectedPlayerId })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
+                <Link key={league.name} href={pageHref({ clubSlug, league: league.name, section: activeSection, week: selectedWeek, player: selectedPlayerId, weeklyMinGames })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
                   {league.name}
                 </Link>
               );
@@ -365,12 +440,12 @@ export default async function LeagueResultsPage({ params, searchParams }: League
             {(Object.keys(sectionLabels) as SectionKey[]).map((section) => {
               const active = section === activeSection;
               return (
-                <Link key={section} href={pageHref({ clubSlug, league: selectedLeague, section, week: selectedWeek, player: selectedPlayerId })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: active ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
+                <Link key={section} href={pageHref({ clubSlug, league: selectedLeague, section, week: selectedWeek, player: selectedPlayerId, weeklyMinGames })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: active ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
                   {sectionLabels[section]}
                 </Link>
               );
             })}
-            <Link href={pageHref({ clubSlug, league: selectedLeague, week: selectedWeek, player: selectedPlayerId, print: true })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: printMode ? "#fef9c3" : "white", color: "#0f172a", textDecoration: "none", fontWeight: 800 }}>
+            <Link href={pageHref({ clubSlug, league: selectedLeague, week: selectedWeek, player: selectedPlayerId, weeklyMinGames, print: true })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: printMode ? "#fef9c3" : "white", color: "#0f172a", textDecoration: "none", fontWeight: 800 }}>
               Print view
             </Link>
             <PrintButton />
@@ -394,11 +469,8 @@ export default async function LeagueResultsPage({ params, searchParams }: League
               <StandingsCharts standings={data.standings} clubSlug={clubSlug} />
 
               <h2>Season highlights</h2>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
-                <HighlightList title="Biggest climbers" rows={data.highlights.biggest_climbers} clubSlug={clubSlug} />
-                <HighlightList title="Best win %" rows={data.highlights.best_win_pct} clubSlug={clubSlug} />
-                <HighlightList title="Most active" rows={data.highlights.most_active} clubSlug={clubSlug} />
-              </div>
+              <p style={{ color: "#64748b" }}>Season totals only; win-percentage leaders must meet the league minimum of {data.season_highlights.min_games ?? 1} games.</p>
+              <HighlightGrid highlights={data.season_highlights} clubSlug={clubSlug} />
 
               <h2>Season cumulative performance</h2>
               <StatTable title="Season" rows={data.cumulative.slice(0, 25)} clubSlug={clubSlug} />
@@ -413,19 +485,30 @@ export default async function LeagueResultsPage({ params, searchParams }: League
                   {data.weeks.map((week) => {
                     const active = week.week_num === selectedWeek;
                     return (
-                      <Link key={week.week_num} href={pageHref({ clubSlug, league: selectedLeague, section: "weekly", week: week.week_num, player: selectedPlayerId })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
-                        {week.week_label}
+                      <Link key={week.week_num} href={pageHref({ clubSlug, league: selectedLeague, section: "weekly", week: week.week_num, player: selectedPlayerId, weeklyMinGames })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
+                        {week.week_label}{week.has_results === false ? " · no results" : ""}
                       </Link>
                     );
                   })}
                 </div>
               ) : null}
+              <div className="no-print" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", alignItems: "center", marginBottom: "1rem" }}>
+                <strong>Best win % qualification:</strong>
+                {[1, 2, 4, 6, 8].map((minimum) => (
+                  <Link key={minimum} href={pageHref({ clubSlug, league: selectedLeague, section: "weekly", week: selectedWeek, player: selectedPlayerId, weeklyMinGames: minimum })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.3rem 0.6rem", background: minimum === weeklyMinGames ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: minimum === weeklyMinGames ? 800 : 600 }}>
+                    {minimum}+ games
+                  </Link>
+                ))}
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
-                <BarList title="Weekly wins" rows={recentWeeklyRows.slice(0, 10).map((row) => ({ key: `wins-${row.player_id}`, label: row.player_name, value: safeNumber(row.wins), detail: `${row.wins ?? 0} wins`, href: playerHref(clubSlug, row.player_id) }))} />
-                <BarList title="Weekly games" rows={recentWeeklyRows.slice(0, 10).map((row) => ({ key: `games-${row.player_id}`, label: row.player_name, value: safeNumber(row.games), detail: `${row.games ?? 0} games`, href: playerHref(clubSlug, row.player_id) }))} />
-                <BarList title="Weekly rating Δ" rows={recentWeeklyRows.filter((row) => row.rating_delta_jupr != null).slice(0, 10).map((row) => ({ key: `delta-${row.player_id}`, label: row.player_name, value: safeNumber(row.rating_delta_jupr), detail: deltaLabel(row.rating_delta_jupr), href: playerHref(clubSlug, row.player_id) }))} />
+                <BarList title="Weekly wins" rows={[...recentWeeklyRows].sort((a, b) => safeNumber(b.wins) - safeNumber(a.wins)).slice(0, 10).map((row) => ({ key: `wins-${row.player_id}`, label: row.player_name, value: safeNumber(row.wins), detail: `${row.wins ?? 0} wins`, href: playerHref(clubSlug, row.player_id) }))} />
+                <BarList title="Weekly games" rows={[...recentWeeklyRows].sort((a, b) => safeNumber(b.games) - safeNumber(a.games)).slice(0, 10).map((row) => ({ key: `games-${row.player_id}`, label: row.player_name, value: safeNumber(row.games), detail: `${row.games ?? 0} games`, href: playerHref(clubSlug, row.player_id) }))} />
+                <BarList title="Weekly rating Δ" rows={recentWeeklyRows.filter((row) => row.rating_delta_jupr != null).sort((a, b) => safeNumber(b.rating_delta_jupr) - safeNumber(a.rating_delta_jupr)).slice(0, 10).map((row) => ({ key: `delta-${row.player_id}`, label: row.player_name, value: safeNumber(row.rating_delta_jupr), detail: deltaLabel(row.rating_delta_jupr), href: playerHref(clubSlug, row.player_id) }))} />
               </div>
               <StatTable title="Weekly" rows={recentWeeklyRows.slice(0, 40)} clubSlug={clubSlug} />
+              <h3>Week {selectedWeek ?? "—"} highlights</h3>
+              <p style={{ color: "#64748b" }}>These cards are scoped only to the selected week.</p>
+              <HighlightGrid highlights={data.weekly_highlights} clubSlug={clubSlug} />
             </section>
           ) : null}
 
@@ -433,10 +516,10 @@ export default async function LeagueResultsPage({ params, searchParams }: League
             <section style={sectionStyle}>
               <h2>Player summary — {selectedPlayerName}</h2>
               <div className="no-print" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-                {playerCandidates.slice(0, 24).map((row) => {
+                {playerCandidates.map((row) => {
                   const active = String(row.player_id) === String(selectedPlayerId);
                   return (
-                    <Link key={`player-${row.player_id}`} href={pageHref({ clubSlug, league: selectedLeague, section: "player", week: selectedWeek, player: row.player_id })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
+                    <Link key={`player-${row.player_id}`} href={pageHref({ clubSlug, league: selectedLeague, section: "player", week: selectedWeek, player: row.player_id, weeklyMinGames })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
                       {row.player_name}
                     </Link>
                   );
@@ -445,9 +528,17 @@ export default async function LeagueResultsPage({ params, searchParams }: League
               <p>
                 <Link href={playerHref(clubSlug, selectedPlayerId)}>Open full public player profile</Link>
               </p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem" }}>
+                <article style={cardStyle}><strong>Rank</strong><br />{data.player_summary?.rank ?? "—"}</article>
+                <article style={cardStyle}><strong>League JUPR</strong><br />{ratingLabel(data.player_summary?.rating_jupr)}</article>
+                <article style={cardStyle}><strong>Games</strong><br />{data.player_summary?.games ?? 0}</article>
+                <article style={cardStyle}><strong>Win %</strong><br />{percentLabel(data.player_summary?.win_pct)}</article>
+              </div>
               <PlayerTrend rows={playerWeeklyRows} playerName={selectedPlayerName} />
               <h3>Player weekly rows</h3>
               <StatTable title="Player weekly" rows={playerWeeklyRows} clubSlug={clubSlug} />
+              <h3>Recent matches</h3>
+              <RecentMatchesTable rows={data.recent_matches} clubSlug={clubSlug} />
             </section>
           ) : null}
         </>

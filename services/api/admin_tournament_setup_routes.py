@@ -13,8 +13,16 @@ from jupr_app.services.admin_tournament_setup_service import (
     is_admin_tournament_setup_enabled,
     list_admin_tournament_setup_tournaments,
     publish_admin_tournament_setup,
+    review_admin_tournament_setup_impact,
     save_admin_tournament_setup_draft,
     update_admin_tournament_setup_settings,
+)
+from jupr_app.services.admin_tournament_guarded_operation import (
+    StaleTournamentAdminStateError,
+    TournamentAdminRecoveryRequiredError,
+    require_tournament_admin_mutation_runtime,
+    run_tournament_admin_guarded_operation,
+    tournament_admin_guarded_runtime_enabled,
 )
 from services.api.auth import authenticate_bearer, auth_header
 
@@ -31,6 +39,7 @@ class TournamentSetupSettingsRequest(BaseModel):
     refund_policy_markdown: str | None = None
     sponsor_markdown: str | None = None
     confirmation_text: str = ""
+    expected_state_fingerprint: str | None = None
     source: str = "next_tournament_setup_settings"
 
 
@@ -40,6 +49,7 @@ class TournamentSetupDraftRequest(BaseModel):
     event_options: list[dict[str, Any]] = Field(default_factory=list)
     saved_step: str | None = "next_setup"
     confirmation_text: str = ""
+    expected_state_fingerprint: str | None = None
     source: str = "next_tournament_setup_draft"
 
 
@@ -47,7 +57,16 @@ class TournamentSetupPublishRequest(BaseModel):
     days: list[dict[str, Any]] = Field(default_factory=list)
     event_options: list[dict[str, Any]] = Field(default_factory=list)
     confirmation_text: str = ""
+    expected_state_fingerprint: str | None = None
+    reviewed_impact_fingerprint: str | None = None
     source: str = "next_tournament_setup_publish"
+
+
+class TournamentSetupImpactRequest(BaseModel):
+    days: list[dict[str, Any]] = Field(default_factory=list)
+    event_options: list[dict[str, Any]] = Field(default_factory=list)
+    expected_state_fingerprint: str
+    source: str = "next_tournament_setup_impact_review"
 
 
 def _dump_model(model: BaseModel) -> dict[str, Any]:
@@ -79,6 +98,8 @@ def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | No
 
 
 def _handle(exc: Exception) -> None:
+    if isinstance(exc, (StaleTournamentAdminStateError, TournamentAdminRecoveryRequiredError)):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, ValueError):
@@ -86,6 +107,11 @@ def _handle(exc: Exception) -> None:
     if isinstance(exc, RuntimeError):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     raise exc
+
+
+def _require_confirmation(actual: str, expected: str) -> None:
+    if str(actual or "").strip().upper() != expected:
+        raise ValueError(f"Type {expected} to confirm this Tournament Setup mutation.")
 
 
 def install_admin_tournament_setup_routes(app, *, get_supabase_client) -> None:
@@ -120,6 +146,24 @@ def install_admin_tournament_setup_routes(app, *, get_supabase_client) -> None:
         except Exception as exc:
             _handle(exc)
 
+    @app.post("/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/impact")
+    def post_setup_impact(club_id: str, tournament_id: str, payload: TournamentSetupImpactRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_tournament_setup_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Setup is disabled.")
+        supabase = get_supabase_client()
+        _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return review_admin_tournament_setup_impact(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                days=payload.days,
+                event_options=payload.event_options,
+                expected_state_fingerprint=payload.expected_state_fingerprint,
+            )
+        except Exception as exc:
+            _handle(exc)
+
     @app.patch("/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/settings")
     def patch_setup_settings(club_id: str, tournament_id: str, payload: TournamentSetupSettingsRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_tournament_setup_enabled():
@@ -129,8 +173,31 @@ def install_admin_tournament_setup_routes(app, *, get_supabase_client) -> None:
         patch = _dump_model(payload)
         source = str(patch.pop("source", payload.source))
         confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
+        expected_state = str(patch.pop("expected_state_fingerprint", payload.expected_state_fingerprint) or "")
         try:
-            return update_admin_tournament_setup_settings(supabase, club_id=str(club_id), tournament_id=str(tournament_id), patch=patch, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source)
+            _require_confirmation(confirmation_text, "SAVE SETUP")
+            preflight = lambda: update_admin_tournament_setup_settings(supabase, club_id=str(club_id), tournament_id=str(tournament_id), patch=patch, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source, dry_run=True)
+            require_tournament_admin_mutation_runtime("setup")
+            mutate = lambda: update_admin_tournament_setup_settings(supabase, club_id=str(club_id), tournament_id=str(tournament_id), patch=patch, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source)
+            if not tournament_admin_guarded_runtime_enabled("setup"):
+                return mutate()
+            return run_tournament_admin_guarded_operation(
+                supabase,
+                club_id=str(club_id),
+                surface="setup",
+                action="tournament_setup_settings",
+                entity_type="tournament_setup",
+                entity_id=str(tournament_id),
+                lock_scope=str(tournament_id),
+                expected_state=expected_state,
+                current_state=lambda: str(get_admin_tournament_setup_detail(supabase, club_id=str(club_id), tournament_id=str(tournament_id)).get("state_fingerprint") or ""),
+                payload=patch,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=source,
+                preflight=preflight,
+                mutate=mutate,
+            )
         except Exception as exc:
             _handle(exc)
 
@@ -141,7 +208,29 @@ def install_admin_tournament_setup_routes(app, *, get_supabase_client) -> None:
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
-            return save_admin_tournament_setup_draft(supabase, club_id=str(club_id), tournament_id=str(tournament_id), days=payload.days, event_families=payload.event_families, event_options=payload.event_options, saved_step=payload.saved_step, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+            _require_confirmation(payload.confirmation_text, "SAVE SETUP DRAFT")
+            preflight = lambda: save_admin_tournament_setup_draft(supabase, club_id=str(club_id), tournament_id=str(tournament_id), days=payload.days, event_families=payload.event_families, event_options=payload.event_options, saved_step=payload.saved_step, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source, dry_run=True)
+            require_tournament_admin_mutation_runtime("setup")
+            mutate = lambda: save_admin_tournament_setup_draft(supabase, club_id=str(club_id), tournament_id=str(tournament_id), days=payload.days, event_families=payload.event_families, event_options=payload.event_options, saved_step=payload.saved_step, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+            if not tournament_admin_guarded_runtime_enabled("setup"):
+                return mutate()
+            return run_tournament_admin_guarded_operation(
+                supabase,
+                club_id=str(club_id),
+                surface="setup",
+                action="tournament_setup_draft",
+                entity_type="tournament_setup",
+                entity_id=str(tournament_id),
+                lock_scope=str(tournament_id),
+                expected_state=str(payload.expected_state_fingerprint or ""),
+                current_state=lambda: str(get_admin_tournament_setup_detail(supabase, club_id=str(club_id), tournament_id=str(tournament_id)).get("state_fingerprint") or ""),
+                payload={"days": payload.days, "event_families": payload.event_families, "event_options": payload.event_options, "saved_step": payload.saved_step},
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+                preflight=preflight,
+                mutate=mutate,
+            )
         except Exception as exc:
             _handle(exc)
 
@@ -152,6 +241,42 @@ def install_admin_tournament_setup_routes(app, *, get_supabase_client) -> None:
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
-            return publish_admin_tournament_setup(supabase, club_id=str(club_id), tournament_id=str(tournament_id), days=payload.days, event_options=payload.event_options, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+            _require_confirmation(payload.confirmation_text, "PUBLISH SETUP")
+            if tournament_admin_guarded_runtime_enabled("setup") and not str(payload.reviewed_impact_fingerprint or "").strip():
+                raise ValueError("Review publish impact before publishing Tournament Setup.")
+            preflight = lambda: publish_admin_tournament_setup(supabase, club_id=str(club_id), tournament_id=str(tournament_id), days=payload.days, event_options=payload.event_options, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, expected_state_fingerprint=payload.expected_state_fingerprint, reviewed_impact_fingerprint=payload.reviewed_impact_fingerprint, source=payload.source, dry_run=True)
+            require_tournament_admin_mutation_runtime("setup")
+            mutate = lambda: publish_admin_tournament_setup(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                days=payload.days,
+                event_options=payload.event_options,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                expected_state_fingerprint=payload.expected_state_fingerprint,
+                reviewed_impact_fingerprint=payload.reviewed_impact_fingerprint,
+                source=payload.source,
+            )
+            if not tournament_admin_guarded_runtime_enabled("setup"):
+                return mutate()
+            return run_tournament_admin_guarded_operation(
+                supabase,
+                club_id=str(club_id),
+                surface="setup",
+                action="tournament_setup_publish",
+                entity_type="tournament_setup",
+                entity_id=str(tournament_id),
+                lock_scope=str(tournament_id),
+                expected_state=str(payload.expected_state_fingerprint or ""),
+                current_state=lambda: str(get_admin_tournament_setup_detail(supabase, club_id=str(club_id), tournament_id=str(tournament_id)).get("state_fingerprint") or ""),
+                payload={"days": payload.days, "event_options": payload.event_options, "reviewed_impact_fingerprint": payload.reviewed_impact_fingerprint},
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+                preflight=preflight,
+                mutate=mutate,
+            )
         except Exception as exc:
             _handle(exc)

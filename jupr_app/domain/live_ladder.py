@@ -112,9 +112,17 @@ def build_movement_preview(
     df["Round Diff"] = df["player_id"].map(lambda pid: int(round_stats.get(int(pid), {}).get("diff", 0)))
     df["Round Pts"] = df["player_id"].map(lambda pid: int(round_stats.get(int(pid), {}).get("pts", 0)))
 
+    if "slot" not in df.columns:
+        df["slot"] = 0
+    df["slot"] = pd.to_numeric(df["slot"], errors="coerce").fillna(0).astype(int)
+    # Stable final tie-breakers are part of the League Live contract. The old
+    # browser implementation used the current court slot; Python must make the
+    # same choice deterministically so retries and different JS engines cannot
+    # select different movers.
     df = df.sort_values(
-        by=["court", "Round Wins", "Round Diff", "Round Pts"],
-        ascending=[True, False, False, False],
+        by=["court", "Round Wins", "Round Diff", "Round Pts", "slot", "player_id"],
+        ascending=[True, False, False, False, True, True],
+        kind="mergesort",
     ).copy()
 
     df["Proposed Court"] = df["court"].astype(int)

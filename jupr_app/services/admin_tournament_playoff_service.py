@@ -8,7 +8,12 @@ import uuid
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.tournaments import build_playoff_games, compute_round_robin_standings
 from jupr_app.services.admin_tournament_draw_service import _draw_payload
-from jupr_app.services.admin_tournament_game_service import _game_payload
+from jupr_app.services.admin_tournament_game_service import (
+    _game_payload,
+    _insert_tournament_draw_games_atomic,
+    _require_reviewed_draw_version,
+    _require_reviewed_row_versions,
+)
 from jupr_app.services.admin_tournament_service import TOURNAMENT_SELECT, _clean_text, _first_row, is_admin_tournament_admin_enabled
 
 CONFIRM_GENERATE_PLAYOFFS = "GENERATE PLAYOFFS"
@@ -49,8 +54,8 @@ def _fetch_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> dict[str,
             .limit(1)
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not verify the tournament draw; playoff generation was refused.") from exc
     return rows[0] if rows else None
 
 
@@ -63,8 +68,8 @@ def _teams_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[
             .eq("draw_id", str(draw_id))
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not load draw teams; playoff generation was refused.") from exc
     return sorted(rows, key=lambda row: int(_safe_int(row.get("team_number")) or 0))
 
 
@@ -77,9 +82,22 @@ def _games_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[
             .eq("draw_id", str(draw_id))
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not load draw games; playoff generation was refused.") from exc
     return rows
+
+
+def _podium_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[dict[str, Any]]:
+    try:
+        return _safe_rows(
+            supabase.table("tournament_podium")
+            .select("id")
+            .eq("tournament_id", str(tournament_id))
+            .eq("draw_id", str(draw_id))
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError("Could not verify podium state; playoff generation was refused.") from exc
 
 
 def _round_robin_complete(games: list[dict[str, Any]]) -> bool:
@@ -97,7 +115,12 @@ def generate_admin_tournament_playoff_games(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    expected_draw_updated_at: str | None = None,
+    expected_team_versions: list[dict[str, Any]] | None = None,
+    expected_source_game_versions: list[dict[str, Any]] | None = None,
     source: str = "next_tournament_admin_generate_playoffs",
+    dry_run: bool = False,
+    atomic: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -112,9 +135,28 @@ def generate_admin_tournament_playoff_games(
     draw = _fetch_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not draw:
         raise ValueError("draw not found for this tournament")
+    reviewed_draw_version = _require_reviewed_draw_version(
+        draw,
+        expected_draw_updated_at=expected_draw_updated_at,
+        atomic=atomic,
+    )
 
     teams = _teams_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     games = _games_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
+    reviewed_team_versions = _require_reviewed_row_versions(
+        teams,
+        expected_team_versions,
+        label="team set",
+        atomic=atomic,
+    )
+    reviewed_source_game_versions = _require_reviewed_row_versions(
+        games,
+        expected_source_game_versions,
+        label="source game set",
+        atomic=atomic,
+    )
+    if _podium_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id):
+        raise ValueError("This draw already has a podium. Playoff generation is locked after podium review or awards.")
     if any(_clean_text(row.get("stage"), limit=80).upper() == "PLAYOFF" for row in games):
         raise ValueError("This draw already has playoff games.")
     if not _round_robin_complete(games):
@@ -141,7 +183,35 @@ def generate_admin_tournament_playoff_games(
                 "updated_at": now,
             }
         )
-    inserted = _safe_rows(supabase.table("tournament_games").insert(playoff_rows).execute()) if playoff_rows else []
+    if dry_run:
+        playoff_games = [_game_payload(row) for row in playoff_rows]
+        return {
+            "ok": True,
+            "mode": "tournament_playoff_generate_preview",
+            "dry_run": True,
+            "write_count": 0,
+            "draw_id": clean_draw_id,
+            "advance_count": count,
+            "standings": standings,
+            "game_count": len(playoff_games),
+            "games": playoff_games,
+            "warnings": [],
+        }
+    inserted = (
+        _insert_tournament_draw_games_atomic(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=clean_tournament_id,
+            draw_id=clean_draw_id,
+            expected_draw_updated_at=reviewed_draw_version,
+            expected_team_versions=reviewed_team_versions,
+            expected_source_game_versions=reviewed_source_game_versions,
+            mode="PLAYOFF",
+            rows=playoff_rows,
+        )
+        if atomic
+        else (_safe_rows(supabase.table("tournament_games").insert(playoff_rows).execute()) if playoff_rows else [])
+    )
     playoff_games = [_game_payload(row) for row in (inserted or playoff_rows)]
 
     audit_payload = build_activity_payload(

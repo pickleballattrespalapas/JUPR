@@ -21,9 +21,19 @@ def install_public_league_results_routes(
     def get_club_league_results(
         club_slug: str,
         league_name: str | None = Query(default=None),
+        week: int | None = Query(default=None, ge=1),
+        player: int | None = Query(default=None, ge=1),
+        weekly_min_games: int = Query(default=4, ge=1, le=20),
     ) -> dict[str, Any]:
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
-        result = build_public_league_results(supabase, club_id=club_id, league_name=league_name)
+        result = build_public_league_results(
+            supabase,
+            club_id=club_id,
+            league_name=league_name,
+            week_num=week,
+            player_id=player,
+            weekly_min_games=weekly_min_games,
+        )
         return {"club": public_club_payload(club, club_slug), **result}

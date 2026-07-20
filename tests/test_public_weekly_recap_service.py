@@ -65,7 +65,8 @@ def fake_supabase() -> FakeSupabase:
                     "final_json": {
                         "week_start": "2026-02-08",
                         "week_end": "2026-02-14",
-                        "numbers": {"matches": 12, "players": 18, "private_metric": {"hidden": True}},
+                        "numbers": {"matches": 12, "players": 18, "private_metric": {"hidden": True}, "internal_count": 99},
+                        "numbers_cards": [{"key": "internal_count", "label": "Private", "value": 99}],
                         "spotlight": [
                             {
                                 "key": "TOP_PERFORMER_WEEK",
@@ -98,6 +99,14 @@ def test_public_weekly_recaps_returns_only_published_sanitized_rows() -> None:
     assert selected["summary"]["headline"] == "Top Performer: Alex, Blair"
     recap = selected["recap"]
     assert recap["numbers"] == {"matches": 12, "players": 18}
+    assert [card["key"] for card in recap["numbers_cards"]] == [
+        "matches",
+        "players",
+        "leagues",
+        "round_robins",
+        "community_events",
+        "new_faces",
+    ]
     assert recap["spotlight"][0]["players"] == ["Alex", "Blair"]
     assert "candidate_ids" not in recap["spotlight"][0]
     assert "internal_notes" not in recap
@@ -118,3 +127,49 @@ def test_weekly_recap_pdf_builder_returns_pdf_bytes() -> None:
 
     assert pdf.startswith(b"%PDF-1.4")
     assert b"JUPR Weekly Recap" in pdf
+    assert b"Weekly Numbers" in pdf
+    assert b"Spotlight Reel" in pdf
+    assert b"Around the Club" in pdf
+    assert b"Tournaments" in pdf
+    assert b"Looking Ahead" in pdf
+
+
+def test_public_weekly_recaps_pages_published_rows_and_keeps_deep_link_private_safe() -> None:
+    rows = [
+        {
+            "club_id": "club",
+            "week_start": f"2026-03-{day:02d}",
+            "week_end": f"2026-03-{day:02d}",
+            "status": "published",
+            "final_json": {"numbers": {"matches": day}, "internal_notes": f"private-{day}"},
+        }
+        for day in range(1, 8)
+    ]
+    rows.append(
+        {
+            "club_id": "club",
+            "week_start": "2026-04-01",
+            "week_end": "2026-04-07",
+            "status": "draft",
+            "final_json": {"highlights": ["draft must stay private"]},
+        }
+    )
+    supabase = FakeSupabase({"weekly_recaps": rows})
+
+    first = build_public_weekly_recaps(supabase, club_id="club", page=1, page_size=3)
+    second = build_public_weekly_recaps(supabase, club_id="club", page=2, page_size=3)
+    deep_link = build_public_weekly_recaps(
+        supabase,
+        club_id="club",
+        week_start="2026-03-01",
+        page=1,
+        page_size=3,
+    )
+
+    assert [row["week_start"] for row in first["recaps"]] == ["2026-03-07", "2026-03-06", "2026-03-05"]
+    assert first["pagination"] == {"page": 1, "page_size": 3, "has_previous": False, "has_next": True}
+    assert [row["week_start"] for row in second["recaps"]] == ["2026-03-04", "2026-03-03", "2026-03-02"]
+    assert second["pagination"] == {"page": 2, "page_size": 3, "has_previous": True, "has_next": True}
+    assert deep_link["selected_recap"]["week_start"] == "2026-03-01"
+    assert "internal_notes" not in deep_link["selected_recap"]["recap"]
+    assert all(row["week_start"] != "2026-04-01" for row in first["recaps"] + second["recaps"])

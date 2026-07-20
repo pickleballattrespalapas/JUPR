@@ -157,7 +157,7 @@ def fake_tables():
                 "t2_p2": 4,
                 "score_t1": 11,
                 "score_t2": 8,
-                "notes": "private note should not appear",
+                "notes": "operator correction context",
                 "deleted_at": None,
                 "context_type": None,
                 "context_id": None,
@@ -298,7 +298,8 @@ def test_admin_match_log_duplicate_scan(monkeypatch) -> None:
     assert payload["duplicate_delete_preview"]["recommended_replay_scope"] == "ALL"
     assert payload["duplicate_delete_preview"]["recompute_scope"] == {"standings": True, "ratings": True}
     assert payload["matches"][0]["team1"][0]["name"] in {"Alex", "Devon"}
-    assert "notes" not in payload["matches"][0]
+    original = next(match for match in payload["matches"] if match["id"] == 1)
+    assert original["notes"] == "operator correction context"
     assert payload["summary"]["scanned_matches"] == 3
     assert all(match["id"] != 99 for match in payload["matches"])
     assert payload["warnings"] == []
@@ -333,6 +334,13 @@ def test_admin_match_log_apply_edits(monkeypatch) -> None:
     tables = fake_tables()
     supabase = FakeSupabase(tables)
 
+    def fake_atomic(_supabase, **kwargs):
+        tables["matches"][0]["week_tag"] = kwargs["patches"][0]["week_tag"]
+        tables["matches"][0]["updated_by"] = kwargs["actor_email"]
+        return {"ok": True, "mode": "applied", "updated_count": 1, "updated_ids": [1]}
+
+    monkeypatch.setattr("jupr_app.services.admin_match_log_service.apply_atomic_match_edits", fake_atomic)
+
     result = apply_admin_match_log_edits(
         supabase,
         club_id="club",
@@ -341,6 +349,7 @@ def test_admin_match_log_apply_edits(monkeypatch) -> None:
         actor_role="club_owner",
         correction_note="Fix week",
         confirmation_text="APPLY",
+        idempotency_key="edit-test-1",
     )
 
     assert result["ok"] is True

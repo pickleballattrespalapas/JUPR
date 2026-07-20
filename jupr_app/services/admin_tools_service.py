@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import csv
+import io
 import json
 import os
 from datetime import datetime, timezone
@@ -18,10 +20,8 @@ from jupr_app.domain.admin.role_assignments import (
 from jupr_app.domain.admin.roles import ALL_ROLES, ROLE_SUPER_ADMIN, normalize_role
 from jupr_app.domain.admin_activity_log import (
     RETENTION_DAYS,
-    build_activity_payload,
     list_recent_admin_activity_logs,
     retention_cutoff_iso,
-    write_admin_activity_log,
 )
 from jupr_app.domain.gamification.badge_worker import (
     process_badge_eval_queue,
@@ -30,6 +30,15 @@ from jupr_app.domain.gamification.badge_worker import (
 from jupr_app.domain.gamification.recompute import run_badge_recompute
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
+from jupr_app.services.admin_guarded_write_service import (
+    GuardedWriteRecoveryRequired,
+    begin_guarded_operation,
+    get_guarded_operation,
+    operation_result,
+    require_staging_service_role_write,
+    required_audit_event,
+    update_guarded_operation,
+)
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
 CONFIRM_ROLE = "SAVE ROLE"
@@ -38,6 +47,7 @@ CONFIRM_QUEUE_BATCH = "PROCESS BADGE QUEUE"
 CONFIRM_QUEUE_DRAIN = "DRAIN BADGE QUEUE"
 CONFIRM_BADGE_RECOMPUTE = "RUN BADGE RECOMPUTE"
 CONFIRM_TOURNAMENT_MATCH_BACKFILL = "BACKFILL TOURNAMENT MATCHES"
+CONFIRM_TOURNAMENT_MATCH_BACKFILL_RECOVERY = "RECOVER TOURNAMENT BACKFILL"
 MAX_TOURNAMENT_MATCH_BACKFILL_APPLY = 100
 MAX_ADMIN_RATING_REPORT_ROWS = 10000
 SNAPSHOT_COLUMNS = {
@@ -52,14 +62,17 @@ SNAPSHOT_COLUMNS = {
 }
 QUEUE_STATUS_VALUES = ("pending", "processing", "done", "error")
 BADGE_RECOMPUTE_MODES = ("dry-run", "append-only", "strict")
+ADMIN_TOOLS_OPERATION_WORKFLOWS = (
+    "admin_role_assignment",
+    "admin_social_moderation",
+    "admin_badge_queue_worker",
+    "admin_tools_badge_recompute",
+    "tournament_match_backfill",
+)
 
 
 def is_admin_tools_enabled() -> bool:
     return os.getenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "").strip().lower() in TRUTHY
-
-
-def _strict_audit_required() -> bool:
-    return os.getenv("JUPR_REQUIRE_API_AUDIT_LOG", "").strip().lower() in TRUTHY
 
 
 def _role_assignment_snapshot(row: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -301,7 +314,13 @@ def build_admin_tools_status(*, club_id: str) -> dict[str, Any]:
             "approve_social_submission": "APPROVE SOCIAL SUBMISSION",
             "reject_social_submission": "REJECT SOCIAL SUBMISSION",
             "tournament_match_backfill": CONFIRM_TOURNAMENT_MATCH_BACKFILL,
+            "tournament_match_backfill_recovery": CONFIRM_TOURNAMENT_MATCH_BACKFILL_RECOVERY,
         },
+        "write_environment": "staging_only",
+        "service_role_required": True,
+        "operation_status_endpoint": "/admin/clubs/{club_id}/tools/operations/{operation_key}",
+        "backfill_recovery_endpoint": "/admin/clubs/{club_id}/tools/backfills/tournament-matches/operations/{operation_key}/recover",
+        "streamlit_fallback": "admin_tools",
     }
 
 
@@ -572,6 +591,13 @@ def build_admin_rating_report(
         if truncated
         else []
     )
+    csv_columns = ["name", "jupr", "wins", "losses", "matches_played", "win_percent", "gain"]
+    csv_buffer = io.StringIO(newline="")
+    writer = csv.writer(csv_buffer, lineterminator="\r\n")
+    writer.writerow(["name", "JUPR", "wins", "losses", "matches_played", "Win %", "Gain"])
+    for row in report_rows:
+        writer.writerow([_safe_csv_value(row.get(column)) for column in csv_columns])
+    safe_scope = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in normalized_scope).strip("_") or "ratings"
     return {
         "ok": True,
         "mode": "admin_rating_report",
@@ -584,10 +610,21 @@ def build_admin_rating_report(
             "row_limit": MAX_ADMIN_RATING_REPORT_ROWS,
             "truncated": truncated,
         },
-        "columns": ["name", "jupr", "wins", "losses", "matches_played", "win_percent", "gain"],
+        "columns": csv_columns,
         "rows": report_rows,
+        "csv_text": csv_buffer.getvalue(),
+        "csv_filename": f"{safe_scope}_report_{datetime.now(timezone.utc).date().isoformat()}.csv",
+        "csv_formula_neutralized": True,
         "warnings": warnings,
     }
+
+
+def _safe_csv_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    # Spreadsheet clients treat leading =,+,-,@ (even after whitespace) as
+    # formulas. Prefix with an apostrophe so exported admin reports remain data.
+    return f"'{value}" if value.lstrip().startswith(("=", "+", "-", "@")) else value
 
 
 def build_admin_tournament_match_backfill_preview(
@@ -844,6 +881,7 @@ def apply_admin_tournament_match_backfill(
     preview_fingerprint: str,
     preview_limit: int = 500,
     confirmation_text: str,
+    operation_key: str,
     actor_email: str,
     actor_role: str,
     source: str = "next_admin_tools_tournament_match_backfill",
@@ -935,45 +973,87 @@ def apply_admin_tournament_match_backfill(
             + ", ".join(str(value) for value in missing_player_ids)
         )
 
-    operation_id = hashlib.sha256(
-        f"{club_id}:{preview_fingerprint}:{','.join(selected_game_ids)}".encode("utf-8")
-    ).hexdigest()[:24]
-    intent_payload = build_activity_payload(
+    require_staging_service_role_write(
+        supabase,
+        workflow="Tournament Match Backfill",
+        required_tables=("tournaments", "tournament_games", "tournament_teams", "matches", "players"),
+    )
+    request_payload = {
+        "preview_fingerprint": str(preview_fingerprint),
+        "selected_game_ids": selected_game_ids,
+        "match_payloads": match_payloads,
+    }
+    operation, idempotent = begin_guarded_operation(
+        supabase,
         club_id=str(club_id),
-        actor_email=str(actor_email or ""),
-        actor_role=str(actor_role or ""),
-        action_type="tournament_match_backfill_apply_started",
-        entity_type="tournament_match_backfill",
-        entity_id=operation_id,
-        after_json={
-            "source_client": "fastapi/nextjs",
-            "source_page": source,
+        workflow="tournament_match_backfill",
+        action="tournament_match_backfill_apply",
+        operation_key=operation_key,
+        request_payload=request_payload,
+        actor_email=actor_email,
+        actor_role=actor_role,
+        source=source,
+        before_json={
             "preview_fingerprint": str(preview_fingerprint),
             "selected_game_ids": selected_game_ids,
-            "selected_count": len(selected_game_ids),
         },
-        source_page=source,
-        flagged_for_review=True,
     )
-    intent_write = write_admin_activity_log(supabase, intent_payload)
+    if idempotent:
+        return operation_result(operation)
     warnings: list[str] = []
-    if intent_write.warning:
-        warnings.append(intent_write.warning)
-    if not intent_write.ok and os.getenv("JUPR_REQUIRE_API_AUDIT_LOG", "").strip().lower() in TRUTHY:
-        raise RuntimeError("audit log write required but unavailable")
 
-    process_result = process_matches(
-        match_payloads,
-        supabase=supabase,
-        club_id=str(club_id),
-        name_to_id={},
-        df_players_all=df_players_all,
-        df_leagues=df_leagues,
-        df_meta=df_meta,
-    )
+    try:
+        process_result = process_matches(
+            match_payloads,
+            supabase=supabase,
+            club_id=str(club_id),
+            name_to_id={},
+            df_players_all=df_players_all,
+            df_leagues=df_leagues,
+            df_meta=df_meta,
+        )
+    except Exception as exc:
+        try:
+            persisted_after_error = _safe_rows(
+                supabase.table("matches")
+                .select("id,club_id,tournament_game_id")
+                .eq("club_id", str(club_id))
+                .in_("tournament_game_id", selected_game_ids)
+                .execute()
+            )
+            readback_error = None
+        except Exception as readback_exc:
+            persisted_after_error = []
+            readback_error = str(readback_exc)
+        persisted_ids_after_error = sorted(
+            str(row.get("tournament_game_id"))
+            for row in persisted_after_error
+            if str(row.get("tournament_game_id") or "").strip()
+        )
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            result_json={"persisted_game_ids": persisted_ids_after_error, "readback_error": readback_error},
+            error_text=f"{exc}; readback: {readback_error}" if readback_error else str(exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Tournament backfill stopped with an uncertain or partial outcome. Do not rerun; reconcile through Match Log and the recovery endpoint.",
+        ) from exc
     inserted_count = int(process_result.get("inserted") or 0)
     if inserted_count != len(match_payloads):
-        raise RuntimeError(
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            result_json={"process_result": process_result},
+            error_text=f"Inserted {inserted_count} of {len(match_payloads)}",
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
             f"Tournament match backfill inserted {inserted_count} of {len(match_payloads)} reviewed games. "
             "Stop further writes and use Match Log plus Replay History to recover."
         )
@@ -986,57 +1066,236 @@ def apply_admin_tournament_match_backfill(
             .execute()
         )
     except Exception as exc:
-        raise RuntimeError("Unable to verify persisted tournament backfill matches.") from exc
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            result_json={"process_result": process_result},
+            error_text=str(exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Tournament backfill may have completed but persisted rows could not be verified. Stop and reconcile through Match Log.",
+        ) from exc
     persisted_ids = {
         str(row.get("tournament_game_id"))
         for row in persisted_rows
         if str(row.get("tournament_game_id") or "").strip()
     }
     if persisted_ids != set(selected_game_ids):
-        raise RuntimeError(
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            result_json={"process_result": process_result, "persisted_game_ids": sorted(persisted_ids)},
+            error_text="Persisted IDs differ from reviewed selection.",
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
             "Tournament match backfill persisted IDs differ from the reviewed selection. "
             "Stop further writes and use Match Log plus Replay History to recover."
         )
-
-    completion_payload = build_activity_payload(
-        club_id=str(club_id),
-        actor_email=str(actor_email or ""),
-        actor_role=str(actor_role or ""),
-        action_type="tournament_match_backfill_applied",
-        entity_type="tournament_match_backfill",
-        entity_id=operation_id,
-        before_json={
-            "preview_fingerprint": str(preview_fingerprint),
-            "selected_game_ids": selected_game_ids,
-        },
-        after_json={
-            "source_client": "fastapi/nextjs",
-            "source_page": source,
-            "inserted_count": inserted_count,
-            "persisted_game_ids": sorted(persisted_ids),
-            "process_result": process_result,
-        },
-        source_page=source,
-        flagged_for_review=True,
-    )
-    completion_write = write_admin_activity_log(supabase, completion_payload)
-    if completion_write.warning:
-        warnings.append(completion_write.warning)
-    if not completion_write.ok and os.getenv("JUPR_REQUIRE_API_AUDIT_LOG", "").strip().lower() in TRUTHY:
-        raise RuntimeError("audit log write required but unavailable")
     warnings.append(
         "If any post-apply verification disagrees, stop additional writes and recover through Match Log and Replay History."
     )
-    return {
+    result = {
         "ok": True,
         "mode": "tournament_match_backfill_apply",
-        "operation_id": operation_id,
+        "operation_id": operation.get("id"),
+        "operation_key": operation_key,
         "preview_fingerprint": str(preview_fingerprint),
         "selected_game_ids": selected_game_ids,
         "inserted_count": inserted_count,
         "process_result": process_result,
         "warnings": warnings,
     }
+    try:
+        required_audit_event(
+            supabase,
+            club_id=str(club_id),
+            actor_email=str(actor_email or ""),
+            actor_role=str(actor_role or ""),
+            action_type="tournament_match_backfill_applied",
+            entity_type="tournament_match_backfill",
+            entity_id=operation_key,
+            before={
+                "preview_fingerprint": str(preview_fingerprint),
+                "selected_game_ids": selected_game_ids,
+            },
+            after={
+                "source_client": "fastapi/nextjs",
+                "source_page": source,
+                "inserted_count": inserted_count,
+                "persisted_game_ids": sorted(persisted_ids),
+                "process_result": process_result,
+            },
+            source=source,
+            intent=False,
+        )
+    except Exception as exc:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            result_json=result,
+            error_text=str(exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Tournament backfill may have completed but completion audit failed. Do not rerun; reconcile and recover the operation.",
+        ) from exc
+    update_guarded_operation(
+        supabase,
+        operation_id=operation.get("id"),
+        operation_key=operation_key,
+        status="completed",
+        result_json=result,
+        after_json={"persisted_game_ids": sorted(persisted_ids)},
+    )
+    return result
+
+
+def recover_admin_tournament_match_backfill(
+    supabase: Any,
+    *,
+    club_id: str,
+    operation_key: str,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_admin_tools_tournament_match_backfill_recovery",
+) -> dict[str, Any]:
+    if not is_admin_tools_enabled():
+        raise PermissionError("Next Admin Tools are disabled.")
+    if str(confirmation_text or "").strip().upper() != CONFIRM_TOURNAMENT_MATCH_BACKFILL_RECOVERY:
+        raise ValueError(
+            f"Type {CONFIRM_TOURNAMENT_MATCH_BACKFILL_RECOVERY} to reconcile this backfill operation."
+        )
+    require_staging_service_role_write(
+        supabase,
+        workflow="Tournament Match Backfill Recovery",
+        required_tables=("matches",),
+    )
+    operation = get_guarded_operation(
+        supabase,
+        club_id=str(club_id),
+        workflow="tournament_match_backfill",
+        operation_key=str(operation_key).strip(),
+    )
+    if operation is None:
+        raise ValueError("Tournament backfill operation was not found for this club.")
+    if str(operation.get("status")) == "completed":
+        return operation_result(operation)
+    if str(operation.get("status")) != "recovery_required":
+        raise ValueError("This tournament backfill operation is not ready for recovery.")
+    before_json = operation.get("before_json") if isinstance(operation.get("before_json"), dict) else {}
+    selected_ids = sorted(str(value) for value in (before_json.get("selected_game_ids") or []) if str(value or "").strip())
+    if not selected_ids:
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Recovery record has no reviewed game IDs. Stop and inspect Admin Tools activity manually.",
+        )
+    persisted_rows = _safe_rows(
+        supabase.table("matches")
+        .select("id,club_id,tournament_game_id")
+        .eq("club_id", str(club_id))
+        .in_("tournament_game_id", selected_ids)
+        .execute()
+    )
+    counts: dict[str, int] = {}
+    for row in persisted_rows:
+        game_id = str(row.get("tournament_game_id") or "")
+        if game_id:
+            counts[game_id] = counts.get(game_id, 0) + 1
+    missing = [game_id for game_id in selected_ids if counts.get(game_id, 0) == 0]
+    duplicates = [game_id for game_id in selected_ids if counts.get(game_id, 0) > 1]
+    if missing or duplicates:
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Backfill is not reconciled. "
+            f"Missing official matches: {missing or 'none'}; duplicates: {duplicates or 'none'}. "
+            "Correct through Match Log, run Replay History, then reconcile again.",
+        )
+    required_audit_event(
+        supabase,
+        club_id=str(club_id),
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action_type="tournament_match_backfill_recovery_intent",
+        entity_type="tournament_match_backfill",
+        entity_id=str(operation_key),
+        source=source,
+        before={"status": operation.get("status"), "selected_game_ids": selected_ids},
+        after={"persisted_game_ids": selected_ids, "next_step": "verify_replay_history"},
+        intent=True,
+    )
+    result = {
+        "ok": True,
+        "mode": "tournament_match_backfill_recovered",
+        "operation_key": str(operation_key),
+        "persisted_game_ids": selected_ids,
+        "recovery": {
+            "match_log": "/admin/match-log",
+            "replay_history": "/admin/replay-history",
+            "instruction": "Verify ratings and snapshots in Replay History before further backfills.",
+        },
+    }
+    required_audit_event(
+        supabase,
+        club_id=str(club_id),
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action_type="tournament_match_backfill_recovered",
+        entity_type="tournament_match_backfill",
+        entity_id=str(operation_key),
+        source=source,
+        before={"status": operation.get("status")},
+        after=result,
+        intent=False,
+    )
+    update_guarded_operation(
+        supabase,
+        operation_id=operation.get("id"),
+        operation_key=operation_key,
+        status="completed",
+        result_json=result,
+        after_json={"persisted_game_ids": selected_ids},
+    )
+    return result
+
+
+def get_admin_tools_operation(
+    supabase: Any,
+    *,
+    club_id: str,
+    operation_key: str,
+) -> dict[str, Any]:
+    for workflow in ADMIN_TOOLS_OPERATION_WORKFLOWS:
+        operation = get_guarded_operation(
+            supabase,
+            club_id=str(club_id),
+            workflow=workflow,
+            operation_key=str(operation_key).strip(),
+        )
+        if operation is not None:
+            return {
+                "ok": True,
+                "workflow": workflow,
+                "operation_key": operation.get("operation_key"),
+                "status": operation.get("status"),
+                "result": operation.get("result_json") or {},
+                "error": operation.get("error_text"),
+                "updated_at": operation.get("updated_at"),
+                "recovery": {
+                    "admin_tools": "/admin/tools",
+                    "match_log": "/admin/match-log",
+                    "replay_history": "/admin/replay-history",
+                },
+            }
+    raise ValueError("Admin Tools operation was not found for this club.")
 
 
 def build_admin_tools_overview(
@@ -1083,6 +1342,7 @@ def update_admin_role_assignment(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    operation_key: str,
     source: str = "next_admin_tools_roles",
 ) -> dict[str, Any]:
     if not is_admin_tools_enabled():
@@ -1118,37 +1378,31 @@ def update_admin_role_assignment(
     else:
         raise ValueError("action must be upsert or revoke")
 
-    operation_id = hashlib.sha256(
-        (
-            f"{club_id}:{normalized_email}:{normalized_action}:{actor_email}:"
-            f"{datetime.now(timezone.utc).isoformat()}"
-        ).encode("utf-8")
-    ).hexdigest()[:24]
-    strict_audit = _strict_audit_required()
-    if strict_audit:
-        intent_result = write_admin_activity_log(
-            supabase,
-            build_activity_payload(
-                club_id=str(club_id),
-                actor_email=actor_email,
-                actor_role=actor_role,
-                action_type=f"{action_type}_intent",
-                entity_type="admin_role_assignment",
-                entity_id=normalized_email,
-                before_json=before,
-                after_json={
-                    "source_client": "fastapi/nextjs",
-                    "operation": "intent",
-                    "operation_id": operation_id,
-                    "proposed_assignment": after,
-                },
-                note=note,
-                source_page=source,
-                flagged_for_review=True,
-            ),
-        )
-        if not intent_result.ok:
-            raise RuntimeError("audit log write required but unavailable")
+    require_staging_service_role_write(
+        supabase,
+        workflow="Admin Role Assignment",
+        required_tables=("admin_role_assignments",),
+    )
+    request_payload = {
+        "email": normalized_email,
+        "action": normalized_action,
+        "role": (after or {}).get("role"),
+        "user_id": (after or {}).get("user_id"),
+    }
+    operation, idempotent = begin_guarded_operation(
+        supabase,
+        club_id=str(club_id),
+        workflow="admin_role_assignment",
+        action=action_type,
+        operation_key=operation_key,
+        request_payload=request_payload,
+        actor_email=actor_email,
+        actor_role=actor_role,
+        source=source,
+        before_json=before,
+    )
+    if idempotent:
+        return operation_result(operation)
 
     try:
         write_record = _apply_role_assignment_change(
@@ -1159,14 +1413,29 @@ def update_admin_role_assignment(
             after=after,
         )
     except Exception as mutation_error:
-        raise RuntimeError(
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            error_text=str(mutation_error),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
             "Critical: the role assignment write outcome is unknown. Stop role changes and review "
             "Admin Tools activity plus the target assignment before retrying."
         ) from mutation_error
 
     expected_write = after if normalized_action == "upsert" else before
     if expected_write is not None and write_record is None:
-        raise RuntimeError("Role assignment changed concurrently. Reload Admin Tools and try again.")
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="failed",
+            error_text="No role assignment row matched the reviewed version.",
+        )
+        raise RuntimeError("Role assignment changed concurrently; no row was changed. Reload Admin Tools and use a new operation key.")
     if write_record is not None and _role_assignment_snapshot(write_record) != expected_write:
         compensated = _try_compensate_role_assignment_change(
             supabase,
@@ -1177,13 +1446,60 @@ def update_admin_role_assignment(
             write_record=write_record,
         )
         if not compensated:
-            raise RuntimeError(
-                "Critical: the role assignment write response was unexpected and the prior assignment "
-                "could not be restored. Stop role changes and review the target assignment."
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=operation_key,
+                status="recovery_required",
+                error_text="Unexpected role write response could not be compensated.",
             )
+            raise GuardedWriteRecoveryRequired(
+                operation_key,
+                "Critical: the role assignment write response was unexpected and the prior assignment "
+                "could not be restored. Stop role changes and review the target assignment.",
+            )
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="compensated",
+            result_json={"restored": True, "target_email": normalized_email},
+            error_text="Unexpected role assignment write response.",
+        )
         raise RuntimeError("Role assignment write was invalid; the prior assignment was restored.")
 
-    persisted_rows = list_role_assignments(supabase, str(club_id))
+    try:
+        persisted_rows = list_role_assignments(supabase, str(club_id))
+    except Exception as readback_exc:
+        compensated = _try_compensate_role_assignment_change(
+            supabase,
+            club_id=str(club_id),
+            action=normalized_action,
+            before_record=before_record,
+            after=after,
+            write_record=write_record,
+        )
+        if compensated:
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=operation_key,
+                status="compensated",
+                result_json={"restored": True, "target_email": normalized_email},
+                error_text=str(readback_exc),
+            )
+            raise RuntimeError("Role assignment readback failed; the prior assignment was restored.") from readback_exc
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            error_text=str(readback_exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Role assignment may have changed but readback and rollback could not be verified. Stop role changes and reconcile the target assignment.",
+        ) from readback_exc
     persisted_record = _role_assignment_record(
         _find_role_assignment(persisted_rows, normalized_email)
     )
@@ -1204,10 +1520,26 @@ def update_admin_role_assignment(
             write_record=write_record,
         )
         if not compensated:
-            raise RuntimeError(
-                "Critical: role assignment persistence could not be verified and the prior assignment "
-                "could not be restored. Stop role changes and review the target assignment."
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=operation_key,
+                status="recovery_required",
+                error_text="Role assignment persistence could not be verified or compensated.",
             )
+            raise GuardedWriteRecoveryRequired(
+                operation_key,
+                "Critical: role assignment persistence could not be verified and the prior assignment "
+                "could not be restored. Stop role changes and review the target assignment.",
+            )
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="compensated",
+            result_json={"restored": True, "target_email": normalized_email},
+            error_text="Role assignment readback verification failed.",
+        )
         raise RuntimeError("Role assignment verification failed; the prior assignment was restored.")
 
     removes_super_admin = (
@@ -1227,36 +1559,61 @@ def update_admin_role_assignment(
             write_record=write_record,
         )
         if not compensated:
-            raise RuntimeError(
-                "Critical: concurrent role changes removed the final super_admin and this change could "
-                "not be rolled back. Stop role changes and restore super_admin access."
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=operation_key,
+                status="recovery_required",
+                error_text="Final super_admin guard failed and could not be compensated.",
             )
+            raise GuardedWriteRecoveryRequired(
+                operation_key,
+                "Critical: concurrent role changes removed the final super_admin and this change could "
+                "not be rolled back. Stop role changes and restore super_admin access.",
+            )
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="compensated",
+            result_json={"restored": True, "target_email": normalized_email},
+            error_text="Final super_admin guard required rollback.",
+        )
         raise ValueError(
             "Unsafe concurrent change blocked: this would remove the final super_admin access."
         )
 
-    log_result = write_admin_activity_log(
-        supabase,
-        build_activity_payload(
+    result = {
+        "ok": True,
+        "mode": "admin_role_assignment_update",
+        "action": normalized_action,
+        "target_email": normalized_email,
+        "operation_id": operation.get("id"),
+        "operation_key": operation_key,
+        "audit_warning": None,
+        "roles": persisted_rows,
+    }
+    try:
+        required_audit_event(
+            supabase,
             club_id=str(club_id),
             actor_email=actor_email,
             actor_role=actor_role,
             action_type=action_type,
             entity_type="admin_role_assignment",
             entity_id=normalized_email,
-            before_json=before,
-            after_json={
+            before=before,
+            after={
                 "source_client": "fastapi/nextjs",
                 "operation": "completion",
-                "operation_id": operation_id,
+                "operation_id": operation.get("id"),
                 "assignment": after,
             },
             note=note,
-            source_page=source,
-            flagged_for_review=True,
-        ),
-    )
-    if not log_result.ok and strict_audit:
+            source=source,
+            intent=False,
+        )
+    except Exception as audit_exc:
         compensated = _try_compensate_role_assignment_change(
             supabase,
             club_id=str(club_id),
@@ -1266,20 +1623,37 @@ def update_admin_role_assignment(
             write_record=write_record,
         )
         if not compensated:
-            raise RuntimeError(
-                "Critical: audit log write failed and the role assignment change could not be "
-                "rolled back. Stop role changes and review Admin Tools activity plus the target assignment."
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=operation_key,
+                status="recovery_required",
+                result_json=result,
+                error_text=str(audit_exc),
             )
-        raise RuntimeError("audit log write required but unavailable")
-    return {
-        "ok": True,
-        "mode": "admin_role_assignment_update",
-        "action": normalized_action,
-        "target_email": normalized_email,
-        "operation_id": operation_id,
-        "audit_warning": log_result.warning,
-        "roles": list_role_assignments(supabase, str(club_id)),
-    }
+            raise GuardedWriteRecoveryRequired(
+                operation_key,
+                "Critical: audit log write failed and the role assignment change could not be "
+                "rolled back. Stop role changes and review Admin Tools activity plus the target assignment.",
+            ) from audit_exc
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="compensated",
+            result_json={"restored": True, "target_email": normalized_email},
+            error_text=str(audit_exc),
+        )
+        raise RuntimeError("Required completion audit failed; the prior role assignment was restored.") from audit_exc
+    update_guarded_operation(
+        supabase,
+        operation_id=operation.get("id"),
+        operation_key=operation_key,
+        status="completed",
+        result_json=result,
+        after_json={"assignment": after},
+    )
+    return result
 
 
 def run_admin_badge_queue_worker(
@@ -1292,6 +1666,7 @@ def run_admin_badge_queue_worker(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    operation_key: str,
     source: str = "next_admin_tools_workers",
 ) -> dict[str, Any]:
     if not is_admin_tools_enabled():
@@ -1305,42 +1680,117 @@ def run_admin_badge_queue_worker(
 
     safe_max_jobs = max(1, min(int(max_jobs or 10), 5000))
     safe_budget = max(1.0, min(float(time_budget_seconds or 5.0), 180.0))
-    before = build_admin_worker_status(supabase, club_id=str(club_id))
-    if normalized_mode == "drain":
-        result = process_badge_eval_queue_until_empty(
-            supabase,
-            str(club_id),
-            max_total_jobs=safe_max_jobs,
-            batch_max_jobs=min(50, safe_max_jobs),
-            per_batch_time_budget_seconds=min(5.0, safe_budget),
-            max_wall_clock_seconds=safe_budget,
-            max_errors=max(1, min(50, safe_max_jobs)),
-        )
-    else:
-        result = process_badge_eval_queue(
-            supabase,
-            str(club_id),
-            max_jobs=safe_max_jobs,
-            time_budget_seconds=int(safe_budget),
-        )
-    after = build_admin_worker_status(supabase, club_id=str(club_id))
-    log_result = write_admin_activity_log(
+    require_staging_service_role_write(
         supabase,
-        build_activity_payload(
+        workflow="Badge Queue Worker",
+        required_tables=("badge_eval_queue", "badge_eval_runs", "player_badges"),
+    )
+    before = build_admin_worker_status(supabase, club_id=str(club_id))
+    request_payload = {"mode": normalized_mode, "max_jobs": safe_max_jobs, "time_budget_seconds": safe_budget}
+    operation, idempotent = begin_guarded_operation(
+        supabase,
+        club_id=str(club_id),
+        workflow="admin_badge_queue_worker",
+        action="admin_badge_queue_worker_run",
+        operation_key=operation_key,
+        request_payload=request_payload,
+        actor_email=actor_email,
+        actor_role=actor_role,
+        source=source,
+        before_json={"worker_status": before},
+    )
+    if idempotent:
+        return operation_result(operation)
+    try:
+        if normalized_mode == "drain":
+            result = process_badge_eval_queue_until_empty(
+                supabase,
+                str(club_id),
+                max_total_jobs=safe_max_jobs,
+                batch_max_jobs=min(50, safe_max_jobs),
+                per_batch_time_budget_seconds=min(5.0, safe_budget),
+                max_wall_clock_seconds=safe_budget,
+                max_errors=max(1, min(50, safe_max_jobs)),
+            )
+        else:
+            result = process_badge_eval_queue(
+                supabase,
+                str(club_id),
+                max_jobs=safe_max_jobs,
+                time_budget_seconds=int(safe_budget),
+            )
+    except Exception as exc:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            error_text=str(exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Badge queue worker stopped with an uncertain partial outcome. Inspect queue status before retrying.",
+        ) from exc
+    try:
+        after = build_admin_worker_status(supabase, club_id=str(club_id))
+    except Exception as exc:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            result_json={"worker_result": result},
+            error_text=str(exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Badge queue work may have completed but post-run queue status was unavailable. Stop and inspect queue state before retrying.",
+        ) from exc
+    response = {
+        "ok": True,
+        "mode": normalized_mode,
+        "operation_key": operation_key,
+        "result": result,
+        "worker_status": after,
+        "audit_warning": None,
+    }
+    try:
+        required_audit_event(
+            supabase,
             club_id=str(club_id),
             actor_email=actor_email,
             actor_role=actor_role,
             action_type="admin_badge_queue_worker_run",
             entity_type="badge_eval_queue",
             entity_id=normalized_mode,
-            before_json={"worker_status": before},
-            after_json={"mode": normalized_mode, "result": result, "worker_status": after},
+            before={"worker_status": before},
+            after={"mode": normalized_mode, "result": result, "worker_status": after},
             note="Admin Tools badge eval queue worker run",
-            source_page=source,
-            flagged_for_review=True,
-        ),
+            source=source,
+            intent=False,
+        )
+    except Exception as exc:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            result_json=response,
+            error_text=str(exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Badge queue work may have completed but completion audit failed. Inspect queue status; do not blindly retry.",
+        ) from exc
+    update_guarded_operation(
+        supabase,
+        operation_id=operation.get("id"),
+        operation_key=operation_key,
+        status="completed",
+        result_json=response,
+        after_json={"worker_status": after},
     )
-    return {"ok": True, "mode": normalized_mode, "result": result, "worker_status": after, "audit_warning": log_result.warning}
+    return response
 
 
 def run_admin_badge_recompute_job(
@@ -1360,6 +1810,7 @@ def run_admin_badge_recompute_job(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    operation_key: str = "",
     source: str = "next_admin_tools_badge_recompute",
 ) -> dict[str, Any]:
     if not is_admin_tools_enabled():
@@ -1369,34 +1820,105 @@ def run_admin_badge_recompute_job(
         raise ValueError("mode must be dry-run, append-only, or strict")
     if normalized_mode != "dry-run" and str(confirmation_text or "").strip().upper() != CONFIRM_BADGE_RECOMPUTE:
         raise ValueError(f"Type {CONFIRM_BADGE_RECOMPUTE} to run an applying badge recompute.")
-    summary = run_badge_recompute(
+    recompute_kwargs = {
+        "club_id": str(club_id),
+        "mode": normalized_mode,
+        "league_id": str(league_id).strip() or None if league_id is not None else None,
+        "context_id": str(context_id).strip() or None if context_id is not None else None,
+        "player_id": int(player_id) if player_id is not None else None,
+        "badge_id": str(badge_id).strip() or None if badge_id is not None else None,
+        "since": str(since).strip() or None if since is not None else None,
+        "until": str(until).strip() or None if until is not None else None,
+        "created_by": actor_email,
+        "allow_strict_global": bool(allow_strict_global),
+        "match_limit": max(100, min(int(match_limit or 5000), 50000)),
+        "include_non_live": bool(include_non_live),
+    }
+    if normalized_mode == "dry-run":
+        summary = run_badge_recompute(supabase, **recompute_kwargs)
+        return {
+            "ok": True,
+            "mode": normalized_mode,
+            "read_only": True,
+            "summary": summary,
+            "audit_warning": None,
+        }
+
+    require_staging_service_role_write(
+        supabase,
+        workflow="Admin Tools Badge Recompute",
+        required_tables=("badges", "player_badges", "badge_eval_runs"),
+    )
+    request_payload = {key: value for key, value in recompute_kwargs.items() if key != "created_by"}
+    operation, idempotent = begin_guarded_operation(
         supabase,
         club_id=str(club_id),
-        mode=normalized_mode,
-        league_id=str(league_id).strip() or None if league_id is not None else None,
-        context_id=str(context_id).strip() or None if context_id is not None else None,
-        player_id=int(player_id) if player_id is not None else None,
-        badge_id=str(badge_id).strip() or None if badge_id is not None else None,
-        since=str(since).strip() or None if since is not None else None,
-        until=str(until).strip() or None if until is not None else None,
-        created_by=actor_email,
-        allow_strict_global=bool(allow_strict_global),
-        match_limit=max(100, min(int(match_limit or 5000), 50000)),
-        include_non_live=bool(include_non_live),
+        workflow="admin_tools_badge_recompute",
+        action="admin_badge_recompute_run",
+        operation_key=operation_key,
+        request_payload=request_payload,
+        actor_email=actor_email,
+        actor_role=actor_role,
+        source=source,
+        before_json={"scope": request_payload},
     )
-    log_result = write_admin_activity_log(
-        supabase,
-        build_activity_payload(
+    if idempotent:
+        return operation_result(operation)
+    try:
+        summary = run_badge_recompute(supabase, **recompute_kwargs)
+    except Exception as exc:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            error_text=str(exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Admin Tools badge recompute stopped with an uncertain partial outcome. Inspect Badge Audit and eval runs.",
+        ) from exc
+    response = {
+        "ok": True,
+        "mode": normalized_mode,
+        "operation_key": operation_key,
+        "summary": summary,
+        "audit_warning": None,
+    }
+    try:
+        required_audit_event(
+            supabase,
             club_id=str(club_id),
             actor_email=actor_email,
             actor_role=actor_role,
             action_type="admin_badge_recompute_run",
             entity_type="player_badges",
             entity_id=f"badge_recompute:{normalized_mode}",
-            after_json={"mode": normalized_mode, "summary": summary},
+            before={"scope": request_payload},
+            after={"mode": normalized_mode, "summary": summary},
             note="Admin Tools badge recompute job",
-            source_page=source,
-            flagged_for_review=normalized_mode != "dry-run",
-        ),
+            source=source,
+            intent=False,
+        )
+    except Exception as exc:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            result_json=response,
+            error_text=str(exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Badge recompute may have completed but completion audit failed. Do not blindly retry.",
+        ) from exc
+    update_guarded_operation(
+        supabase,
+        operation_id=operation.get("id"),
+        operation_key=operation_key,
+        status="completed",
+        result_json=response,
+        after_json={"summary": summary},
     )
-    return {"ok": True, "mode": normalized_mode, "summary": summary, "audit_warning": log_result.warning}
+    return response

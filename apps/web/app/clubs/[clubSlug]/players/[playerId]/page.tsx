@@ -1,16 +1,18 @@
 import Link from "next/link";
-import { getClubPlayerProfile, type PublicMatch } from "@/lib/api";
+import { getClubPlayerProfile, type PublicMatch, type PublicRatingHistoryPoint, type PublicRelationship } from "@/lib/api";
 
 type PlayerProfilePageProps = {
   params: { clubSlug: string; playerId: string };
   searchParams?: Record<string, string | string[] | undefined>;
 };
 
-type SectionKey = "overview" | "leagues" | "matches";
+type SectionKey = "overview" | "ratings" | "awards" | "social" | "matches";
+type HistoryKey = "recent" | "all";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const thStyle = { textAlign: "left" as const, borderBottom: "1px solid #cbd5e1", padding: "0.6rem", whiteSpace: "nowrap" as const, color: "#475569", fontSize: "0.82rem" };
 const tdStyle = { borderBottom: "1px solid #e2e8f0", padding: "0.6rem", whiteSpace: "nowrap" as const };
+const pillStyle = { border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", color: "#0f172a", textDecoration: "none" };
 
 function firstParam(searchParams: PlayerProfilePageProps["searchParams"], key: string): string | null {
   const value = searchParams?.[key];
@@ -19,209 +21,245 @@ function firstParam(searchParams: PlayerProfilePageProps["searchParams"], key: s
 }
 
 function normalizeSection(value: string | null): SectionKey {
-  if (value === "leagues" || value === "matches") return value;
+  if (value === "ratings" || value === "awards" || value === "social" || value === "matches") return value;
   return "overview";
 }
 
-function pageHref({ clubSlug, playerId, section, league }: { clubSlug: string; playerId: string; section?: SectionKey | null; league?: string | null }): string {
+function normalizeHistory(value: string | null): HistoryKey {
+  return value === "all" ? "all" : "recent";
+}
+
+function pageHref({ clubSlug, playerId, section, league, history }: { clubSlug: string; playerId: string; section?: SectionKey | null; league?: string | null; history?: HistoryKey | null }): string {
   const params = new URLSearchParams();
   if (section && section !== "overview") params.set("section", section);
   if (league) params.set("league", league);
+  if (history === "all") params.set("history", "all");
   const query = params.toString();
-  return `/clubs/${clubSlug}/players/${playerId}${query ? `?${query}` : ""}`;
-}
-
-function ratingValue(value?: number | null): number | null {
-  if (value == null || Number.isNaN(Number(value))) return null;
-  const n = Number(value);
-  return n > 20 ? n / 400 : n;
+  return `/clubs/${clubSlug}/players/${encodeURIComponent(playerId)}${query ? `?${query}` : ""}`;
 }
 
 function ratingLabel(value?: number | null): string {
-  const rating = ratingValue(value);
-  return rating == null ? "—" : rating.toFixed(3);
+  return value == null || Number.isNaN(Number(value)) ? "—" : Number(value).toFixed(3);
+}
+
+function signedRating(value?: number | null): string {
+  if (value == null || Number.isNaN(Number(value))) return "—";
+  return `${Number(value) >= 0 ? "+" : ""}${Number(value).toFixed(3)}`;
 }
 
 function pctLabel(wins?: number | null, losses?: number | null): string {
-  const w = wins ?? 0;
-  const l = losses ?? 0;
-  const total = w + l;
-  return total > 0 ? `${((w / total) * 100).toFixed(1)}%` : "—";
+  const total = (wins ?? 0) + (losses ?? 0);
+  return total ? `${(((wins ?? 0) / total) * 100).toFixed(1)}%` : "—";
 }
 
-function formatMatchDate(value?: string | null): string {
+function formatDate(value?: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
-function dateLabel(value?: string | null): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
-  return date.toISOString().slice(0, 10);
+  return Number.isNaN(date.getTime()) ? String(value).slice(0, 10) : date.toISOString().slice(0, 10);
 }
 
 function teamLabel(clubSlug: string, players: Array<{ id?: string | number | null; name: string }>) {
   return players.length ? (
-    <>
-      {players.map((player, index) => (
-        <span key={`${player.id ?? player.name}-${index}`}>
-          {index > 0 ? " / " : ""}
-          {player.id != null ? <Link href={`/clubs/${clubSlug}/players/${player.id}`}>{player.name}</Link> : player.name}
-        </span>
-      ))}
-    </>
+    <>{players.map((player, index) => <span key={`${player.id ?? player.name}-${index}`}>{index ? " / " : ""}{player.id != null ? <Link href={`/clubs/${clubSlug}/players/${player.id}`}>{player.name}</Link> : player.name}</span>)}</>
   ) : "—";
 }
 
-function matchLabel(match: PublicMatch): string {
-  const scoreA = match.score_t1 ?? null;
-  const scoreB = match.score_t2 ?? null;
-  return scoreA == null && scoreB == null ? "—" : `${scoreA ?? 0}–${scoreB ?? 0}`;
+function matchScore(match: PublicMatch): string {
+  return match.score_t1 == null && match.score_t2 == null ? "—" : `${match.score_t1 ?? 0}–${match.score_t2 ?? 0}`;
 }
 
 function sectionVisible(active: SectionKey, section: SectionKey): boolean {
   return active === "overview" || active === section;
 }
 
+function relationshipCard(clubSlug: string, title: string, testId: string, relationship?: PublicRelationship | null) {
+  return (
+    <article style={cardStyle} data-testid={testId}>
+      <strong>{title}</strong>
+      {relationship ? (
+        <><h3 style={{ marginBottom: "0.25rem" }}><Link href={`/clubs/${clubSlug}/players/${relationship.player_id}`}>{relationship.player_name}</Link></h3><p style={{ margin: 0, color: "#475569" }}>{relationship.matches} matches · {relationship.wins}-{relationship.losses} · {relationship.win_pct?.toFixed(1) ?? "—"}%</p></>
+      ) : <p style={{ color: "#475569" }}>Not enough public match history yet.</p>}
+    </article>
+  );
+}
+
+function RatingTrend({ points, clubSlug }: { points: PublicRatingHistoryPoint[]; clubSlug: string }) {
+  const known = points.filter((point) => point.rating_after_jupr != null);
+  if (!known.length) return <p data-testid="player-rating-trend-empty" style={{ color: "#475569" }}>No authoritative rating snapshots are available yet.</p>;
+  const values = known.map((point) => Number(point.rating_after_jupr));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = Math.max(max - min, 0.05);
+  const width = 720;
+  const height = 190;
+  const padding = 24;
+  const coordinates = known.map((point, index) => {
+    const x = known.length === 1 ? width / 2 : padding + (index / (known.length - 1)) * (width - padding * 2);
+    const y = height - padding - ((Number(point.rating_after_jupr) - min) / span) * (height - padding * 2);
+    return { point, x, y };
+  });
+  return (
+    <div data-testid="player-rating-trend" style={{ overflowX: "auto" }}>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Overall and singles JUPR trend by rated match" style={{ width: "100%", minWidth: "560px", height: "auto", border: "1px solid #e2e8f0", borderRadius: "10px", background: "#f8fafc" }}>
+        <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#cbd5e1" />
+        <polyline points={coordinates.map(({ x, y }) => `${x},${y}`).join(" ")} fill="none" stroke="#2563eb" strokeWidth="4" strokeLinejoin="round" />
+        {coordinates.map(({ point, x, y }) => <circle key={`${point.match_id ?? point.match_number}-${point.match_number}`} cx={x} cy={y} r="5" fill={point.match_format === "singles" ? "#7c3aed" : "#2563eb"}><title>{`${formatDate(point.date)} · ${point.match_format_label} · ${ratingLabel(point.rating_after_jupr)}`}</title></circle>)}
+      </svg>
+      <p style={{ margin: "0.45rem 0 0", color: "#475569", fontSize: "0.88rem" }}>Blue/purple points use stored server-side rating snapshots. Open a point&apos;s match from the history table for context.</p>
+      <ul style={{ display: "none" }}>{known.map((point) => <li key={`trend-${point.match_id ?? point.match_number}`}><Link href={`/clubs/${clubSlug}/matches/${point.match_id}`}>{formatDate(point.date)} {point.match_format_label} {ratingLabel(point.rating_after_jupr)}</Link></li>)}</ul>
+    </div>
+  );
+}
+
 export default async function PlayerProfilePage({ params, searchParams }: PlayerProfilePageProps) {
   const { clubSlug, playerId } = params;
   const section = normalizeSection(firstParam(searchParams, "section"));
   const selectedLeague = firstParam(searchParams, "league");
-  const { data, error } = await getClubPlayerProfile(clubSlug, playerId);
+  const historyView = normalizeHistory(firstParam(searchParams, "history"));
+  const { data, error } = await getClubPlayerProfile(clubSlug, playerId, { recent: 12, history: 500 });
   const player = data?.player;
 
-  if (error || !player) {
+  if (error || !player || !data) {
     return (
-      <section>
+      <section data-testid="player-profile-error-state">
         <h1>Player unavailable</h1>
-        <p style={{ color: "#b91c1c" }}>We could not load this player profile. {error}</p>
+        <p style={{ color: "#b91c1c" }}>We could not load this public player profile. No private player data was exposed. Please try again shortly.</p>
         <p><Link href={`/clubs/${clubSlug}/players`}>Back to players</Link></p>
       </section>
     );
   }
 
-  const wins = player.wins ?? 0;
-  const losses = player.losses ?? 0;
-  const singlesWins = player.singles_wins ?? 0;
-  const singlesLosses = player.singles_losses ?? 0;
-  const leagueRatings = data?.league_ratings ?? [];
-  const matches = data?.recent_matches ?? [];
-  const leagues = Array.from(new Set([...leagueRatings.map((row) => row.league_name).filter(Boolean), ...matches.map((match) => match.league).filter(Boolean)] as string[])).sort((a, b) => a.localeCompare(b));
-  const filteredMatches = selectedLeague ? matches.filter((match) => match.league === selectedLeague) : matches;
-  const lastMatch = [...matches].sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")))[0];
+  const leagueRatings = data.league_ratings ?? [];
+  const sourceMatches = historyView === "all" ? data.match_history : data.recent_matches;
+  const leagues = Array.from(new Set([...leagueRatings.map((row) => row.league_name).filter(Boolean), ...data.match_history.map((match) => match.league).filter(Boolean)] as string[])).sort((a, b) => a.localeCompare(b));
+  const matches = selectedLeague ? sourceMatches.filter((match) => match.league === selectedLeague) : sourceMatches;
+  const awards = data.awards;
+  const social = data.social;
+  const verifiedLabel = data.verified_updates.status === "enabled" ? "Verified updates enabled" : data.verified_updates.status === "pending" ? "Verified updates pending review" : "Verified updates available";
 
   return (
-    <section>
-      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        {data?.club?.name ?? clubSlug} · Player profile
-      </p>
-      <h1 style={{ marginTop: 0 }}>{player.name}</h1>
-      <p style={{ color: "#475569", maxWidth: "760px" }}>
-        Public doubles/overall rating, singles rating, league-specific records, recent match history, and direct links into the surrounding club pages.
-      </p>
+    <section data-testid="player-profile">
+      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>{data.club?.name ?? clubSlug} · Player profile</p>
+      <h1 style={{ marginTop: 0 }}>{data.identity.display_name}</h1>
+      <p style={{ color: "#475569", maxWidth: "820px" }}>Public display-name profile with Python-authoritative ratings, match formats, earned awards, match relationships, and privacy-safe Club Social aggregates.</p>
 
-      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-        {(["overview", "leagues", "matches"] as SectionKey[]).map((item) => {
-          const active = item === section;
-          return (
-            <Link key={item} href={pageHref({ clubSlug, playerId, section: item, league: selectedLeague })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
-              {item === "overview" ? "Overview" : item === "leagues" ? "League ratings" : "Recent matches"}
-            </Link>
-          );
-        })}
-        <Link href={`/clubs/${clubSlug}/leaderboards?player=${encodeURIComponent(String(player.id))}#leaderboard-player-${encodeURIComponent(String(player.id))}`} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: "white", color: "#0f172a", textDecoration: "none", fontWeight: 700 }}>Leaderboard row</Link>
-        <Link href={`/clubs/${clubSlug}/badge-codex`} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: "white", color: "#0f172a", textDecoration: "none", fontWeight: 700 }}>Badge codex</Link>
+      <article data-testid="player-public-identity" style={{ ...cardStyle, background: "#eff6ff", marginBottom: "1rem" }}>
+        <strong>{verifiedLabel}</strong>
+        <p style={{ margin: "0.35rem 0", color: "#334155" }}>This page uses the player&apos;s approved public display name. Contact details, legal names, social identity keys, and subscription records are never included.</p>
+        {data.verified_updates.can_request ? <Link href={`/clubs/${clubSlug}/verified-updates?player_id=${encodeURIComponent(String(player.id))}`}>Request verified player updates</Link> : <span>Update access is managed through the private link in the verified email.</span>}
+        <span style={{ color: "#64748b" }}> · </span><Link href="/profile-privacy">Request an alias or privacy review</Link>
+      </article>
+
+      <nav aria-label="Player profile sections" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+        {(["overview", "ratings", "awards", "social", "matches"] as SectionKey[]).map((item) => (
+          <Link key={item} data-testid={`player-section-${item}`} aria-current={item === section ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: item, league: selectedLeague, history: historyView })} style={{ ...pillStyle, background: item === section ? "#dbeafe" : "white", fontWeight: item === section ? 800 : 600 }}>
+            {item === "overview" ? "Overview" : item[0].toUpperCase() + item.slice(1)}
+          </Link>
+        ))}
+        <Link href={`/clubs/${clubSlug}/leaderboards?player=${encodeURIComponent(String(player.id))}#leaderboard-player-${encodeURIComponent(String(player.id))}`} style={{ ...pillStyle, background: "white", fontWeight: 700 }}>Leaderboard snapshot</Link>
+        <Link href={`/clubs/${clubSlug}/badge-codex`} style={{ ...pillStyle, background: "white", fontWeight: 700 }}>Badge codex</Link>
+        <Link href={`/clubs/${clubSlug}/verified-updates?player_id=${encodeURIComponent(String(player.id))}`} style={{ ...pillStyle, background: "white", fontWeight: 700 }}>Request verified updates</Link>
+      </nav>
+
+      <div data-testid="player-summary-cards" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+        <article style={cardStyle}><strong>Doubles / overall</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.rating_jupr)}</div></article>
+        <article style={cardStyle}><strong>Singles</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.singles_rating_jupr)}</div></article>
+        <article style={cardStyle}><strong>Doubles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.wins ?? 0}-{player.losses ?? 0}</div><small>{pctLabel(player.wins, player.losses)}</small></article>
+        <article style={cardStyle}><strong>Singles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.singles_wins ?? 0}-{player.singles_losses ?? 0}</div><small>{pctLabel(player.singles_wins, player.singles_losses)}</small></article>
+        <article style={cardStyle}><strong>Badges earned</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{awards.badge_award_count}</div><small>{awards.prestige_total} prestige</small></article>
+        <article style={cardStyle}><strong>Last played</strong><div style={{ fontSize: "1.35rem", fontWeight: 800 }}>{formatDate(player.last_game_at)}</div><small>{player.is_active === false ? "Inactive" : "Active"}</small></article>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
-        <article style={cardStyle}><strong>Doubles / overall rating</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{ratingLabel(player.rating)}</div></article>
-        <article style={cardStyle}><strong>Singles rating</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{ratingLabel(player.singles_rating)}</div></article>
-        <article style={cardStyle}><strong>Doubles matches</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{player.matches_played ?? wins + losses}</div></article>
-        <article style={cardStyle}><strong>Singles matches</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{player.singles_matches_played ?? singlesWins + singlesLosses}</div></article>
-        <article style={cardStyle}><strong>Doubles record</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{wins}/{losses}</div></article>
-        <article style={cardStyle}><strong>Singles record</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{singlesWins}/{singlesLosses}</div></article>
-        <article style={cardStyle}><strong>Singles win %</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{pctLabel(singlesWins, singlesLosses)}</div></article>
-        <article style={cardStyle}><strong>Last played</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{dateLabel(player.last_game_at ?? lastMatch?.date)}</div></article>
-      </div>
-
-      {sectionVisible(section, "leagues") ? (
-        <section style={{ ...cardStyle, marginBottom: "1rem" }}>
-          <h2 style={{ marginTop: 0 }}>League ratings</h2>
-          {leagueRatings.length === 0 ? <p style={{ color: "#475569" }}>No league-specific ratings yet.</p> : null}
-          {leagueRatings.length > 0 ? (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "640px" }}>
-                <thead><tr><th style={thStyle}>League</th><th style={thStyle}>Rating</th><th style={thStyle}>Matches</th><th style={thStyle}>W/L</th><th style={thStyle}>Win %</th><th style={thStyle}>Status</th></tr></thead>
-                <tbody>
-                  {leagueRatings.map((row, index) => (
-                    <tr key={`${row.league_name ?? "league"}-${index}`}>
-                      <td style={tdStyle}>{row.league_name ?? "Overall"}</td>
-                      <td style={tdStyle}>{ratingLabel(row.rating)}</td>
-                      <td style={tdStyle}>{row.matches_played ?? (row.wins ?? 0) + (row.losses ?? 0)}</td>
-                      <td style={tdStyle}>{row.wins ?? 0}/{row.losses ?? 0}</td>
-                      <td style={tdStyle}>{pctLabel(row.wins, row.losses)}</td>
-                      <td style={tdStyle}>{row.is_active === false ? "Inactive" : "Active"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      {sectionVisible(section, "ratings") ? (
+        <section id="ratings" data-testid="player-ratings" style={{ display: "grid", gap: "1rem", marginBottom: "1rem" }}>
+          <article style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>Rating trend and snapshot</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.65rem", marginBottom: "1rem" }}>
+              <div><strong>Starting JUPR</strong><br />{ratingLabel(data.rating_summary.starting_rating_jupr)}</div>
+              <div><strong>Highest JUPR</strong><br />{ratingLabel(data.rating_summary.highest_rating_jupr)}</div>
+              <div><strong>Lowest JUPR</strong><br />{ratingLabel(data.rating_summary.lowest_rating_jupr)}</div>
+              <div><strong>Last 10</strong><br />{data.rating_summary.last_10_record}</div>
+              <div><strong>Last 10 delta</strong><br />{signedRating(data.rating_summary.last_10_delta_jupr)}</div>
+              <div><strong>Current streak</strong><br />{data.rating_summary.current_streak ?? "—"}</div>
             </div>
-          ) : null}
+            <RatingTrend points={data.rating_history} clubSlug={clubSlug} />
+          </article>
+
+          <article style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>Format breakdown</h2>
+            <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: "600px" }}><thead><tr><th style={thStyle}>Format</th><th style={thStyle}>Matches</th><th style={thStyle}>Record</th><th style={thStyle}>Win %</th><th style={thStyle}>Rating delta</th></tr></thead><tbody>
+              {data.rating_breakdowns.map((row) => <tr key={row.format} data-testid="player-format-row"><td style={tdStyle}>{row.label}</td><td style={tdStyle}>{row.matches}</td><td style={tdStyle}>{row.wins}-{row.losses}</td><td style={tdStyle}>{row.win_pct?.toFixed(1) ?? "—"}%</td><td style={tdStyle}>{signedRating(row.rating_delta_jupr)}</td></tr>)}
+            </tbody></table></div>
+          </article>
+
+          <article style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>League rating breakdown</h2>
+            {leagueRatings.length === 0 ? <p style={{ color: "#475569" }}>No league-specific ratings yet.</p> : (
+              <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: "700px" }}><thead><tr><th style={thStyle}>League</th><th style={thStyle}>JUPR</th><th style={thStyle}>Gain</th><th style={thStyle}>Matches</th><th style={thStyle}>Record</th><th style={thStyle}>Status</th></tr></thead><tbody>
+                {leagueRatings.map((row, index) => <tr key={`${row.league_name ?? "league"}-${index}`}><td style={tdStyle}>{row.league_name ?? "Overall"}</td><td style={tdStyle}>{ratingLabel(row.rating_jupr)}</td><td style={tdStyle}>{signedRating(row.rating_gain_jupr)}</td><td style={tdStyle}>{row.matches_played ?? 0}</td><td style={tdStyle}>{row.wins ?? 0}-{row.losses ?? 0}</td><td style={tdStyle}>{row.is_active === false ? "Inactive" : "Active"}</td></tr>)}
+              </tbody></table></div>
+            )}
+          </article>
+        </section>
+      ) : null}
+
+      {sectionVisible(section, "awards") ? (
+        <section id="awards" data-testid="player-awards" style={{ display: "grid", gap: "1rem", marginBottom: "1rem" }}>
+          <article style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>Trophy case</h2>
+            {awards.trophies.length === 0 ? <p style={{ color: "#475569" }}>No public trophy records yet.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>{awards.trophies.map((trophy, index) => <div key={`${trophy.badge_id}-${trophy.earned_at ?? index}`} data-testid="player-trophy" style={{ border: "1px solid #f59e0b", borderRadius: "12px", padding: "0.85rem", background: "#fffbeb" }}><strong>🏆 {trophy.title}</strong><p style={{ margin: "0.35rem 0" }}>{trophy.placement ? `Place #${trophy.placement}` : "Award"}{trophy.context_label ? ` · ${trophy.context_label}` : ""}</p><small>{formatDate(trophy.earned_at)}</small></div>)}</div>}
+          </article>
+          <article style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>Badge cabinet</h2>
+            {awards.badges.length === 0 ? <p style={{ color: "#475569" }}>No badges earned yet. Badge definitions remain available in the <Link href={`/clubs/${clubSlug}/badge-codex`}>Badge Codex</Link>.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>{awards.badges.map((badge) => <article key={badge.badge_id} data-testid="player-badge" style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.85rem" }}><strong>🏅 {badge.name}{badge.count > 1 ? ` ×${badge.count}` : ""}</strong><p style={{ margin: "0.35rem 0", color: "#475569" }}>{badge.category} · {badge.prestige} prestige{badge.rarity ? ` · ${badge.rarity}` : ""}</p><small>{badge.description ?? badge.requirements ?? `Last earned ${formatDate(badge.last_earned_at)}`}</small></article>)}</div>}
+          </article>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
+            {relationshipCard(clubSlug, "Best partner", "player-best-partner", data.relationships.best_partner)}
+            {relationshipCard(clubSlug, "Rival", "player-rival", data.relationships.rival)}
+          </div>
+          <article style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>Frequent partners and opponents</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
+              <div><h3>Partners</h3>{data.relationships.partners.length ? <ul>{data.relationships.partners.map((row) => <li key={`partner-${row.player_id}`}><Link href={`/clubs/${clubSlug}/players/${row.player_id}`}>{row.player_name}</Link> · {row.matches} · {row.wins}-{row.losses}</li>)}</ul> : <p style={{ color: "#475569" }}>No doubles partners yet.</p>}</div>
+              <div><h3>Opponents / rivals</h3>{data.relationships.rivals.length ? <ul>{data.relationships.rivals.map((row) => <li key={`rival-${row.player_id}`}><Link href={`/clubs/${clubSlug}/players/${row.player_id}`}>{row.player_name}</Link> · {row.matches} · {row.wins}-{row.losses}</li>)}</ul> : <p style={{ color: "#475569" }}>No opponents yet.</p>}</div>
+            </div>
+          </article>
+        </section>
+      ) : null}
+
+      {sectionVisible(section, "social") ? (
+        <section id="social" data-testid="player-social" style={{ ...cardStyle, marginBottom: "1rem" }}>
+          <h2 style={{ marginTop: 0 }}>Club Social projection</h2>
+          <p><strong>{social.identity.label}</strong></p>
+          {!social.available ? <p style={{ color: "#92400e" }}>Club Social aggregates are unavailable; no identity or event details were exposed.</p> : null}
+          {social.available && social.summary ? <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.65rem", marginBottom: "1rem" }}>
+              <div><strong>Events</strong><br />{social.summary.events}</div><div><strong>Matches</strong><br />{social.summary.matches}</div><div><strong>Record</strong><br />{social.summary.wins}-{social.summary.losses}</div><div><strong>Score diff</strong><br />{social.summary.score_diff >= 0 ? "+" : ""}{social.summary.score_diff}</div><div><strong>Last appearance</strong><br />{formatDate(social.summary.last_appearance)}</div>
+            </div>
+            {social.skill_breakdown.length ? <div style={{ overflowX: "auto", marginBottom: "1rem" }}><h3>Skill-level breakdown</h3><table style={{ width: "100%", borderCollapse: "collapse", minWidth: "620px" }}><thead><tr><th style={thStyle}>Skill</th><th style={thStyle}>Events</th><th style={thStyle}>Matches</th><th style={thStyle}>Record</th><th style={thStyle}>Diff</th></tr></thead><tbody>{social.skill_breakdown.map((row) => <tr key={row.label}><td style={tdStyle}>{row.label}</td><td style={tdStyle}>{row.events}</td><td style={tdStyle}>{row.matches}</td><td style={tdStyle}>{row.wins}-{row.losses}</td><td style={tdStyle}>{row.score_diff >= 0 ? "+" : ""}{row.score_diff}</td></tr>)}</tbody></table></div> : null}
+            <h3>Recent social events</h3>
+            {social.recent_events.length ? <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: "700px" }}><thead><tr><th style={thStyle}>Date</th><th style={thStyle}>Event</th><th style={thStyle}>Format</th><th style={thStyle}>Skill</th><th style={thStyle}>Record</th><th style={thStyle}>Diff</th></tr></thead><tbody>{social.recent_events.map((event, index) => <tr key={`${event.date ?? index}-${event.name}`}><td style={tdStyle}>{formatDate(event.date)}</td><td style={tdStyle}>{event.name}</td><td style={tdStyle}>{event.event_type}</td><td style={tdStyle}>{event.skill_labels.join(", ")}</td><td style={tdStyle}>{event.wins}-{event.losses}</td><td style={tdStyle}>{event.score_diff >= 0 ? "+" : ""}{event.score_diff}</td></tr>)}</tbody></table></div> : <p style={{ color: "#475569" }}>No linked public Club Social history yet.</p>}
+          </> : null}
         </section>
       ) : null}
 
       {sectionVisible(section, "matches") ? (
-        <section style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Recent matches</h2>
-          {leagues.length ? (
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-              <Link href={pageHref({ clubSlug, playerId, section: "matches" })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: !selectedLeague ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: !selectedLeague ? 800 : 600 }}>All leagues</Link>
-              {leagues.map((league) => {
-                const active = league === selectedLeague;
-                return (
-                  <Link key={league} href={pageHref({ clubSlug, playerId, section: "matches", league })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
-                    {league}
-                  </Link>
-                );
-              })}
-            </div>
-          ) : null}
-          {filteredMatches.length === 0 ? <p style={{ color: "#475569" }}>No recent public matches yet.</p> : null}
-          {filteredMatches.length > 0 ? (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "820px" }}>
-                <thead><tr><th style={thStyle}>Date</th><th style={thStyle}>Format</th><th style={thStyle}>Team 1</th><th style={thStyle}>Score</th><th style={thStyle}>Team 2</th><th style={thStyle}>League</th></tr></thead>
-                <tbody>
-                  {filteredMatches.map((match, index) => {
-                    const detailHref = match.id ? `/clubs/${clubSlug}/matches/${match.id}` : `/clubs/${clubSlug}/matches`;
-                    return (
-                      <tr key={`${match.id ?? index}`}>
-                        <td style={tdStyle}>{match.id ? <Link href={detailHref}>{formatMatchDate(match.date)}</Link> : formatMatchDate(match.date)}</td>
-                        <td style={tdStyle}>{match.match_format === "singles" ? "Singles" : "Doubles"}</td>
-                        <td style={tdStyle}>{teamLabel(clubSlug, match.team_1)}</td>
-                        <td style={tdStyle}>{match.id ? <Link href={detailHref}>{matchLabel(match)}</Link> : matchLabel(match)}</td>
-                        <td style={tdStyle}>{teamLabel(clubSlug, match.team_2)}</td>
-                        <td style={tdStyle}>{match.league ?? "—"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
+        <section id="matches" data-testid="player-match-history" style={cardStyle}>
+          <h2 style={{ marginTop: 0 }}>{historyView === "all" ? "Full public match history" : "Recent matches"}</h2>
+          <p style={{ color: "#475569" }}>Every row carries an explicit Singles or Doubles format label. Rating changes are shown only when a stored server snapshot exists.</p>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+            <Link data-testid="player-history-recent" aria-current={historyView === "recent" ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: "matches", league: selectedLeague, history: "recent" })} style={{ ...pillStyle, background: historyView === "recent" ? "#dcfce7" : "white" }}>Recent {data.history.recent_limit}</Link>
+            <Link data-testid="player-history-all" aria-current={historyView === "all" ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: "matches", league: selectedLeague, history: "all" })} style={{ ...pillStyle, background: historyView === "all" ? "#dcfce7" : "white" }}>Full history ({data.history.total_matches})</Link>
+          </div>
+          {leagues.length ? <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}><Link href={pageHref({ clubSlug, playerId, section: "matches", history: historyView })} style={{ ...pillStyle, background: !selectedLeague ? "#dbeafe" : "white" }}>All leagues</Link>{leagues.map((league) => <Link key={league} href={pageHref({ clubSlug, playerId, section: "matches", league, history: historyView })} style={{ ...pillStyle, background: selectedLeague === league ? "#dbeafe" : "white" }}>{league}</Link>)}</div> : null}
+          {matches.length === 0 ? <p data-testid="player-match-empty" style={{ color: "#475569" }}>No public matches match this view.</p> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1040px" }}><thead><tr><th style={thStyle}>Date</th><th style={thStyle}>Format</th><th style={thStyle}>Result</th><th style={thStyle}>Team 1</th><th style={thStyle}>Score</th><th style={thStyle}>Team 2</th><th style={thStyle}>JUPR before → after</th><th style={thStyle}>League</th></tr></thead><tbody>
+            {matches.map((match, index) => { const detailHref = match.id != null ? `/clubs/${clubSlug}/matches/${match.id}` : `/clubs/${clubSlug}/matches`; return <tr key={`${match.id ?? index}`} data-testid="player-match-row" data-format={match.match_format ?? "doubles"}><td style={tdStyle}><Link href={detailHref}>{formatDate(match.date)}</Link></td><td style={tdStyle}>{match.match_format_label ?? (match.match_format === "singles" ? "Singles" : "Doubles")}</td><td style={tdStyle}>{match.player_result === "win" ? "Win" : match.player_result === "loss" ? "Loss" : "—"}</td><td style={tdStyle}>{teamLabel(clubSlug, match.team_1)}</td><td style={tdStyle}><Link href={detailHref}>{matchScore(match)}</Link></td><td style={tdStyle}>{teamLabel(clubSlug, match.team_2)}</td><td style={tdStyle}>{ratingLabel(match.player_rating_before_jupr)} → {ratingLabel(match.player_rating_after_jupr)} ({signedRating(match.player_rating_delta_jupr)})</td><td style={tdStyle}>{match.league ?? "—"}</td></tr>; })}
+          </tbody></table></div>}
+          {data.history.has_more && historyView === "all" ? <p style={{ color: "#92400e" }}>Showing the newest {data.history.history_limit} public matches. Search the club match history for earlier archive access.</p> : null}
         </section>
       ) : null}
 
-      <p style={{ marginTop: "1rem" }}>
-        <Link href={`/clubs/${clubSlug}/players`}>Back to players</Link>
-        <span style={{ color: "#64748b" }}> · </span>
-        <Link href={`/clubs/${clubSlug}/matches?q=${encodeURIComponent(player.name)}`}>Search this player in match history</Link>
-        <span style={{ color: "#64748b" }}> · </span>
-        <Link href={`/clubs/${clubSlug}/match-explorer?me=${encodeURIComponent(String(player.id))}`}>Use in Match Explorer</Link>
-      </p>
+      <p style={{ marginTop: "1rem" }}><Link href={`/clubs/${clubSlug}/players`}>Back to active players</Link><span style={{ color: "#64748b" }}> · </span><Link href={`/clubs/${clubSlug}/matches?q=${encodeURIComponent(player.name)}`}>Search this player in match history</Link><span style={{ color: "#64748b" }}> · </span><Link href={`/clubs/${clubSlug}/match-explorer?me=${encodeURIComponent(String(player.id))}`}>Use in Match Explorer</Link></p>
     </section>
   );
 }

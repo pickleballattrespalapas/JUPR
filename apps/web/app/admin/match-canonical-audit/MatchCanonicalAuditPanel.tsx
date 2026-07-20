@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
-type StatusResponse = { enabled: boolean; status: string; confirmation_text?: string };
+type StatusResponse = { enabled: boolean; status: string; confirmation_text?: string; write_environment?: string; recovery_routes?: Record<string, string> };
 type PlayerOption = { player_id: number; player_name: string };
 type OptionsResponse = { ok: boolean; players: PlayerOption[]; leagues: string[]; schema_degraded?: boolean; schema_degraded_reason?: string | null };
 type AuditReport = {
@@ -15,7 +15,8 @@ type AuditReport = {
   exclusion_reasons_summary?: Array<Record<string, unknown>>;
 };
 type AuditResponse = { ok: boolean; report: AuditReport; schema_degraded?: boolean; schema_degraded_reason?: string | null };
-type NormalizeResponse = { ok: boolean; result: Record<string, unknown> };
+type NormalizeResponse = { ok: boolean; result?: Record<string, unknown>; preview_fingerprint?: string; operation_key?: string; updated_count?: number; recovery?: Record<string, string>; readback_verified?: boolean };
+type OperationResponse = { ok: boolean; operation_key: string; status: string; result: Record<string, unknown>; error?: string | null; recovery?: Record<string, string> };
 
 type Props = { apiBase: string | null; clubId: string; status: StatusResponse | null };
 
@@ -28,7 +29,11 @@ function apiUrl(apiBase: string, path: string): string { return `${apiBase.repla
 async function apiError(response: Response): Promise<string> {
   const text = await response.text().catch(() => "");
   if (!text) return `API error (${response.status}).`;
-  try { return String((JSON.parse(text) as { detail?: unknown }).detail || text); } catch { return text.slice(0, 240); }
+  try {
+    const detail = (JSON.parse(text) as { detail?: unknown }).detail;
+    if (detail && typeof detail === "object" && "message" in detail) return String((detail as { message?: unknown }).message || text);
+    return String(detail || text);
+  } catch { return text.slice(0, 240); }
 }
 function smallTable(rows: Array<Record<string, unknown>>, keys: string[]) {
   if (!rows.length) return <p style={{ color: "#64748b" }}>No rows.</p>;
@@ -52,6 +57,10 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
   const [report, setReport] = useState<AuditReport | null>(null);
   const [matchIds, setMatchIds] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  const [previewFingerprint, setPreviewFingerprint] = useState("");
+  const [operationKey, setOperationKey] = useState("");
+  const [operationLookupKey, setOperationLookupKey] = useState("");
+  const [operationLookup, setOperationLookup] = useState<OperationResponse | null>(null);
   const [normalizeResult, setNormalizeResult] = useState<Record<string, unknown> | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -97,16 +106,54 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
   async function normalize(dryRun: boolean) {
     if (!playerId) { setMessage("Select a player first."); return; }
     const ids = matchIds.split(/[\s,]+/).map((value) => Number(value.trim())).filter((value) => Number.isInteger(value) && value > 0);
+    if (!dryRun && !ids.length) { setMessage("Select the exact IDs from the current dry run before applying."); return; }
+    if (!dryRun && !previewFingerprint) { setMessage("Run and review a current dry run before applying."); return; }
     if (!dryRun && confirmation.trim().toUpperCase() !== "APPLY NORMALIZE") { setMessage("Type APPLY NORMALIZE to apply canonical normalization updates."); return; }
     setBusy(true); setMessage(null);
     try {
+      const key = dryRun ? "" : (operationKey || `canonical:${Date.now()}:${crypto.randomUUID()}`);
+      if (!dryRun && !operationKey) setOperationKey(key);
       const payload = await requestJson<NormalizeResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/match-canonical-audit/normalize`, {
         method: "POST",
-        body: JSON.stringify({ player_id: Number(playerId), match_ids: ids, dry_run: dryRun, confirmation_text: confirmation, source: dryRun ? "next_match_canonical_audit_dry_run" : "next_match_canonical_audit_apply" })
+        body: JSON.stringify({
+          player_id: Number(playerId),
+          match_ids: ids,
+          dry_run: dryRun,
+          confirmation_text: confirmation,
+          preview_fingerprint: dryRun ? "" : previewFingerprint,
+          operation_key: key,
+          source: dryRun ? "next_match_canonical_audit_dry_run" : "next_match_canonical_audit_apply"
+        })
       });
-      setNormalizeResult(payload.result || {});
-      setMessage(dryRun ? "Dry-run normalization plan generated." : "Normalization updates applied. Re-run this audit, then use Badge Diagnostics and Replay History if needed.");
+      const result: Record<string, unknown> = payload.result || (payload as unknown as Record<string, unknown>);
+      setNormalizeResult(result);
+      if (dryRun) {
+        const fingerprint = String(payload.preview_fingerprint || result.preview_fingerprint || "");
+        const proposals = Array.isArray(result.proposals) ? result.proposals as Array<Record<string, unknown>> : [];
+        const proposedIds = proposals.map((row) => Number(row.match_id)).filter((value) => Number.isInteger(value) && value > 0);
+        setPreviewFingerprint(fingerprint);
+        setMatchIds(proposedIds.join(", "));
+        setOperationKey("");
+        setConfirmation("");
+        setMessage(`Read-only dry run prepared ${proposedIds.length} exact match ID(s). Review every patch before applying.`);
+      } else {
+        setPreviewFingerprint("");
+        setOperationKey("");
+        setConfirmation("");
+        setMessage(`Atomic normalization updated ${payload.updated_count ?? ids.length} match(es) and verified readback. Re-run the audit.`);
+      }
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to normalize rows."); }
+    finally { setBusy(false); }
+  }
+
+  async function inspectOperation() {
+    if (!operationLookupKey.trim()) { setMessage("Enter the exact canonical operation key first."); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<OperationResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/match-canonical-audit/operations/${encodeURIComponent(operationLookupKey.trim())}`);
+      setOperationLookup(payload);
+      setMessage(`Canonical operation ${payload.operation_key} is ${payload.status}.`);
+    } catch (error) { setOperationLookup(null); setMessage(error instanceof Error ? error.message : "Unable to inspect canonical operation."); }
     finally { setBusy(false); }
   }
 
@@ -129,12 +176,12 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
         <p style={{ color: "#475569" }}>Run this for one player at a time. Applying normalization is explicit and audit-flagged.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
           <button type="button" onClick={loadOptions} disabled={busy || !accessToken} style={ghostButtonStyle}>Load players/leagues</button>
-          <label>Player<br /><select value={playerId} onChange={(event) => setPlayerId(event.target.value)} style={inputStyle}>{(options?.players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} · #{player.player_id}</option>)}</select></label>
+          <label>Player<br /><select value={playerId} onChange={(event) => { setPlayerId(event.target.value); setPreviewFingerprint(""); setMatchIds(""); setConfirmation(""); }} style={inputStyle}>{(options?.players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} · #{player.player_id}</option>)}</select></label>
           <label>League<br /><select value={leagueId} onChange={(event) => setLeagueId(event.target.value)} style={inputStyle}><option value="">All leagues</option>{(options?.leagues || []).map((league) => <option key={league} value={league}>{league}</option>)}</select></label>
           <label>Limit<br /><input value={limit} onChange={(event) => setLimit(event.target.value)} style={inputStyle} /></label>
           <button type="button" onClick={runAudit} disabled={busy || !playerId} style={buttonStyle}>Run audit</button>
         </div>
-        {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("type") || message.toLowerCase().includes("missing") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+        {message ? <p role="status" aria-live="polite" style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("type") || message.toLowerCase().includes("missing") || message.toLowerCase().includes("stop") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
 
       {report ? <article style={cardStyle}>
@@ -154,14 +201,32 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
 
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>3. Normalize legacy rows</h2>
-        <p style={{ color: "#475569" }}>Leave match IDs blank to target the audit's candidate set, or paste IDs separated by commas/spaces.</p>
-        <label>Match IDs<br /><textarea value={matchIds} onChange={(event) => setMatchIds(event.target.value)} rows={3} style={inputStyle} /></label>
+        <p style={{ color: "#475569" }}>Run a read-only dry run first. Apply is bound to its fingerprint and exact proposed IDs, runs atomically through FastAPI/Supabase, and cannot silently replay after an uncertain response.</p>
+        <label>Match IDs<br /><textarea value={matchIds} onChange={(event) => { setMatchIds(event.target.value); setPreviewFingerprint(""); setConfirmation(""); }} rows={3} style={inputStyle} /></label>
         <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
           <label>Apply confirmation<br /><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="APPLY NORMALIZE" style={inputStyle} /></label>
           <button type="button" onClick={() => normalize(true)} disabled={busy || !playerId} style={ghostButtonStyle}>Dry run normalize</button>
-          <button type="button" onClick={() => normalize(false)} disabled={busy || !playerId} style={buttonStyle}>Apply normalize</button>
+          <button type="button" onClick={() => normalize(false)} disabled={busy || !playerId || !previewFingerprint || !matchIds.trim()} style={buttonStyle}>Apply exact reviewed plan</button>
         </div>
+        {previewFingerprint ? <p><strong>Current preview fingerprint:</strong> <code>{previewFingerprint}</code></p> : null}
+        {operationKey ? <p style={{ color: "#92400e" }}><strong>Retry guard:</strong> keep operation key <code>{operationKey}</code>. If the response is uncertain, inspect status before retrying.</p> : null}
+        <p style={{ color: "#475569" }}>Stop on any stale preview, count mismatch, or uncertain response. Recover through <a href="/admin/match-log">Match Log</a> and <a href="/admin/replay-history">Replay History</a>; Streamlit remains the fallback.</p>
         {normalizeResult ? <pre style={{ whiteSpace: "pre-wrap", background: "#0f172a", color: "white", padding: "1rem", borderRadius: "12px", overflowX: "auto" }}>{JSON.stringify(normalizeResult, null, 2)}</pre> : null}
+      </article>
+
+      <article style={cardStyle}>
+        <h2 style={{ marginTop: 0 }}>4. Inspect or recover an uncertain apply</h2>
+        <p style={{ color: "#475569" }}>If an apply response is interrupted, keep its operation key and inspect the server record. Never create a new key or rerun patches while status is incomplete.</p>
+        {operationKey ? <p style={{ color: "#92400e" }}><strong>Retained key:</strong> <code style={{ overflowWrap: "anywhere" }}>{operationKey}</code></p> : null}
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
+          <label>Exact operation key<br /><input value={operationLookupKey} onChange={(event) => { setOperationLookupKey(event.target.value); setOperationLookup(null); }} style={inputStyle} /></label>
+          <button type="button" onClick={inspectOperation} disabled={busy || !accessToken} style={ghostButtonStyle}>Inspect canonical operation</button>
+        </div>
+        {operationLookup ? <div style={{ marginTop: "1rem" }}>
+          <pre style={{ whiteSpace: "pre-wrap", background: "#0f172a", color: "white", padding: "1rem", borderRadius: "12px", overflowX: "auto" }}>{JSON.stringify(operationLookup, null, 2)}</pre>
+          {operationLookup.status !== "completed" ? <p style={{ color: "#991b1b" }}><strong>Stop further writes.</strong> Compare the exact IDs in Match Log, then use Replay History. Do not blindly retry this operation.</p> : <p style={{ color: "#166534" }}>The atomic operation completed. Verify its saved IDs and read models before continuing.</p>}
+        </div> : null}
+        <p><a href="/admin/match-log">Match Log</a> · <a href="/admin/replay-history">Replay History</a> · <a href="/admin/guide">Admin Guide</a></p>
       </article>
     </div>
   );

@@ -1,38 +1,13 @@
+import { expect, test } from "@playwright/test";
 import {
-  expect,
-  test,
-  type APIResponse,
-  type BrowserContext,
-  type Page
-} from "@playwright/test";
-
-const clubSlug = String(process.env.JUPR_SMOKE_CLUB_SLUG || "tres-palapas").trim();
-const expectAuthIsolation = /^(1|true|yes|on)$/i.test(
-  String(process.env.JUPR_EXPECT_PREVIEW_AUTH_ISOLATION || "")
-);
-const expectedApiOrigin = String(
-  process.env.JUPR_EXPECTED_STAGING_API_ORIGIN || "https://juprleagues-api-staging.fly.dev"
-).trim().replace(/\/$/, "");
-const expectedAuthOrigin = String(process.env.JUPR_EXPECTED_STAGING_AUTH_ORIGIN || "")
-  .trim()
-  .replace(/\/$/, "");
-const expectedStagingWebOrigin =
-  "https://jupr-git-staging-pickleballattrespalapas1.vercel.app";
-const remoteBaseUrl = String(process.env.STAGING_WEB_BASE_URL || "").trim().replace(/\/$/, "");
-const bypassSecret = String(process.env.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
-const vercelBypassOrigin = (() => {
-  if (!remoteBaseUrl || !bypassSecret) return "";
-  if (remoteBaseUrl !== expectedStagingWebOrigin) {
-    throw new Error("Refusing to send Vercel bypass credentials to a non-staging web origin.");
-  }
-  return expectedStagingWebOrigin;
-})();
-
-type Surface = {
-  name: string;
-  path: string;
-  expected: RegExp;
-};
+  bootstrapStagingContext,
+  clubSlug,
+  expectAuthIsolation,
+  expectHealthySurface,
+  expectedApiOrigin,
+  expectedAuthOrigin,
+  type Surface
+} from "./support/staging";
 
 const publicSurfaces: Surface[] = [
   { name: "home", path: "/", expected: /Pickleball Club Sandwich/i },
@@ -66,6 +41,9 @@ const adminSurfaces: Surface[] = [
   { name: "verified updates", path: "/admin/player-updates/verified-requests", expected: /verified update/i },
   { name: "support requests", path: "/admin/support-requests", expected: /request queue/i },
   { name: "league manager", path: "/admin/league-manager", expected: /league manager/i },
+  { name: "league printout", path: "/admin/league-manager/print", expected: /league night printout/i },
+  { name: "top players printable", path: "/admin/top-players-printable", expected: /top active players/i },
+  { name: "league awards", path: "/admin/league-manager/awards", expected: /league awards/i },
   { name: "league live", path: "/admin/league-manager/live", expected: /league live/i },
   { name: "tournament setup", path: "/admin/tournament-setup", expected: /tournament setup/i },
   { name: "tournament admin", path: "/admin/tournaments", expected: /tournament registration management/i },
@@ -80,79 +58,9 @@ const adminSurfaces: Surface[] = [
   { name: "admin tools", path: "/admin/tools", expected: /admin tools/i }
 ];
 
-async function installVercelBypassCookie(context: BrowserContext): Promise<void> {
-  const bootstrapUrl = `${vercelBypassOrigin}/api/environment`;
-  let bootstrap: APIResponse;
-  try {
-    bootstrap = await context.request.get(bootstrapUrl, {
-      headers: {
-        "x-vercel-protection-bypass": bypassSecret,
-        "x-vercel-set-bypass-cookie": "true"
-      },
-      maxRedirects: 0,
-      failOnStatusCode: false
-    });
-  } catch {
-    throw new Error("Unable to establish the Vercel automation bypass cookie.");
-  }
-
-  try {
-    expect(
-      bootstrap.status(),
-      "Vercel bypass-cookie bootstrap did not redirect"
-    ).toBeGreaterThanOrEqual(300);
-    expect(
-      bootstrap.status(),
-      "Vercel bypass-cookie bootstrap did not redirect"
-    ).toBeLessThan(400);
-    expect(
-      bootstrap.headersArray().some(({ name }) => name.toLowerCase() === "set-cookie"),
-      "Vercel bypass-cookie bootstrap did not issue a cookie"
-    ).toBeTruthy();
-  } finally {
-    await bootstrap.dispose().catch(() => {});
-  }
-
-  let verification: APIResponse;
-  try {
-    verification = await context.request.get(bootstrapUrl, {
-      maxRedirects: 0,
-      failOnStatusCode: false
-    });
-  } catch {
-    throw new Error("Unable to verify the Vercel automation bypass cookie.");
-  }
-
-  try {
-    expect(verification.status(), "Vercel bypass cookie was not accepted").toBe(200);
-    expect(verification.headers()["content-type"] || "").toContain("application/json");
-  } finally {
-    await verification.dispose().catch(() => {});
-  }
-}
-
 test.beforeEach(async ({ context }) => {
-  if (!vercelBypassOrigin || !bypassSecret) return;
-  await installVercelBypassCookie(context);
+  await bootstrapStagingContext(context);
 });
-
-async function expectHealthySurface(page: Page, surface: Surface): Promise<void> {
-  const consoleErrors: string[] = [];
-  const pageErrors: string[] = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
-  });
-  page.on("pageerror", (error) => pageErrors.push(error.message));
-
-  const response = await page.goto(surface.path, { waitUntil: "domcontentloaded" });
-  expect(response, `${surface.name} did not return a document response`).not.toBeNull();
-  expect(response?.status(), `${surface.name} returned an error status`).toBeLessThan(400);
-  await expect(page.locator("body")).toContainText(surface.expected);
-  await expect(page.locator("body")).not.toHaveText("");
-  await expect(page.locator("[data-nextjs-dialog], .nextjs-container-errors-pseudo-html")).toHaveCount(0);
-  expect(pageErrors, `${surface.name} raised browser page errors`).toEqual([]);
-  expect(consoleErrors, `${surface.name} emitted console errors`).toEqual([]);
-}
 
 test("preview environment is isolated from production", async ({ page }) => {
   const response = await page.goto("/api/environment", { waitUntil: "domcontentloaded" });
@@ -187,6 +95,84 @@ for (const surface of publicSurfaces) {
     await expectHealthySurface(page, surface);
   });
 }
+
+test("tournament roster filters and public deep links remain navigable", async ({ page }) => {
+  const response = await page.goto(`/clubs/${clubSlug}/tournament-roster`, { waitUntil: "domcontentloaded" });
+  expect(response).not.toBeNull();
+  expect(response?.ok()).toBeTruthy();
+  await expect(page.getByRole("heading", { name: /tournament roster|open/i }).first()).toBeVisible();
+
+  const filterForm = page.getByRole("form", { name: "Tournament roster filters" });
+  const rowLink = page.getByRole("link", { name: /roster entry/i }).first();
+  const unavailable = page.getByRole("alert").filter({ hasText: /temporarily unavailable|not configured/i });
+  const empty = page.getByRole("heading", { name: /no roster entries yet|no matching roster entries/i });
+
+  if (await filterForm.count()) {
+    await expect(filterForm.getByLabel("Day")).toBeVisible();
+    await expect(filterForm.getByLabel("Event")).toBeVisible();
+    await expect(filterForm.getByLabel("Division")).toBeVisible();
+    await expect(filterForm.getByLabel("Status")).toBeVisible();
+    await expect(filterForm.getByRole("button", { name: "Apply filters" })).toBeVisible();
+  }
+
+  if (await rowLink.count()) {
+    const href = await rowLink.getAttribute("href");
+    expect(href).toBeTruthy();
+    const target = new URL(String(href), page.url());
+    expect(target.hash).toMatch(/^#entry-/);
+    await page.goto(target.toString(), { waitUntil: "domcontentloaded" });
+    await expect(page.locator(target.hash)).toBeVisible();
+  } else {
+    await expect(empty.or(unavailable).or(page.getByText(/No tournament roster is currently published|No published tournament roster was found/i)).first()).toBeVisible();
+  }
+
+  const partnerLink = page.getByRole("link", { name: "View on partner board" }).first();
+  if (await partnerLink.count()) {
+    const href = String(await partnerLink.getAttribute("href"));
+    expect(href).toContain("/tournament-partner-board");
+    expect(href).toMatch(/#partner-tr-[a-f0-9]{24}$/);
+    expect(href).not.toMatch(/selection_id|registration_id|player_id/);
+  }
+});
+
+test("badge codex: authoritative buckets, filters, anchors, and trophy room", async ({ page }) => {
+  const response = await page.goto(`/clubs/${clubSlug}/badge-codex`, { waitUntil: "domcontentloaded" });
+  expect(response?.status()).toBeLessThan(400);
+  await expect(page.getByRole("heading", { name: /badge codex/i })).toBeVisible();
+  await expect(page.locator("[data-badge-bucket]")).toHaveCount(4);
+  await expect(page.getByText(/Complete definitions/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent trophy room" })).toBeVisible();
+
+  const firstBadge = page.locator("[data-badge-id]").first();
+  await expect(firstBadge).toBeVisible();
+  const badgeId = await firstBadge.getAttribute("data-badge-id");
+  expect(badgeId).toBeTruthy();
+  const directHref = await firstBadge.getByRole("link", { name: "Link directly to this badge" }).getAttribute("href");
+  expect(directHref).toContain(`badge=${badgeId}`);
+  expect(directHref).toContain(`#badge-${badgeId}`);
+  await page.goto(String(directHref), { waitUntil: "domcontentloaded" });
+  await expect(page.locator(`[data-badge-id="${badgeId}"]`)).toBeVisible();
+});
+
+test("challenge ladder: Python eligibility, deep links, rulebook, and status legend", async ({ page }) => {
+  let response = await page.goto(`/clubs/${clubSlug}/challenge-ladder?section=rules`, { waitUntil: "domcontentloaded" });
+  expect(response?.status()).toBeLessThan(400);
+  await expect(page.locator('[data-rulebook-authority="python"]')).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Swing Partner Swap format" })).toBeVisible();
+  await expect(page.getByText(/exact tie favors the defender/i)).toBeVisible();
+  await expect(page.locator("[data-ladder-status]")).toHaveCount(8);
+
+  response = await page.goto(`/clubs/${clubSlug}/challenge-ladder?tier=PREM#tier-PREM`, { waitUntil: "domcontentloaded" });
+  expect(response?.status()).toBeLessThan(400);
+  await expect(page.locator("#tier-PREM")).toBeVisible();
+  response = await page.goto(`/clubs/${clubSlug}/challenge-ladder`, { waitUntil: "domcontentloaded" });
+  expect(response?.status()).toBeLessThan(400);
+  const playerLink = page.locator('a[href*="player="][href*="#ladder-player-"]').first();
+  await expect(playerLink).toBeVisible();
+  await playerLink.click();
+  await expect(page.locator('[data-python-eligibility="python"]')).toBeVisible();
+  await expect(page.getByText(/Python ladder policy/i)).toBeVisible();
+});
 
 for (const surface of adminSurfaces) {
   test(`admin shell: ${surface.name}`, async ({ page }) => {

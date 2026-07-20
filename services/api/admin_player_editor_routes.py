@@ -16,7 +16,15 @@ from jupr_app.services.admin_player_editor_service import (
     update_admin_player_editor_player,
 )
 from jupr_app.services.admin_player_league_rating_service import update_admin_player_editor_league_rating
-from jupr_app.services.admin_player_merge_service import build_admin_player_merge_preview, execute_admin_player_merge
+from jupr_app.services.admin_player_merge_service import (
+    PlayerMergeConflictError,
+    PlayerMergeSetupError,
+    build_admin_player_merge_preview,
+    compensate_admin_player_merge,
+    execute_admin_player_merge,
+    get_admin_player_merge_operation,
+    verify_admin_player_merge_replay,
+)
 from jupr_app.services.admin_player_social_identity_service import (
     auto_link_admin_player_social_identities,
     list_admin_player_social_identities,
@@ -68,8 +76,21 @@ class AdminPlayerMergePreviewRequest(BaseModel):
 class AdminPlayerMergeExecuteRequest(BaseModel):
     source_player_id: int
     target_player_id: int
+    preview_fingerprint: str
+    operation_id: str | None = None
     confirmation_text: str = ""
     source: str = "next_player_editor_merge"
+
+
+class AdminPlayerMergeCompensateRequest(BaseModel):
+    confirmation_text: str = ""
+    source: str = "next_player_editor_merge_compensation"
+
+
+class AdminPlayerMergeReplayEvidenceRequest(BaseModel):
+    replay_job_id: str
+    confirmation_text: str = ""
+    source: str = "next_player_editor_merge_replay_evidence"
 
 
 def _dump_model(model: BaseModel) -> dict[str, Any]:
@@ -90,7 +111,9 @@ def _resolve_player_editor_role_or_403(*, supabase: Any, club_id: str, authoriza
 
 def _handle_common(exc: Exception) -> None:
     if isinstance(exc, PermissionError): raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if isinstance(exc, PlayerMergeConflictError): raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, ValueError): raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, PlayerMergeSetupError): raise HTTPException(status_code=503, detail=str(exc)) from exc
     if isinstance(exc, RuntimeError): raise HTTPException(status_code=500, detail=str(exc)) from exc
     raise exc
 
@@ -114,7 +137,28 @@ def install_admin_player_editor_routes(app, *, get_supabase_client) -> None:
     def post_admin_player_merge_execute(club_id: str, payload: AdminPlayerMergeExecuteRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_player_editor_enabled(): raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        try: return execute_admin_player_merge(supabase, club_id=str(club_id), source_player_id=payload.source_player_id, target_player_id=payload.target_player_id, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        try: return execute_admin_player_merge(supabase, club_id=str(club_id), source_player_id=payload.source_player_id, target_player_id=payload.target_player_id, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, preview_fingerprint=payload.preview_fingerprint, operation_id=payload.operation_id, source=payload.source)
+        except Exception as exc: _handle_common(exc)
+
+    @app.get("/admin/clubs/{club_id}/players/editor/merge/{operation_id}")
+    def get_admin_player_merge_recovery(club_id: str, operation_id: str, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_player_editor_enabled(): raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
+        supabase = get_supabase_client(); _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_player_editor_merge_recovery")
+        try: return get_admin_player_merge_operation(supabase, club_id=str(club_id), operation_id=operation_id)
+        except Exception as exc: _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/players/editor/merge/{operation_id}/compensate")
+    def post_admin_player_merge_compensation(club_id: str, operation_id: str, payload: AdminPlayerMergeCompensateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_player_editor_enabled(): raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
+        supabase = get_supabase_client(); actor_email, actor_role = _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try: return compensate_admin_player_merge(supabase, club_id=str(club_id), operation_id=operation_id, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc: _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/players/editor/merge/{operation_id}/replay-evidence")
+    def post_admin_player_merge_replay_evidence(club_id: str, operation_id: str, payload: AdminPlayerMergeReplayEvidenceRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_player_editor_enabled(): raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
+        supabase = get_supabase_client(); actor_email, actor_role = _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try: return verify_admin_player_merge_replay(supabase, club_id=str(club_id), operation_id=operation_id, replay_job_id=payload.replay_job_id, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
         except Exception as exc: _handle_common(exc)
 
     @app.get("/admin/clubs/{club_id}/players/editor/social-identities")

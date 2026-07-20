@@ -34,11 +34,19 @@ export async function GET() {
   const expectedStagingOrigin =
     safeOrigin(process.env.JUPR_STAGING_API_BASE_URL) ||
     "https://juprleagues-api-staging.fly.dev";
+  const gitCommitSha = String(process.env.VERCEL_GIT_COMMIT_SHA || "").trim().toLowerCase() || null;
+  const vercelDeploymentId = String(process.env.VERCEL_DEPLOYMENT_ID || "").trim() || null;
+  const vercelDeploymentOrigin = safeOrigin(
+    process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined
+  );
 
   return NextResponse.json(
     {
       environment,
       vercel_environment: vercelEnvironment,
+      git_commit_sha: gitCommitSha,
+      vercel_deployment_id: vercelDeploymentId,
+      vercel_deployment_origin: vercelDeploymentOrigin,
       api_origin: apiOrigin,
       score_entry_visible: truthy(process.env.NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY),
       auth_origin: authOrigin,

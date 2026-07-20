@@ -95,8 +95,6 @@ def upsert_player_badges(
         _PLAYER_BADGES_CONTRACT_CHECKED = True
 
     existing = _fetch_existing_keys(supabase, club_id, candidate_list)
-    now = datetime.now(timezone.utc).isoformat()
-    rows: list[dict[str, Any]] = []
     created: list[BadgeCandidate] = []
 
     for candidate in candidate_list:
@@ -107,31 +105,15 @@ def upsert_player_badges(
         if key in existing:
             continue
         existing.add(key)
-        value_json = dict(candidate.value_json or {})
-        value_json.setdefault("badge_id", candidate.badge_id)
-        if "tape_excerpt" not in value_json or not value_json.get("tape_excerpt"):
-            value_json["tape_excerpt"] = _build_tape_excerpt(candidate, value_json)
-        if "tape_title" not in value_json or not value_json.get("tape_title"):
-            value_json["tape_title"] = _build_tape_title(candidate, value_json)
-        rows.append(
-            {
-                "id": str(uuid4()),
-                "club_id": club_id,
-                "player_id": int(candidate.player_id),
-                "badge_id": candidate.badge_id,
-                "earned_at": now,
-                "context_type": candidate.context_type,
-                "context_id": context_id,
-                "match_id": candidate.match_id,
-                "value_num": candidate.value_num,
-                "value_json": value_json,
-                "awarded_by": awarded_by,
-                "rule_version": rule_version,
-                "eval_run_id": eval_run_id,
-            }
-        )
         created.append(candidate)
 
+    rows = build_player_badge_rows(
+        club_id,
+        created,
+        awarded_by=awarded_by,
+        rule_version=rule_version,
+        eval_run_id=eval_run_id,
+    )
     if not rows:
         return []
 
@@ -142,6 +124,51 @@ def upsert_player_badges(
             rows[i : i + chunk],
         )
     return created
+
+
+def build_player_badge_rows(
+    club_id: str,
+    candidates: Iterable[BadgeCandidate],
+    *,
+    awarded_by: str = "engine",
+    rule_version: str | None = None,
+    eval_run_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Build canonical insert rows without reading or mutating badge storage.
+
+    Atomic domain RPCs use this pure projection so their transaction can verify
+    and insert the exact same badge content as the ordinary repository path.
+    """
+
+    now = datetime.now(timezone.utc).isoformat()
+    rows: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if candidate.context_id is None or str(candidate.context_id).strip() == "":
+            raise ValueError(f"Missing context_id for badge {candidate.badge_id} (player {candidate.player_id})")
+        value_json = dict(candidate.value_json or {})
+        value_json.setdefault("badge_id", candidate.badge_id)
+        if "tape_excerpt" not in value_json or not value_json.get("tape_excerpt"):
+            value_json["tape_excerpt"] = _build_tape_excerpt(candidate, value_json)
+        if "tape_title" not in value_json or not value_json.get("tape_title"):
+            value_json["tape_title"] = _build_tape_title(candidate, value_json)
+        rows.append(
+            {
+                "id": str(uuid4()),
+                "club_id": str(club_id),
+                "player_id": int(candidate.player_id),
+                "badge_id": str(candidate.badge_id),
+                "earned_at": now,
+                "context_type": str(candidate.context_type),
+                "context_id": str(candidate.context_id),
+                "match_id": candidate.match_id,
+                "value_num": candidate.value_num,
+                "value_json": value_json,
+                "awarded_by": awarded_by,
+                "rule_version": rule_version,
+                "eval_run_id": eval_run_id,
+            }
+        )
+    return rows
 
 
 def _upsert_player_badges_chunk(supabase: Any, rows: list[dict[str, Any]]) -> None:

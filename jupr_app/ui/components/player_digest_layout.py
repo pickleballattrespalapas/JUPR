@@ -13,7 +13,7 @@ def _inject_styles() -> None:
   .player-digest-wrap { max-width: 980px; margin: 0 auto; }
   .player-digest { font-family: 'Inter', sans-serif; border: 1px solid gainsboro; border-radius: 14px; padding: 18px; }
   .digest-card { border-radius: 16px; padding: 16px 18px; margin-bottom: 14px; background: var(--secondary-background-color); }
-  .digest-header { background: linear-gradient(135deg, #FFF3E6, #FFE7CF); border-left: 6px solid #FF7A00; color: #111; }
+  .digest-header { background: linear-gradient(135deg, color-mix(in srgb, var(--status-warning) 10%, var(--panel)), color-mix(in srgb, var(--status-warning) 22%, var(--panel))); border-left: 6px solid var(--status-warning); color: var(--text-primary); }
   .digest-title { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
   .digest-subtitle { opacity: 0.8; font-size: 14px; }
   .digest-metrics { display: grid; grid-template-columns: repeat(auto-fit,minmax(120px,1fr)); gap: 8px; }
@@ -21,11 +21,11 @@ def _inject_styles() -> None:
   .digest-metric-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
   .digest-metric-value { font-size: 20px; font-weight: 700; }
   .digest-section-title { font-size: 17px; font-weight: 700; margin-bottom: 8px; }
-  .digest-soft { background: linear-gradient(135deg, #EAF4FF, #D8E9FF); border-left: 5px solid #1976D2; color: #111; }
-  .digest-soft-green { background: linear-gradient(135deg, #E8FFF4, #D2F7E7); border-left: 5px solid #1B9E77; color: #111; }
+  .digest-soft { background: linear-gradient(135deg, color-mix(in srgb, var(--status-info) 8%, var(--panel)), color-mix(in srgb, var(--status-info) 18%, var(--panel))); border-left: 5px solid var(--status-info); color: var(--text-primary); }
+  .digest-soft-green { background: linear-gradient(135deg, color-mix(in srgb, var(--status-success) 8%, var(--panel)), color-mix(in srgb, var(--status-success) 18%, var(--panel))); border-left: 5px solid var(--status-success); color: var(--text-primary); }
   .digest-list { margin: 0; padding-left: 18px; }
   .digest-list li { margin: 6px 0; }
-  .digest-row { border-bottom: 1px solid rgba(128,128,128,.25); padding: 7px 0; }
+  .digest-row { border-bottom: 1px solid var(--border); padding: 7px 0; }
   .digest-row:last-child { border-bottom: none; }
   .digest-muted { opacity: .8; font-size: 13px; }
   .digest-cta { text-align:center; }

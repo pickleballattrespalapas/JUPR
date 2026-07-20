@@ -101,14 +101,14 @@ export default function ProfilePrivacyRequestForm({ clubSlug = "tres-palapas" }:
         </select>
       </label>
       <label>Request details<br /><textarea value={state.details} onChange={(event) => update("details", event.target.value)} rows={5} style={inputStyle} /></label>
-      <label>Evidence or relevant link, optional<br /><input value={state.evidenceUrl} onChange={(event) => update("evidenceUrl", event.target.value)} style={inputStyle} /></label>
+      <label>Evidence or relevant link, optional<br /><input type="url" value={state.evidenceUrl} onChange={(event) => update("evidenceUrl", event.target.value)} placeholder="https://…" style={inputStyle} /></label>
       <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
         <input type="checkbox" checked={state.consent} onChange={(event) => update("consent", event.target.checked)} />
         <span>I understand profile privacy requests are reviewed by staff and staff may contact me to verify this request.</span>
       </label>
       <button type="submit" disabled={pending} style={buttonStyle}>{pending ? "Submitting…" : "Submit privacy request"}</button>
-      {message ? <p style={{ color: "#166534", margin: 0 }}>{message}</p> : null}
-      {error ? <p style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
+      {message ? <p role="status" style={{ color: "#166534", margin: 0 }}>{message}</p> : null}
+      {error ? <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
     </form>
   );
 }

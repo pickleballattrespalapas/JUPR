@@ -70,7 +70,7 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(
         `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/delete-draft`,
-        { method: "POST", body: JSON.stringify({ confirmation_text: confirm, source: "next_tournament_admin_delete_draft_page" }) }
+        { method: "POST", body: JSON.stringify({ expected_updated_at: selectedTournament?.updated_at, confirmation_text: confirm, source: "next_tournament_admin_delete_draft_page" }) }
       );
       setTournaments((current) => current.filter((row) => row.id !== selectedTournamentId));
       setSelectedTournamentId("");
@@ -119,13 +119,13 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
             <label><strong>Type DELETE DRAFT</strong><br />
               <input value={confirm} onChange={(event) => setConfirm(event.target.value)} style={inputStyle} />
             </label>
-            <button type="button" onClick={deleteDraft} disabled={busy || !selectedTournamentId || confirm.trim().toUpperCase() !== "DELETE DRAFT"} style={buttonStyle}>Delete draft</button>
+            <button type="button" onClick={deleteDraft} disabled={busy || !selectedTournamentId || !selectedTournament?.updated_at || confirm.trim().toUpperCase() !== "DELETE DRAFT"} style={buttonStyle}>Delete draft</button>
           </div>
           {selectedTournament ? <p style={{ color: "#64748b" }}>Selected: <strong>{selectedTournament.name}</strong> ({selectedTournament.id})</p> : null}
         </article>
       ) : null}
 
-      {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") || message.toLowerCase().includes("sign in") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+      {message ? <p role="status" style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") || message.toLowerCase().includes("sign in") || message.toLowerCase().includes("reload") || message.toLowerCase().includes("changed") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </section>
   );
 }

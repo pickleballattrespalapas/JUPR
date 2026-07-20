@@ -9,7 +9,14 @@ from jupr_app.domain.admin_activity_log import build_activity_payload, write_adm
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 REQUEST_STATUSES = {"new", "in_review", "resolved", "dismissed"}
 REQUEST_TYPES = {"data_correction", "profile_privacy", "general_support"}
+IDENTITY_STATUSES = {"not_required", "pending", "verified", "rejected"}
+FULFILLMENT_STATUSES = {"not_required", "pending", "in_progress", "completed", "declined"}
+RESOLUTION_ACTIONS = {"none", "alias", "hide", "anonymize", "contact_update", "correction", "other"}
 CONFIRM_STATUS = "SAVE REQUEST STATUS"
+
+
+class SupportRequestConflictError(RuntimeError):
+    """Raised when a reviewer attempts to save a stale queue item."""
 
 
 def _truthy_env(name: str) -> bool:
@@ -57,6 +64,10 @@ def _request_payload(row: dict[str, Any]) -> dict[str, Any]:
         "description": _clean_text(row.get("description"), limit=2400),
         "requested_action": _clean_text(row.get("requested_action"), limit=1200),
         "evidence_url": _clean_text(row.get("evidence_url"), limit=600),
+        "identity_status": _clean_text(row.get("identity_status") or "not_required", limit=40),
+        "fulfillment_status": _clean_text(row.get("fulfillment_status") or "not_required", limit=40),
+        "resolution_action": _clean_text(row.get("resolution_action") or "none", limit=60),
+        "resolution_evidence": _clean_text(row.get("resolution_evidence"), limit=1200),
         "source": _clean_text(row.get("source"), limit=120),
         "admin_note": _clean_text(row.get("admin_note"), limit=1200),
         "reviewed_by": _clean_text(row.get("reviewed_by"), limit=240),
@@ -140,6 +151,11 @@ def update_admin_support_request(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    expected_updated_at: str | None = None,
+    identity_status: str | None = None,
+    fulfillment_status: str | None = None,
+    resolution_action: str | None = None,
+    resolution_evidence: str | None = None,
     source: str = "next_admin_support_requests",
 ) -> dict[str, Any]:
     if not is_admin_support_requests_enabled():
@@ -160,22 +176,67 @@ def update_admin_support_request(
     )
     if not before:
         raise ValueError("Support request not found.")
+    current_updated_at = _clean_text(before.get("updated_at"), limit=80)
+    clean_expected_updated_at = _clean_text(expected_updated_at, limit=80)
+    if clean_expected_updated_at and clean_expected_updated_at != current_updated_at:
+        raise SupportRequestConflictError("This request changed after it was loaded. Refresh before saving.")
+
+    clean_note = _clean_text(admin_note, limit=1200)
+    if clean_status in {"resolved", "dismissed"} and not clean_note:
+        raise ValueError("An admin note is required before resolving or dismissing a request.")
+
+    current_identity = _clean_text(before.get("identity_status") or "not_required", limit=40).lower()
+    current_fulfillment = _clean_text(before.get("fulfillment_status") or "not_required", limit=40).lower()
+    current_action = _clean_text(before.get("resolution_action") or "none", limit=60).lower()
+    clean_identity = _clean_text(identity_status if identity_status is not None else current_identity, limit=40).lower()
+    clean_fulfillment = _clean_text(
+        fulfillment_status if fulfillment_status is not None else current_fulfillment,
+        limit=40,
+    ).lower()
+    clean_action = _clean_text(resolution_action if resolution_action is not None else current_action, limit=60).lower()
+    clean_resolution_evidence = _clean_text(
+        resolution_evidence if resolution_evidence is not None else before.get("resolution_evidence"),
+        limit=1200,
+    )
+    if clean_identity not in IDENTITY_STATUSES:
+        raise ValueError("Unsupported identity-verification status.")
+    if clean_fulfillment not in FULFILLMENT_STATUSES:
+        raise ValueError("Unsupported privacy-fulfillment status.")
+    if clean_action not in RESOLUTION_ACTIONS:
+        raise ValueError("Unsupported resolution action.")
+    if _clean_text(before.get("request_type"), limit=60).lower() == "profile_privacy" and clean_status == "resolved":
+        if clean_identity != "verified":
+            raise ValueError("Verify the requester identity before resolving a profile privacy request.")
+        if clean_fulfillment != "completed":
+            raise ValueError("Complete and verify the privacy fulfillment checklist before resolving the request.")
+        if clean_action == "none":
+            raise ValueError("Record the approved privacy resolution action before resolving the request.")
+        if not clean_resolution_evidence:
+            raise ValueError("Record privacy fulfillment evidence before resolving the request.")
+
+    updated_at = _now_iso()
     payload = {
         "status": clean_status,
-        "admin_note": _clean_text(admin_note, limit=1200) or None,
+        "admin_note": clean_note or None,
+        "identity_status": clean_identity,
+        "fulfillment_status": clean_fulfillment,
+        "resolution_action": clean_action,
+        "resolution_evidence": clean_resolution_evidence or None,
         "reviewed_by": str(actor_email or "").strip() or None,
-        "reviewed_at": _now_iso(),
-        "updated_at": _now_iso(),
+        "reviewed_at": updated_at,
+        "updated_at": updated_at,
     }
-    updated = _safe_first(
+    update_query = (
         supabase.table("public_support_requests")
         .update(payload)
         .eq("club_id", str(club_id))
         .eq("id", clean_request_id)
-        .execute()
     )
+    if current_updated_at:
+        update_query = update_query.eq("updated_at", current_updated_at)
+    updated = _safe_first(update_query.execute())
     if not updated:
-        raise RuntimeError("Support request could not be updated.")
+        raise SupportRequestConflictError("This request changed after it was loaded. Refresh before saving.")
     audit_payload = build_activity_payload(
         club_id=str(club_id),
         actor_email=str(actor_email or ""),

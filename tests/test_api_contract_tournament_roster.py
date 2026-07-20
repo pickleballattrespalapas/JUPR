@@ -47,6 +47,8 @@ def test_public_tournament_roster_after_submit_contract(client):
             "email": "alex@example.com",
             "phone": "555-0100",
             "doubles_skill": 4.0,
+            "age": 34,
+            "gender": "Men",
             "terms_accepted": True,
             "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
         },
@@ -58,7 +60,14 @@ def test_public_tournament_roster_after_submit_contract(client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["summary"]["total_registrations"] == 1
-    members = payload["roster"]["registrations_by_event"][0]["members"]
+    roster_row = payload["roster"]["registrations_by_event"][0]
+    members = roster_row["members"]
     assert members[0]["display_name"] == "Alex Rivera"
+    assert roster_row["status"] == "Review"
     assert "email" not in members[0]
     assert "phone" not in members[0]
+    assert "registration_id" not in members[0]
+    assert "selection_id" not in members[0]
+    assert "player_id" not in members[0]
+    assert "source_registration_ids" not in roster_row
+    assert "source_selection_ids" not in roster_row

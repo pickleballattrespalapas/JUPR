@@ -71,6 +71,27 @@ def get_public_base_url(default: str = "http://localhost:8501") -> str:
     return str(default).strip().rstrip("/")
 
 
+def get_next_web_base_url(default: str = "http://localhost:3000") -> str:
+    """Return the canonical Next web origin used in generated public links.
+
+    ``JUPR_PUBLIC_BASE_URL`` predates the Next migration and may still point at
+    Streamlit.  Prefer the explicit web-origin variables, while retaining the
+    legacy variables as a last-resort compatibility fallback during rollout.
+    """
+
+    for env_name in (
+        "JUPR_NEXT_WEB_BASE_URL",
+        "JUPR_WEB_BASE_URL",
+        "NEXT_PUBLIC_JUPR_WEB_BASE_URL",
+        "JUPR_PUBLIC_BASE_URL",
+        "PUBLIC_BASE_URL",
+    ):
+        value = get_env_or_default(env_name)
+        if value:
+            return value.rstrip("/")
+    return str(default).strip().rstrip("/")
+
+
 def get_smtp_config() -> SMTPConfig:
     host = get_env_or_default("SMTP_HOST")
     port_raw = get_env_or_default("SMTP_PORT")
@@ -147,6 +168,30 @@ def _registration_edit_secret_fallback() -> str:
     return ""
 
 
+def get_explicit_registration_edit_token_secret() -> str:
+    """Return only an operator-managed, rotation-stable edit-token secret."""
+
+    for candidate in (
+        get_env_or_default("JUPR_REGISTRATION_EDIT_SECRET"),
+        _streamlit_secret_value("registration", "edit_token_secret"),
+        _streamlit_secret_value("registration", "edit_secret"),
+        _streamlit_secret_value("jupr", "registration_edit_secret"),
+    ):
+        if candidate:
+            if len(candidate.encode("utf-8")) < 32:
+                raise ValueError(
+                    "JUPR_REGISTRATION_EDIT_SECRET must contain at least 32 bytes "
+                    "of operator-managed secret material."
+                )
+            return candidate
+    raise ValueError(
+        "Public registration edit links require an explicit, stable "
+        "JUPR_REGISTRATION_EDIT_SECRET. Supabase credential fallbacks are not "
+        "accepted by the public edit API because key rotation would invalidate "
+        "outstanding links."
+    )
+
+
 def get_registration_edit_token_secret() -> str:
     for candidate in (
         get_env_or_default("JUPR_REGISTRATION_EDIT_SECRET"),
@@ -160,4 +205,35 @@ def get_registration_edit_token_secret() -> str:
     raise ValueError(
         "JUPR_REGISTRATION_EDIT_SECRET is required for registration edit links. "
         "Set it directly, or configure Supabase credentials so the app can derive a stable signing secret."
+    )
+
+
+def get_registration_confirmation_token_secret() -> str:
+    """Return a server-only signing secret for confirmation access tokens.
+
+    Confirmation tokens protect a registrant-specific projection. Never derive
+    them from the publishable/anonymous key because that key is intentionally
+    delivered to browsers.
+    """
+
+    for candidate in (
+        get_env_or_default("JUPR_REGISTRATION_CONFIRMATION_SECRET"),
+        _streamlit_secret_value("registration", "confirmation_token_secret"),
+        get_env_or_default("JUPR_REGISTRATION_EDIT_SECRET"),
+        _streamlit_secret_value("registration", "edit_token_secret"),
+    ):
+        if candidate:
+            return candidate
+
+    for candidate in (
+        get_env_or_default("SUPABASE_SERVICE_ROLE_KEY"),
+        _streamlit_secret_value("supabase", "service_role_key"),
+    ):
+        if candidate:
+            return f"registration-confirmation-token:{candidate}"
+
+    raise ValueError(
+        "JUPR_REGISTRATION_CONFIRMATION_SECRET is required for registration "
+        "confirmation links. Set it directly, reuse the server-only registration "
+        "edit secret, or configure the Supabase service-role credential."
     )

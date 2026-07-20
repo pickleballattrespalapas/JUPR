@@ -118,6 +118,11 @@ def test_public_match_explorer_preview_contract(client):
     assert preview["context"] == {"name": "Open", "k_factor": 24}
     assert preview["teams"]["you"]["players"][0]["name"] == "Alex"
     assert preview["rating_delta"]["you_team_elo"] > 0
+    assert preview["expected"]["score_to_11"]["label"] == "11\u20133"
+    assert preview["score"]["you_share"] == pytest.approx(11 / 18)
+    assert len(preview["impact_chart"]["points"]) == 101
+    assert len(preview["impact_chart"]["score_ticks"]) == 9
+    assert len(preview["player_impacts"]) == 4
 
     player_payload = preview["teams"]["you"]["players"][0]
     assert set(player_payload) == {"id", "name", "overall_rating", "overall_jupr", "context_rating", "context_jupr"}
@@ -133,3 +138,13 @@ def test_public_match_explorer_preview_rejects_duplicate_players(client):
 
     assert response.status_code == 400
     assert "four different players" in response.json()["detail"]
+
+
+def test_public_match_explorer_preview_rejects_inactive_context(client):
+    response = client.get(
+        "/clubs/tres-palapas/match-explorer/preview",
+        params={"me": 1, "partner": 2, "opp1": 3, "opp2": 4, "context": "Archived"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Selected rating context is unavailable."

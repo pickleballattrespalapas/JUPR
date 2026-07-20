@@ -19,27 +19,75 @@ export type LeaderboardEntry = {
   player_name: string;
   rating?: number | null;
   rating_jupr?: number | null;
+  starting_rating?: number | null;
+  starting_rating_jupr?: number | null;
+  rating_gain_jupr?: number | null;
+  gap_jupr?: number | null;
   wins?: number | null;
   losses?: number | null;
   matches_played?: number | null;
+  win_pct?: number | null;
   is_active?: boolean | null;
+  qualified?: boolean | null;
+  min_games?: number | null;
+  badges?: LeaderboardBadge[];
+  badge_count?: number;
   updated_at?: string | null;
+};
+
+export type LeaderboardBadge = {
+  badge_id: string;
+  name: string;
+  prestige?: number | null;
+  category?: string | null;
+  icon_key?: string | null;
+  rarity?: string | null;
+  earned_at?: string | null;
+};
+
+export type LeaderboardScope = {
+  name: string;
+  label: string;
+  min_games: number;
 };
 
 export type LeaderboardResponse = {
   club: { id: string; slug: string; name: string };
+  scopes: LeaderboardScope[];
+  selected_scope: string;
+  scope: LeaderboardScope;
+  filters: { status: "active" | "inactive" | "all"; search: string; sort: string };
+  summary: {
+    ranked_players: number;
+    active_players: number;
+    inactive_players: number;
+    leaderboard_scopes: number;
+    filtered_players: number;
+  };
   leaderboard: LeaderboardEntry[];
+  snapshot?: LeaderboardEntry | null;
+  highlights: {
+    highest_rating: LeaderboardEntry[];
+    most_improved: LeaderboardEntry[];
+    best_win_pct: LeaderboardEntry[];
+    most_wins: LeaderboardEntry[];
+  };
+  pagination: { total: number; offset: number; limit: number; has_more: boolean };
 };
 
 export type PublicPlayer = {
   id: string | number;
-  club_id?: string;
   name: string;
+  display_name?: string;
   rating?: number | null;
+  rating_jupr?: number | null;
+  starting_rating?: number | null;
+  starting_rating_jupr?: number | null;
   wins?: number | null;
   losses?: number | null;
   matches_played?: number | null;
   singles_rating?: number | null;
+  singles_rating_jupr?: number | null;
   singles_wins?: number | null;
   singles_losses?: number | null;
   singles_matches_played?: number | null;
@@ -52,7 +100,10 @@ export type PublicLeagueRating = {
   id?: string | number | null;
   league_name?: string | null;
   rating?: number | null;
+  rating_jupr?: number | null;
   starting_rating?: number | null;
+  starting_rating_jupr?: number | null;
+  rating_gain_jupr?: number | null;
   wins?: number | null;
   losses?: number | null;
   matches_played?: number | null;
@@ -75,15 +126,19 @@ export type PublicMatch = {
   week_tag?: string | null;
   match_type?: string | null;
   match_format?: string | null;
+  match_format_label?: string | null;
   rating_scope?: string | null;
   context_type?: string | null;
-  context_id?: string | null;
   team_1: PublicMatchPlayer[];
   team_2: PublicMatchPlayer[];
   score_t1?: number | null;
   score_t2?: number | null;
   winner?: string | null;
   elo_delta?: number | null;
+  player_result?: "win" | "loss" | null;
+  player_rating_before_jupr?: number | null;
+  player_rating_after_jupr?: number | null;
+  player_rating_delta_jupr?: number | null;
   rating_snapshot?: {
     team_1: PublicRatingSnapshotEntry[];
     team_2: PublicRatingSnapshotEntry[];
@@ -93,13 +148,99 @@ export type PublicMatch = {
 export type PlayersResponse = {
   club: { id: string; slug: string; name: string };
   players: PublicPlayer[];
+  filters?: { search: string; status: "active" | "inactive" | "all"; sort: string };
+  summary?: { public_players: number; active_players: number; inactive_players: number; filtered_players: number };
+  pagination?: { total: number; limit: number; offset: number; has_more: boolean };
+};
+
+export type PublicRatingHistoryPoint = {
+  match_number: number;
+  match_id?: string | number | null;
+  date?: string | null;
+  league?: string | null;
+  match_type?: string | null;
+  match_format: "doubles" | "singles";
+  match_format_label: string;
+  result?: "win" | "loss" | null;
+  rating_before_jupr?: number | null;
+  rating_after_jupr?: number | null;
+  rating_delta_jupr?: number | null;
+};
+
+export type PublicRatingBreakdown = {
+  format: "doubles" | "singles";
+  label: string;
+  matches: number;
+  wins: number;
+  losses: number;
+  win_pct?: number | null;
+  rating_delta_jupr?: number | null;
+};
+
+export type PublicBadgeAward = {
+  badge_id: string;
+  name: string;
+  category: string;
+  prestige: number;
+  rarity?: string | null;
+  icon_key?: string | null;
+  description?: string | null;
+  requirements?: string | null;
+  count: number;
+  last_earned_at?: string | null;
+};
+
+export type PublicTrophy = {
+  badge_id: string;
+  title: string;
+  placement?: number | null;
+  context_type?: string | null;
+  context_label?: string | null;
+  earned_at?: string | null;
+};
+
+export type PublicRelationship = {
+  player_id: string | number;
+  player_name: string;
+  matches: number;
+  wins: number;
+  losses: number;
+  win_pct?: number | null;
+  balance?: number | null;
+};
+
+export type PublicSocialProjection = {
+  available: boolean;
+  identity: { linked: boolean; label: string };
+  summary?: { events: number; matches: number; wins: number; losses: number; score_diff: number; last_appearance?: string | null } | null;
+  skill_breakdown: Array<{ label: string; events: number; matches: number; wins: number; losses: number; score_diff: number }>;
+  recent_events: Array<{ date?: string | null; name: string; event_type: string; skill_labels: string[]; matches: number; wins: number; losses: number; score_diff: number }>;
 };
 
 export type PlayerProfileResponse = {
   club: { id: string; slug: string; name: string };
   player: PublicPlayer;
+  identity: { display_name: string; public_name_policy: "public_display_name"; verification_status: "enabled" | "pending" | "available" };
+  verified_updates: { status: "enabled" | "pending" | "available"; can_request: boolean };
+  rating_summary: {
+    current_rating_jupr?: number | null;
+    current_singles_rating_jupr?: number | null;
+    starting_rating_jupr?: number | null;
+    highest_rating_jupr?: number | null;
+    lowest_rating_jupr?: number | null;
+    last_10_record: string;
+    last_10_delta_jupr?: number | null;
+    current_streak?: string | null;
+  };
+  rating_breakdowns: PublicRatingBreakdown[];
+  rating_history: PublicRatingHistoryPoint[];
   league_ratings: PublicLeagueRating[];
+  awards: { badge_count: number; badge_award_count: number; prestige_total: number; badges: PublicBadgeAward[]; trophies: PublicTrophy[] };
+  relationships: { best_partner?: PublicRelationship | null; rival?: PublicRelationship | null; partners: PublicRelationship[]; rivals: PublicRelationship[] };
+  social: PublicSocialProjection;
   recent_matches: PublicMatch[];
+  match_history: PublicMatch[];
+  history: { total_matches: number; recent_limit: number; history_limit: number; has_more: boolean };
 };
 
 export type MatchesResponse = {
@@ -137,6 +278,8 @@ export type PublicLiveSessionSummary = {
   session_key: string;
   title: string;
   status: string;
+  version: number;
+  live_mode?: "quick" | "club_social" | string;
   event_type?: string | null;
   current_round?: number | null;
   has_event?: boolean;
@@ -144,11 +287,24 @@ export type PublicLiveSessionSummary = {
   updated_at?: string | null;
   last_seen_at?: string | null;
   expires_at?: string | null;
+  completed_at?: string | null;
 };
 
 export type PublicLiveSessionDetail = PublicLiveSessionSummary & {
   rounds: PublicLiveRound[];
   standings: Array<Record<string, string | number | boolean | null>>;
+  participants: Array<{ id: string; name: string; player_id?: string | number | null }>;
+  substitutions: Array<{
+    id: string;
+    scope: string;
+    round_number?: number | null;
+    match_id?: string | null;
+    original_participant_id: string;
+    original_player_name: string;
+    substitute_name: string;
+    affected_match_ids: string[];
+  }>;
+  social?: { enabled: boolean; skill_levels: string[]; submission_status?: string | null };
   bracket?: { champion?: string | null; rows: Array<Record<string, string | number | boolean | null>> } | null;
   court_standings?: Array<Record<string, unknown>>;
 };
@@ -156,6 +312,8 @@ export type PublicLiveSessionDetail = PublicLiveSessionSummary & {
 export type LiveSessionsResponse = {
   club: { id: string; slug: string; name: string };
   sessions: PublicLiveSessionSummary[];
+  write_enabled: boolean;
+  write_fallback_url?: string | null;
 };
 
 export type LiveSessionDetailResponse = {
@@ -177,20 +335,65 @@ export type MatchExplorerPlayer = {
   context_jupr?: number | null;
 };
 
+export type MatchExplorerScoreTo11 = {
+  you: number;
+  opponents: number;
+  label: string;
+};
+
+export type MatchExplorerImpactPoint = {
+  score_share: number;
+  score_to_11: MatchExplorerScoreTo11;
+  you_team_elo: number;
+  opponent_team_elo: number;
+  you_team_jupr: number;
+  opponent_team_jupr: number;
+};
+
+export type MatchExplorerPlayerImpact = {
+  role: "You" | "Partner" | "Opponent 1" | "Opponent 2";
+  player: MatchExplorerPlayer;
+  current_rating: number;
+  current_jupr: number;
+  projected_rating: number;
+  projected_jupr: number;
+  delta_elo: number;
+  delta_jupr: number;
+};
+
 export type MatchExplorerPreview = {
   context: { name: string; k_factor: number };
   teams: {
     you: { average_rating: number; average_jupr?: number | null; players: MatchExplorerPlayer[] };
     opponents: { average_rating: number; average_jupr?: number | null; players: MatchExplorerPlayer[] };
   };
-  expected: { you: number; opponents: number; label: string };
-  score: { you: number; opponents: number };
+  expected: { you: number; opponents: number; label: string; score_to_11: MatchExplorerScoreTo11 };
+  score: {
+    you: number;
+    opponents: number;
+    you_share?: number | null;
+    opponents_share?: number | null;
+    beat_expectation_pp?: number | null;
+    score_to_11?: MatchExplorerScoreTo11 | null;
+  };
   rating_delta: {
     you_team_elo: number;
     opponent_team_elo: number;
     you_team_jupr?: number | null;
     opponent_team_jupr?: number | null;
   };
+  impact_chart: {
+    points: MatchExplorerImpactPoint[];
+    score_ticks: Array<{ score_share: number; score_to_11: MatchExplorerScoreTo11 }>;
+    expected_marker: { score_share: number; score_to_11: MatchExplorerScoreTo11 };
+    selected_marker?: {
+      score_share: number;
+      score_to_11?: MatchExplorerScoreTo11 | null;
+      you_team_elo: number;
+      you_team_jupr: number;
+    } | null;
+  };
+  player_impacts: MatchExplorerPlayerImpact[];
 };
 
 export type MatchExplorerPreviewResponse = {
@@ -202,6 +405,9 @@ export type LeagueResultsLeague = {
   name: string;
   min_games?: number | null;
   k_factor?: number | null;
+  start_week?: number | null;
+  end_week?: number | null;
+  num_weeks?: number | null;
 };
 
 export type LeagueResultsStanding = {
@@ -225,6 +431,42 @@ export type LeagueResultsStatRow = {
   wins?: number | null;
   losses?: number | null;
   win_pct?: number | null;
+  rating_jupr?: number | null;
+  rating_delta_jupr?: number | null;
+  rank?: number | null;
+  prev_rank?: number | null;
+  rank_delta?: number | null;
+};
+
+export type LeagueResultsHighlights = {
+  scope?: "week" | "season" | string | null;
+  week_num?: number | null;
+  min_games?: number | null;
+  biggest_climbers: LeagueResultsStatRow[];
+  best_win_pct: LeagueResultsStatRow[];
+  most_active: LeagueResultsStatRow[];
+};
+
+export type LeagueResultsPlayerOption = {
+  player_id: string | number;
+  player_name: string;
+};
+
+export type LeagueResultsPlayerSummary = LeagueResultsStatRow & {
+  rating_jupr?: number | null;
+  rank?: number | null;
+};
+
+export type LeagueResultsRecentMatch = {
+  match_id: string | number;
+  date?: string | null;
+  week_num?: number | null;
+  week_label?: string | null;
+  partner?: LeagueResultsPlayerOption | null;
+  opponents: LeagueResultsPlayerOption[];
+  result: "W" | "L" | "D" | string;
+  score_for: number;
+  score_against: number;
   rating_delta_jupr?: number | null;
 };
 
@@ -234,14 +476,18 @@ export type LeagueResultsResponse = {
   selected_league?: string | null;
   league?: LeagueResultsLeague | null;
   standings: LeagueResultsStanding[];
-  weeks: Array<{ week_num: number; week_label: string }>;
+  weeks: Array<{ week_num: number; week_label: string; has_results?: boolean | null }>;
+  selected_week?: number | null;
   weekly_results: LeagueResultsStatRow[];
   cumulative: LeagueResultsStatRow[];
-  highlights: {
-    biggest_climbers: LeagueResultsStatRow[];
-    best_win_pct: LeagueResultsStatRow[];
-    most_active: LeagueResultsStatRow[];
-  };
+  players: LeagueResultsPlayerOption[];
+  selected_player_id?: string | number | null;
+  player_summary?: LeagueResultsPlayerSummary | null;
+  player_weekly: LeagueResultsStatRow[];
+  recent_matches: LeagueResultsRecentMatch[];
+  weekly_highlights: LeagueResultsHighlights;
+  season_highlights: LeagueResultsHighlights;
+  highlights: LeagueResultsHighlights;
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };
@@ -287,16 +533,56 @@ export async function getClub(clubSlug: string): Promise<ApiResult<ClubSummary>>
   return fetchJson<ClubSummary>(`/clubs/${clubSlug}`);
 }
 
-export async function getClubLeaderboard(clubSlug: string): Promise<ApiResult<LeaderboardResponse>> {
-  return fetchJson<LeaderboardResponse>(`/clubs/${clubSlug}/leaderboards`);
+export type LeaderboardRequest = {
+  leagueName?: string | null;
+  status?: "active" | "inactive" | "all";
+  search?: string | null;
+  sort?: "rank" | "rating" | "matches" | "win_pct" | "gain" | "name";
+  playerId?: string | number | null;
+  limit?: number;
+  offset?: number;
+};
+
+export async function getClubLeaderboard(
+  clubSlug: string,
+  options: LeaderboardRequest = {}
+): Promise<ApiResult<LeaderboardResponse>> {
+  const params = new URLSearchParams();
+  if (options.leagueName) params.set("league_name", String(options.leagueName));
+  if (options.status) params.set("status", options.status);
+  if (options.search) params.set("q", String(options.search));
+  if (options.sort) params.set("sort", options.sort);
+  if (options.playerId != null && String(options.playerId).trim()) params.set("player_id", String(options.playerId));
+  if (options.limit != null) params.set("limit", String(options.limit));
+  if (options.offset != null) params.set("offset", String(options.offset));
+  const query = params.toString();
+  return fetchJson<LeaderboardResponse>(`/clubs/${clubSlug}/leaderboards${query ? `?${query}` : ""}`);
 }
 
-export async function getClubPlayers(clubSlug: string): Promise<ApiResult<PlayersResponse>> {
-  return fetchJson<PlayersResponse>(`/clubs/${clubSlug}/players`);
+export async function getClubPlayers(
+  clubSlug: string,
+  filters: { q?: string | null; status?: "active" | "inactive" | "all" | null; sort?: string | null; limit?: number | null; offset?: number | null } = {}
+): Promise<ApiResult<PlayersResponse>> {
+  const params = new URLSearchParams();
+  if (filters.q) params.set("q", filters.q);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.sort) params.set("sort", filters.sort);
+  if (filters.limit != null) params.set("limit", String(filters.limit));
+  if (filters.offset != null) params.set("offset", String(filters.offset));
+  const query = params.toString();
+  return fetchJson<PlayersResponse>(`/clubs/${clubSlug}/players${query ? `?${query}` : ""}`);
 }
 
-export async function getClubPlayerProfile(clubSlug: string, playerId: string): Promise<ApiResult<PlayerProfileResponse>> {
-  return fetchJson<PlayerProfileResponse>(`/clubs/${clubSlug}/players/${playerId}`);
+export async function getClubPlayerProfile(
+  clubSlug: string,
+  playerId: string,
+  limits: { recent?: number; history?: number } = {}
+): Promise<ApiResult<PlayerProfileResponse>> {
+  const params = new URLSearchParams();
+  if (limits.recent != null) params.set("recent_limit", String(limits.recent));
+  if (limits.history != null) params.set("history_limit", String(limits.history));
+  const query = params.toString();
+  return fetchJson<PlayerProfileResponse>(`/clubs/${clubSlug}/players/${playerId}${query ? `?${query}` : ""}`);
 }
 
 export async function getClubMatches(clubSlug: string): Promise<ApiResult<MatchesResponse>> {
@@ -323,7 +609,18 @@ export async function getClubMatchExplorerContext(clubSlug: string): Promise<Api
   return fetchJson<MatchExplorerContextResponse>(`/clubs/${clubSlug}/match-explorer`);
 }
 
-export async function getClubLeagueResults(clubSlug: string, leagueName?: string | null): Promise<ApiResult<LeagueResultsResponse>> {
-  const query = leagueName ? `?league_name=${encodeURIComponent(leagueName)}` : "";
-  return fetchJson<LeagueResultsResponse>(`/clubs/${clubSlug}/league-results${query}`);
+export async function getClubLeagueResults(
+  clubSlug: string,
+  leagueName?: string | null,
+  week?: number | null,
+  player?: string | number | null,
+  weeklyMinGames?: number | null
+): Promise<ApiResult<LeagueResultsResponse>> {
+  const params = new URLSearchParams();
+  if (leagueName) params.set("league_name", leagueName);
+  if (week) params.set("week", String(week));
+  if (player) params.set("player", String(player));
+  if (weeklyMinGames) params.set("weekly_min_games", String(weeklyMinGames));
+  const query = params.toString();
+  return fetchJson<LeagueResultsResponse>(`/clubs/${clubSlug}/league-results${query ? `?${query}` : ""}`);
 }

@@ -1,0 +1,353 @@
+name: Parity Final Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "One candidate-bound staging wave, or the completed-book proof"
+        required: true
+        type: choice
+        options:
+          - public-read
+          - public-intake-auth
+          - admin-read-export
+          - match-rating-writes
+          - complete-book
+      candidate_sha:
+        description: "Exact 40-character Git SHA deployed to Vercel and Fly"
+        required: true
+        type: string
+      vercel_deployment_id:
+        description: "Exact VERCEL_DEPLOYMENT_ID attested by the preview"
+        required: true
+        type: string
+      vercel_deployment_origin:
+        description: "Exact immutable candidate origin (*.vercel.app), never the staging alias"
+        required: true
+        type: string
+      fly_image_ref:
+        description: "Exact FLY_IMAGE_REF attested by the staging API"
+        required: true
+        type: string
+      mutation_confirmation:
+        description: "For a mutating wave, enter: RUN DISPOSABLE STAGING WRITES"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # This lock is shared with fly_api_staging_deploy.yml so a deployment cannot
+  # replace the candidate while evidence is being collected.
+  group: jupr-staging-api-and-parity-evidence
+  cancel-in-progress: false
+
+jobs:
+  evidence-contract:
+    name: Pending-safe evidence contract
+    runs-on: ubuntu-latest
+    outputs:
+      candidate_sha: ${{ steps.validate-inputs.outputs.candidate_sha }}
+      fly_image_ref: ${{ steps.validate-inputs.outputs.fly_image_ref }}
+      mode: ${{ steps.validate-inputs.outputs.mode }}
+      write_wave: ${{ steps.validate-inputs.outputs.write_wave }}
+      mutation_confirmation: ${{ steps.validate-inputs.outputs.mutation_confirmation }}
+      vercel_deployment_id: ${{ steps.validate-inputs.outputs.vercel_deployment_id }}
+      vercel_deployment_origin: ${{ steps.validate-inputs.outputs.vercel_deployment_origin }}
+    steps:
+      - name: Check out canonical staging workflow
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: staging
+
+      - name: Verify canonical staging workflow provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/staging" ]; then
+            echo "parity evidence workflow must be dispatched from refs/heads/staging" >&2
+            exit 2
+          fi
+          WORKFLOW_SHA="$(git rev-parse HEAD)"
+          STAGING_SHA="$(git rev-parse refs/remotes/origin/staging)"
+          if [ "$WORKFLOW_SHA" != "$GITHUB_SHA" ] || [ "$WORKFLOW_SHA" != "$STAGING_SHA" ]; then
+            echo "workflow definition HEAD, GITHUB_SHA, and canonical origin/staging must be identical" >&2
+            exit 2
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate dispatch inputs and candidate ancestry
+        id: validate-inputs
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          FLY_IMAGE_REF: ${{ inputs.fly_image_ref }}
+          MUTATION_CONFIRMATION: ${{ inputs.mutation_confirmation }}
+          PARITY_MODE: ${{ inputs.mode }}
+          VERCEL_DEPLOYMENT_ID: ${{ inputs.vercel_deployment_id }}
+          VERCEL_DEPLOYMENT_ORIGIN: ${{ inputs.vercel_deployment_origin }}
+        run: |
+          set -euo pipefail
+
+          STAGING_SHA="$(git rev-parse refs/remotes/origin/staging)"
+          if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "candidate_sha must be a lowercase, full 40-character Git SHA" >&2
+            exit 2
+          fi
+          if [[ ! "$VERCEL_DEPLOYMENT_ID" =~ ^dpl_[A-Za-z0-9]{8,128}$ ]]; then
+            echo "vercel_deployment_id must be a Vercel dpl_ identifier" >&2
+            exit 2
+          fi
+          if [[ ! "$VERCEL_DEPLOYMENT_ORIGIN" =~ ^https://[a-z0-9]([a-z0-9-]{0,180}[a-z0-9])?-[a-z0-9]{8,64}-pickleballattrespalapas1\.vercel\.app$ ]] || \
+             [ "$VERCEL_DEPLOYMENT_ORIGIN" = "https://jupr-git-staging-pickleballattrespalapas1.vercel.app" ]; then
+            echo "vercel_deployment_origin must be the exact immutable candidate origin, not the mutable staging alias" >&2
+            exit 2
+          fi
+          if [[ ! "$FLY_IMAGE_REF" =~ ^registry\.fly\.io/juprleagues-api-staging:deployment-[A-Za-z0-9]{10,128}$ ]]; then
+            echo "fly_image_ref must identify a deployment image for juprleagues-api-staging" >&2
+            exit 2
+          fi
+          case "$PARITY_MODE" in
+            public-read|public-intake-auth|admin-read-export|match-rating-writes|complete-book) ;;
+            *)
+              echo "mode is not one of the supported evidence modes" >&2
+              exit 2
+              ;;
+          esac
+          case "$PARITY_MODE" in
+            public-read|admin-read-export|complete-book)
+              WRITE_WAVE="none"
+              ;;
+            public-intake-auth)
+              WRITE_WAVE="public-intake-auth"
+              ;;
+            match-rating-writes)
+              WRITE_WAVE="tournament-live"
+              ;;
+          esac
+          case "$PARITY_MODE" in
+            match-rating-writes)
+              if [ "$MUTATION_CONFIRMATION" != "RUN DISPOSABLE STAGING WRITES" ]; then
+                echo "mutating evidence modes require the exact mutation confirmation" >&2
+                exit 2
+              fi
+              ;;
+            *)
+              if [ -n "$MUTATION_CONFIRMATION" ]; then
+                echo "mutation_confirmation must be empty for non-mutating evidence modes" >&2
+                exit 2
+              fi
+              ;;
+          esac
+
+          git cat-file -e "${CANDIDATE_SHA}^{commit}"
+          if [ "$PARITY_MODE" = "complete-book" ]; then
+            git merge-base --is-ancestor "$CANDIDATE_SHA" "$STAGING_SHA" || {
+              echo "complete-book candidate_sha must be an ancestor of canonical origin/staging" >&2
+              exit 2
+            }
+            while IFS= read -r changed_path; do
+              if [ "$changed_path" != "docs/next_parity_manual_staging_book.md" ]; then
+                echo "complete-book may differ from its deployed candidate only by the completed evidence book: $changed_path" >&2
+                exit 2
+              fi
+            done < <(git diff --name-only "$CANDIDATE_SHA..$STAGING_SHA")
+          elif [ "$CANDIDATE_SHA" != "$STAGING_SHA" ]; then
+            echo "candidate_sha must equal canonical origin/staging for executable waves" >&2
+            exit 2
+          fi
+
+          {
+            printf 'candidate_sha=%s\n' "$CANDIDATE_SHA"
+            printf 'fly_image_ref=%s\n' "$FLY_IMAGE_REF"
+            printf 'mode=%s\n' "$PARITY_MODE"
+            printf 'write_wave=%s\n' "$WRITE_WAVE"
+            printf 'mutation_confirmation=%s\n' "$MUTATION_CONFIRMATION"
+            printf 'vercel_deployment_id=%s\n' "$VERCEL_DEPLOYMENT_ID"
+            printf 'vercel_deployment_origin=%s\n' "$VERCEL_DEPLOYMENT_ORIGIN"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out canonical staging evidence tree
+        run: git checkout --detach refs/remotes/origin/staging
+
+      - name: Validate scaffold and exact manifests
+        run: make check-parity-final-evidence
+
+      - name: Validate completed candidate-bound book
+        if: steps.validate-inputs.outputs.mode == 'complete-book'
+        env:
+          CANDIDATE_SHA: ${{ steps.validate-inputs.outputs.candidate_sha }}
+          FLY_IMAGE_REF: ${{ steps.validate-inputs.outputs.fly_image_ref }}
+          VERCEL_DEPLOYMENT_ID: ${{ steps.validate-inputs.outputs.vercel_deployment_id }}
+          VERCEL_DEPLOYMENT_ORIGIN: ${{ steps.validate-inputs.outputs.vercel_deployment_origin }}
+        run: |
+          python scripts/check_parity_manual_book.py \
+            --require-complete \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --vercel-deployment-id "$VERCEL_DEPLOYMENT_ID" \
+            --vercel-deployment-origin "$VERCEL_DEPLOYMENT_ORIGIN" \
+            --fly-image-ref "$FLY_IMAGE_REF"
+
+      - name: Retain completed evidence book
+        if: steps.validate-inputs.outputs.mode == 'complete-book'
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-completed-book-${{ steps.validate-inputs.outputs.candidate_sha }}
+          path: docs/next_parity_manual_staging_book.md
+          if-no-files-found: error
+          retention-days: 90
+
+  staging-wave:
+    name: Candidate-bound ${{ needs.evidence-contract.outputs.mode }} / ${{ needs.evidence-contract.outputs.write_wave }} wave
+    if: needs.evidence-contract.outputs.mode != 'complete-book'
+    needs: evidence-contract
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      JUPR_EXPECT_PREVIEW_AUTH_ISOLATION: "1"
+      JUPR_EXPECTED_STAGING_API_ORIGIN: "https://juprleagues-api-staging.fly.dev"
+      STAGING_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
+      JUPR_SMOKE_CLUB_SLUG: ${{ vars.JUPR_SMOKE_CLUB_SLUG }}
+      STAGING_CLUB_SLUG: ${{ vars.JUPR_SMOKE_CLUB_SLUG }}
+      STAGING_ADMIN_EMAIL: ${{ vars.STAGING_ADMIN_EMAIL }}
+      JUPR_REAL_AUTH_EXPECTED_ROLE: ${{ vars.JUPR_REAL_AUTH_EXPECTED_ROLE }}
+      JUPR_STAGING_ADMIN_EMAIL: ${{ vars.STAGING_ADMIN_EMAIL }}
+      JUPR_COMMUNICATIONS_DRAFT_WEEK_START: ${{ vars.JUPR_COMMUNICATIONS_DRAFT_WEEK_START }}
+      JUPR_TOURNAMENT_REGISTRATION_FIXTURE_SLUG: ${{ vars.JUPR_TOURNAMENT_REGISTRATION_FIXTURE_SLUG }}
+      JUPR_TOURNAMENT_OPS_TOURNAMENT_ID: ${{ vars.JUPR_TOURNAMENT_OPS_TOURNAMENT_ID }}
+      JUPR_TOURNAMENT_OPS_DRAW_ID: ${{ vars.JUPR_TOURNAMENT_OPS_DRAW_ID }}
+      JUPR_TOURNAMENT_LIVE_TOURNAMENT_ID: ${{ vars.JUPR_TOURNAMENT_LIVE_TOURNAMENT_ID }}
+      JUPR_TOURNAMENT_LIVE_DRAW_ID: ${{ vars.JUPR_TOURNAMENT_LIVE_DRAW_ID }}
+      JUPR_TOURNAMENT_LIVE_GAME_ID: ${{ vars.JUPR_TOURNAMENT_LIVE_GAME_ID }}
+      JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_A: ${{ vars.JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_A }}
+      JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_B: ${{ vars.JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_B }}
+      JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_A: ${{ vars.JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_A }}
+      JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_B: ${{ vars.JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_B }}
+      JUPR_TOURNAMENT_LIVE_ALLOW_MUTATION_E2E: ${{ needs.evidence-contract.outputs.mode == 'match-rating-writes' && needs.evidence-contract.outputs.mutation_confirmation == 'RUN DISPOSABLE STAGING WRITES' && '1' || '0' }}
+    steps:
+      - name: Check out exact application candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.evidence-contract.outputs.candidate_sha }}
+
+      - name: Require complete stacked staging manifest
+        run: make check-parity-final-evidence-integrated
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install browser-suite dependencies
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run exact wave and reject skips or flakes
+        env:
+          CANDIDATE_SHA: ${{ needs.evidence-contract.outputs.candidate_sha }}
+          FLY_IMAGE_REF: ${{ needs.evidence-contract.outputs.fly_image_ref }}
+          JUPR_PARITY_MUTATION_CONFIRMATION: ${{ needs.evidence-contract.outputs.mutation_confirmation }}
+          JUPR_EXPECTED_STAGING_AUTH_ORIGIN: ${{ secrets.STAGING_SUPABASE_URL }}
+          JUPR_STAGING_ADMIN_ACCESS_TOKEN: ${{ needs.evidence-contract.outputs.mode == 'admin-read-export' && secrets.STAGING_ADMIN_BEARER_TOKEN || '' }}
+          NEXT_PUBLIC_JUPR_API_BASE_URL: ${{ secrets.STAGING_JUPR_API_BASE_URL }}
+          PARITY_MODE: ${{ needs.evidence-contract.outputs.mode }}
+          REQUIRED_STAGING_WRITE_WAVE: ${{ needs.evidence-contract.outputs.write_wave }}
+          STAGING_ADMIN_BEARER_TOKEN: ${{ (needs.evidence-contract.outputs.mode == 'admin-read-export' || needs.evidence-contract.outputs.mode == 'match-rating-writes') && secrets.STAGING_ADMIN_BEARER_TOKEN || '' }}
+          STAGING_ADMIN_PASSWORD: ${{ needs.evidence-contract.outputs.mode == 'public-intake-auth' && secrets.STAGING_ADMIN_PASSWORD || '' }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_JUPR_API_BASE_URL }}
+          STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          STAGING_WEB_BASE_URL: ${{ secrets.STAGING_WEB_BASE_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          VERCEL_DEPLOYMENT_ID: ${{ needs.evidence-contract.outputs.vercel_deployment_id }}
+          VERCEL_DEPLOYMENT_ORIGIN: ${{ needs.evidence-contract.outputs.vercel_deployment_origin }}
+        run: |
+          python scripts/run_parity_staging_wave.py \
+            "$PARITY_MODE" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --vercel-deployment-id "$VERCEL_DEPLOYMENT_ID" \
+            --vercel-deployment-origin "$VERCEL_DEPLOYMENT_ORIGIN" \
+            --fly-image-ref "$FLY_IMAGE_REF" \
+            --expected-write-wave "$REQUIRED_STAGING_WRITE_WAVE" \
+            --report-dir parity-staging-artifacts
+
+      - name: Retain success and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-${{ needs.evidence-contract.outputs.mode }}-${{ needs.evidence-contract.outputs.candidate_sha }}
+          path: parity-staging-artifacts
+          if-no-files-found: error
+          retention-days: 90
+
+  complete-book-deployment-identity:
+    name: Re-attest completed-book deployment identity
+    if: needs.evidence-contract.outputs.mode == 'complete-book'
+    needs: evidence-contract
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Check out exact application candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.evidence-contract.outputs.candidate_sha }}
+
+      - name: Require complete stacked staging manifest
+        run: make check-parity-final-evidence-integrated
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Re-attest live Vercel and Fly identities without browser writes
+        env:
+          CANDIDATE_SHA: ${{ needs.evidence-contract.outputs.candidate_sha }}
+          FLY_IMAGE_REF: ${{ needs.evidence-contract.outputs.fly_image_ref }}
+          JUPR_EXPECTED_STAGING_API_ORIGIN: "https://juprleagues-api-staging.fly.dev"
+          JUPR_EXPECTED_STAGING_AUTH_ORIGIN: ${{ secrets.STAGING_SUPABASE_URL }}
+          REQUIRED_STAGING_WRITE_WAVE: ${{ needs.evidence-contract.outputs.write_wave }}
+          NEXT_PUBLIC_JUPR_API_BASE_URL: ${{ secrets.STAGING_JUPR_API_BASE_URL }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_JUPR_API_BASE_URL }}
+          STAGING_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
+          STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          STAGING_WEB_BASE_URL: ${{ secrets.STAGING_WEB_BASE_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          VERCEL_DEPLOYMENT_ID: ${{ needs.evidence-contract.outputs.vercel_deployment_id }}
+          VERCEL_DEPLOYMENT_ORIGIN: ${{ needs.evidence-contract.outputs.vercel_deployment_origin }}
+        run: |
+          python scripts/run_parity_staging_wave.py \
+            public-read \
+            --identity-only \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --vercel-deployment-id "$VERCEL_DEPLOYMENT_ID" \
+            --vercel-deployment-origin "$VERCEL_DEPLOYMENT_ORIGIN" \
+            --fly-image-ref "$FLY_IMAGE_REF" \
+            --expected-write-wave "$REQUIRED_STAGING_WRITE_WAVE" \
+            --report-dir parity-staging-artifacts
+
+      - name: Retain completion identity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-complete-book-identity-${{ needs.evidence-contract.outputs.candidate_sha }}
+          path: parity-staging-artifacts
+          if-no-files-found: error
+          retention-days: 90

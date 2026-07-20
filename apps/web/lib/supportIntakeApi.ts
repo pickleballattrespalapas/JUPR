@@ -20,6 +20,7 @@ export type PublicSupportRequestResponse = {
   ok: boolean;
   mode?: string | null;
   accepted?: boolean | null;
+  deduplicated?: boolean | null;
   request?: {
     id: string;
     request_type: string;

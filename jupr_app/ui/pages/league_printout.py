@@ -284,13 +284,13 @@ def _build_printout_html(league_name: str, week_num: int, weekly_rating: pd.Data
 <meta charset=\"utf-8\" />
 <title>League Night Printout</title>
 <style>
-body {{ font-family: Arial, sans-serif; margin: 24px; color: #111; }}
+body {{ font-family: Arial, sans-serif; margin: 24px; color: CanvasText; background: Canvas; }}
 h1 {{ margin: 0 0 6px 0; }}
-.subtitle {{ color: #444; margin-bottom: 18px; }}
-h2 {{ margin-top: 24px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }}
+.subtitle {{ color: GrayText; margin-bottom: 18px; }}
+h2 {{ margin-top: 24px; border-bottom: 1px solid ButtonBorder; padding-bottom: 6px; }}
 table {{ width: 100%; border-collapse: collapse; margin-top: 8px; }}
-th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 13px; }}
-th {{ background: #f6f6f6; }}
+th, td {{ border: 1px solid ButtonBorder; padding: 8px; text-align: left; font-size: 13px; }}
+th {{ background: ButtonFace; }}
 @media print {{
   .no-print {{ display: none !important; }}
   body {{ margin: 10mm; }}

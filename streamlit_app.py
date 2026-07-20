@@ -79,12 +79,18 @@ def get_secret(path: list[str], default=None):
     except Exception:
         return default
 
-    for k in path:
-        if not isinstance(cur, Mapping):
-            return default
-        if k not in cur:
-            return default
-        cur = cur[k]
+    try:
+        for k in path:
+            if not isinstance(cur, Mapping):
+                return default
+            if k not in cur:
+                return default
+            cur = cur[k]
+    except Exception:
+        # Streamlit parses its secrets lazily. A missing secrets.toml therefore
+        # raises while checking membership, not while reading ``st.secrets``.
+        # Local imports and non-Streamlit workers should still use defaults.
+        return default
 
     return cur
 
@@ -123,15 +129,16 @@ def get_supabase():
 
     [supabase]
     url = "https://....supabase.co"
-    anon_key = "..."   # OR key = "..." (either is accepted)
+    service_role_key = "..."  # required for trusted admin/communications fallback
+    anon_key = "..."          # optional public-only fallback
     """
     url = st.secrets.get("SUPABASE_URL") or get_secret(["supabase", "url"])
 
     key = (
-        st.secrets.get("SUPABASE_ANON_KEY")
-        or st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
-        or get_secret(["supabase", "anon_key"])
+        st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
         or get_secret(["supabase", "service_role_key"])
+        or st.secrets.get("SUPABASE_ANON_KEY")
+        or get_secret(["supabase", "anon_key"])
     )
 
     if not url or not key:

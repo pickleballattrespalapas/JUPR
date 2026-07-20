@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SERVICE_LOCATION, SERVICE_OPERATOR, SUPPORT_EMAIL } from "@/lib/publicSupportContent";
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -6,8 +7,6 @@ const cardStyle = {
   padding: "1rem",
   background: "white"
 };
-
-const supportEmail = "joe@juprleagues.com";
 
 export default function PrivacyPage() {
   return (
@@ -21,11 +20,19 @@ export default function PrivacyPage() {
       </p>
 
       <div style={{ display: "grid", gap: "1rem" }}>
+        <article id="operator" style={cardStyle}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Who operates the service</h2>
+          <p style={{ color: "#475569" }}>{SERVICE_OPERATOR} operates Pickleball Club Sandwich for {SERVICE_LOCATION}. Club staff use private administrative views to maintain operational and results integrity.</p>
+        </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Information we collect</h2>
           <p style={{ color: "#475569" }}>
             We collect information submitted by players, organizers, and club staff, including names, email addresses, phone numbers, player identifiers, tournament registration details, partner-board preferences, match results, ratings, event participation, support requests, and correction requests. We may also collect basic technical information such as browser, device, log, and usage data needed to operate and secure the service.
           </p>
+        </article>
+        <article id="aliases" style={cardStyle}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Public aliases and private identity</h2>
+          <p style={{ color: "#475569" }}>An approved public alias may replace a player&apos;s display name on public pages. Authorized staff views may retain the player&apos;s verified identity where needed for operations, corrections, ratings, disputes, and audit history.</p>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>How we use information</h2>
@@ -57,11 +64,13 @@ export default function PrivacyPage() {
             You may request correction, review, or removal of information by contacting support. Some rating, match, tournament, and audit records may need to be retained for operational integrity, dispute resolution, and legal compliance.
           </p>
           <p><Link href="/data-corrections">Open data correction instructions</Link></p>
+          <p><Link href="/profile-privacy">Request profile privacy review</Link></p>
+          <p><Link href="/email-preferences">Manage email preferences</Link></p>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Contact</h2>
           <p style={{ color: "#475569" }}>
-            Privacy questions and requests can be sent to <a href={`mailto:${supportEmail}`}>{supportEmail}</a>.
+            Privacy questions and requests can be sent to <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> or submitted through the durable <Link href="/support#general-support-form">support form</Link>.
           </p>
         </article>
       </div>

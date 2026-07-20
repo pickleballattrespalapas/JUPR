@@ -33,8 +33,13 @@ function normalizeRecommendedTarget(value: string | null | undefined, defaultTar
 }
 
 function replayMessage(result: AdminReplayResultResponse | null): string | null {
-  if (!result?.ok) return null;
-  return `Replay complete for ${result.target_reset}: scanned ${result.result.matches_scanned_total}, rewrote ${result.result.matches_rewritten} snapshot row(s), rebuilt ${result.result.league_ratings_rows} league rating row(s).`;
+  if (!result) return null;
+  if (!result.ok) return `Replay job ${result.job_id || "—"} is ${result.job_status || "not complete"}. Check Replay History before retrying.`;
+  return `Replay complete for ${result.target_reset}: scanned ${result.result.matches_scanned_total ?? 0}, rewrote ${result.result.matches_rewritten ?? 0} snapshot row(s), rebuilt ${result.result.league_ratings_rows ?? 0} league rating row(s). Job ${result.job_id || "—"}.`;
+}
+
+function requestKey(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `quick-replay-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 export default function MatchLogQuickReplayPanel({
@@ -55,6 +60,7 @@ export default function MatchLogQuickReplayPanel({
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(statusError || null);
   const [result, setResult] = useState<AdminReplayResultResponse | null>(null);
+  const [idempotencyKey, setIdempotencyKey] = useState(requestKey);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -79,7 +85,8 @@ export default function MatchLogQuickReplayPanel({
         body: JSON.stringify({
           target_reset: targetReset,
           confirmation_text: confirmationText,
-          source: "next_match_log_quick_replay"
+          source: "next_match_log_quick_replay",
+          idempotency_key: idempotencyKey
         })
       });
       const payload = await response.json().catch(() => null);
@@ -87,6 +94,7 @@ export default function MatchLogQuickReplayPanel({
       setResult(payload as AdminReplayResultResponse);
       setMessage(replayMessage(payload as AdminReplayResultResponse));
       setConfirmationText("");
+      if ((payload as AdminReplayResultResponse).job_status === "succeeded") setIdempotencyKey(requestKey());
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to run replay.");
     } finally {
@@ -137,10 +145,12 @@ export default function MatchLogQuickReplayPanel({
       {message ? <p style={{ color: result?.ok ? "#166534" : "#b91c1c" }}>{message}</p> : null}
       {result ? (
         <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", margin: 0 }}>
+          <div><dt style={{ fontWeight: 700 }}>Job</dt><dd style={{ margin: 0, fontFamily: "monospace" }}>{result.job_id || "—"}</dd></div>
+          <div><dt style={{ fontWeight: 700 }}>Status</dt><dd style={{ margin: 0 }}>{result.job_status || "—"}</dd></div>
           <div><dt style={{ fontWeight: 700 }}>Players updated</dt><dd style={{ margin: 0 }}>{result.result.players_updated ? "Yes" : "No"}</dd></div>
-          <div><dt style={{ fontWeight: 700 }}>Skipped incomplete</dt><dd style={{ margin: 0 }}>{result.result.skipped_incomplete}</dd></div>
-          <div><dt style={{ fontWeight: 700 }}>Snapshot rows updated</dt><dd style={{ margin: 0 }}>{result.result.matches_snapshots_updated_rows}</dd></div>
-          <div><dt style={{ fontWeight: 700 }}>League ratings rows</dt><dd style={{ margin: 0 }}>{result.result.league_ratings_rows}</dd></div>
+          <div><dt style={{ fontWeight: 700 }}>Skipped incomplete</dt><dd style={{ margin: 0 }}>{result.result.skipped_incomplete ?? "—"}</dd></div>
+          <div><dt style={{ fontWeight: 700 }}>Snapshot rows updated</dt><dd style={{ margin: 0 }}>{result.result.matches_snapshots_updated_rows ?? "—"}</dd></div>
+          <div><dt style={{ fontWeight: 700 }}>League ratings rows</dt><dd style={{ margin: 0 }}>{result.result.league_ratings_rows ?? "—"}</dd></div>
         </dl>
       ) : null}
       {(result?.warnings?.length || warnings.length) ? (

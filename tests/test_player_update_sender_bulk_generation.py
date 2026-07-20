@@ -60,19 +60,21 @@ def test_generate_and_queue_filters_to_subscribers_with_matches(monkeypatch):
 
     saved_players: list[int] = []
     queued_players: list[int] = []
+    queued_snapshots: list[dict] = []
 
     monkeypatch.setattr(sender, "list_active_subscriptions", lambda *_args, **_kwargs: active_rows)
     monkeypatch.setattr(sender, "get_player_ids_with_matches_in_range", lambda *_args, **_kwargs: {1, 3})
-    monkeypatch.setattr(
-        sender,
-        "_save_digest_for_subscription",
-        lambda _ctx, *, subscription, start_date, end_date: saved_players.append(int(subscription["player_id"])),
-    )
-    monkeypatch.setattr(
-        sender,
-        "_queue_outbox_for_subscription",
-        lambda _ctx, *, subscription, start_date, end_date: queued_players.append(int(subscription["player_id"])),
-    )
+    def save_digest(_ctx, *, subscription, start_date, end_date):
+        player_id = int(subscription["player_id"])
+        saved_players.append(player_id)
+        return {"player_id": player_id, "summary": {"matches_played": 1}}
+
+    def queue_digest(_ctx, *, subscription, start_date, end_date, digest_snapshot, operation_key=None):
+        queued_players.append(int(subscription["player_id"]))
+        queued_snapshots.append(digest_snapshot)
+
+    monkeypatch.setattr(sender, "_save_digest_for_subscription", save_digest)
+    monkeypatch.setattr(sender, "_queue_outbox_for_subscription", queue_digest)
 
     result = sender.generate_and_queue_digests_for_active_subscriptions(
         ctx,
@@ -83,6 +85,7 @@ def test_generate_and_queue_filters_to_subscribers_with_matches(monkeypatch):
 
     assert saved_players == [1, 3]
     assert queued_players == [1, 3]
+    assert [snapshot["player_id"] for snapshot in queued_snapshots] == [1, 3]
     assert result == {
         "active_subscriptions": 3,
         "players_with_matches": 2,
@@ -98,18 +101,20 @@ def test_generate_and_queue_unfiltered_queues_all_subscribers(monkeypatch):
     ctx = SimpleNamespace(supabase=object(), club_id="club")
     active_rows = [{"id": "s1", "player_id": 1}, {"id": "s2", "player_id": 2}]
     queued_players: list[int] = []
+    queued_snapshots: list[dict] = []
 
     monkeypatch.setattr(sender, "list_active_subscriptions", lambda *_args, **_kwargs: active_rows)
     monkeypatch.setattr(
         sender,
         "_save_digest_for_subscription",
-        lambda _ctx, *, subscription, start_date, end_date: None,
+        lambda _ctx, *, subscription, start_date, end_date: {"player_id": int(subscription["player_id"])},
     )
-    monkeypatch.setattr(
-        sender,
-        "_queue_outbox_for_subscription",
-        lambda _ctx, *, subscription, start_date, end_date: queued_players.append(int(subscription["player_id"])),
-    )
+
+    def queue_digest(_ctx, *, subscription, start_date, end_date, digest_snapshot, operation_key=None):
+        queued_players.append(int(subscription["player_id"]))
+        queued_snapshots.append(digest_snapshot)
+
+    monkeypatch.setattr(sender, "_queue_outbox_for_subscription", queue_digest)
 
     result = sender.generate_and_queue_digests_for_active_subscriptions(
         ctx,
@@ -119,6 +124,7 @@ def test_generate_and_queue_unfiltered_queues_all_subscribers(monkeypatch):
     )
 
     assert queued_players == [1, 2]
+    assert [snapshot["player_id"] for snapshot in queued_snapshots] == [1, 2]
     assert result["active_subscriptions"] == 2
     assert result["eligible_subscriptions"] == 2
     assert result["players_with_matches"] == 0

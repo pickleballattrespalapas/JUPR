@@ -4,7 +4,14 @@ from datetime import datetime, timezone
 import os
 from typing import Any
 
-from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.services.admin_guarded_write_service import (
+    GuardedWriteRecoveryRequired,
+    begin_guarded_operation,
+    operation_result,
+    require_staging_service_role_write,
+    required_audit_event,
+    update_guarded_operation,
+)
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 SOCIAL_SUBMISSION_STATUSES = ("pending", "saved", "rejected")
@@ -180,6 +187,7 @@ def moderate_admin_social_submission(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    operation_key: str,
     source: str = "next_admin_tools_social_review",
 ) -> dict[str, Any]:
     if not _admin_tools_enabled():
@@ -222,45 +230,141 @@ def moderate_admin_social_submission(
         "moderated_by": _clean_text(actor_email, limit=240) or None,
         "rejection_reason": clean_rejection_reason if normalized_action == "reject" else None,
     }
-    updated = _safe_first(
-        supabase.table("live_events")
-        .update(update_payload)
-        .eq("id", clean_event_id)
-        .eq("club_id", str(club_id))
-        .eq("result_mode", "social_unrated")
-        .eq("status", normalized_expected_status)
-        .execute()
+    require_staging_service_role_write(
+        supabase,
+        workflow="Club Social Moderation",
+        required_tables=("live_events",),
     )
+    request_payload = {
+        "event_id": clean_event_id,
+        "action": normalized_action,
+        "expected_status": normalized_expected_status,
+        "target_status": target_status,
+        "rejection_reason": clean_rejection_reason or None,
+        "expected_updated_at": before.get("updated_at"),
+    }
+    operation, idempotent = begin_guarded_operation(
+        supabase,
+        club_id=str(club_id),
+        workflow="admin_social_moderation",
+        action=f"{normalized_action}_club_social_submission",
+        operation_key=operation_key,
+        request_payload=request_payload,
+        actor_email=actor_email,
+        actor_role=actor_role,
+        source=source,
+        before_json=_submission_payload(before, include_raw=False),
+    )
+    if idempotent:
+        return operation_result(operation)
+    try:
+        query = (
+            supabase.table("live_events")
+            .update(update_payload)
+            .eq("id", clean_event_id)
+            .eq("club_id", str(club_id))
+            .eq("result_mode", "social_unrated")
+            .eq("status", normalized_expected_status)
+        )
+        if before.get("updated_at") is not None:
+            query = query.eq("updated_at", before.get("updated_at"))
+        updated = _safe_first(query.execute())
+    except Exception as exc:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            error_text=str(exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Club Social moderation outcome is uncertain. Reload the queue and inspect activity before retrying.",
+        ) from exc
     if not updated:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="failed",
+            error_text="Optimistic status/version filter affected no rows.",
+        )
         raise ValueError("Submission changed while it was being moderated. Reload the queue and review it again.")
 
     normalized_updated = {**before, **updated}
-    audit_payload = build_activity_payload(
-        club_id=str(club_id),
-        actor_email=str(actor_email or ""),
-        actor_role=str(actor_role or ""),
-        action_type=f"{normalized_action}_club_social_submission",
-        entity_type="live_event",
-        entity_id=clean_event_id,
-        before_json=_submission_payload(before, include_raw=False),
-        after_json={
-            "source_client": "fastapi/nextjs",
-            "submission": _submission_payload(normalized_updated, include_raw=False),
-        },
-        note=clean_rejection_reason if normalized_action == "reject" else None,
-        source_page=_clean_text(source, limit=120) or "next_admin_tools_social_review",
-        flagged_for_review=True,
-    )
-    audit_write = write_admin_activity_log(supabase, audit_payload)
-    warnings: list[str] = []
-    if audit_write.warning:
-        warnings.append(audit_write.warning)
-    if not audit_write.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
-        raise RuntimeError("audit log write required but unavailable")
-    return {
+    result = {
         "ok": True,
         "mode": "admin_social_submission_moderation",
+        "operation_key": operation_key,
         "action": normalized_action,
         "submission": _submission_payload(normalized_updated),
-        "warnings": warnings,
+        "warnings": [],
     }
+    try:
+        required_audit_event(
+            supabase,
+            club_id=str(club_id),
+            actor_email=str(actor_email or ""),
+            actor_role=str(actor_role or ""),
+            action_type=f"{normalized_action}_club_social_submission",
+            entity_type="live_event",
+            entity_id=clean_event_id,
+            before=_submission_payload(before, include_raw=False),
+            after={
+                "source_client": "fastapi/nextjs",
+                "submission": _submission_payload(normalized_updated, include_raw=False),
+            },
+            note=clean_rejection_reason if normalized_action == "reject" else None,
+            source=_clean_text(source, limit=120) or "next_admin_tools_social_review",
+            intent=False,
+        )
+    except Exception as audit_exc:
+        rollback_payload = {
+            "status": before.get("status"),
+            "moderated_at": before.get("moderated_at"),
+            "moderated_by": before.get("moderated_by"),
+            "rejection_reason": before.get("rejection_reason"),
+        }
+        try:
+            rollback = _safe_rows(
+                supabase.table("live_events")
+                .update(rollback_payload)
+                .eq("id", clean_event_id)
+                .eq("club_id", str(club_id))
+                .eq("status", target_status)
+                .eq("moderated_at", update_payload["moderated_at"])
+                .execute()
+            )
+        except Exception:
+            rollback = []
+        if len(rollback) == 1:
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=operation_key,
+                status="compensated",
+                result_json={"restored": True, "event_id": clean_event_id},
+                error_text=str(audit_exc),
+            )
+            raise RuntimeError("Required completion audit failed; the prior Club Social status was restored.") from audit_exc
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            result_json=result,
+            error_text=str(audit_exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Club Social status may have changed but completion audit failed and rollback was not verified. Stop and reconcile.",
+        ) from audit_exc
+    update_guarded_operation(
+        supabase,
+        operation_id=operation.get("id"),
+        operation_key=operation_key,
+        status="completed",
+        result_json=result,
+        after_json=result["submission"],
+    )
+    return result

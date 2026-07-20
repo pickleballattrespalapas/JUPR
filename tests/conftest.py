@@ -9,6 +9,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _explicit_test_runtime_environment(monkeypatch):
+    """Never let application write guards infer behavior from a blank env."""
+
+    if not os.getenv("JUPR_ENV", "").strip():
+        monkeypatch.setenv("JUPR_ENV", "test")
+
+
 def require_api_dependency(module_name: str):
     """Import optional API test dependency.
 

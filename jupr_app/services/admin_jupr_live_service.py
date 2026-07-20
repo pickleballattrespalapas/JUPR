@@ -14,7 +14,10 @@ from jupr_app.domain.live_beta_engine import (
     set_match_score,
     start_next_league_round,
 )
-from jupr_app.domain.live_session_repo import abandon_expired_live_sessions
+from jupr_app.services.admin_live_ladder_operation_service import (
+    deterministic_match_context_id,
+    is_staging_write_gate_enabled,
+)
 from jupr_app.services.context import ServiceContext
 from jupr_app.services.match_service import submit_match_batch
 
@@ -26,6 +29,7 @@ CONFIRM_SCORES = "SAVE LIVE SCORES"
 CONFIRM_PUBLISH = "PUBLISH LIVE MATCHES"
 CONFIRM_ADVANCE = "ADVANCE LIVE ROUND"
 SUPPORTED_ADMIN_EVENT_TYPES = {"round_robin", "league_ladder", "league", "ladder"}
+JUPR_LIVE_WRITE_FLAG = "JUPR_ENABLE_STAGING_NEXT_ADMIN_JUPR_LIVE_WRITES"
 
 
 def is_admin_jupr_live_enabled() -> bool:
@@ -92,13 +96,16 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
         "created_by_email": row.get("created_by_email"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
+        "version": str(row.get("updated_at") or row.get("created_at") or ""),
         "last_seen_at": row.get("last_seen_at"),
         "expires_at": row.get("expires_at"),
         "event_type": event.get("type") or state.get("event_type") or state.get("eventType"),
         "current_round_number": event.get("currentRoundNumber"),
         "total_rounds": event.get("totalRounds"),
         "state": state,
-        "public_url_path": f"/clubs/tres-palapas/live/{row.get('session_key')}",
+        # club_id may be opaque/UUID-shaped; only a caller with a resolved club
+        # slug may construct the public route.
+        "public_url_path": None,
     }
 
 
@@ -201,16 +208,25 @@ def build_admin_jupr_live_status(supabase: Any | None, *, club_id: str) -> dict[
                     counts[status] += 1
         except Exception:
             pass
-    return {"enabled": True, "status": "ready_for_jupr_live_admin", "counts": counts, "warnings": [], "confirmation_text": {"create": CONFIRM_CREATE, "status": CONFIRM_STATUS, "scores": CONFIRM_SCORES, "publish": CONFIRM_PUBLISH, "advance": CONFIRM_ADVANCE}}
+    writes_enabled = is_staging_write_gate_enabled(JUPR_LIVE_WRITE_FLAG)
+    return {
+        "enabled": True,
+        "writes_enabled": writes_enabled,
+        "status": "ready_for_jupr_live_admin" if writes_enabled else "read_only_streamlit_fallback",
+        "counts": counts,
+        "warnings": [] if writes_enabled else [
+            f"Next JUPR Live Admin writes require JUPR_ENV=staging and {JUPR_LIVE_WRITE_FLAG}=1 on FastAPI. Use Streamlit JUPR Live Admin otherwise."
+        ],
+        "confirmation_text": {"create": CONFIRM_CREATE, "status": CONFIRM_STATUS, "scores": CONFIRM_SCORES, "publish": CONFIRM_PUBLISH, "advance": CONFIRM_ADVANCE},
+        "streamlit_fallback": "jupr_live_admin",
+        "recovery": {"match_log_url": "/admin/match-log", "replay_history_url": "/admin/replay-history"},
+        "authority": "python_fastapi",
+    }
 
 
 def list_admin_jupr_live_sessions(supabase: Any, *, club_id: str, status: str | None = None, limit: int = 100) -> dict[str, Any]:
     if not is_admin_jupr_live_enabled():
         raise PermissionError("Next JUPR Live Admin is disabled.")
-    try:
-        abandon_expired_live_sessions(supabase)
-    except Exception:
-        pass
     query = supabase.table("live_sessions").select("*").eq("club_id", str(club_id))
     clean_status = _clean_text(status, limit=40).lower()
     if clean_status:
@@ -276,12 +292,24 @@ def _live_row(supabase: Any, *, club_id: str, session_key: str) -> dict[str, Any
     return row
 
 
-def _update_live_row(supabase: Any, *, club_id: str, session_key: str, patch: dict[str, Any]) -> dict[str, Any]:
-    updated = _safe_first(supabase.table("live_sessions").update(patch).eq("club_id", str(club_id)).eq("session_key", str(session_key)).execute())
+def _update_live_row(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_key: str,
+    patch: dict[str, Any],
+    expected_version: str | None = None,
+) -> dict[str, Any]:
+    query = supabase.table("live_sessions").update(patch).eq("club_id", str(club_id)).eq("session_key", str(session_key))
+    if str(expected_version or "").strip():
+        query = query.eq("updated_at", str(expected_version))
+    updated = _safe_first(query.execute())
+    if updated is None and str(expected_version or "").strip():
+        raise ValueError("JUPR Live session changed. Reload the Python state before saving.")
     return updated or {"club_id": str(club_id), "session_key": str(session_key), **patch}
 
 
-def update_admin_jupr_live_scores(supabase: Any, *, club_id: str, session_key: str, scores: list[dict[str, Any]], actor_email: str, actor_role: str, confirmation_text: str, source: str = "next_jupr_live_admin_scores") -> dict[str, Any]:
+def update_admin_jupr_live_scores(supabase: Any, *, club_id: str, session_key: str, scores: list[dict[str, Any]], actor_email: str, actor_role: str, confirmation_text: str, expected_version: str | None = None, source: str = "next_jupr_live_admin_scores") -> dict[str, Any]:
     if not is_admin_jupr_live_enabled():
         raise PermissionError("Next JUPR Live Admin is disabled.")
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_SCORES:
@@ -311,12 +339,12 @@ def update_admin_jupr_live_scores(supabase: Any, *, club_id: str, session_key: s
         changed += 1
     next_state = _put_event(state, event)
     patch = {"state": next_state, "updated_at": _now_iso(), "last_seen_at": _now_iso()}
-    updated = _update_live_row(supabase, club_id=str(club_id), session_key=str(session_key), patch=patch)
+    updated = _update_live_row(supabase, club_id=str(club_id), session_key=str(session_key), patch=patch, expected_version=expected_version)
     _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role, action_type="score_jupr_live_session_admin", entity_id=session_key, before_json={"session": _session_payload(before)}, after_json={"session": _session_payload(updated), "changed_scores": changed}, source=source)
     return {"ok": True, "mode": "jupr_live_admin_scores", "changed_scores": changed, "session": _session_payload(updated)}
 
 
-def advance_admin_jupr_live_league_round(supabase: Any, *, club_id: str, session_key: str, actor_email: str, actor_role: str, confirmation_text: str, source: str = "next_jupr_live_admin_advance") -> dict[str, Any]:
+def advance_admin_jupr_live_league_round(supabase: Any, *, club_id: str, session_key: str, actor_email: str, actor_role: str, confirmation_text: str, expected_version: str | None = None, source: str = "next_jupr_live_admin_advance") -> dict[str, Any]:
     if not is_admin_jupr_live_enabled():
         raise PermissionError("Next JUPR Live Admin is disabled.")
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_ADVANCE:
@@ -329,7 +357,7 @@ def advance_admin_jupr_live_league_round(supabase: Any, *, club_id: str, session
     start_next_league_round(event)
     next_state = _put_event(state, event)
     patch = {"state": next_state, "updated_at": _now_iso(), "last_seen_at": _now_iso()}
-    updated = _update_live_row(supabase, club_id=str(club_id), session_key=str(session_key), patch=patch)
+    updated = _update_live_row(supabase, club_id=str(club_id), session_key=str(session_key), patch=patch, expected_version=expected_version)
     _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role, action_type="advance_jupr_live_league_round_admin", entity_id=session_key, before_json={"session": _session_payload(before)}, after_json={"session": _session_payload(updated)}, source=source)
     return {"ok": True, "mode": "jupr_live_admin_advance", "session": _session_payload(updated)}
 
@@ -373,7 +401,7 @@ def _team_player_ids(participants: dict[str, dict[str, Any]], team: list[Any]) -
     return ids
 
 
-def _publish_payloads_from_event(event: dict[str, Any], *, session_key: str, published_ids: set[str], match_date: str) -> list[dict[str, Any]]:
+def _publish_payloads_from_event(event: dict[str, Any], *, session_key: str, published_ids: set[str], match_date: str, publish_context_prefix: str | None = None) -> list[dict[str, Any]]:
     participants = _participant_map(event)
     payloads: list[dict[str, Any]] = []
     for match in _event_matches(event):
@@ -390,26 +418,97 @@ def _publish_payloads_from_event(event: dict[str, Any], *, session_key: str, pub
             continue
         team_a = _team_player_ids(participants, list(match.get("teamA") or []))
         team_b = _team_player_ids(participants, list(match.get("teamB") or []))
-        payloads.append({"date": match_date, "league": "OVERALL", "match_type": "JUPR Live", "is_popup": False, "context_type": "jupr_live", "context_id": str(session_key), "live_match_id": match_id, "week_tag": f"JUPR Live {str(match_date)[:10]}", "t1_p1": team_a[0], "t1_p2": team_a[1], "t2_p1": team_b[0], "t2_p2": team_b[1], "s1": s1, "s2": s2})
+        context_prefix = _clean_text(publish_context_prefix, limit=80)
+        payloads.append({"date": match_date, "league": "OVERALL", "match_type": "JUPR Live", "is_popup": False, "context_type": "jupr_live", "context_id": deterministic_match_context_id(operation_key=context_prefix, slot=match_id) if context_prefix else str(session_key), "live_match_id": match_id, "week_tag": f"JUPR Live {str(match_date)[:10]}", "t1_p1": team_a[0], "t1_p2": team_a[1], "t2_p1": team_b[0], "t2_p2": team_b[1], "s1": s1, "s2": s2})
     return payloads
 
 
-def publish_admin_jupr_live_matches(supabase: Any, *, club_id: str, session_key: str, match_date: str | None, actor_email: str, actor_role: str, confirmation_text: str, source: str = "next_jupr_live_admin_publish") -> dict[str, Any]:
+def admin_jupr_live_publish_contexts(
+    session: dict[str, Any],
+    *,
+    operation_key: str,
+) -> list[str]:
+    """Predict the exact official-match contexts for pre-mutation recovery."""
+    state = _as_dict((session or {}).get("state"))
+    event = _event_from_state(state)
+    if str(event.get("type") or "") not in {"round_robin", "league"}:
+        raise ValueError(
+            "Official JUPR Live publish supports one-off round-robin and league/ladder sessions. "
+            "Use Tournament Live/Ops for brackets."
+        )
+    official = _as_dict(state.get("official_publish"))
+    published_ids = {
+        str(mid)
+        for mid in (official.get("published_live_match_ids") or official.get("published_match_ids") or [])
+    }
+    prefix = _clean_text(operation_key, limit=80)
+    participants = _participant_map(event)
+    contexts: list[str] = []
+    for match in _event_matches(event):
+        match_id = str(match.get("id") or "")
+        if not match_id or match_id in published_ids:
+            continue
+        if match.get("scoreA") is None or match.get("scoreB") is None:
+            continue
+        score_a = int(match.get("scoreA") or 0)
+        score_b = int(match.get("scoreB") or 0)
+        if score_a == score_b:
+            raise ValueError(f"Match {match_id} is tied; official matches cannot be published with tied scores.")
+        if (score_a + score_b) <= 0:
+            continue
+        # Resolve both teams before acquiring a durable write lease. Missing
+        # official player linkage is a validation failure, not an uncertain write.
+        _team_player_ids(participants, list(match.get("teamA") or []))
+        _team_player_ids(participants, list(match.get("teamB") or []))
+        contexts.append(deterministic_match_context_id(operation_key=prefix, slot=match_id))
+    return contexts
+
+
+def admin_jupr_live_pending_operation_key(session: dict[str, Any]) -> str | None:
+    state = _as_dict((session or {}).get("state"))
+    official = _as_dict(state.get("official_publish"))
+    pending = _clean_text(official.get("pending_operation_key"), limit=80)
+    return pending or None
+
+
+def publish_admin_jupr_live_matches(supabase: Any, *, club_id: str, session_key: str, match_date: str | None, actor_email: str, actor_role: str, confirmation_text: str, expected_version: str | None = None, publish_context_prefix: str | None = None, source: str = "next_jupr_live_admin_publish") -> dict[str, Any]:
     if not is_admin_jupr_live_enabled():
         raise PermissionError("Next JUPR Live Admin is disabled.")
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_PUBLISH:
         raise ValueError(f"Type {CONFIRM_PUBLISH} to publish official JUPR Live matches.")
     before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    if str(expected_version or "").strip() and str(before.get("updated_at") or "") != str(expected_version):
+        raise ValueError("JUPR Live session changed. Reload the Python state before publishing.")
     state = _state(before)
     event = _event_from_state(state)
     if str(event.get("type") or "") not in {"round_robin", "league"}:
         raise ValueError("Official JUPR Live publish supports one-off round-robin and league/ladder sessions. Use Tournament Live/Ops for brackets.")
     official = _as_dict(state.get("official_publish"))
+    if _clean_text(official.get("pending_operation_key"), limit=80):
+        raise ValueError(
+            "This JUPR Live session has an interrupted official publish. Reconcile that durable operation and "
+            "inspect Match Log/Replay History before any new publish."
+        )
     published_ids = {str(mid) for mid in (official.get("published_live_match_ids") or official.get("published_match_ids") or [])}
     date_value = _clean_text(match_date, limit=80) or _now_iso()
-    payloads = _publish_payloads_from_event(event, session_key=str(session_key), published_ids=published_ids, match_date=date_value)
+    payloads = _publish_payloads_from_event(event, session_key=str(session_key), published_ids=published_ids, match_date=date_value, publish_context_prefix=publish_context_prefix)
     if not payloads:
         raise ValueError("No unpublished scored JUPR Live matches are ready to publish.")
+    # Claim the session version before the external match batch.  If the batch
+    # later becomes uncertain, the durable session visibly retains the pending
+    # operation and a stale client cannot publish a second copy.
+    reservation_version = _now_iso()
+    official["pending_operation_key"] = _clean_text(publish_context_prefix, limit=80) or None
+    official["pending_live_match_ids"] = [str(payload.get("live_match_id") or "") for payload in payloads]
+    official["publish_started_at"] = reservation_version
+    state["official_publish"] = official
+    _update_live_row(
+        supabase,
+        club_id=str(club_id),
+        session_key=str(session_key),
+        patch={"state": state, "updated_at": reservation_version, "last_seen_at": reservation_version},
+        expected_version=expected_version,
+    )
     df_players_all, _df_players_active, df_leagues, _df_matches, df_meta, _df_badges, _df_player_badges, name_to_id, _id_to_name, _schema_degraded, _schema_degraded_reason = load_data(supabase, str(club_id), match_limit=5000)
     service_ctx = ServiceContext(supabase=supabase, club_id=str(club_id), actor_email=actor_email, actor_role=actor_role, source="jupr_live_admin")
     result = submit_match_batch(service_ctx, payloads, name_to_id=name_to_id, df_players_all=df_players_all, df_leagues=df_leagues, df_meta=df_meta)
@@ -419,14 +518,30 @@ def publish_admin_jupr_live_matches(supabase: Any, *, club_id: str, session_key:
     official["published_live_match_ids"] = sorted(published_ids | set(newly_published))
     official["published_at"] = _now_iso()
     official["publish_result"] = result.data if isinstance(result.data, dict) else {"result": result.data}
+    official.pop("pending_operation_key", None)
+    official.pop("pending_live_match_ids", None)
+    official.pop("publish_started_at", None)
     state["official_publish"] = official
     patch = {"state": state, "updated_at": _now_iso(), "last_seen_at": _now_iso()}
-    updated = _update_live_row(supabase, club_id=str(club_id), session_key=str(session_key), patch=patch)
+    updated = _update_live_row(supabase, club_id=str(club_id), session_key=str(session_key), patch=patch, expected_version=reservation_version)
     _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role, action_type="publish_jupr_live_matches_admin", entity_id=session_key, before_json={"session": _session_payload(before)}, after_json={"session": _session_payload(updated), "payload_count": len(payloads), "result": official["publish_result"]}, source=source)
-    return {"ok": True, "mode": "jupr_live_admin_publish", "published_count": len(payloads), "result": official["publish_result"], "session": _session_payload(updated)}
+    contexts = [str(payload.get("context_id") or "") for payload in payloads]
+    return {
+        "ok": True,
+        "mode": "jupr_live_admin_publish",
+        "published_count": len(payloads),
+        "result": official["publish_result"],
+        "match_context_ids": contexts,
+        "session": _session_payload(updated),
+        "correction": {
+            "match_log_url": f"/admin/match-log?context_type=jupr_live&context_id={contexts[0] if contexts else session_key}",
+            "replay_history_url": f"/admin/replay-history?context_type=jupr_live&context_id={contexts[0] if contexts else session_key}",
+            "instructions": "Correct official one-off results in Match Log, then run and verify Replay History. Do not republish the session as a correction.",
+        },
+    }
 
 
-def update_admin_jupr_live_session_status(supabase: Any, *, club_id: str, session_key: str, status: str, title: str | None, actor_email: str, actor_role: str, confirmation_text: str, source: str = "next_jupr_live_admin_status") -> dict[str, Any]:
+def update_admin_jupr_live_session_status(supabase: Any, *, club_id: str, session_key: str, status: str, title: str | None, actor_email: str, actor_role: str, confirmation_text: str, expected_version: str | None = None, source: str = "next_jupr_live_admin_status") -> dict[str, Any]:
     if not is_admin_jupr_live_enabled():
         raise PermissionError("Next JUPR Live Admin is disabled.")
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_STATUS:
@@ -438,7 +553,7 @@ def update_admin_jupr_live_session_status(supabase: Any, *, club_id: str, sessio
     patch: dict[str, Any] = {"status": clean_status, "updated_at": _now_iso(), "last_seen_at": _now_iso()}
     if title is not None:
         patch["title"] = _clean_text(title, limit=160) or None
-    updated = _update_live_row(supabase, club_id=str(club_id), session_key=str(session_key), patch=patch)
+    updated = _update_live_row(supabase, club_id=str(club_id), session_key=str(session_key), patch=patch, expected_version=expected_version)
     _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role, action_type="update_jupr_live_session_admin", entity_id=session_key, before_json={"session": _session_payload(before)}, after_json={"session": _session_payload(updated)}, source=source)
     return {"ok": True, "mode": "jupr_live_admin_session_update", "session": _session_payload(updated)}
 

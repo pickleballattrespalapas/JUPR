@@ -6,12 +6,13 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
-from jupr_app.domain.bulk_match_editor import apply_bulk_match_edits, compute_recompute_scope
+from jupr_app.domain.bulk_match_editor import compute_recompute_scope
 from jupr_app.domain.dupes import canonical_dup_key
+from jupr_app.services.match_edit_durability_service import apply_atomic_match_edits
 
 MATCH_LOG_SELECT = (
     "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,"
-    "score_t1,score_t2,deleted_at,context_type,context_id,updated_at"
+    "score_t1,score_t2,notes,deleted_at,context_type,context_id,updated_at"
 )
 MATCH_LOG_MINIMAL_SELECT = "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,deleted_at"
 DUPLICATE_RESOLUTIONS_TABLE = "admin_match_log_duplicate_resolutions"
@@ -171,6 +172,7 @@ def _match_payload(row: dict[str, Any], *, club_id: str, names: dict[int, str]) 
         "league": _clean_text(row.get("league"), limit=120),
         "week_tag": _clean_text(row.get("week_tag"), limit=80),
         "match_type": _clean_text(row.get("match_type"), limit=80),
+        "notes": _clean_text(row.get("notes"), limit=2000),
         "score": {"team1": s1, "team2": s2, "display": f"{s1}-{s2}"},
         "team1": [_format_player(p1, names), _format_player(p2, names)],
         "team2": [_format_player(p3, names), _format_player(p4, names)],
@@ -213,6 +215,35 @@ def _fetch_duplicate_resolutions(supabase: Any, *, club_id: str) -> tuple[dict[t
         if dup_key and match_id_key:
             resolutions[(dup_key, match_id_key)] = row
     return resolutions, None
+
+
+def _recent_match_edit_operations(supabase: Any, *, club_id: str) -> tuple[list[dict[str, Any]], str | None]:
+    try:
+        rows = _safe_rows(
+            supabase.table("match_edit_operations")
+            .select("id,status,recompute_scope,replay_target,replay_job_id,error_text,actor_email,source,created_at,finished_at")
+            .eq("club_id", str(club_id))
+            .order("created_at", desc=True)
+            .limit(20)
+            .execute()
+        )
+    except Exception as exc:
+        return [], f"Durable match edit operation history is unavailable: {exc.__class__.__name__}"
+    return [
+        {
+            "id": str(row.get("id") or ""),
+            "status": _clean_text(row.get("status") or "unknown", limit=40),
+            "recompute_scope": dict(row.get("recompute_scope") or {}),
+            "replay_target": _clean_text(row.get("replay_target"), limit=160),
+            "replay_job_id": str(row.get("replay_job_id") or "") or None,
+            "error_text": _clean_text(row.get("error_text"), limit=500),
+            "actor_email": _clean_text(row.get("actor_email"), limit=240),
+            "source": _clean_text(row.get("source"), limit=120),
+            "created_at": row.get("created_at"),
+            "finished_at": row.get("finished_at"),
+        }
+        for row in rows
+    ], None
 
 
 def _duplicate_scan(
@@ -343,6 +374,7 @@ def _correction_plan() -> dict[str, Any]:
             "Duplicate cleanup keeps the oldest row and recommends replay history afterward.",
             "False-positive duplicate groups can be resolved as no issue without deleting rows.",
             "Writes use FastAPI audit attribution and Python domain services.",
+            "Match edits are committed through one service-role-only transaction; rating-affecting edits create and complete a mandatory replay job before success is reported.",
         ],
     }
 
@@ -387,6 +419,7 @@ def build_admin_match_log(
             "duplicate_rows": [],
             "duplicate_delete_preview": None,
             "resolved_duplicate_groups": [],
+            "recent_edit_operations": [],
             "correction_plan": _correction_plan(),
             "warnings": ["Next Match Log is disabled. Use Streamlit Match Log until JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG is enabled for the pilot."],
         }
@@ -413,6 +446,9 @@ def build_admin_match_log(
     resolved_lookup, resolution_warning = _fetch_duplicate_resolutions(supabase, club_id=str(club_id))
     if resolution_warning:
         warnings.append(resolution_warning)
+    recent_operations, operations_warning = _recent_match_edit_operations(supabase, club_id=str(club_id))
+    if operations_warning:
+        warnings.append(operations_warning)
     duplicate_payload = _duplicate_scan(visible_rows, club_id=str(club_id), names=names, resolved_lookup=resolved_lookup)
     matches = [_match_payload(row, club_id=str(club_id), names=names) for row in visible_rows]
     duplicate_delete_count = len((duplicate_payload.get("delete_preview") or {}).get("delete_ids") or [])
@@ -434,6 +470,7 @@ def build_admin_match_log(
         "duplicate_rows": duplicate_payload["duplicate_rows"],
         "duplicate_delete_preview": duplicate_payload["delete_preview"],
         "resolved_duplicate_groups": duplicate_payload["resolved_duplicate_groups"],
+        "recent_edit_operations": recent_operations,
         "correction_plan": _correction_plan(),
         "warnings": warnings,
     }
@@ -449,6 +486,8 @@ def apply_admin_match_log_edits(
     correction_note: str | None = None,
     source: str = "next_match_log",
     confirmation_text: str = "",
+    idempotency_key: str | None = None,
+    replay_target: str = "ALL (Full System Reset)",
 ) -> dict[str, Any]:
     if not is_admin_match_log_apply_enabled():
         raise PermissionError("Next Match Log apply is disabled.")
@@ -462,17 +501,17 @@ def apply_admin_match_log_edits(
     if any("is_active" in patch for patch in clean_patches):
         raise ValueError("Use the guarded rated-match exclude workflow to change match activity.")
 
-    result = apply_bulk_match_edits(
+    return apply_atomic_match_edits(
         supabase,
         club_id=str(club_id),
         patches=clean_patches,
-        actor=str(actor_email or "admin"),
-        source=source,
-        correction_note=correction_note,
         actor_email=str(actor_email or ""),
         actor_role=str(actor_role or ""),
+        correction_note=correction_note,
+        source=source,
+        idempotency_key=str(idempotency_key or ""),
+        replay_target=replay_target,
     )
-    return {"ok": True, "mode": "applied", "source": source, **result}
 
 
 def _cleanup_candidate_payload(

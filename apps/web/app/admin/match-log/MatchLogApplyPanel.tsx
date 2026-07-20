@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import type { AdminDuplicateDeletePreview, AdminDuplicateGroup, AdminMatchLogMatch, AdminMatchLogPlayer, AdminMatchLogWriteResult } from "@/lib/adminMatchLogApi";
+import type { AdminDuplicateDeletePreview, AdminDuplicateGroup, AdminMatchEditOperation, AdminMatchLogMatch, AdminMatchLogPlayer, AdminMatchLogWriteResult } from "@/lib/adminMatchLogApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type MatchLogApplyPanelProps = {
@@ -13,6 +13,7 @@ type MatchLogApplyPanelProps = {
   duplicatePreview?: AdminDuplicateDeletePreview | null;
   duplicateGroups?: AdminDuplicateGroup[];
   matches?: AdminMatchLogMatch[];
+  recentOperations?: AdminMatchEditOperation[];
 };
 
 type MatchPatch = {
@@ -21,6 +22,7 @@ type MatchPatch = {
   date?: string;
   week_tag?: string;
   match_type?: string;
+  notes?: string;
   t1_p1?: number;
   t1_p2?: number;
   t2_p1?: number;
@@ -33,6 +35,7 @@ type MatchEditState = {
   league: string;
   weekTag: string;
   matchType: string;
+  notes: string;
   date: string;
   scoreT1: string;
   scoreT2: string;
@@ -47,6 +50,29 @@ const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const secondaryButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 
+class ApiCallError extends Error {
+  operationId: string | null;
+
+  constructor(message: string, operationId: string | null = null) {
+    super(message);
+    this.operationId = operationId;
+  }
+}
+
+function requestKey(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `match-edit-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function apiErrorDetail(payload: unknown, fallback: string): { message: string; operationId: string | null } {
+  if (!payload || typeof payload !== "object") return { message: fallback, operationId: null };
+  const detail = (payload as { detail?: unknown }).detail;
+  if (detail && typeof detail === "object") {
+    const record = detail as { message?: unknown; operation_id?: unknown };
+    return { message: String(record.message || fallback), operationId: record.operation_id ? String(record.operation_id) : null };
+  }
+  return { message: detail ? String(detail) : fallback, operationId: null };
+}
+
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
 }
@@ -55,7 +81,10 @@ function resultSummary(result: AdminMatchLogWriteResult | null): string | null {
   if (!result) return null;
   if (result.mode === "duplicates_cleaned") return `Cleaned ${result.deleted_count ?? 0} duplicate row(s). Replay scope: ${result.recommended_replay_scope ?? "ALL"}.`;
   if (result.mode === "duplicate_no_issue") return `Marked match IDs ${(result.match_ids ?? []).join(", ") || "selected group"} as no issue.`;
-  if (result.mode === "applied") return `Applied ${result.updated_count ?? 0} match edit(s).`;
+  if (result.mode === "applied_and_replayed") return `Atomically applied ${result.updated_count ?? 0} match edit(s) and completed replay job ${result.replay_job_id || "—"}.`;
+  if (result.mode === "replay_in_progress") return `Applied ${result.updated_count ?? 0} match edit(s); replay job ${result.replay_job_id || "—"} is still in progress.`;
+  if (result.mode === "recovered" || result.mode === "already_recovered") return `Mandatory replay recovery completed for operation ${result.operation_id || "—"}.`;
+  if (result.mode === "applied") return `Atomically applied ${result.updated_count ?? 0} non-rating match edit(s).`;
   return "Operation completed.";
 }
 
@@ -91,6 +120,7 @@ function emptyEditState(): MatchEditState {
     league: "",
     weekTag: "",
     matchType: "",
+    notes: "",
     date: "",
     scoreT1: "",
     scoreT2: "",
@@ -107,6 +137,7 @@ function editStateFromMatch(match: AdminMatchLogMatch | null): MatchEditState {
     league: match.league || "",
     weekTag: match.week_tag || "",
     matchType: match.match_type || "",
+    notes: match.notes || "",
     date: toDateTimeInput(match.date),
     scoreT1: String(match.score?.team1 ?? ""),
     scoreT2: String(match.score?.team2 ?? ""),
@@ -136,6 +167,7 @@ function buildPatch(match: AdminMatchLogMatch, edit: MatchEditState): MatchPatch
   if (changedText(edit.league, match.league)) patch.league = edit.league.trim();
   if (changedText(edit.weekTag, match.week_tag)) patch.week_tag = edit.weekTag.trim();
   if (changedText(edit.matchType, match.match_type)) patch.match_type = edit.matchType.trim();
+  if (changedText(edit.notes, match.notes)) patch.notes = edit.notes.trim();
 
   const originalDate = toDateTimeInput(match.date);
   if (edit.date && edit.date !== originalDate) patch.date = `${edit.date}:00Z`;
@@ -152,6 +184,8 @@ function buildPatch(match: AdminMatchLogMatch, edit: MatchEditState): MatchPatch
     ["t2_p2", edit.t2p2, match.team2?.[1]?.id, "Team 2 player 2"]
   ];
   for (const [field, value, original, label] of playerFields) {
+    if (!String(value || "").trim() && original == null && (field === "t1_p2" || field === "t2_p2")) continue;
+    if (!String(value || "").trim() && original != null) throw new Error(`${label} cannot be cleared. Choose a replacement player instead.`);
     const playerId = integerInput(value, label);
     if (playerId !== Number(original ?? -1)) {
       patch[field] = playerId as never;
@@ -204,11 +238,12 @@ function MatchSummary({ match }: { match: AdminMatchLogMatch }) {
       <strong>#{match.id} · {dateLabel(match.date)}</strong>
       <p style={{ margin: "0.35rem 0", color: "#475569" }}>{match.league || "—"} · {match.week_tag || "—"} · {match.match_type || "—"}</p>
       <p style={{ margin: 0 }}>{playerNames(match.team1)} <strong>{match.score?.display}</strong> {playerNames(match.team2)}</p>
+      {match.notes ? <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>Notes: {match.notes}</p> : null}
     </div>
   );
 }
 
-export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, duplicatePreview, duplicateGroups = [], matches = [] }: MatchLogApplyPanelProps) {
+export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, duplicatePreview, duplicateGroups = [], matches = [], recentOperations = [] }: MatchLogApplyPanelProps) {
   const router = useRouter();
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const firstMatch = matches.find((match) => match.id != null) || null;
@@ -225,6 +260,19 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [result, setResult] = useState<AdminMatchLogWriteResult | null>(null);
+  const [idempotencyKey, setIdempotencyKey] = useState(requestKey);
+  const [recoveryOperationId, setRecoveryOperationId] = useState<string | null>(() => recentOperations.find((operation) => operation.status === "recovery_required")?.id || null);
+  const [recoveryConfirm, setRecoveryConfirm] = useState("");
+  const [bulkIds, setBulkIds] = useState<string[]>([]);
+  const [bulkLeague, setBulkLeague] = useState("");
+  const [bulkWeekMode, setBulkWeekMode] = useState<"unchanged" | "set" | "clear">("unchanged");
+  const [bulkWeekTag, setBulkWeekTag] = useState("");
+  const [bulkMatchType, setBulkMatchType] = useState("");
+  const [bulkNotesMode, setBulkNotesMode] = useState<"unchanged" | "set" | "clear">("unchanged");
+  const [bulkNotes, setBulkNotes] = useState("");
+  const [bulkShiftDays, setBulkShiftDays] = useState("0");
+  const [bulkReplaceSlot, setBulkReplaceSlot] = useState<"" | "t1_p1" | "t1_p2" | "t2_p1" | "t2_p2">("");
+  const [bulkReplacementPlayer, setBulkReplacementPlayer] = useState("");
   const selectedMatch = matches.find((match) => match.id != null && String(match.id) === selectedMatchId) || null;
   const visiblePlayerOptions = collectVisiblePlayers(matches);
   const playerOptions = rosterPlayers.length ? rosterPlayers : visiblePlayerOptions;
@@ -285,7 +333,10 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
       body: JSON.stringify(body)
     });
     const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+    if (!response.ok) {
+      const detail = apiErrorDetail(payload, `API error (${response.status})`);
+      throw new ApiCallError(detail.message, detail.operationId);
+    }
     return payload as AdminMatchLogWriteResult;
   }
 
@@ -304,6 +355,52 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
     }
   }
 
+  function toggleBulkMatch(matchId: number) {
+    const key = String(matchId);
+    setBulkIds((current) => current.includes(key) ? current.filter((value) => value !== key) : current.length < 100 ? [...current, key] : current);
+  }
+
+  function stageBulkEdits() {
+    setMessage(null);
+    setResult(null);
+    try {
+      const selected = matches.filter((match) => match.id != null && bulkIds.includes(String(match.id))).slice(0, 100);
+      if (!selected.length) throw new Error("Select at least one visible match for the bulk stage.");
+      const shiftDays = Number(bulkShiftDays || 0);
+      if (!Number.isInteger(shiftDays)) throw new Error("Date shift must be a whole number of days.");
+      if (bulkWeekMode === "set" && !bulkWeekTag.trim()) throw new Error("Enter a week tag before staging the bulk set action.");
+      if (bulkNotesMode === "set" && !bulkNotes.trim()) throw new Error("Enter notes before staging the bulk set action.");
+      if (bulkReplaceSlot && !bulkReplacementPlayer) throw new Error("Choose a replacement player for the selected slot.");
+
+      const generated = selected.map((match) => {
+        const patch: MatchPatch = { id: Number(match.id) };
+        if (bulkLeague.trim()) patch.league = bulkLeague.trim();
+        if (bulkWeekMode === "set") patch.week_tag = bulkWeekTag.trim();
+        if (bulkWeekMode === "clear") patch.week_tag = "";
+        if (bulkMatchType.trim()) patch.match_type = bulkMatchType.trim();
+        if (bulkNotesMode === "set") patch.notes = bulkNotes.trim();
+        if (bulkNotesMode === "clear") patch.notes = "";
+        if (shiftDays !== 0) {
+          const original = new Date(String(match.date || ""));
+          if (Number.isNaN(original.getTime())) throw new Error(`Match #${match.id} has no valid date to shift.`);
+          original.setUTCDate(original.getUTCDate() + shiftDays);
+          patch.date = original.toISOString();
+        }
+        if (bulkReplaceSlot) patch[bulkReplaceSlot] = integerInput(bulkReplacementPlayer, "Replacement player");
+        return patch;
+      });
+      if (generated.every((patch) => patchFields(patch).length === 0)) throw new Error("Choose at least one bulk field change.");
+      setStagedPatches((current) => {
+        const byId = new Map(current.map((patch) => [patch.id, patch]));
+        for (const patch of generated) byId.set(patch.id, { ...(byId.get(patch.id) || { id: patch.id }), ...patch });
+        return Array.from(byId.values());
+      });
+      setMessage(`Staged bulk changes for ${generated.length} match(es).`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to stage bulk changes.");
+    }
+  }
+
   async function submitGuidedPatches() {
     setBusy(true);
     setMessage(null);
@@ -314,15 +411,45 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
         patches: stagedPatches,
         confirmation_text: applyConfirm,
         correction_note: correctionNote,
-        source: "next_match_log_guided_editor"
+        source: "next_match_log_guided_editor",
+        idempotency_key: idempotencyKey,
+        replay_target: "ALL (Full System Reset)"
       });
       setResult(payload);
       setMessage(resultSummary(payload));
-      setStagedPatches([]);
-      setApplyConfirm("");
+      if (payload.ok) {
+        setStagedPatches([]);
+        setApplyConfirm("");
+        setRecoveryOperationId(null);
+        setIdempotencyKey(requestKey());
+      }
       router.refresh();
     } catch (error) {
+      if (error instanceof ApiCallError && error.operationId) setRecoveryOperationId(error.operationId);
       setMessage(error instanceof Error ? error.message : "Unable to apply match edits.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function recoverMandatoryReplay() {
+    if (!recoveryOperationId) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await callApi(`/admin/clubs/${encodeURIComponent(clubId)}/match-log/edits/${encodeURIComponent(recoveryOperationId)}/recover`, "POST", {
+        confirmation_text: recoveryConfirm,
+        source: "next_match_log_recovery"
+      });
+      setResult(payload);
+      setMessage(`Recovery completed for operation ${recoveryOperationId}.`);
+      setRecoveryOperationId(null);
+      setRecoveryConfirm("");
+      setStagedPatches([]);
+      setIdempotencyKey(requestKey());
+      router.refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to complete replay recovery.");
     } finally {
       setBusy(false);
     }
@@ -428,6 +555,8 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
           <label><strong>Team 2 score</strong><br /><input type="number" min="0" step="1" value={edit.scoreT2} onChange={(event) => updateEdit("scoreT2", event.target.value)} style={inputStyle} /></label>
         </div>
 
+        <label><strong>Match notes</strong><br /><textarea value={edit.notes} onChange={(event) => updateEdit("notes", event.target.value)} maxLength={2000} rows={3} style={inputStyle} placeholder="Blank clears notes" /></label>
+
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem" }}>
           <PlayerSelect label="Team 1 player 1" value={edit.t1p1} onChange={(value) => updateEdit("t1p1", value)} options={playerOptions} />
           <PlayerSelect label="Team 1 player 2" value={edit.t1p2} onChange={(value) => updateEdit("t1p2", value)} options={playerOptions} />
@@ -445,6 +574,36 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
         </p>
       </div>
 
+      <section data-testid="match-log-bulk-editor" style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.85rem", marginTop: "1rem", background: "#f8fafc" }}>
+        <h3 style={{ marginTop: 0 }}>Bulk stage visible matches</h3>
+        <p style={{ color: "#475569" }}>Select up to 100 rows, then set shared fields, clear notes/week tags, shift dates, or replace one player slot. Nothing is written until the staged operation is confirmed below.</p>
+        <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          <button type="button" onClick={() => setBulkIds(matches.filter((match) => match.id != null).slice(0, 100).map((match) => String(match.id)))} style={secondaryButtonStyle}>Select first 100 visible</button>
+          <button type="button" onClick={() => setBulkIds([])} disabled={!bulkIds.length} style={secondaryButtonStyle}>Clear selection</button>
+          <span style={{ alignSelf: "center" }}><strong>{bulkIds.length}</strong> selected</span>
+        </p>
+        <div style={{ maxHeight: "220px", overflowY: "auto", display: "grid", gap: "0.35rem", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "0.6rem", background: "white" }}>
+          {matches.filter((match) => match.id != null).map((match) => (
+            <label key={String(match.id)} style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
+              <input type="checkbox" checked={bulkIds.includes(String(match.id))} onChange={() => toggleBulkMatch(Number(match.id))} />
+              <span>#{match.id} · {dateLabel(match.date)} · {match.league || "—"} · {playerNames(match.team1)} vs {playerNames(match.team2)} · {match.score?.display || "—"}</span>
+            </label>
+          ))}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}>
+          <label><strong>Set league</strong><br /><input value={bulkLeague} onChange={(event) => setBulkLeague(event.target.value)} style={inputStyle} placeholder="Blank = unchanged" /></label>
+          <label><strong>Week tag action</strong><br /><select value={bulkWeekMode} onChange={(event) => setBulkWeekMode(event.target.value as "unchanged" | "set" | "clear")} style={inputStyle}><option value="unchanged">No change</option><option value="set">Set</option><option value="clear">Clear</option></select></label>
+          <label><strong>New week tag</strong><br /><input value={bulkWeekTag} onChange={(event) => setBulkWeekTag(event.target.value)} disabled={bulkWeekMode !== "set"} style={inputStyle} /></label>
+          <label><strong>Set match type</strong><br /><input value={bulkMatchType} onChange={(event) => setBulkMatchType(event.target.value)} style={inputStyle} placeholder="Blank = unchanged" /></label>
+          <label><strong>Notes action</strong><br /><select value={bulkNotesMode} onChange={(event) => setBulkNotesMode(event.target.value as "unchanged" | "set" | "clear")} style={inputStyle}><option value="unchanged">No change</option><option value="set">Set</option><option value="clear">Clear</option></select></label>
+          <label><strong>Shift UTC date</strong><br /><input type="number" step="1" value={bulkShiftDays} onChange={(event) => setBulkShiftDays(event.target.value)} style={inputStyle} /><small>Whole days; 0 = unchanged.</small></label>
+          <label><strong>Replace player slot</strong><br /><select value={bulkReplaceSlot} onChange={(event) => setBulkReplaceSlot(event.target.value as "" | "t1_p1" | "t1_p2" | "t2_p1" | "t2_p2")} style={inputStyle}><option value="">No change</option><option value="t1_p1">Team 1 player 1</option><option value="t1_p2">Team 1 player 2</option><option value="t2_p1">Team 2 player 1</option><option value="t2_p2">Team 2 player 2</option></select></label>
+          <PlayerSelect label="Replacement player" value={bulkReplacementPlayer} onChange={setBulkReplacementPlayer} options={playerOptions} />
+        </div>
+        {bulkNotesMode === "set" ? <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Replacement notes</strong><br /><textarea value={bulkNotes} onChange={(event) => setBulkNotes(event.target.value)} maxLength={2000} rows={3} style={inputStyle} /></label> : null}
+        <p><button type="button" onClick={stageBulkEdits} disabled={busy || !bulkIds.length} style={buttonStyle}>Stage bulk changes</button></p>
+      </section>
+
       <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", marginTop: "1rem", background: stagedPatches.length ? "#f8fafc" : "white" }}>
         <h4 style={{ marginTop: 0 }}>Staged edits</h4>
         {stagedPatches.length ? (
@@ -455,17 +614,45 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
               ))}
             </ul>
             <p style={{ color: "#475569" }}>Impact preview: standings={String(scope.standings)}, ratings={String(scope.ratings)}</p>
+            {scope.ratings ? <p style={{ color: "#92400e" }}>This operation cannot report success until its durable Replay ALL job succeeds.</p> : <p style={{ color: "#166534" }}>These metadata-only changes do not require rating replay.</p>}
           </>
         ) : <p style={{ color: "#475569" }}>No edits staged yet.</p>}
         <label><strong>Correction note</strong><br /><input value={correctionNote} onChange={(event) => setCorrectionNote(event.target.value)} style={inputStyle} /></label>
         <label><strong>Type APPLY to confirm edits</strong><br /><input value={applyConfirm} onChange={(event) => setApplyConfirm(event.target.value)} style={inputStyle} /></label>
         <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-          <button type="button" onClick={submitGuidedPatches} disabled={busy || !accessToken || applyConfirm.trim().toUpperCase() !== "APPLY" || !stagedPatches.length} style={buttonStyle}>
+          <button type="button" onClick={submitGuidedPatches} disabled={busy || !accessToken || Boolean(recoveryOperationId) || applyConfirm.trim().toUpperCase() !== "APPLY" || !stagedPatches.length} style={buttonStyle}>
             {busy ? "Working…" : "Apply staged edits"}
           </button>
           <button type="button" onClick={() => setStagedPatches([])} disabled={busy || !stagedPatches.length} style={secondaryButtonStyle}>Clear staged edits</button>
         </p>
       </div>
+
+      {recoveryOperationId ? (
+        <div role="alert" data-testid="match-edit-recovery" style={{ border: "2px solid #dc2626", borderRadius: "12px", padding: "0.85rem", marginTop: "1rem", background: "#fef2f2" }}>
+          <h4 style={{ marginTop: 0 }}>Mandatory replay recovery required</h4>
+          <p>Edits were committed in one database transaction, but replay did not finish. Do not start another correction until operation <code>{recoveryOperationId}</code> is recovered.</p>
+          <label><strong>Type RECOVER to retry the same durable replay job</strong><br /><input value={recoveryConfirm} onChange={(event) => setRecoveryConfirm(event.target.value)} style={inputStyle} /></label>
+          <p><button type="button" onClick={recoverMandatoryReplay} disabled={busy || recoveryConfirm.trim().toUpperCase() !== "RECOVER"} style={buttonStyle}>{busy ? "Recovering…" : "Complete mandatory replay"}</button></p>
+        </div>
+      ) : null}
+
+      {recentOperations.length ? (
+        <div data-testid="match-edit-operation-history" style={{ overflowX: "auto", marginTop: "1rem" }}>
+          <h4>Recent durable edit operations</h4>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "680px" }}>
+            <thead><tr>{["Created", "Status", "Replay", "Actor", "Operation"].map((label) => <th key={label} style={{ textAlign: "left", borderBottom: "1px solid #cbd5e1", padding: "0.5rem" }}>{label}</th>)}</tr></thead>
+            <tbody>{recentOperations.map((operation) => (
+              <tr key={operation.id} data-operation-status={operation.status}>
+                <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.created_at ? new Date(operation.created_at).toISOString().slice(0, 19).replace("T", " ") : "—"}</td>
+                <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.status}{operation.error_text ? ` · ${operation.error_text}` : ""}</td>
+                <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.replay_target || "Not required"}</td>
+                <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.actor_email || "—"}</td>
+                <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem", fontFamily: "monospace" }}>{operation.id}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      ) : null}
 
       <hr style={{ border: 0, borderTop: "1px solid #e2e8f0", margin: "1rem 0" }} />
 

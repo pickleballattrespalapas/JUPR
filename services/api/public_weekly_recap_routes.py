@@ -30,11 +30,19 @@ def install_public_weekly_recap_routes(
     def get_club_weekly_recaps(
         club_slug: str,
         week_start: str | None = Query(default=None),
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=8, ge=1, le=12),
     ) -> dict[str, Any]:
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
-        recaps = build_public_weekly_recaps(supabase, club_id=club_id, week_start=week_start)
+        recaps = build_public_weekly_recaps(
+            supabase,
+            club_id=club_id,
+            week_start=week_start,
+            page=page,
+            page_size=page_size,
+        )
         return {"club": public_club_payload(club, club_slug), **recaps}
 
     @app.get("/clubs/{club_slug}/weekly-recaps/{week_start}")

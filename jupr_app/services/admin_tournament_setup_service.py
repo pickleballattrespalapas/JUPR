@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.tournament_admin_operations import stable_tournament_admin_fingerprint
 from jupr_app.domain.tournament_registration_repo import (
     REGISTRATION_STATUS_OPTIONS,
     analyze_registration_publish_impact,
@@ -138,7 +140,6 @@ def _event_option_payload(row: dict[str, Any]) -> dict[str, Any]:
         "status": row.get("status"),
         "enabled": row.get("enabled"),
         "sort_order": row.get("sort_order"),
-        "notes": row.get("notes"),
     }
 
 
@@ -147,20 +148,121 @@ def _day_payload(row: dict[str, Any]) -> dict[str, Any]:
         "id": row.get("id"),
         "tournament_id": row.get("tournament_id"),
         "label": row.get("label"),
-        "date": row.get("date"),
-        "start_date": row.get("start_date"),
-        "end_date": row.get("end_date"),
+        "event_date": row.get("event_date") or row.get("date") or row.get("start_date"),
+        "date": row.get("event_date") or row.get("date") or row.get("start_date"),
         "enabled": row.get("enabled"),
         "sort_order": row.get("sort_order"),
     }
 
 
+def _setup_state_fingerprint(
+    *,
+    tournament: dict[str, Any],
+    settings: dict[str, Any],
+    days: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    draft: dict[str, Any] | None,
+) -> str:
+    stable_settings = _settings_payload(settings)
+    stable_settings.pop("id", None)
+    return stable_tournament_admin_fingerprint(
+        {
+            "tournament": {
+                "id": tournament.get("id"),
+                "status": tournament.get("status"),
+                "updated_at": tournament.get("updated_at"),
+            },
+            "settings": stable_settings,
+            "days": days,
+            "event_options": events,
+            "builder_draft": draft or {},
+        }
+    )
+
+
+def _template_id(tournament_id: str, kind: str, label: str) -> str:
+    return str(uuid5(NAMESPACE_URL, f"jupr:tournament-setup:{tournament_id}:{kind}:{label}"))
+
+
+def build_admin_tournament_setup_templates(
+    *,
+    tournament: dict[str, Any],
+    days: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return Python-authoritative builder templates for the Next renderer."""
+
+    tournament_id = str(tournament.get("id") or "").strip()
+    template_days = [dict(row) for row in (days or [])]
+    if not template_days:
+        fallback_date = str(tournament.get("start_date") or "").strip() or None
+        template_days = [
+            {
+                "id": _template_id(tournament_id, "day", "day-1"),
+                "tournament_id": tournament_id,
+                "label": "Day 1",
+                "event_date": fallback_date,
+                "date": fallback_date,
+                "enabled": True,
+                "sort_order": 1,
+            }
+        ]
+    day_id = str(template_days[0].get("id") or "")
+    definitions = [
+        ("Men's Doubles", "GENDER_DOUBLES", "MEN", True),
+        ("Women's Doubles", "GENDER_DOUBLES", "WOMEN", True),
+        ("Mixed Doubles", "MIXED_DOUBLES", "MIXED", True),
+        ("Men's Singles", "SINGLES", "MEN", False),
+        ("Women's Singles", "SINGLES", "WOMEN", False),
+    ]
+    event_options: list[dict[str, Any]] = []
+    for index, (family, event_type, gender, partner_board) in enumerate(definitions, start=1):
+        event_options.append(
+            {
+                "id": _template_id(tournament_id, "event", family),
+                "tournament_id": tournament_id,
+                "registration_day_id": day_id,
+                "event_family_label": family,
+                "division_name": f"{family} Open",
+                "event_type": event_type,
+                "gender_restriction": gender,
+                "event_format_default": "ROUND_ROBIN_PLUS_PLAYOFF",
+                "scoring_default": "GAME_TO_15",
+                "skill_label": "Open",
+                "skill_mode": "OPEN",
+                "age_mode": "ALL_AGES",
+                "age_label": "All ages",
+                "age_rules": "{}",
+                "capacity_teams": 16,
+                "price_usd": 0,
+                "waitlist_enabled": True,
+                "partner_board_enabled": partner_board,
+                "status": "open",
+                "enabled": True,
+                "sort_order": index,
+            }
+        )
+    return [
+        {
+            "key": "standard_doubles_singles",
+            "label": "Standard doubles and singles",
+            "description": "Five standard open divisions on the first tournament day.",
+            "days": template_days,
+            "event_families": [],
+            "event_options": event_options,
+        }
+    ]
+
+
 def build_admin_tournament_setup_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
+    from jupr_app.services.admin_tournament_guarded_operation import tournament_admin_mutation_status
+
     if not is_admin_tournament_setup_enabled():
         return {
             "enabled": False,
             "status": "guarded_off",
             "warnings": ["Enable JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS to use Tournament Setup in Next."],
+            "streamlit_fallback_url": os.getenv("JUPR_STREAMLIT_FALLBACK_URL", "").strip() or "https://juprtrespalapas.streamlit.app",
+            "mutation_runtime": tournament_admin_mutation_status(),
         }
     count = None
     if supabase is not None:
@@ -174,6 +276,8 @@ def build_admin_tournament_setup_status(supabase: Any | None, *, club_id: str) -
         "tournament_count": count,
         "confirmation_text": {"settings": CONFIRM_SETTINGS, "draft": CONFIRM_DRAFT, "publish": CONFIRM_PUBLISH},
         "warnings": [],
+        "streamlit_fallback_url": os.getenv("JUPR_STREAMLIT_FALLBACK_URL", "").strip() or "https://juprtrespalapas.streamlit.app",
+        "mutation_runtime": tournament_admin_mutation_status(),
     }
 
 
@@ -214,6 +318,13 @@ def get_admin_tournament_setup_detail(supabase: Any, *, club_id: str, tournament
     draft = get_builder_draft(supabase, str(tournament_id)) or {"days": days, "event_families": [], "divisions": events}
     draft_days = list(draft.get("days") or days)
     draft_events = list(draft.get("event_options") or draft.get("divisions") or events)
+    state_fingerprint = _setup_state_fingerprint(
+        tournament=tournament,
+        settings=settings,
+        days=days,
+        events=events,
+        draft=draft,
+    )
     impact = None
     impact_warning = None
     try:
@@ -231,6 +342,58 @@ def get_admin_tournament_setup_detail(supabase: Any, *, club_id: str, tournament
         "publish_impact": impact,
         "publish_impact_warning": impact_warning,
         "registration_count": count_tournament_registrations(supabase, str(tournament_id)),
+        "state_fingerprint": state_fingerprint,
+        "templates": build_admin_tournament_setup_templates(tournament=tournament, days=days),
+    }
+
+
+def review_admin_tournament_setup_impact(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    days: list[dict[str, Any]],
+    event_options: list[dict[str, Any]],
+    expected_state_fingerprint: str,
+) -> dict[str, Any]:
+    """Analyze a draft without writing any table."""
+
+    detail = get_admin_tournament_setup_detail(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=str(tournament_id),
+    )
+    if str(expected_state_fingerprint or "").strip() != str(detail.get("state_fingerprint") or ""):
+        from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
+
+        raise StaleTournamentAdminStateError(
+            "Tournament setup changed after it was loaded. Reload before reviewing publish impact."
+        )
+    normalized_days = list(days or [])
+    normalized_events = list(event_options or [])
+    impact = analyze_registration_publish_impact(
+        supabase,
+        tournament_id=str(tournament_id),
+        days=normalized_days,
+        event_options=normalized_events,
+    )
+    impact_fingerprint = stable_tournament_admin_fingerprint(
+        {
+            "tournament_id": str(tournament_id),
+            "state_fingerprint": detail["state_fingerprint"],
+            "days": normalized_days,
+            "event_options": normalized_events,
+            "impact": impact,
+        }
+    )
+    return {
+        "ok": True,
+        "mode": "tournament_setup_impact_review",
+        "dry_run": True,
+        "write_count": 0,
+        "state_fingerprint": detail["state_fingerprint"],
+        "impact_fingerprint": impact_fingerprint,
+        "publish_impact": impact,
     }
 
 
@@ -244,6 +407,7 @@ def update_admin_tournament_setup_settings(
     actor_role: str,
     confirmation_text: str,
     source: str = "next_tournament_setup_settings",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     _assert_enabled()
     if _clean(confirmation_text, limit=80).upper() != CONFIRM_SETTINGS:
@@ -275,6 +439,8 @@ def update_admin_tournament_setup_settings(
     for key in ("waitlist_enabled", "partner_board_enabled"):
         if key in payload:
             payload[key] = _bool(payload.get(key), default=True)
+    if dry_run:
+        return {"ok": True, "mode": "tournament_setup_settings_preflight", "dry_run": True, "write_count": 0, "patch": payload}
     updated = upsert_registration_settings(supabase, payload)
     warnings = _audit(
         supabase,
@@ -303,12 +469,23 @@ def save_admin_tournament_setup_draft(
     actor_role: str,
     confirmation_text: str,
     source: str = "next_tournament_setup_draft",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     _assert_enabled()
     if _clean(confirmation_text, limit=80).upper() != CONFIRM_DRAFT:
         raise ValueError(f"Type {CONFIRM_DRAFT} to save tournament setup draft.")
     _get_tournament_for_club(supabase, club_id=str(club_id), tournament_id=str(tournament_id))
     before = get_builder_draft(supabase, str(tournament_id))
+    if dry_run:
+        return {
+            "ok": True,
+            "mode": "tournament_setup_draft_preflight",
+            "dry_run": True,
+            "write_count": 0,
+            "day_count": len(days or []),
+            "event_family_count": len(event_families or []),
+            "event_option_count": len(event_options or []),
+        }
     draft = save_builder_draft(
         supabase,
         tournament_id=str(tournament_id),
@@ -342,15 +519,41 @@ def publish_admin_tournament_setup(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    expected_state_fingerprint: str | None = None,
+    reviewed_impact_fingerprint: str | None = None,
     source: str = "next_tournament_setup_publish",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     _assert_enabled()
     if _clean(confirmation_text, limit=80).upper() != CONFIRM_PUBLISH:
         raise ValueError(f"Type {CONFIRM_PUBLISH} to publish tournament setup.")
     _get_tournament_for_club(supabase, club_id=str(club_id), tournament_id=str(tournament_id))
     impact = analyze_registration_publish_impact(supabase, tournament_id=str(tournament_id), days=list(days or []), event_options=list(event_options or []))
+    if reviewed_impact_fingerprint:
+        detail = get_admin_tournament_setup_detail(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=str(tournament_id),
+        )
+        if str(expected_state_fingerprint or "") != str(detail.get("state_fingerprint") or ""):
+            from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
+
+            raise StaleTournamentAdminStateError("Tournament setup changed after impact review. Reload and review again.")
+        expected_impact_fingerprint = stable_tournament_admin_fingerprint(
+            {
+                "tournament_id": str(tournament_id),
+                "state_fingerprint": detail["state_fingerprint"],
+                "days": list(days or []),
+                "event_options": list(event_options or []),
+                "impact": impact,
+            }
+        )
+        if str(reviewed_impact_fingerprint) != expected_impact_fingerprint:
+            raise ValueError("Publish payload does not match the last reviewed impact. Review impact again before publishing.")
     if impact.get("blocked"):
         raise ValueError("Publish blocked due to destructive changes: " + " | ".join(str(x) for x in impact.get("blocked") or []))
+    if dry_run:
+        return {"ok": True, "mode": "tournament_setup_publish_preflight", "dry_run": True, "write_count": 0, "publish_impact": impact}
     result = publish_registration_configuration(supabase, tournament_id=str(tournament_id), days=list(days or []), event_options=list(event_options or []))
     warnings = _audit(
         supabase,

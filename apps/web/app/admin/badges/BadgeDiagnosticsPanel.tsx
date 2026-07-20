@@ -12,8 +12,9 @@ import type {
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminBadgeDiagnosticsStatusResponse };
-type RepairResponse = { ok: boolean; mode?: string; recompute_mode?: string; summary?: Record<string, unknown>; revoked_count?: number; rows?: Array<Record<string, unknown>>; audit_warning?: string | null };
-type BadgeStateUpdateResponse = { ok: boolean; mode: "badge_definition_state_update"; badge: { badge_id: string; name: string; state: "live" | "frozen" | "deprecated"; state_changed_at?: string | null; state_change_reason?: string | null }; force: boolean; audit_warning?: string | null };
+type RepairResponse = { ok: boolean; mode?: string; recompute_mode?: string; operation_key?: string; read_only?: boolean; summary?: Record<string, unknown>; revoked_count?: number; rows?: Array<Record<string, unknown>>; audit_warning?: string | null };
+type BadgeStateUpdateResponse = { ok: boolean; mode: "badge_definition_state_update"; operation_key?: string; badge: { badge_id: string; name: string; state: "live" | "frozen" | "deprecated"; state_changed_at?: string | null; state_change_reason?: string | null }; force: boolean; audit_warning?: string | null };
+type BadgeOperationResponse = { ok: boolean; workflow: string; operation_key: string; status: string; result: Record<string, unknown>; error?: string | null; recovery?: Record<string, string> };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
@@ -43,7 +44,7 @@ function reportRows(report: Record<string, unknown>, key: string): Array<Record<
 
 function messageColor(message: string | null): string {
   const text = (message || "").toLowerCase();
-  if (text.includes("unable") || text.includes("error") || text.includes("disabled") || text.includes("missing") || text.includes("type ")) return "#b91c1c";
+  if (text.includes("unable") || text.includes("error") || text.includes("disabled") || text.includes("missing") || text.includes("type ") || text.includes("critical") || text.includes("recovery")) return "#b91c1c";
   return "#166534";
 }
 
@@ -69,6 +70,11 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
   const [badgeStateReason, setBadgeStateReason] = useState("");
   const [badgeStateForce, setBadgeStateForce] = useState(false);
   const [badgeStateConfirm, setBadgeStateConfirm] = useState("");
+  const [recomputeOperationKey, setRecomputeOperationKey] = useState("");
+  const [revokeOperationKey, setRevokeOperationKey] = useState("");
+  const [stateOperationKey, setStateOperationKey] = useState("");
+  const [operationLookupKey, setOperationLookupKey] = useState("");
+  const [operationLookup, setOperationLookup] = useState<BadgeOperationResponse | null>(null);
   const [debugReport, setDebugReport] = useState<Record<string, unknown> | null>(null);
   const [auditReport, setAuditReport] = useState<Record<string, unknown> | null>(null);
   const [repairResult, setRepairResult] = useState<RepairResponse | null>(null);
@@ -87,7 +93,11 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
     if (options?.body) headers.set("Content-Type", "application/json");
     const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+    if (!response.ok) {
+      const detail = payload?.detail;
+      const text = detail && typeof detail === "object" ? String(detail.message || JSON.stringify(detail)) : String(detail || `API error (${response.status})`);
+      throw new Error(text);
+    }
     return payload as T;
   }
 
@@ -135,9 +145,11 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
   }
 
   async function runRecompute() {
-    if (recomputeConfirm.trim().toUpperCase() !== "RECOMPUTE BADGES") { setMessage("Type RECOMPUTE BADGES to run badge recompute."); return; }
+    if (recomputeMode !== "dry-run" && recomputeConfirm.trim().toUpperCase() !== "RECOMPUTE BADGES") { setMessage("Type RECOMPUTE BADGES to run an applying badge recompute."); return; }
     setBusy(true); setMessage(null);
     try {
+      const key = recomputeMode === "dry-run" ? "" : (recomputeOperationKey || `badge-recompute:${Date.now()}:${crypto.randomUUID()}`);
+      if (recomputeMode !== "dry-run" && !recomputeOperationKey) setRecomputeOperationKey(key);
       const payload = await requestJson<RepairResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/badges/recompute`, {
         method: "POST",
         body: JSON.stringify({
@@ -151,10 +163,13 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           include_non_live: includeNonLive,
           match_limit: Number(matchLimit || 5000),
           revoke_reason: revokeReason || null,
-          confirmation_text: recomputeConfirm
+          confirmation_text: recomputeConfirm,
+          operation_key: key
         })
       });
-      setRepairResult(payload); setRecomputeConfirm(""); setMessage(`Badge recompute ${payload.recompute_mode || recomputeMode} complete.`);
+      setRepairResult(payload); setRecomputeConfirm("");
+      if (recomputeMode !== "dry-run") setRecomputeOperationKey("");
+      setMessage(payload.read_only ? "Read-only badge recompute preview complete; no rows were written." : `Badge recompute ${payload.recompute_mode || recomputeMode} complete.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to run badge recompute."); }
     finally { setBusy(false); }
   }
@@ -163,6 +178,8 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
     if (revokeConfirm.trim().toUpperCase() !== "REVOKE BADGE") { setMessage("Type REVOKE BADGE to revoke badge rows."); return; }
     setBusy(true); setMessage(null);
     try {
+      const key = revokeOperationKey || `badge-revoke:${Date.now()}:${crypto.randomUUID()}`;
+      if (!revokeOperationKey) setRevokeOperationKey(key);
       const payload = await requestJson<RepairResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/badges/revoke`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -171,10 +188,11 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           badge_id: badgeId || null,
           context_id: contextId || null,
           revoke_reason: revokeReason || null,
-          confirmation_text: revokeConfirm
+          confirmation_text: revokeConfirm,
+          operation_key: key
         })
       });
-      setRepairResult(payload); setRevokeConfirm(""); setMessage(`Revoked ${payload.revoked_count || 0} badge row(s).`);
+      setRepairResult(payload); setRevokeConfirm(""); setRevokeOperationKey(""); setMessage(`Revoked ${payload.revoked_count || 0} badge row(s).`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to revoke badge row."); }
     finally { setBusy(false); }
   }
@@ -187,6 +205,8 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
     if (selectedBadge.state === badgeStateTarget) { setMessage(`Badge state is already ${badgeStateTarget}.`); return; }
     setBusy(true); setMessage(null);
     try {
+      const key = stateOperationKey || `badge-state:${Date.now()}:${crypto.randomUUID()}`;
+      if (!stateOperationKey) setStateOperationKey(key);
       const payload = await requestJson<BadgeStateUpdateResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/badges/${encodeURIComponent(selectedBadge.badge_id)}/state`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -195,6 +215,7 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           reason: badgeStateReason,
           force: badgeStateForce,
           confirmation_text: badgeStateConfirm,
+          operation_key: key,
           source: "next_badge_definition_state"
         })
       });
@@ -202,8 +223,20 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
       setBadgeStateReason("");
       setBadgeStateForce(false);
       setBadgeStateConfirm("");
+      setStateOperationKey("");
       setMessage(payload.audit_warning ? `Badge state updated with audit warning: ${payload.audit_warning}` : `Badge state updated to ${payload.badge.state}.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to update badge definition state."); }
+    finally { setBusy(false); }
+  }
+
+  async function inspectBadgeOperation() {
+    if (!operationLookupKey.trim()) { setMessage("Enter the exact badge operation key first."); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<BadgeOperationResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/badges/operations/${encodeURIComponent(operationLookupKey.trim())}`);
+      setOperationLookup(payload);
+      setMessage(`Badge operation ${payload.operation_key} is ${payload.status}.`);
+    } catch (error) { setOperationLookup(null); setMessage(error instanceof Error ? error.message : "Unable to inspect badge operation."); }
     finally { setBusy(false); }
   }
 
@@ -242,7 +275,7 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           <label><input type="checkbox" checked={includeNonLive} onChange={(event) => setIncludeNonLive(event.target.checked)} /> Include non-live badge rules</label>
           <label><input type="checkbox" checked={includeRevoked} onChange={(event) => setIncludeRevoked(event.target.checked)} /> Include revoked badge rows</label>
         </div>
-        {message ? <p style={{ color: messageColor(message) }}>{message}</p> : null}
+        {message ? <p role="status" aria-live="polite" style={{ color: messageColor(message) }}>{message}</p> : null}
       </article>
 
       <article style={cardStyle}>
@@ -276,7 +309,7 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
 
       <article style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
         <h2 style={{ marginTop: 0 }}>4. Badge Definition State</h2>
-        <p style={{ color: "#475569" }}>Control whether the selected badge definition can continue awarding. Normal transitions are <code>live → frozen → deprecated</code>. This global staging definition change requires <code>manage_roles</code>, a reason, current-state locking, and an exact confirmation.</p>
+        <p style={{ color: "#475569" }}>Control whether the selected badge definition can continue awarding. Normal transitions are <code>live → frozen → deprecated</code>. This staging-only definition change requires <code>run_replay</code>, a reason, current-state locking, durable retry key, strict audit intent, and an exact confirmation.</p>
         {!selectedBadge ? <p style={{ color: "#64748b" }}>Load options and select a badge first.</p> : <>
           <p><strong>{selectedBadge.name}</strong> · <code>{selectedBadge.badge_id}</code><br />Current state: <strong>{selectedBadge.state || "live"}</strong>{selectedBadge.state_changed_at ? ` · changed ${selectedBadge.state_changed_at}` : ""}</p>
           {selectedBadge.state_change_reason ? <p><strong>Previous reason:</strong> {selectedBadge.state_change_reason}</p> : null}
@@ -295,10 +328,11 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
         <h2 style={{ marginTop: 0 }}>5. Badge Repair / Recompute</h2>
         <p style={{ color: "#9a3412" }}>Super-admin repair controls for staging validation. Dry-run previews do not mutate badges; append-only and strict modes write through the Python badge recompute path. Revoke marks matched badge rows as revoked.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>Recompute mode<br /><select value={recomputeMode} onChange={(event) => setRecomputeMode(event.target.value)} style={inputStyle}><option value="dry-run">dry-run</option><option value="append-only">append-only</option><option value="strict">strict</option></select></label>
-          <label>Recompute confirmation<br /><input value={recomputeConfirm} onChange={(event) => setRecomputeConfirm(event.target.value)} placeholder="RECOMPUTE BADGES" style={inputStyle} /></label>
+          <label>Recompute mode<br /><select value={recomputeMode} onChange={(event) => { setRecomputeMode(event.target.value); setRecomputeConfirm(""); setRecomputeOperationKey(""); }} style={inputStyle}><option value="dry-run">dry-run</option><option value="append-only">append-only</option><option value="strict">strict</option></select></label>
+          <label>Recompute confirmation<br /><input value={recomputeConfirm} onChange={(event) => setRecomputeConfirm(event.target.value)} placeholder={recomputeMode === "dry-run" ? "Not required for no-write preview" : "RECOMPUTE BADGES"} disabled={recomputeMode === "dry-run"} style={inputStyle} /></label>
           <button type="button" onClick={runRecompute} disabled={busy} style={buttonStyle}>Run recompute</button>
         </div>
+        {recomputeOperationKey || revokeOperationKey || stateOperationKey ? <div style={{ color: "#92400e" }}><p><strong>Uncertain-operation guard:</strong> do not change inputs or retry with a new key. Inspect Badge Audit and operation status first.</p>{[recomputeOperationKey, revokeOperationKey, stateOperationKey].filter(Boolean).map((key) => <code key={key} style={{ display: "block", overflowWrap: "anywhere" }}>{key}</code>)}</div> : null}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end", marginTop: "1rem" }}>
           <label>Player badge row ID optional<br /><input value={playerBadgeId} onChange={(event) => setPlayerBadgeId(event.target.value)} placeholder="Use exact row id when known" style={inputStyle} /></label>
           <label>Revoke reason<br /><input value={revokeReason} onChange={(event) => setRevokeReason(event.target.value)} placeholder="Required for operator clarity" style={inputStyle} /></label>
@@ -306,6 +340,21 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           <button type="button" onClick={revokeBadge} disabled={busy} style={ghostButtonStyle}>Revoke matched badge row(s)</button>
         </div>
         {repairResult ? <pre style={{ whiteSpace: "pre-wrap", background: "#0f172a", color: "white", padding: "1rem", borderRadius: "12px", overflowX: "auto" }}>{JSON.stringify(repairResult, null, 2)}</pre> : null}
+      </article>
+
+      <article style={cardStyle}>
+        <h2 style={{ marginTop: 0 }}>6. Guarded operation recovery</h2>
+        <p style={{ color: "#475569" }}>If an applying response is interrupted, preserve the exact key shown above and inspect it here. Completed keys return their saved result; incomplete keys never rerun the write.</p>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
+          <label>Exact operation key<br /><input value={operationLookupKey} onChange={(event) => { setOperationLookupKey(event.target.value); setOperationLookup(null); }} style={inputStyle} /></label>
+          <button type="button" onClick={inspectBadgeOperation} disabled={busy || !accessToken} style={ghostButtonStyle}>Inspect badge operation</button>
+        </div>
+        {operationLookup ? <div style={{ marginTop: "1rem" }}>
+          <pre style={{ whiteSpace: "pre-wrap", background: "#0f172a", color: "white", padding: "1rem", borderRadius: "12px", overflowX: "auto" }}>{JSON.stringify(operationLookup, null, 2)}</pre>
+          {operationLookup.status === "recovery_required" || operationLookup.status === "intent_recorded" || operationLookup.status === "running" ? <p style={{ color: "#991b1b" }}><strong>Stop further badge writes.</strong> Run Badge Audit and inspect the relevant definitions/rows or eval run before any retry.</p> : null}
+        </div> : null}
+        <p><a href="/admin/badges">Badge Audit</a> · <a href="/admin/replay-history">Replay History</a> · <a href="/admin/guide">Admin Guide</a></p>
+        <p style={{ color: "#475569" }}>If recovery cannot prove the exact outcome, keep Streamlit Badge Debug/Audit as the fallback and carry the operation key into the incident note.</p>
       </article>
     </div>
   );

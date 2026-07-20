@@ -8,10 +8,10 @@ from typing import Any
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
-from jupr_app.domain.leagues import normalize_league_status
 from jupr_app.services.admin_league_manager_service import (
     get_admin_league_manager_detail,
     is_admin_league_manager_enabled,
+    validate_admin_league_manager_lifecycle_state,
 )
 
 CONFIRM_SAVE_LEAGUE = "SAVE LEAGUE"
@@ -469,7 +469,7 @@ def update_admin_league_manager_settings(
             end_date=schedule_config.get("end_date") or schedule_config.get("start_date"),
         )
         normalized["event_tags"] = _bounded_config(event_tags, field="event_tags")
-    league_status = normalize_league_status(before)
+    league_status = validate_admin_league_manager_lifecycle_state(before)
     _validate_edit_policy(status=league_status, normalized=normalized)
 
     update_query = (

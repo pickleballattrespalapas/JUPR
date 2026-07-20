@@ -5,13 +5,20 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 try:
-    from services.api.auth import jwt_verification_configured, jwt_verification_mode
+    from services.api.auth import (
+        jwt_verification_configured,
+        jwt_verification_mode,
+        jwt_verification_project_ref,
+    )
 except Exception:  # pragma: no cover - imported by non-API contexts too
     def jwt_verification_configured() -> bool:
         return False
 
     def jwt_verification_mode() -> str:
         return "unavailable"
+
+    def jwt_verification_project_ref() -> str | None:
+        return None
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 STREAMLIT_FALLBACK_DEFAULT = "https://juprtrespalapas.streamlit.app"
@@ -191,16 +198,16 @@ WORKFLOWS: tuple[AdminWorkflowDefinition, ...] = (
         label="League Manager",
         streamlit_page_key="league_manager",
         next_route="/admin/league-manager",
-        api_scope="league_settings_roster_membership_read_foundation",
+        api_scope="league_settings_roster_lifecycle_print_and_persisted_awards",
         access="staff",
         risk="high",
         env_flag="JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER",
         status_when_disabled="streamlit_fallback",
-        next_action="Pilot league settings and roster membership; keep live court movement, score submission, and awards staged behind explicit review/publish.",
+        next_action="Pilot league settings, roster, and the separately flagged recoverable Awards wizard; keep League Live submission staged behind its own review/publish slices.",
         safety_notes=(
             "League Manager routes require Supabase JWT auth with manage_matches permission.",
             "Settings and roster writes are audit-attributed and club-scoped.",
-            "Live ladder movement, score entry, and end-of-league award workflows remain next migration layers.",
+            "League Awards writes require JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE and verified mint evidence before archive.",
         ),
     ),
     AdminWorkflowDefinition(
@@ -292,6 +299,9 @@ def _workflow_payload(workflow: AdminWorkflowDefinition, *, pilot_enabled: bool)
     if workflow.key == "player_updates":
         payload["auto_send_env_flag"] = "JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS"
         payload["auto_send_enabled"] = _truthy_env("JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS")
+    if workflow.key == "league_manager":
+        payload["awards_write_env_flag"] = "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE"
+        payload["awards_write_enabled"] = _truthy_env("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE")
     return payload
 
 
@@ -312,6 +322,7 @@ def build_admin_operations_status() -> dict[str, Any]:
         "service_role_configured": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()),
         "jwt_verification_configured": jwt_verification_configured(),
         "jwt_verification_mode": jwt_verification_mode(),
+        "jwt_verification_project_ref": jwt_verification_project_ref(),
         "enabled_workflows": enabled_workflows,
         "recommended_sequence": [
             "admin_shell",

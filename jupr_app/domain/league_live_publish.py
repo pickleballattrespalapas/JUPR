@@ -1,0 +1,227 @@
+from __future__ import annotations
+
+import csv
+import hashlib
+import io
+import json
+from typing import Any, Iterable
+from uuid import NAMESPACE_URL, uuid5
+
+
+class LeagueLivePublishError(ValueError):
+    """A League Live publish request violates the durable submit contract."""
+
+
+def _safe_int(value: Any, default: int | None = None) -> int | None:
+    if value in (None, ""):
+        return default
+    try:
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def _clean_text(value: Any, *, limit: int = 240) -> str:
+    return str(value or "").replace("<", "").replace(">", "").strip()[:limit]
+
+
+def stable_payload_fingerprint(payload: Any) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def league_live_match_context_id(*, session_id: str, round_number: int, match_index: int) -> str:
+    seed = f"jupr:league-live:{str(session_id)}:round:{int(round_number)}:match:{int(match_index)}"
+    return str(uuid5(NAMESPACE_URL, seed))
+
+
+def normalize_league_live_publish_matches(
+    matches: Iterable[dict[str, Any]] | None,
+    *,
+    session_id: str,
+    round_number: int,
+    league_name: str,
+    week_tag: str,
+    match_date: str,
+    expected_match_count: int,
+) -> list[dict[str, Any]]:
+    raw_rows = [dict(row) for row in (matches or []) if isinstance(row, dict)]
+    expected = int(expected_match_count or 0)
+    if expected < 1:
+        raise LeagueLivePublishError("expected_match_count must include every generated match slot.")
+    if len(raw_rows) != expected:
+        raise LeagueLivePublishError(
+            f"All generated matches must be scored before publish ({len(raw_rows)} of {expected} supplied)."
+        )
+    if expected > 200:
+        raise LeagueLivePublishError("A League Live round cannot publish more than 200 matches.")
+
+    normalized: list[dict[str, Any]] = []
+    signatures: set[tuple[int, int, int, int, int, int]] = set()
+    for index, raw in enumerate(raw_rows, start=1):
+        player_ids = [_safe_int(raw.get(key)) for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2")]
+        if any(player_id is None or int(player_id) <= 0 for player_id in player_ids):
+            raise LeagueLivePublishError(f"Match {index} has an unresolved player.")
+        resolved_ids = [int(player_id or 0) for player_id in player_ids]
+        if len(set(resolved_ids)) != 4:
+            raise LeagueLivePublishError(f"Match {index} must contain four distinct players.")
+        score_t1 = _safe_int(raw.get("score_t1", raw.get("s1")))
+        score_t2 = _safe_int(raw.get("score_t2", raw.get("s2")))
+        if score_t1 is None or score_t2 is None or score_t1 < 0 or score_t2 < 0:
+            raise LeagueLivePublishError(f"Match {index} has an invalid score.")
+        if score_t1 == score_t2 or (score_t1 + score_t2) <= 0:
+            raise LeagueLivePublishError(f"Match {index} must have a non-tied final score.")
+        signature = (*resolved_ids, int(score_t1), int(score_t2))
+        if signature in signatures:
+            raise LeagueLivePublishError(f"Match {index} duplicates another scored row in this round.")
+        signatures.add(signature)
+        context_id = league_live_match_context_id(
+            session_id=str(session_id),
+            round_number=int(round_number),
+            match_index=index,
+        )
+        normalized.append(
+            {
+                "date": _clean_text(match_date, limit=40),
+                "league": _clean_text(league_name, limit=120),
+                "week_tag": _clean_text(week_tag, limit=80),
+                "match_type": "League Manager Live",
+                "context_type": "league_live_session",
+                "context_id": context_id,
+                "court": _safe_int(raw.get("court"), index) or index,
+                "t1_p1": resolved_ids[0],
+                "t1_p2": resolved_ids[1],
+                "t2_p1": resolved_ids[2],
+                "t2_p2": resolved_ids[3],
+                "score_t1": int(score_t1),
+                "score_t2": int(score_t2),
+            }
+        )
+    return normalized
+
+
+def build_league_live_publish_request(
+    *,
+    session_id: str,
+    round_number: int,
+    league_name: str,
+    week_tag: str,
+    match_date: str,
+    matches: list[dict[str, Any]],
+    expected_match_count: int,
+    expected_updated_at: str,
+    expected_operation_key: str,
+    round_label: str | None = None,
+    preview: dict[str, Any] | None = None,
+    courts: list[dict[str, Any]] | None = None,
+    movement_overrides: list[dict[str, Any]] | None = None,
+    override_reason: str | None = None,
+    roster_change: dict[str, Any] | None = None,
+    bench_player_ids: list[Any] | None = None,
+    bench_override_reason: str | None = None,
+) -> dict[str, Any]:
+    normalized_matches = normalize_league_live_publish_matches(
+        matches,
+        session_id=str(session_id),
+        round_number=int(round_number),
+        league_name=str(league_name),
+        week_tag=str(week_tag),
+        match_date=str(match_date),
+        expected_match_count=int(expected_match_count),
+    )
+    request = {
+        "session_id": str(session_id),
+        "round_number": int(round_number),
+        "round_label": _clean_text(round_label, limit=80) or f"Round {int(round_number)}",
+        "match_date": _clean_text(match_date, limit=40),
+        "expected_match_count": int(expected_match_count),
+        "expected_updated_at": _clean_text(expected_updated_at, limit=120),
+        "expected_operation_key": _clean_text(expected_operation_key, limit=128),
+        "preview": dict(preview or {}),
+        "matches": normalized_matches,
+        "courts": [dict(row) for row in (courts or []) if isinstance(row, dict)],
+        "movement_overrides": [dict(row) for row in (movement_overrides or []) if isinstance(row, dict)],
+        "override_reason": _clean_text(override_reason, limit=500) or None,
+        "roster_change": dict(roster_change or {}) or None,
+        "bench_player_ids": sorted({int(value) for value in (bench_player_ids or []) if _safe_int(value) is not None}),
+        "bench_override_reason": _clean_text(bench_override_reason, limit=500) or None,
+    }
+    if not request["expected_updated_at"]:
+        raise LeagueLivePublishError("expected_updated_at is required; reload the session before publish.")
+    if len(str(request["expected_operation_key"])) != 64:
+        raise LeagueLivePublishError("A verified 64-character Python plan operation key is required.")
+    request["match_context_ids"] = [row["context_id"] for row in normalized_matches]
+    request["request_fingerprint"] = stable_payload_fingerprint(request)
+    return request
+
+
+def build_rating_review(
+    *,
+    before_rows: Iterable[dict[str, Any]] | None,
+    after_rows: Iterable[dict[str, Any]] | None,
+    expected_player_ids: Iterable[int],
+    published_match_count: int,
+) -> dict[str, Any]:
+    before = {int(row["id"]): dict(row) for row in (before_rows or []) if _safe_int(row.get("id")) is not None}
+    after = {int(row["id"]): dict(row) for row in (after_rows or []) if _safe_int(row.get("id")) is not None}
+    rows: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for player_id in sorted({int(value) for value in expected_player_ids}):
+        old = before.get(player_id, {})
+        new = after.get(player_id, {})
+        rating_before = old.get("rating")
+        rating_after = new.get("rating")
+        delta: float | None = None
+        try:
+            if rating_before is not None and rating_after is not None:
+                delta = float(rating_after) - float(rating_before)
+        except Exception:
+            delta = None
+        if not new:
+            warnings.append(f"Player {player_id} could not be read back after publish.")
+        rows.append(
+            {
+                "player_id": player_id,
+                "player_name": new.get("name") or old.get("name") or f"Player {player_id}",
+                "rating_before": rating_before,
+                "rating_after": rating_after,
+                "rating_delta": delta,
+                "matches_played_before": old.get("matches_played"),
+                "matches_played_after": new.get("matches_played"),
+            }
+        )
+    return {
+        "status": "review_required" if warnings else "verified_readback",
+        "published_match_count": int(published_match_count),
+        "affected_player_count": len(rows),
+        "requires_replay_review": bool(warnings),
+        "rows": rows,
+        "warnings": warnings,
+        "recovery": {"match_log": "/admin/match-log", "replay_history": "/admin/replay-history"},
+    }
+
+
+def _csv_value(value: Any) -> Any:
+    if isinstance(value, (dict, list, tuple)):
+        value = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    text = "" if value is None else str(value)
+    if text.startswith(("=", "+", "-", "@")):
+        return f"'{text}"
+    return text
+
+
+def rows_to_safe_csv(rows: Iterable[dict[str, Any]] | None) -> str:
+    materialized = [dict(row) for row in (rows or []) if isinstance(row, dict)]
+    if not materialized:
+        return ""
+    columns: list[str] = []
+    for row in materialized:
+        for key in row:
+            if key not in columns:
+                columns.append(str(key))
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    for row in materialized:
+        writer.writerow({key: _csv_value(row.get(key)) for key in columns})
+    return output.getvalue()

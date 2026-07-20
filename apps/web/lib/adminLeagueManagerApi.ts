@@ -9,9 +9,33 @@ export type AdminLeagueManagerStatusResponse = {
   league_settings_update_endpoint?: string | null;
   league_schedule_preview_endpoint?: string | null;
   league_roster_update_endpoint?: string | null;
+  league_printout_endpoint?: string | null;
+  top_players_printable_endpoint?: string | null;
   league_live_sessions_endpoint?: string | null;
+  league_awards_endpoint?: string | null;
+  awards_write_enabled?: boolean;
   league_count?: number | null;
   active_count?: number | null;
+  warnings: string[];
+};
+
+export type AdminLeagueLiveStatusResponse = {
+  enabled: boolean;
+  status: string;
+  sessions_endpoint?: string | null;
+  roster_suggestion_endpoint?: string | null;
+  round_plan_endpoint?: string | null;
+  submit_enabled?: boolean;
+  round_submit_endpoint?: string | null;
+  round_reconcile_endpoint?: string | null;
+  round_compensate_endpoint?: string | null;
+  guest_endpoint?: string | null;
+  export_endpoint?: string | null;
+  movement_authority?: string | null;
+  publish_authority?: string | null;
+  service_role_configured?: boolean;
+  streamlit_fallback?: string | null;
+  session_count?: number | null;
   warnings: string[];
 };
 
@@ -89,6 +113,80 @@ export type AdminLeagueManagerDetailResponse = {
   roster?: AdminLeagueManagerRosterRow[];
   roster_count?: number | null;
   league_roster_count?: number | null;
+  validation?: {
+    valid: boolean;
+    errors: string[];
+    warnings: string[];
+    capabilities: AdminLeagueManagerCapabilities;
+  };
+  capabilities?: AdminLeagueManagerCapabilities;
+};
+
+export type AdminLeagueManagerCapabilities = {
+  settings_mode: "full" | "description_only" | "read_only";
+  roster_mutable: boolean;
+  lifecycle_actions: Array<"start" | "pause" | "resume" | "end" | "archive">;
+  printable: boolean;
+};
+
+export type AdminLeaguePrintLeader = {
+  player_id: number;
+  player_name: string;
+  games: number;
+  wins: number;
+  losses: number;
+  rating_delta_elo: number;
+  rating_delta_jupr: number;
+  win_pct?: number | null;
+};
+
+export type AdminLeagueTopPerformer = {
+  category_key: string;
+  category_label: string;
+  player_id: number;
+  player_name: string;
+  metric_value?: number | null;
+  metric_display: string;
+  rank: number;
+  min_games: number;
+};
+
+export type AdminLeaguePrintoutResponse = {
+  ok: boolean;
+  mode: string;
+  league_name: string;
+  available_weeks: number[];
+  selected_week?: number | null;
+  detail: AdminLeagueManagerDetailResponse;
+  weekly_rating_leaders: AdminLeaguePrintLeader[];
+  weekly_win_leaders: AdminLeaguePrintLeader[];
+  season_top_performers: AdminLeagueTopPerformer[];
+  season_top_performer_count: number;
+  rating_source: "stored_snapshots" | "stored_snapshots_with_python_replay";
+  warnings: string[];
+};
+
+export type AdminTopPlayersPrintableRow = {
+  rank: number;
+  player_id: number;
+  player_name: string;
+  rating: number;
+  rating_jupr: number;
+  wins: number;
+  losses: number;
+  games: number;
+  record: string;
+};
+
+export type AdminTopPlayersPrintableResponse = {
+  ok: boolean;
+  mode: string;
+  period: { label: string; start: string; end_exclusive: string; timezone: "UTC" };
+  minimum_games: number;
+  limit: number;
+  rankings: AdminTopPlayersPrintableRow[];
+  ranking_count: number;
+  empty_message?: string | null;
 };
 
 export type AdminLeagueManagerSchedulePreviewResponse = {
@@ -163,4 +261,8 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
 
 export async function getAdminLeagueManagerStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminLeagueManagerStatusResponse>> {
   return fetchJson<AdminLeagueManagerStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/status`);
+}
+
+export async function getAdminLeagueLiveStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminLeagueLiveStatusResponse>> {
+  return fetchJson<AdminLeagueLiveStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live/status`);
 }

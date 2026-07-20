@@ -8,6 +8,20 @@ export type PublicLadderPlayer = {
   detail?: string | null;
   until?: string | null;
   challenge_id?: string | number | null;
+  eligibility: {
+    authority: "python";
+    can_initiate: boolean;
+    can_receive: boolean;
+    hint: string;
+    eligible_opponents: Array<{
+      player_id: string | number;
+      player_name: string;
+      rank?: number | null;
+      status: string;
+      status_short?: string | null;
+      rank_gap?: number | null;
+    }>;
+  };
 };
 
 export type PublicLadderTier = {
@@ -56,10 +70,23 @@ export type PublicChallengeLadderResponse = {
     active_player_count: number;
     populated_tier_count: number;
     active_challenge_count: number;
+    eligible_pair_count: number;
   };
   tiers: PublicLadderTier[];
   challenge_sections: PublicLadderChallengeSection[];
   quick_rules: string[];
+  rulebook: Array<{
+    title: string;
+    rules: Array<{ title: string; body: string }>;
+  }>;
+  status_legend: Array<{
+    status: string;
+    short: string;
+    can_initiate: boolean;
+    can_receive: boolean;
+    meaning: string;
+  }>;
+  eligibility_authority: "python";
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };

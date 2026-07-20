@@ -7,12 +7,13 @@ type EditLinkRequestFormProps = {
   clubSlug: string;
   tournamentId: string;
   registrationSlug?: string | null;
+  initialEmail?: string;
 };
 
 const inputStyle = { width: "100%", padding: "0.5rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 
-export default function EditLinkRequestForm({ clubSlug, tournamentId, registrationSlug }: EditLinkRequestFormProps) {
-  const [email, setEmail] = useState("");
+export default function EditLinkRequestForm({ clubSlug, tournamentId, registrationSlug, initialEmail = "" }: EditLinkRequestFormProps) {
+  const [email, setEmail] = useState(initialEmail);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,17 +45,17 @@ export default function EditLinkRequestForm({ clubSlug, tournamentId, registrati
   }
 
   return (
-    <form onSubmit={onSubmit} style={{ display: "grid", gap: "0.75rem" }}>
+    <form onSubmit={onSubmit} style={{ display: "grid", gap: "0.75rem" }} data-testid="registration-edit-link-form">
       <input type="text" name="website" autoComplete="off" tabIndex={-1} style={{ position: "absolute", left: "-10000px" }} aria-hidden="true" />
       <label>
         Registration email<br />
-        <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="you@example.com" style={inputStyle} />
+        <input name="email" value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" placeholder="you@example.com" required style={inputStyle} />
       </label>
       <button type="submit" disabled={pending} style={{ padding: "0.65rem 0.9rem", borderRadius: "10px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 }}>
         {pending ? "Sending…" : "Send secure edit link"}
       </button>
-      {message ? <p style={{ color: "#166534", margin: 0 }}>{message}</p> : null}
-      {error ? <p style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
+      {message ? <p role="status" style={{ color: "#166534", margin: 0 }}>{message}</p> : null}
+      {error ? <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
     </form>
   );
 }

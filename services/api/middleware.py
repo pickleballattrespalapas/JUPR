@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+
+from scripts.staging_write_waves import wave_allows_request
 
 logger = logging.getLogger("jupr.api.request")
 
@@ -29,3 +33,33 @@ class StructuredRequestLoggingMiddleware(BaseHTTPMiddleware):
             },
         )
         return response
+
+
+class StagingWriteWaveMiddleware(BaseHTTPMiddleware):
+    """Fail closed before routing unless the runtime and write wave are explicit."""
+
+    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+        environment = os.getenv("JUPR_ENV", "").strip().lower()
+        unsafe = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        if unsafe and environment not in {
+            "local",
+            "test",
+            "development",
+            "dev",
+            "production",
+            "staging",
+        }:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Unsafe requests require an explicit runtime environment."},
+            )
+        if environment == "staging" and unsafe:
+            wave = os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip()
+            if not wave_allows_request(wave, request.method, request.url.path):
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "detail": "This unsafe request is outside the selected staging write wave."
+                    },
+                )
+        return await call_next(request)

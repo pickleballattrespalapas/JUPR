@@ -2,7 +2,7 @@ import importlib
 
 import pytest
 
-from jupr_app.config import get_registration_edit_token_secret
+from jupr_app.config import get_explicit_registration_edit_token_secret, get_registration_edit_token_secret
 from jupr_app.domain.tournament_registration_edit_tokens import build_registration_edit_token, verify_registration_edit_token
 
 SECRET = "test-secret"
@@ -60,6 +60,21 @@ def test_get_registration_edit_token_secret_can_fall_back_to_supabase_service_ro
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role-secret")
 
     assert get_registration_edit_token_secret() == "registration-edit-token:service-role-secret"
+
+
+def test_public_edit_secret_preflight_rejects_rotatable_supabase_fallback(monkeypatch):
+    monkeypatch.delenv("JUPR_REGISTRATION_EDIT_SECRET", raising=False)
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role-secret")
+
+    with pytest.raises(ValueError, match="explicit, stable"):
+        get_explicit_registration_edit_token_secret()
+
+
+def test_public_edit_secret_preflight_rejects_short_explicit_secret(monkeypatch):
+    monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", "too-short")
+
+    with pytest.raises(ValueError, match="at least 32 bytes"):
+        get_explicit_registration_edit_token_secret()
 
 
 def test_build_and_verify_token_can_use_supabase_fallback_secret(monkeypatch):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import os
 from typing import Any
 from urllib.parse import urlencode
 
@@ -10,6 +11,9 @@ from jupr_app.domain.notifications.player_profile_update_repo import (
     SEND_STATUS_ERROR,
     SEND_STATUS_SENT,
     SEND_STATUS_SKIPPED,
+    SEND_STATUS_SENDING,
+    StaleCommunicationsStateError,
+    claim_outbox_row_for_send,
     create_outbox_row,
     ensure_unsubscribe_token,
     list_active_subscriptions,
@@ -25,11 +29,12 @@ from jupr_app.domain.notifications.player_update_email_template import (
 )
 from jupr_app.config import (
     EMAIL_MODE_DRY_RUN,
+    EMAIL_MODE_LIVE,
     EMAIL_MODE_STAGING_REDIRECT,
     SMTPConfig,
     get_email_mode,
     get_env_or_default,
-    get_public_base_url,
+    get_next_web_base_url,
 )
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
@@ -75,7 +80,7 @@ def _safe_digest_for_week(
 
 
 def _normalize_public_base_url(public_base_url: str | None = None) -> str:
-    return str(public_base_url or get_public_base_url()).strip().rstrip("/")
+    return str(public_base_url or get_next_web_base_url()).strip().rstrip("/")
 
 
 def _build_public_players_url(params: dict[str, str], *, public_base_url: str | None = None) -> str:
@@ -95,12 +100,15 @@ def _merge_links_for_send(
 ) -> dict[str, Any]:
     links = dict((digest or {}).get("links") or {})
     links["player_profile"] = _build_public_players_url({"pid": str(int(player_id))}, public_base_url=public_base_url)
-    unsubscribe_params = {"page": "email_preferences"}
-    if str(unsubscribe_token or "").strip():
-        unsubscribe_params["token"] = str(unsubscribe_token).strip()
-    else:
-        unsubscribe_params["sid"] = str(subscription_id)
-    links["unsubscribe"] = f"{_normalize_public_base_url(public_base_url)}/?{urlencode(unsubscribe_params)}"
+    token = str(unsubscribe_token or "").strip()
+    if not token:
+        raise ValueError(
+            "A tokenized Next email-preferences link is required before a player update email can be sent."
+        )
+    links["unsubscribe"] = (
+        f"{_normalize_public_base_url(public_base_url)}/email-preferences?"
+        f"{urlencode({'token': token})}"
+    )
     merged = dict(digest or {})
     merged["links"] = links
     return merged
@@ -213,6 +221,8 @@ def _queue_outbox_for_subscription(
     subscription: dict[str, Any],
     start_date: date,
     end_date: date,
+    operation_key: str | None = None,
+    digest_snapshot: dict[str, Any] | None = None,
 ) -> str:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
@@ -225,6 +235,8 @@ def _queue_outbox_for_subscription(
         week_start=start_date,
         week_end=end_date,
         email=str(subscription.get("email") or ""),
+        operation_key=operation_key,
+        digest_snapshot=digest_snapshot,
     )
     return "queued"
 
@@ -257,6 +269,7 @@ def generate_and_queue_digests_for_active_subscriptions(
     start_date: date,
     end_date: date,
     only_players_with_matches: bool = False,
+    operation_key: str | None = None,
 ) -> dict[str, Any]:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
@@ -282,9 +295,17 @@ def generate_and_queue_digests_for_active_subscriptions(
 
     for sub in eligible_rows:
         try:
-            _save_digest_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
+            digest = _save_digest_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
             saved += 1
-            _queue_outbox_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
+            queue_kwargs: dict[str, Any] = {
+                "subscription": sub,
+                "start_date": start_date,
+                "end_date": end_date,
+                "digest_snapshot": digest,
+            }
+            if operation_key is not None:
+                queue_kwargs["operation_key"] = operation_key
+            _queue_outbox_for_subscription(ctx, **queue_kwargs)
             queued += 1
         except Exception:
             failed += 1
@@ -306,6 +327,7 @@ def generate_and_queue_digest_for_player(
     player_id: int,
     start_date: date,
     end_date: date,
+    operation_key: str | None = None,
 ) -> dict[str, Any]:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
@@ -315,7 +337,15 @@ def generate_and_queue_digest_for_player(
         raise ValueError("No active verified subscriber exists for that player.")
 
     digest = _save_digest_for_subscription(ctx, subscription=subscription, start_date=start_date, end_date=end_date)
-    _queue_outbox_for_subscription(ctx, subscription=subscription, start_date=start_date, end_date=end_date)
+    queue_kwargs: dict[str, Any] = {
+        "subscription": subscription,
+        "start_date": start_date,
+        "end_date": end_date,
+        "digest_snapshot": digest,
+    }
+    if operation_key is not None:
+        queue_kwargs["operation_key"] = operation_key
+    _queue_outbox_for_subscription(ctx, **queue_kwargs)
 
     return {
         "player_id": int(player_id),
@@ -335,8 +365,14 @@ def queue_digest_outbox_rows_for_range(ctx, *, start_date: date, end_date: date)
 
     for sub in active_rows:
         try:
-            _save_digest_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
-            _queue_outbox_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
+            digest = _save_digest_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
+            _queue_outbox_for_subscription(
+                ctx,
+                subscription=sub,
+                start_date=start_date,
+                end_date=end_date,
+                digest_snapshot=digest,
+            )
             queued += 1
         except Exception:
             failed += 1
@@ -379,6 +415,7 @@ def queue_saved_digest_rows(ctx, *, digest_rows: list[dict[str, Any]]) -> dict[s
                 week_start=_coerce_date(digest_row.get("week_start")),
                 week_end=_coerce_date(digest_row.get("week_end")),
                 email=str(subscription.get("email") or ""),
+                digest_snapshot=(digest_row.get("final_json") or digest_row.get("generated_json") or {}),
             )
             queued += 1
         except Exception:
@@ -397,20 +434,91 @@ def send_pending_player_update_emails(
     limit: int = 100,
     public_base_url: str | None = None,
     smtp_config: SMTPConfig | None = None,
-) -> dict[str, int]:
+    start_date: date | None = None,
+    end_date: date | None = None,
+    outbox_items: list[dict[str, Any]] | None = None,
+    actor_email: str = "",
+    enforce_next_live_gate: bool = False,
+) -> dict[str, int | str]:
+    """Claim and deliver pending outbox rows through one shared CAS path.
+
+    The worker, Streamlit fallback, and Next/FastAPI callers all use this
+    function so two runtimes cannot send the same pending row concurrently.
+    A row is moved to ``sending`` before SMTP; post-SMTP uncertainty deliberately
+    remains in that state for operator reconciliation.
+    """
+
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
-    pending_rows = list_outbox_rows(supabase, club_id, status="pending", limit=max(1, int(limit)))
+    if (start_date is None) != (end_date is None):
+        raise ValueError("start_date and end_date must be provided together")
+    pending_rows = list_outbox_rows(
+        supabase,
+        club_id,
+        status="pending",
+        limit=max(1, int(limit)),
+        week_start=start_date,
+        week_end=end_date,
+    )
+    if start_date is not None and end_date is not None:
+        start_iso = start_date.isoformat()
+        end_iso = end_date.isoformat()
+        pending_rows = [
+            row
+            for row in pending_rows
+            if str(row.get("week_start") or "") == start_iso and str(row.get("week_end") or "") == end_iso
+        ]
+
+    expected_versions: dict[str, int] = {}
+    if outbox_items is not None:
+        for item in outbox_items:
+            outbox_id = str((item or {}).get("id") or "").strip()
+            if not outbox_id:
+                raise ValueError("Every selected outbox row requires an id.")
+            try:
+                expected_version = int((item or {}).get("expected_row_version"))
+            except Exception as exc:
+                raise ValueError("Every selected outbox row requires expected_row_version.") from exc
+            if expected_version < 1:
+                raise ValueError("expected_row_version must be positive")
+            expected_versions[outbox_id] = expected_version
+        pending_rows = [row for row in pending_rows if str(row.get("id") or "") in expected_versions]
 
     email_mode = get_email_mode()
     sent = 0
     skipped = 0
     errors = 0
+    current_ids = {str(row.get("id") or "") for row in pending_rows}
+    stale = len(set(expected_versions) - current_ids)
+    uncertain = 0
+
+    if (
+        enforce_next_live_gate
+        and email_mode == EMAIL_MODE_LIVE
+        and str(os.getenv("JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL") or "").strip().lower()
+        not in {"1", "true", "yes", "y", "on"}
+    ):
+        raise PermissionError(
+            "Live Player Updates email is disabled for the Next workflow. Use dry_run/staging_redirect or enable JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL."
+        )
 
     for outbox in pending_rows:
         outbox_id = str(outbox.get("id") or "")
-        subscription = _safe_subscription(supabase, str(outbox.get("subscription_id") or ""))
+        claimed_version: int | None = None
+        external_delivery_attempted = False
         try:
+            expected_version = expected_versions.get(outbox_id, int(outbox.get("row_version") or 1))
+            claimed = claim_outbox_row_for_send(
+                supabase,
+                club_id=club_id,
+                outbox_id=outbox_id,
+                expected_row_version=expected_version,
+                actor_email=actor_email,
+                delivery_mode=email_mode,
+            )
+            claimed_version = int(claimed.get("row_version") or expected_version)
+            delivery_attempt_id = str(claimed.get("delivery_attempt_id") or "").strip() or None
+            subscription = _safe_subscription(supabase, str(outbox.get("subscription_id") or ""))
             if not subscription:
                 raise ValueError("Subscription not found")
             if str(subscription.get("request_status") or "") != REQUEST_STATUS_ACTIVE:
@@ -419,6 +527,10 @@ def send_pending_player_update_emails(
                     outbox_id,
                     send_status=SEND_STATUS_SKIPPED,
                     error_text="Subscription is no longer active.",
+                    club_id=club_id,
+                    expected_row_version=claimed_version,
+                    expected_status=SEND_STATUS_SENDING,
+                    delivery_mode=email_mode,
                 )
                 skipped += 1
                 continue
@@ -427,8 +539,11 @@ def send_pending_player_update_emails(
             week_end = date.fromisoformat(str(outbox.get("week_end")))
             player_id = int(outbox.get("player_id"))
 
-            digest_row = _safe_digest_for_week(supabase, club_id, player_id, week_start, week_end)
-            digest = (digest_row or {}).get("final_json") or (digest_row or {}).get("generated_json") or {}
+            digest = dict(outbox.get("digest_snapshot_json") or {})
+            digest_row = None
+            if not digest:
+                digest_row = _safe_digest_for_week(supabase, club_id, player_id, week_start, week_end)
+                digest = (digest_row or {}).get("final_json") or (digest_row or {}).get("generated_json") or {}
             if not digest:
                 digest = compute_player_weekly_digest(ctx, player_id=player_id, start_date=week_start, end_date=week_end)
                 save_digest(
@@ -458,6 +573,10 @@ def send_pending_player_update_emails(
                     outbox_id,
                     send_status=SEND_STATUS_SKIPPED,
                     error_text="Skipped because send_only_if_changed is enabled and no changes were detected.",
+                    club_id=club_id,
+                    expected_row_version=claimed_version,
+                    expected_status=SEND_STATUS_SENDING,
+                    delivery_mode=email_mode,
                 )
                 skipped += 1
                 continue
@@ -480,15 +599,17 @@ def send_pending_player_update_emails(
             if email_mode == EMAIL_MODE_DRY_RUN:
                 provider_message_id = "dry_run"
             else:
+                external_delivery_attempted = True
                 provider_message_id = send_email_with_inline_chart(
                     to_email=effective_to_email,
-                subject=subject,
-                html_body=html_body,
-                text_body=text_body,
-                chart_png_bytes=chart_png,
-                chart_cid=chart_cid if chart_png else None,
-                unsubscribe_url=str(((digest.get("links") or {}).get("unsubscribe")) or "").strip() or None,
-                smtp_config=smtp_config,
+                    subject=subject,
+                    html_body=html_body,
+                    text_body=text_body,
+                    chart_png_bytes=chart_png,
+                    chart_cid=chart_cid if chart_png else None,
+                    unsubscribe_url=str(((digest.get("links") or {}).get("unsubscribe")) or "").strip() or None,
+                    smtp_config=smtp_config,
+                    message_id=delivery_attempt_id,
                 )
 
             update_outbox_status(
@@ -497,21 +618,46 @@ def send_pending_player_update_emails(
                 send_status=SEND_STATUS_SENT,
                 provider_message_id=provider_message_id,
                 error_text=None,
-            )
-            (
-                supabase.table("player_profile_update_subscriptions")
-                .update({"last_digest_week_start": week_start.isoformat()})
-                .eq("id", str(subscription.get("id") or ""))
-                .execute()
+                club_id=club_id,
+                expected_row_version=claimed_version,
+                expected_status=SEND_STATUS_SENDING,
+                delivery_mode=email_mode,
             )
             sent += 1
+            try:
+                (
+                    supabase.table("player_profile_update_subscriptions")
+                    .update({"last_digest_week_start": week_start.isoformat()})
+                    .eq("id", str(subscription.get("id") or ""))
+                    .execute()
+                )
+            except Exception:
+                # The delivery row is authoritative. Do not turn a sent email
+                # into a retry just because this convenience watermark failed.
+                pass
+        except StaleCommunicationsStateError:
+            if external_delivery_attempted:
+                uncertain += 1
+            else:
+                stale += 1
         except Exception as exc:
-            update_outbox_status(
-                supabase,
-                outbox_id,
-                send_status=SEND_STATUS_ERROR,
-                error_text=str(exc),
-            )
+            if external_delivery_attempted:
+                uncertain += 1
+            else:
+                try:
+                    if claimed_version is not None:
+                        update_outbox_status(
+                            supabase,
+                            outbox_id,
+                            send_status=SEND_STATUS_ERROR,
+                            error_text=str(exc),
+                            club_id=club_id,
+                            expected_row_version=claimed_version,
+                            expected_status=SEND_STATUS_SENDING,
+                            delivery_mode=email_mode,
+                        )
+                except Exception:
+                    stale += 1
             errors += 1
 
     return {
@@ -519,6 +665,8 @@ def send_pending_player_update_emails(
         "sent": sent,
         "skipped": skipped,
         "errors": errors,
+        "stale": stale,
+        "uncertain": uncertain,
         "email_mode": email_mode,
     }
 
@@ -574,14 +722,30 @@ def send_test_player_update_email(
     text_body = build_player_update_email_text(digest)
     unsubscribe_url = str(((digest.get("links") or {}).get("unsubscribe")) or "").strip() or None
 
-    provider_message_id = send_email_with_inline_chart(
-        to_email=admin_email,
-        subject=subject,
-        html_body=html_body,
-        text_body=text_body,
-        chart_png_bytes=chart_png,
-        chart_cid=chart_cid if chart_png else None,
-        unsubscribe_url=unsubscribe_url,
-        smtp_config=smtp_config,
-    )
-    return {"to_email": admin_email, "provider_message_id": provider_message_id}
+    email_mode = get_email_mode()
+    effective_to_email = admin_email
+    if email_mode == EMAIL_MODE_STAGING_REDIRECT:
+        effective_to_email = get_env_or_default("JUPR_STAGING_EMAIL_REDIRECT_TO").strip()
+        if not effective_to_email:
+            raise ValueError("JUPR_STAGING_EMAIL_REDIRECT_TO is required when JUPR_EMAIL_MODE=staging_redirect.")
+        subject = f"[STAGING→{admin_email}] {subject}"
+
+    if email_mode == EMAIL_MODE_DRY_RUN:
+        provider_message_id = "dry_run"
+    else:
+        provider_message_id = send_email_with_inline_chart(
+            to_email=effective_to_email,
+            subject=subject,
+            html_body=html_body,
+            text_body=text_body,
+            chart_png_bytes=chart_png,
+            chart_cid=chart_cid if chart_png else None,
+            unsubscribe_url=unsubscribe_url,
+            smtp_config=smtp_config,
+        )
+    return {
+        "to_email": effective_to_email,
+        "original_to_email": admin_email,
+        "provider_message_id": provider_message_id,
+        "email_mode": email_mode,
+    }

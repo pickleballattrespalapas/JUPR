@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
 
+from jupr_app.domain.tournament_registration_repo import PUBLIC_REGISTRATION_EDIT_RPC
 from jupr_app.services.public_tournament_registration_service import (
+    DuplicateTournamentRegistrationError,
     build_public_tournament_registration_confirmation,
     build_public_tournament_registration_page,
+    resolve_public_tournament_registration_profile,
     submit_public_tournament_registration,
 )
 
@@ -113,9 +117,106 @@ class FakeQuery:
 class FakeSupabase:
     def __init__(self, storage):
         self.storage = storage
+        self.rpc_calls: list[tuple[str, dict]] = []
 
     def table(self, name):
         return FakeQuery(self.storage, name)
+
+    def rpc(self, name, params):
+        self.rpc_calls.append((str(name), deepcopy(dict(params or {}))))
+        return FakeRegistrationEditRpc(self.storage, str(name), dict(params or {}))
+
+
+class FakeRegistrationEditRpc:
+    def __init__(self, storage, name, params):
+        self.storage = storage
+        self.name = name
+        self.params = params
+
+    def execute(self):
+        if self.name != PUBLIC_REGISTRATION_EDIT_RPC:
+            raise AssertionError(f"Unexpected fake RPC: {self.name}")
+        tournament_id = str(self.params.get("p_tournament_id") or "")
+        registration_id = str(self.params.get("p_registration_id") or "")
+        registration = next(
+            (
+                row
+                for row in self.storage.get("tournament_registrations", [])
+                if str(row.get("tournament_id")) == tournament_id and str(row.get("id")) == registration_id
+            ),
+            None,
+        )
+        if not registration:
+            return SimpleNamespace(data={"ok": False, "code": "REGISTRATION_NOT_FOUND"})
+        if str(registration.get("updated_at") or "") != str(self.params.get("p_expected_updated_at") or ""):
+            return SimpleNamespace(data={"ok": False, "code": "REGISTRATION_EDIT_CONFLICT"})
+
+        current_selections = [
+            row
+            for row in self.storage.get("tournament_registration_selections", [])
+            if str(row.get("tournament_id")) == tournament_id and str(row.get("registration_id")) == registration_id
+        ]
+        expected_versions = {
+            str(row.get("id") or ""): str(row.get("updated_at") or "")
+            for row in self.params.get("p_expected_selection_versions") or []
+        }
+        current_versions = {
+            str(row.get("id") or ""): str(row.get("updated_at") or "")
+            for row in current_selections
+        }
+        if expected_versions != current_versions:
+            return SimpleNamespace(data={"ok": False, "code": "REGISTRATION_EDIT_CONFLICT"})
+
+        imported_pairs = {
+            (str(row.get("registration_day_id") or ""), str(row.get("event_option_id") or ""))
+            for row in self.storage.get("tournament_teams", [])
+            if str(row.get("tournament_id")) == tournament_id and str(row.get("source") or "").upper() == "REGISTRATION"
+        }
+        if any(
+            (str(row.get("registration_day_id") or ""), str(row.get("event_option_id") or "")) in imported_pairs
+            for row in current_selections
+        ):
+            return SimpleNamespace(data={"ok": False, "code": "REGISTRATION_IMPORTED_TO_DRAW"})
+
+        if self.storage.get("_fail_public_registration_edit_rpc"):
+            raise RuntimeError("simulated atomic RPC failure")
+
+        next_version = "2099-01-01T00:00:00.000001Z"
+        registration.update(deepcopy(self.params.get("p_registration_patch") or {}))
+        registration["updated_at"] = next_version
+        retained = [
+            row
+            for row in self.storage.get("tournament_registration_selections", [])
+            if not (
+                str(row.get("tournament_id")) == tournament_id
+                and str(row.get("registration_id")) == registration_id
+            )
+        ]
+        replacements = []
+        current_by_id = {str(row.get("id") or ""): row for row in current_selections}
+        for index, desired in enumerate(self.params.get("p_selections") or []):
+            selection_id = str(desired.get("id") or "")
+            row = deepcopy(current_by_id.get(selection_id) or {})
+            row.update(deepcopy(desired))
+            row.update(
+                {
+                    "id": selection_id,
+                    "tournament_id": tournament_id,
+                    "registration_id": registration_id,
+                    "sort_order": index,
+                    "updated_at": next_version,
+                }
+            )
+            replacements.append(row)
+        self.storage["tournament_registration_selections"] = [*retained, *replacements]
+        return SimpleNamespace(
+            data={
+                "ok": True,
+                "registration_id": registration_id,
+                "updated_at": next_version,
+                "selection_count": len(replacements),
+            }
+        )
 
 
 def fake_storage():
@@ -141,6 +242,7 @@ def fake_storage():
                 "partner_board_enabled": True,
                 "rules_markdown": "Be kind.",
                 "refund_policy_markdown": "No refunds after draw publication.",
+                "sponsor_markdown": "Presented by Rally House.",
                 "builder_draft_json": {"private": True},
                 "builder_draft_updated_at": "2026-01-01T00:00:00Z",
             }
@@ -198,9 +300,109 @@ def test_public_tournament_registration_page_is_public_safe() -> None:
     assert "admin_notes" not in payload["tournament"]
     assert "internal_seed_notes" not in payload["events"][0]
     assert "builder_draft_json" not in payload["settings"]
+    assert payload["settings"]["sponsor_markdown"] == "Presented by Rally House."
 
 
-def test_public_tournament_registration_submit_and_confirmation() -> None:
+def test_public_profile_resolution_returns_safe_suggestion_without_linking_policy() -> None:
+    storage = fake_storage()
+    storage["players"] = [
+        {
+            "id": 10,
+            "club_id": "club-1",
+            "name": "Avery Ace",
+            "email": "avery@example.com",
+            "phone": "private",
+            "rating": 1600,
+            "dupr_id": "DUPR-10",
+            "active": True,
+            "inactive_at": None,
+        }
+    ]
+
+    result = resolve_public_tournament_registration_profile(
+        FakeSupabase(storage),
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Avery",
+            "last_name": "Ace",
+            "email": "avery@example.com",
+            "age": 34,
+            "gender": "Women",
+        },
+    )
+
+    assert result["status"] == "ready"
+    assert result["profile_match_kind"] == "email_exact"
+    assert result["profile_candidates"] == [
+        {
+            "id": "10",
+            "display_name": "Avery Ace",
+            "dupr_id": "DUPR-10",
+            "doubles_skill": 4.0,
+            "singles_skill": 4.0,
+        }
+    ]
+    assert result["profile_policy"] == {
+        "linkage": "staff_review_required",
+        "public_submission_links_player": False,
+    }
+    assert "phone" not in result["profile_candidates"][0]
+    assert "email" not in result["profile_candidates"][0]
+
+
+def test_public_profile_resolution_hands_existing_email_to_recovery_without_id() -> None:
+    storage = fake_storage()
+    storage["tournament_registrations"] = [
+        {"id": "private-registration-id", "tournament_id": "t1", "email": "avery@example.com"}
+    ]
+
+    result = resolve_public_tournament_registration_profile(
+        FakeSupabase(storage),
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Avery",
+            "last_name": "Ace",
+            "email": "avery@example.com",
+            "age": 34,
+            "gender": "Women",
+        },
+    )
+
+    assert result["status"] == "existing_registration"
+    assert result["can_start_new"] is False
+    assert result["masked_email"] == "a***y@example.com"
+    assert "private-registration-id" not in str(result)
+
+
+def test_public_profile_resolution_reports_closed_state_before_profile_discovery() -> None:
+    storage = fake_storage()
+    storage["tournament_registration_settings"][0]["registration_status"] = "closed"
+
+    result = resolve_public_tournament_registration_profile(
+        FakeSupabase(storage),
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Avery",
+            "last_name": "Ace",
+            "email": "avery@example.com",
+            "age": 34,
+            "gender": "Women",
+        },
+    )
+
+    assert result["status"] == "closed"
+    assert result["registration_open"] is False
+    assert result["profile_candidates"] == []
+
+
+def test_public_tournament_registration_submit_and_confirmation(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "unit-test-confirmation-secret")
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://staging.example.test")
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
     storage = fake_storage()
     supabase = FakeSupabase(storage)
 
@@ -222,17 +424,117 @@ def test_public_tournament_registration_submit_and_confirmation() -> None:
     assert result["selection_count"] == 1
     assert len(storage["tournament_registrations"]) == 1
     assert len(storage["tournament_registration_selections"]) == 1
+    assert result["confirmation_token"]
+    assert result["email_delivery"]["status"] == "dry_run"
 
     confirmation = build_public_tournament_registration_confirmation(
         supabase,
         club_id="club-1",
-        registration_id=result["registration_id"],
-        registration_slug="tres-open",
+        confirmation_token=result["confirmation_token"],
     )
     assert confirmation is not None
     assert confirmation["registration"]["display_name"] == "Alex Rivera"
     assert confirmation["selections"][0]["event_label"] == "Open"
+    assert confirmation["selections"][0]["price_usd"] == 50
     assert "phone" not in confirmation["registration"]
+    assert "email" not in confirmation["registration"]
+    assert "id" not in confirmation["registration"]
+    assert "selection_id" not in confirmation["selections"][0]
+
+
+def test_registration_stays_saved_when_confirmation_email_fails(monkeypatch) -> None:
+    storage = fake_storage()
+    supabase = FakeSupabase(storage)
+    monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "unit-test-confirmation-secret")
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://staging.example.test")
+    monkeypatch.setattr(
+        "jupr_app.services.public_tournament_registration_service.send_tournament_registration_confirmation_email",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("simulated delivery failure")),
+    )
+
+    result = submit_public_tournament_registration(
+        supabase,
+        club_id="club-1",
+        club_slug="tres-palapas",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Saved",
+            "last_name": "Player",
+            "email": "saved@example.com",
+            "doubles_skill": 4.0,
+            "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["confirmation_token"]
+    assert result["email_delivery"]["status"] == "failed"
+    assert any(row["email"] == "saved@example.com" for row in storage["tournament_registrations"])
+    assert len(storage["tournament_registration_selections"]) == 1
+
+
+def test_registration_stays_saved_when_confirmation_reload_fails(monkeypatch) -> None:
+    storage = fake_storage()
+    supabase = FakeSupabase(storage)
+    monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "unit-test-confirmation-secret")
+    monkeypatch.setattr(
+        "jupr_app.services.public_tournament_registration_service.get_registration_confirmation_bundle",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("simulated reload failure")),
+    )
+
+    result = submit_public_tournament_registration(
+        supabase,
+        club_id="club-1",
+        club_slug="tres-palapas",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Saved",
+            "last_name": "Before Reload",
+            "email": "saved-before-reload@example.com",
+            "doubles_skill": 4.0,
+            "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+
+    assert result["confirmation_available"] is False
+    assert result["email_delivery"]["status"] == "failed"
+    assert any(row["email"] == "saved-before-reload@example.com" for row in storage["tournament_registrations"])
+    assert len(storage["tournament_registration_selections"]) == 1
+
+
+def test_confirmation_link_requires_explicit_next_web_origin(monkeypatch) -> None:
+    storage = fake_storage()
+    supabase = FakeSupabase(storage)
+    monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "unit-test-confirmation-secret")
+    monkeypatch.setenv("JUPR_PUBLIC_BASE_URL", "https://streamlit.example.test")
+    for name in ("JUPR_WEB_BASE_URL", "STAGING_WEB_BASE_URL", "NEXT_PUBLIC_JUPR_WEB_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        "jupr_app.services.public_tournament_registration_service.send_tournament_registration_confirmation_email",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("email should not be attempted")),
+    )
+
+    result = submit_public_tournament_registration(
+        supabase,
+        club_id="club-1",
+        club_slug="tres-palapas",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Saved",
+            "last_name": "Without Next Origin",
+            "email": "saved-no-origin@example.com",
+            "doubles_skill": 4.0,
+            "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+
+    assert result["confirmation_token"]
+    assert result["email_delivery"]["status"] == "failed"
+    assert "link is not configured" in result["email_delivery"]["message"]
+    assert any(row["email"] == "saved-no-origin@example.com" for row in storage["tournament_registrations"])
 
 
 def test_public_tournament_registration_blocks_honeypot() -> None:
@@ -246,6 +548,186 @@ def test_public_tournament_registration_blocks_honeypot() -> None:
         assert "Unable to submit" in str(exc)
     else:
         raise AssertionError("Expected honeypot submission to fail")
+
+
+@pytest.mark.parametrize(
+    ("patch", "message"),
+    [
+        ({"age": None, "gender": "Women"}, "Age is required"),
+        ({"age": 34, "gender": ""}, "Gender is required"),
+    ],
+)
+def test_fastapi_public_contract_requires_age_and_gender(patch, message) -> None:
+    payload = {
+        "registration_slug": "tres-open",
+        "first_name": "Alex",
+        "last_name": "Rivera",
+        "email": "alex@example.com",
+        "age": 34,
+        "gender": "Women",
+        "terms_accepted": True,
+        "_require_demographics": True,
+        "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        **patch,
+    }
+
+    with pytest.raises(ValueError, match=message):
+        submit_public_tournament_registration(FakeSupabase(fake_storage()), club_id="club-1", payload=payload)
+
+
+def test_duplicate_email_refuses_second_write_and_requires_recovery() -> None:
+    storage = fake_storage()
+    supabase = FakeSupabase(storage)
+    payload = {
+        "registration_slug": "tres-open",
+        "first_name": "Alex",
+        "last_name": "Rivera",
+        "email": "alex@example.com",
+        "age": 34,
+        "gender": "Men",
+        "terms_accepted": True,
+        "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+    }
+    submit_public_tournament_registration(supabase, club_id="club-1", payload=payload)
+
+    with pytest.raises(DuplicateTournamentRegistrationError, match="secure edit-link"):
+        submit_public_tournament_registration(supabase, club_id="club-1", payload=payload)
+
+    assert len(storage["tournament_registrations"]) == 1
+    assert len(storage["tournament_registration_selections"]) == 1
+
+
+def test_partner_required_and_partner_board_consent_integrity() -> None:
+    storage = fake_storage()
+    storage["tournament_event_options"][0].update(
+        {"event_type": "GENDER_DOUBLES", "partner_required": True, "division_name": "Doubles"}
+    )
+    base = {
+        "registration_slug": "tres-open",
+        "first_name": "Alex",
+        "last_name": "Rivera",
+        "email": "alex@example.com",
+        "age": 34,
+        "gender": "Women",
+        "terms_accepted": True,
+    }
+
+    with pytest.raises(ValueError, match="choose whether you have or need a partner"):
+        submit_public_tournament_registration(
+            FakeSupabase(storage),
+            club_id="club-1",
+            payload={**base, "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}]},
+        )
+
+    with pytest.raises(ValueError, match="partner age is required"):
+        submit_public_tournament_registration(
+            FakeSupabase(storage),
+            club_id="club-1",
+            payload={
+                **base,
+                "selections": [
+                    {
+                        "event_option_id": "event1",
+                        "partner_mode": "HAS_PARTNER",
+                        "partner_name": "Casey Court",
+                        "partner_email": "casey@example.com",
+                        "partner_gender": "Men",
+                    }
+                ],
+            },
+        )
+
+    with pytest.raises(ValueError, match="Partner-board contact consent"):
+        submit_public_tournament_registration(
+            FakeSupabase(storage),
+            club_id="club-1",
+            payload={
+                **base,
+                "selections": [
+                    {
+                        "event_option_id": "event1",
+                        "partner_mode": "NEEDS_PARTNER",
+                        "show_on_partner_board": True,
+                    }
+                ],
+            },
+        )
+
+
+def test_registered_partner_without_demographics_uses_submitted_review_fields() -> None:
+    storage = fake_storage()
+    storage["tournament_event_options"][0].update(
+        {"event_type": "GENDER_DOUBLES", "partner_required": True, "division_name": "Doubles"}
+    )
+    storage["tournament_registrations"] = [
+        {
+            "id": "partner-registration",
+            "tournament_id": "t1",
+            "email": "casey@example.com",
+            "display_name": "Casey Court",
+        }
+    ]
+
+    result = submit_public_tournament_registration(
+        FakeSupabase(storage),
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Alex",
+            "last_name": "Rivera",
+            "email": "alex@example.com",
+            "age": 34,
+            "gender": "Women",
+            "terms_accepted": True,
+            "selections": [
+                {
+                    "event_option_id": "event1",
+                    "partner_mode": "HAS_PARTNER",
+                    "partner_name": "Casey Court",
+                    "partner_email": "casey@example.com",
+                    "partner_age": 35,
+                    "partner_gender": "Men",
+                    "partner_skill": 3.5,
+                }
+            ],
+        },
+    )
+
+    assert result["ok"] is True
+    saved = storage["tournament_registration_selections"][-1]
+    assert saved["partner_age"] == 35
+    assert saved["partner_skill"] == 3.5
+
+
+def test_singles_rejects_partner_fields() -> None:
+    storage = fake_storage()
+    storage["tournament_event_options"][0].update(
+        {"event_type": "SINGLES", "partner_required": False, "division_name": "Singles"}
+    )
+
+    with pytest.raises(ValueError, match="does not accept partner information"):
+        submit_public_tournament_registration(
+            FakeSupabase(storage),
+            club_id="club-1",
+            payload={
+                "registration_slug": "tres-open",
+                "first_name": "Alex",
+                "email": "alex@example.com",
+                "age": 34,
+                "gender": "Women",
+                "terms_accepted": True,
+                "selections": [
+                    {
+                        "event_option_id": "event1",
+                        "partner_mode": "HAS_PARTNER",
+                        "partner_name": "Casey",
+                        "partner_email": "casey@example.com",
+                        "partner_age": 35,
+                        "partner_gender": "Men",
+                    }
+                ],
+            },
+        )
 
 
 def test_public_registration_hides_players_and_initial_player_link_is_not_trusted() -> None:
@@ -411,6 +893,7 @@ def test_public_registration_enforces_partner_identity_gender_and_rating() -> No
                         "partner_mode": "HAS_PARTNER",
                         "partner_name": "Alex",
                         "partner_email": "alex@example.com",
+                        "partner_age": 35,
                         "partner_gender": "Men",
                     }
                 ],
@@ -429,6 +912,7 @@ def test_public_registration_enforces_partner_identity_gender_and_rating() -> No
                         "partner_mode": "HAS_PARTNER",
                         "partner_name": "Pat",
                         "partner_email": "pat@example.com",
+                        "partner_age": 35,
                         "partner_gender": "Women",
                         "partner_skill": 3.2,
                     }
@@ -448,6 +932,7 @@ def test_public_registration_enforces_partner_identity_gender_and_rating() -> No
                         "partner_mode": "HAS_PARTNER",
                         "partner_name": "Pat",
                         "partner_email": "pat@example.com",
+                        "partner_age": 35,
                         "partner_gender": "Men",
                         "partner_skill": 4.0,
                     }

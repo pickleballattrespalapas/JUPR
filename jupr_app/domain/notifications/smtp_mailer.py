@@ -82,6 +82,7 @@ def send_email_with_inline_chart(
     chart_cid: str | None = None,
     unsubscribe_url: str | None = None,
     smtp_config: SMTPConfig | None = None,
+    message_id: str | None = None,
 ) -> str:
     cfg = _smtp_config_dict(smtp_config)
 
@@ -89,6 +90,10 @@ def send_email_with_inline_chart(
     msg["Subject"] = str(subject)
     msg["From"] = f"{cfg['from_name']} <{cfg['from_email']}>"
     msg["To"] = str(to_email).strip()
+    clean_message_id = str(message_id or "").strip().strip("<>")
+    rfc_message_id = f"<{clean_message_id}@notifications.juprleagues.com>" if clean_message_id else None
+    if rfc_message_id:
+        msg["Message-ID"] = rfc_message_id
     if cfg.get("reply_to"):
         msg["Reply-To"] = str(cfg["reply_to"]).strip()
 
@@ -117,4 +122,4 @@ def send_email_with_inline_chart(
         server.login(cfg["username"], cfg["password"])
         server.sendmail(cfg["from_email"], [msg["To"]], msg.as_string())
 
-    return "smtp"
+    return rfc_message_id or "smtp"

@@ -8,6 +8,7 @@ import uuid
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.tournaments import SUPPORTED_TEAM_COUNTS, build_round_robin_games
 from jupr_app.services.admin_tournament_draw_service import _draw_payload
+from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
 from jupr_app.services.admin_tournament_service import TOURNAMENT_SELECT, _clean_text, _first_row, is_admin_tournament_admin_enabled
 
 CONFIRM_GENERATE_GAMES = "GENERATE GAMES"
@@ -47,8 +48,8 @@ def _fetch_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> dict[str,
             .limit(1)
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not verify the tournament draw; game generation was refused.") from exc
     return rows[0] if rows else None
 
 
@@ -61,8 +62,8 @@ def _teams_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[
             .eq("draw_id", str(draw_id))
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not load draw teams; game generation was refused.") from exc
     return sorted(rows, key=lambda row: int(_safe_int(row.get("team_number")) or 0))
 
 
@@ -75,8 +76,8 @@ def _games_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[
             .eq("draw_id", str(draw_id))
             .execute()
         )
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("Could not verify whether this draw already has games; game generation was refused.") from exc
 
 
 def _game_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -101,6 +102,125 @@ def _game_payload(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _require_reviewed_draw_version(
+    draw: dict[str, Any],
+    *,
+    expected_draw_updated_at: str | None,
+    atomic: bool,
+) -> str:
+    reviewed = str(expected_draw_updated_at or "").strip()
+    if atomic and not reviewed:
+        raise StaleTournamentAdminStateError(
+            "A reviewed draw version is required for staging game generation. Reload the Ops snapshot."
+        )
+    if reviewed and str(draw.get("updated_at") or "") != reviewed:
+        raise StaleTournamentAdminStateError(
+            "This tournament draw changed after it was reviewed. Reload the Ops snapshot before generating games."
+        )
+    return reviewed
+
+
+def _canonical_timestamp(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds")
+    except Exception:
+        return text
+
+
+def _require_reviewed_row_versions(
+    current_rows: list[dict[str, Any]],
+    expected_rows: list[dict[str, Any]] | None,
+    *,
+    label: str,
+    atomic: bool,
+) -> list[dict[str, str]]:
+    reviewed = [
+        {"id": str(row.get("id") or "").strip(), "updated_at": str(row.get("updated_at") or "").strip()}
+        for row in (expected_rows or [])
+    ]
+    if atomic and not reviewed:
+        raise StaleTournamentAdminStateError(
+            f"A reviewed {label} snapshot is required for this staging mutation. Reload the Ops snapshot."
+        )
+    expected_map = {
+        row["id"]: _canonical_timestamp(row["updated_at"])
+        for row in reviewed
+        if row["id"] and row["updated_at"]
+    }
+    if len(expected_map) != len(reviewed):
+        raise StaleTournamentAdminStateError(
+            f"The reviewed {label} snapshot is incomplete or duplicated. Reload the Ops snapshot."
+        )
+    current_map = {
+        str(row.get("id") or "").strip(): _canonical_timestamp(row.get("updated_at"))
+        for row in current_rows
+        if str(row.get("id") or "").strip() and str(row.get("updated_at") or "").strip()
+    }
+    if reviewed and (len(current_map) != len(current_rows) or current_map != expected_map):
+        raise StaleTournamentAdminStateError(
+            f"The tournament {label} changed after review. Reload the Ops snapshot before continuing."
+        )
+    return sorted(reviewed, key=lambda row: row["id"])
+
+
+def _insert_tournament_draw_games_atomic(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    draw_id: str,
+    expected_draw_updated_at: str,
+    expected_team_versions: list[dict[str, str]],
+    expected_source_game_versions: list[dict[str, str]],
+    mode: str,
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    try:
+        response = supabase.rpc(
+            "admin_insert_tournament_draw_games_cas",
+            {
+                "p_club_id": str(club_id),
+                "p_tournament_id": str(tournament_id),
+                "p_draw_id": str(draw_id),
+                "p_expected_draw_updated_at": str(expected_draw_updated_at),
+                "p_mode": str(mode),
+                "p_expected_teams": list(expected_team_versions),
+                "p_expected_source_games": list(expected_source_game_versions),
+                "p_games": list(rows),
+            },
+        ).execute()
+    except Exception as exc:
+        detail = str(exc)
+        if any(
+            marker in detail
+            for marker in (
+                "JUPR_TOURNAMENT_DRAW_STALE",
+                "JUPR_TOURNAMENT_TEAM_SNAPSHOT_STALE",
+                "JUPR_TOURNAMENT_SOURCE_GAME_SNAPSHOT_STALE",
+            )
+        ):
+            raise StaleTournamentAdminStateError(
+                "The draw, team set, or source game set changed while games were being generated. Reload the Ops snapshot."
+            ) from exc
+        raise RuntimeError("Atomic tournament game generation failed; no game set was committed.") from exc
+    data = getattr(response, "data", None)
+    if isinstance(data, dict):
+        saved = data.get("games")
+    elif isinstance(data, list) and data and isinstance(data[0], dict):
+        saved = data[0].get("games")
+    else:
+        saved = None
+    if not isinstance(saved, list):
+        raise RuntimeError("Atomic tournament game generation returned no saved game set.")
+    return [dict(row) for row in saved if isinstance(row, dict)]
+
+
 def generate_admin_tournament_round_robin_games(
     supabase: Any,
     *,
@@ -110,7 +230,11 @@ def generate_admin_tournament_round_robin_games(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    expected_draw_updated_at: str | None = None,
+    expected_team_versions: list[dict[str, Any]] | None = None,
     source: str = "next_tournament_admin_generate_round_robin",
+    dry_run: bool = False,
+    atomic: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -125,10 +249,21 @@ def generate_admin_tournament_round_robin_games(
     draw = _fetch_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not draw:
         raise ValueError("draw not found for this tournament")
+    reviewed_draw_version = _require_reviewed_draw_version(
+        draw,
+        expected_draw_updated_at=expected_draw_updated_at,
+        atomic=atomic,
+    )
     if _games_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id):
         raise ValueError("This draw already has games. Delete/recreate the draw or clear games before regenerating.")
 
     teams = _teams_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
+    reviewed_team_versions = _require_reviewed_row_versions(
+        teams,
+        expected_team_versions,
+        label="team set",
+        atomic=atomic,
+    )
     team_count = len(teams)
     if team_count not in SUPPORTED_TEAM_COUNTS:
         raise ValueError(f"Round-robin generation supports {SUPPORTED_TEAM_COUNTS}; this draw has {team_count} teams.")
@@ -156,7 +291,33 @@ def generate_admin_tournament_round_robin_games(
                 "updated_at": now,
             }
         )
-    inserted = _safe_rows(supabase.table("tournament_games").insert(game_rows).execute()) if game_rows else []
+    if dry_run:
+        games = [_game_payload(row) for row in game_rows]
+        return {
+            "ok": True,
+            "mode": "tournament_round_robin_generate_preview",
+            "dry_run": True,
+            "write_count": 0,
+            "draw_id": clean_draw_id,
+            "game_count": len(games),
+            "games": games,
+            "warnings": [],
+        }
+    inserted = (
+        _insert_tournament_draw_games_atomic(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=clean_tournament_id,
+            draw_id=clean_draw_id,
+            expected_draw_updated_at=reviewed_draw_version,
+            expected_team_versions=reviewed_team_versions,
+            expected_source_game_versions=[],
+            mode="ROUND_ROBIN",
+            rows=game_rows,
+        )
+        if atomic
+        else (_safe_rows(supabase.table("tournament_games").insert(game_rows).execute()) if game_rows else [])
+    )
     games = [_game_payload(row) for row in (inserted or game_rows)]
 
     audit_payload = build_activity_payload(

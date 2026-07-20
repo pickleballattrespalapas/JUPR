@@ -58,6 +58,7 @@ def test_player_editor_status_enabled_contract(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(fake_storage()))
 
     response = TestClient(app).get("/admin/clubs/club/players/editor/status")
@@ -66,6 +67,8 @@ def test_player_editor_status_enabled_contract(monkeypatch):
     payload = response.json()
     assert payload["enabled"] is True
     assert payload["players_endpoint"] == "/admin/clubs/{club_id}/players/editor/players"
+    assert payload["transactional_merge_ready"] is True
+    assert payload["player_merge_endpoint"] == "/admin/clubs/{club_id}/players/editor/merge"
     assert payload["player_count"] == 2
 
 

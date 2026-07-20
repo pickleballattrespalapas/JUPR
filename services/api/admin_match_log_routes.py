@@ -12,6 +12,7 @@ from jupr_app.domain.admin.roles import (
     PERMISSION_DELETE_MATCHES,
     PERMISSION_ENTER_SCORES,
     PERMISSION_MANAGE_MATCHES,
+    PERMISSION_RUN_REPLAY,
     has_permission,
     resolve_admin_role,
 )
@@ -32,6 +33,7 @@ from jupr_app.services.admin_match_log_service import (
     is_admin_match_log_enabled,
     resolve_admin_match_log_duplicate_false_positive,
 )
+from jupr_app.services.match_edit_durability_service import MatchEditRecoveryRequired, recover_atomic_match_edit
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -40,6 +42,13 @@ class AdminMatchLogEditRequest(BaseModel):
     confirmation_text: str = ""
     correction_note: str | None = None
     source: str = "next_match_log"
+    idempotency_key: str = Field(default="", max_length=160)
+    replay_target: str = Field(default="ALL (Full System Reset)", max_length=160)
+
+
+class AdminMatchLogEditRecoveryRequest(BaseModel):
+    confirmation_text: str = ""
+    source: str = "next_match_log_recovery"
 
 
 class AdminMatchLogDuplicateCleanupRequest(BaseModel):
@@ -474,11 +483,64 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
                 correction_note=payload.correction_note,
                 source=payload.source,
                 confirmation_text=payload.confirmation_text,
+                idempotency_key=payload.idempotency_key,
+                replay_target=payload.replay_target,
             )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except MatchEditRecoveryRequired as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "MATCH_EDIT_RECOVERY_REQUIRED",
+                    "operation_id": exc.operation_id,
+                    "message": str(exc),
+                },
+            ) from exc
+
+    @app.post("/admin/clubs/{club_id}/match-log/edits/{operation_id}/recover")
+    def post_admin_match_log_edit_recovery(
+        club_id: str,
+        operation_id: str,
+        payload: AdminMatchLogEditRecoveryRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_match_log_apply_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Log apply is disabled.")
+        if str(payload.confirmation_text or "").strip().upper() != "RECOVER":
+            raise HTTPException(status_code=400, detail="Type RECOVER to confirm mandatory replay recovery.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            permission=PERMISSION_MANAGE_MATCHES,
+            source=payload.source,
+        )
+        if not has_permission(actor_role, PERMISSION_RUN_REPLAY):
+            raise HTTPException(status_code=403, detail="Replay recovery permission is required.")
+        try:
+            return recover_atomic_match_edit(
+                supabase,
+                club_id=str(club_id),
+                operation_id=str(operation_id),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except MatchEditRecoveryRequired as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "MATCH_EDIT_RECOVERY_REQUIRED",
+                    "operation_id": exc.operation_id,
+                    "message": str(exc),
+                },
+            ) from exc
 
     @app.post("/admin/clubs/{club_id}/match-log/duplicates/cleanup")
     def post_admin_match_log_duplicate_cleanup(

@@ -12,6 +12,7 @@ MATCH_SELECT = (
     "id,club_id,date,league,match_type,week_tag,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,"
     "t1_p1_r,t1_p1_r_end,t1_p2_r,t1_p2_r_end,t2_p1_r,t2_p1_r_end,t2_p2_r,t2_p2_r_end"
 )
+DEFAULT_WEEKLY_HIGHLIGHT_MIN_GAMES = 4
 
 
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
@@ -167,6 +168,12 @@ def get_public_league_results_overview(supabase: Any, *, club_id: str) -> dict[s
                 "name": name,
                 "min_games": _safe_int(meta.get("min_games"), 0) or 0,
                 "k_factor": _safe_int(meta.get("k_factor"), None),
+                "start_week": _safe_int(meta.get("start_week"), None),
+                "end_week": _safe_int(meta.get("end_week"), None),
+                "num_weeks": _safe_int(
+                    meta.get("num_weeks", meta.get("total_weeks", meta.get("weeks"))),
+                    None,
+                ),
             }
         )
     return {"leagues": leagues}
@@ -186,7 +193,14 @@ def _league_meta(overview: dict[str, Any], league_name: str | None) -> dict[str,
     for item in overview.get("leagues", []):
         if str(item.get("name")) == str(league_name):
             return dict(item)
-    return {"name": str(league_name), "min_games": 0, "k_factor": None}
+    return {
+        "name": str(league_name),
+        "min_games": 0,
+        "k_factor": None,
+        "start_week": None,
+        "end_week": None,
+        "num_weeks": None,
+    }
 
 
 def _league_matches(supabase: Any, *, club_id: str, league_name: str) -> list[dict[str, Any]]:
@@ -210,7 +224,7 @@ def _league_matches(supabase: Any, *, club_id: str, league_name: str) -> list[di
     return result
 
 
-def _rating_snapshot_delta(row: dict[str, Any], player_id: int) -> float | None:
+def _rating_snapshot(row: dict[str, Any], player_id: int) -> tuple[float | None, float | None]:
     pid = int(player_id)
     columns = {
         "t1_p1": ("t1_p1_r", "t1_p1_r_end"),
@@ -223,10 +237,15 @@ def _rating_snapshot_delta(row: dict[str, Any], player_id: int) -> float | None:
             continue
         start = _safe_float(row.get(start_col))
         end = _safe_float(row.get(end_col))
-        if start is None or end is None:
-            return None
-        return float(end) - float(start)
-    return None
+        return start, end
+    return None, None
+
+
+def _rating_snapshot_delta(row: dict[str, Any], player_id: int) -> float | None:
+    start, end = _rating_snapshot(row, player_id)
+    if start is None or end is None:
+        return None
+    return float(end) - float(start)
 
 
 def _expand_matches(matches: list[dict[str, Any]], players_by_id: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -246,16 +265,24 @@ def _expand_matches(matches: list[dict[str, Any]], players_by_id: dict[int, dict
             if player_id is None or int(player_id) not in players_by_id:
                 continue
             won = bool(team_1_win and team == 1) or bool((not team_1_win) and team == 2)
+            rating_start, rating_end = _rating_snapshot(match, int(player_id))
             expanded.append(
                 {
                     "match_id": match.get("id"),
+                    "match_date": _json_safe(match.get("date")),
                     "week_num": match.get("week_num"),
                     "player_id": int(player_id),
                     "player_name": players_by_id[int(player_id)]["name"],
                     "games": 1,
                     "wins": 1 if won else 0,
                     "losses": 0 if won else 1,
-                    "rating_delta_elo": _rating_snapshot_delta(match, int(player_id)),
+                    "rating_start_elo": rating_start,
+                    "rating_end_elo": rating_end,
+                    "rating_delta_elo": (
+                        float(rating_end) - float(rating_start)
+                        if rating_start is not None and rating_end is not None
+                        else None
+                    ),
                 }
             )
     return expanded
@@ -326,67 +353,401 @@ def _standing_rows(supabase: Any, *, club_id: str, league_name: str, players_by_
     return output
 
 
-def _week_list(matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    week_nums = sorted({int(row["week_num"]) for row in matches if row.get("week_num") is not None})
-    return [{"week_num": week_num, "week_label": _week_label(week_num)} for week_num in week_nums]
-
-
-def _weekly_highlights(weekly_rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    if not weekly_rows:
-        return {"biggest_climbers": [], "best_win_pct": [], "most_active": []}
-    recent_week = max(int(row["week_num"]) for row in weekly_rows if row.get("week_num") is not None)
-    current = [row for row in weekly_rows if row.get("week_num") == recent_week]
-
-    def public_row(row: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "week_num": row.get("week_num"),
-            "player_id": row.get("player_id"),
-            "player_name": row.get("player_name"),
-            "games": row.get("games"),
-            "wins": row.get("wins"),
-            "losses": row.get("losses"),
-            "win_pct": row.get("win_pct"),
-            "rating_delta_jupr": row.get("rating_delta_jupr"),
-        }
-
-    climbers_source = [row for row in current if row.get("rating_delta_jupr") is not None]
-    if climbers_source:
-        climbers = sorted(climbers_source, key=lambda row: row.get("rating_delta_jupr") or 0, reverse=True)[:3]
+def _week_list(matches: list[dict[str, Any]], league: dict[str, Any] | None) -> list[dict[str, Any]]:
+    league = league or {}
+    result_week_nums = sorted(
+        {int(row["week_num"]) for row in matches if row.get("week_num") is not None}
+    )
+    start_week = _safe_int(league.get("start_week"))
+    end_week = _safe_int(league.get("end_week"))
+    num_weeks = _safe_int(league.get("num_weeks"))
+    if start_week is not None and end_week is not None and start_week > 0 and end_week >= start_week:
+        week_nums = list(range(start_week, end_week + 1))
+    elif num_weeks is not None and num_weeks > 0:
+        week_nums = list(range(1, num_weeks + 1))
+    elif result_week_nums:
+        week_nums = list(range(min(result_week_nums), max(result_week_nums) + 1))
     else:
-        climbers = sorted(current, key=lambda row: (row.get("wins") or 0, row.get("games") or 0), reverse=True)[:3]
-    best = sorted([row for row in current if int(row.get("games") or 0) > 0], key=lambda row: (row.get("win_pct") or 0, row.get("games") or 0), reverse=True)[:3]
-    active = sorted(current, key=lambda row: (row.get("games") or 0, row.get("wins") or 0), reverse=True)[:3]
+        week_nums = []
+    result_set = set(result_week_nums)
+    return [
+        {
+            "week_num": week_num,
+            "week_label": _week_label(week_num),
+            "has_results": week_num in result_set,
+        }
+        for week_num in week_nums
+    ]
+
+
+def _weekly_rating_rankings(expanded: list[dict[str, Any]]) -> dict[tuple[int, int], dict[str, Any]]:
+    ordered = sorted(
+        [row for row in expanded if row.get("week_num") is not None],
+        key=lambda row: (
+            int(row.get("week_num") or 0),
+            str(row.get("match_date") or ""),
+            _safe_int(row.get("match_id"), 0) or 0,
+        ),
+    )
+    snapshots: dict[tuple[int, int], dict[str, Any]] = {}
+    for row in ordered:
+        week_num = int(row.get("week_num"))
+        player_id = int(row.get("player_id"))
+        start = _safe_float(row.get("rating_start_elo"))
+        end = _safe_float(row.get("rating_end_elo"))
+        if start is None or end is None:
+            continue
+        item = snapshots.setdefault(
+            (week_num, player_id),
+            {"rating_start_elo": start, "rating_end_elo": end},
+        )
+        item["rating_end_elo"] = end
+
+    by_week: dict[int, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
+    for (week_num, player_id), item in snapshots.items():
+        by_week[week_num].append((player_id, item))
+    for rows in by_week.values():
+        previous_rating: float | None = None
+        dense_rank = 0
+        for player_id, item in sorted(
+            rows,
+            key=lambda entry: (-float(entry[1]["rating_end_elo"]), entry[0]),
+        ):
+            rating = float(item["rating_end_elo"])
+            if previous_rating is None or rating != previous_rating:
+                dense_rank += 1
+                previous_rating = rating
+            item["rank"] = dense_rank
+
+    by_player: dict[int, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
+    for (week_num, player_id), item in snapshots.items():
+        by_player[player_id].append((week_num, item))
+    for rows in by_player.values():
+        previous_rank: int | None = None
+        for _week_num, item in sorted(rows, key=lambda entry: entry[0]):
+            current_rank = _safe_int(item.get("rank"))
+            item["prev_rank"] = previous_rank
+            item["rank_delta"] = (
+                previous_rank - current_rank
+                if previous_rank is not None and current_rank is not None
+                else None
+            )
+            previous_rank = current_rank
+
+    output: dict[tuple[int, int], dict[str, Any]] = {}
+    for key, item in snapshots.items():
+        start = float(item["rating_start_elo"])
+        end = float(item["rating_end_elo"])
+        output[key] = {
+            "rating_start_jupr": _jupr(start),
+            "rating_jupr": _jupr(end),
+            "rating_delta_jupr": _jupr(end - start),
+            "rank": item.get("rank"),
+            "prev_rank": item.get("prev_rank"),
+            "rank_delta": item.get("rank_delta"),
+        }
+    return output
+
+
+def _public_stat_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
-        "biggest_climbers": [public_row(row) for row in climbers],
-        "best_win_pct": [public_row(row) for row in best],
-        "most_active": [public_row(row) for row in active],
+        "week_num": row.get("week_num"),
+        "player_id": row.get("player_id"),
+        "player_name": row.get("player_name"),
+        "games": row.get("games"),
+        "wins": row.get("wins"),
+        "losses": row.get("losses"),
+        "win_pct": row.get("win_pct"),
+        "rating_delta_jupr": row.get("rating_delta_jupr"),
+        "rating_jupr": row.get("rating_jupr"),
+        "rank": row.get("rank"),
+        "prev_rank": row.get("prev_rank"),
+        "rank_delta": row.get("rank_delta"),
     }
 
 
-def build_public_league_results(supabase: Any, *, club_id: str, league_name: str | None = None) -> dict[str, Any]:
+def _highlights(
+    rows: list[dict[str, Any]],
+    *,
+    scope: str,
+    min_games: int,
+    week_num: int | None = None,
+) -> dict[str, Any]:
+    current = list(rows)
+    climbers_source = [row for row in current if row.get("rating_delta_jupr") is not None]
+    if climbers_source:
+        climbers = sorted(
+            climbers_source,
+            key=lambda row: (row.get("rating_delta_jupr") or 0, row.get("games") or 0),
+            reverse=True,
+        )[:3]
+    else:
+        climbers = sorted(
+            current,
+            key=lambda row: (row.get("wins") or 0, row.get("games") or 0),
+            reverse=True,
+        )[:3]
+    qualified = [
+        row
+        for row in current
+        if int(row.get("games") or 0) >= int(min_games) and row.get("win_pct") is not None
+    ]
+    best = sorted(
+        qualified,
+        key=lambda row: (row.get("win_pct") or 0, row.get("games") or 0),
+        reverse=True,
+    )[:3]
+    active = sorted(
+        current,
+        key=lambda row: (row.get("games") or 0, row.get("wins") or 0),
+        reverse=True,
+    )[:3]
+    return {
+        "scope": scope,
+        "week_num": week_num,
+        "min_games": int(min_games),
+        "biggest_climbers": [_public_stat_row(row) for row in climbers],
+        "best_win_pct": [_public_stat_row(row) for row in best],
+        "most_active": [_public_stat_row(row) for row in active],
+    }
+
+
+def _player_options(
+    standings: list[dict[str, Any]],
+    cumulative: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    options: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for row in [*standings, *cumulative]:
+        player_id = _safe_int(row.get("player_id"))
+        if player_id is None or player_id in seen:
+            continue
+        seen.add(player_id)
+        options.append(
+            {"player_id": player_id, "player_name": str(row.get("player_name") or f"Player {player_id}")}
+        )
+    return options
+
+
+def _recent_player_matches(
+    matches: list[dict[str, Any]],
+    *,
+    player_id: int | None,
+    players_by_id: dict[int, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if player_id is None:
+        return []
+
+    def public_player(pid: int | None) -> dict[str, Any] | None:
+        if pid is None:
+            return None
+        player = players_by_id.get(int(pid))
+        return {
+            "player_id": int(pid),
+            "player_name": str((player or {}).get("name") or f"Player {pid}"),
+        }
+
+    output: list[dict[str, Any]] = []
+    ordered = sorted(
+        matches,
+        key=lambda row: (str(_json_safe(row.get("date")) or ""), _safe_int(row.get("id"), 0) or 0),
+        reverse=True,
+    )
+    for match in ordered:
+        team_1 = [_safe_int(match.get("t1_p1")), _safe_int(match.get("t1_p2"))]
+        team_2 = [_safe_int(match.get("t2_p1")), _safe_int(match.get("t2_p2"))]
+        if player_id in team_1:
+            own, opponents = team_1, team_2
+            score_for = _safe_int(match.get("score_t1"), 0) or 0
+            score_against = _safe_int(match.get("score_t2"), 0) or 0
+        elif player_id in team_2:
+            own, opponents = team_2, team_1
+            score_for = _safe_int(match.get("score_t2"), 0) or 0
+            score_against = _safe_int(match.get("score_t1"), 0) or 0
+        else:
+            continue
+        partner_id = next((pid for pid in own if pid is not None and pid != player_id), None)
+        output.append(
+            {
+                "match_id": match.get("id"),
+                "date": _json_safe(match.get("date")),
+                "week_num": match.get("week_num"),
+                "week_label": _week_label(match.get("week_num")),
+                "partner": public_player(partner_id),
+                "opponents": [player for player in (public_player(pid) for pid in opponents) if player],
+                "result": "W" if score_for > score_against else "L" if score_for < score_against else "D",
+                "score_for": score_for,
+                "score_against": score_against,
+                "rating_delta_jupr": _jupr(_rating_snapshot_delta(match, player_id)),
+            }
+        )
+        if len(output) >= 15:
+            break
+    return output
+
+
+def build_public_league_results(
+    supabase: Any,
+    *,
+    club_id: str,
+    league_name: str | None = None,
+    week_num: int | None = None,
+    player_id: int | None = None,
+    weekly_min_games: int = DEFAULT_WEEKLY_HIGHLIGHT_MIN_GAMES,
+) -> dict[str, Any]:
     """Build the public League Results payload for one club/league."""
 
     cid = str(club_id).strip()
     overview = get_public_league_results_overview(supabase, club_id=cid)
     selected = _selected_league(overview, league_name)
     if not selected:
-        return {**overview, "selected_league": None, "league": None, "standings": [], "weeks": [], "weekly_results": [], "cumulative": [], "highlights": {"biggest_climbers": [], "best_win_pct": [], "most_active": []}}
+        empty_highlights = _highlights([], scope="week", min_games=weekly_min_games)
+        return {
+            **overview,
+            "selected_league": None,
+            "league": None,
+            "standings": [],
+            "weeks": [],
+            "selected_week": None,
+            "weekly_results": [],
+            "cumulative": [],
+            "players": [],
+            "selected_player_id": None,
+            "player_summary": None,
+            "player_weekly": [],
+            "recent_matches": [],
+            "weekly_highlights": empty_highlights,
+            "season_highlights": _highlights([], scope="season", min_games=1),
+            "highlights": empty_highlights,
+        }
 
     players_by_id = _fetch_players(supabase, cid)
     matches = _league_matches(supabase, club_id=cid, league_name=selected)
     expanded = _expand_matches(matches, players_by_id)
     weekly = _summarize(expanded, ("week_num", "player_id", "player_name"))
+    weekly_ratings = _weekly_rating_rankings(expanded)
+    for row in weekly:
+        row.update(
+            weekly_ratings.get(
+                (int(row.get("week_num") or 0), int(row.get("player_id") or 0)),
+                {
+                    "rating_start_jupr": None,
+                    "rating_jupr": None,
+                    "rank": None,
+                    "prev_rank": None,
+                    "rank_delta": None,
+                },
+            )
+        )
     weekly.sort(key=lambda row: (row.get("week_num") or 0, -(row.get("wins") or 0), -(row.get("games") or 0), str(row.get("player_name") or "").lower()))
     cumulative = _summarize(expanded, ("player_id", "player_name"))
     cumulative.sort(key=lambda row: (-(row.get("wins") or 0), -(row.get("games") or 0), str(row.get("player_name") or "").lower()))
+    league = _league_meta(overview, selected)
+    standings = _standing_rows(
+        supabase,
+        club_id=cid,
+        league_name=selected,
+        players_by_id=players_by_id,
+    )
+    standing_by_player = {
+        int(row["player_id"]): row for row in standings if _safe_int(row.get("player_id")) is not None
+    }
+    season_rows: list[dict[str, Any]] = []
+    for row in cumulative:
+        standing = standing_by_player.get(int(row.get("player_id") or 0), {})
+        season_rows.append(
+            {
+                **row,
+                "rating_jupr": standing.get("rating_jupr"),
+                "rating_delta_jupr": standing.get("rating_delta_jupr"),
+                "rank": standing.get("rank"),
+            }
+        )
+    cumulative = season_rows
+    weeks = _week_list(matches, league)
+    valid_weeks = [int(row["week_num"]) for row in weeks]
+    selected_week = int(week_num) if week_num is not None and int(week_num) in valid_weeks else None
+    if selected_week is None:
+        selected_week = max(valid_weeks) if valid_weeks else None
+    selected_week_rows = [row for row in weekly if row.get("week_num") == selected_week]
+    weekly_min_games = max(1, min(20, int(weekly_min_games or DEFAULT_WEEKLY_HIGHLIGHT_MIN_GAMES)))
+    season_min_games = max(1, int((league or {}).get("min_games") or 1))
+    weekly_highlights = _highlights(
+        selected_week_rows,
+        scope="week",
+        min_games=weekly_min_games,
+        week_num=selected_week,
+    )
+    season_highlight_rows = [
+        {
+            "player_id": row.get("player_id"),
+            "player_name": row.get("player_name"),
+            "games": row.get("matches_played"),
+            "wins": row.get("wins"),
+            "losses": row.get("losses"),
+            "win_pct": row.get("win_pct"),
+            "rating_jupr": row.get("rating_jupr"),
+            "rating_delta_jupr": row.get("rating_delta_jupr"),
+            "rank": row.get("rank"),
+        }
+        for row in standings
+    ]
+    season_highlights = _highlights(
+        season_highlight_rows,
+        scope="season",
+        min_games=season_min_games,
+    )
+    player_options = _player_options(standings, cumulative)
+    valid_player_ids = {int(row["player_id"]) for row in player_options}
+    selected_player_id = int(player_id) if player_id is not None and int(player_id) in valid_player_ids else None
+    if selected_player_id is None and player_options:
+        selected_player_id = int(player_options[0]["player_id"])
+    selected_standing = standing_by_player.get(int(selected_player_id or 0), {})
+    selected_cumulative = next(
+        (row for row in cumulative if int(row.get("player_id") or 0) == int(selected_player_id or 0)),
+        {},
+    )
+    player_summary = (
+        {
+            "player_id": selected_player_id,
+            "player_name": selected_standing.get("player_name")
+            or selected_cumulative.get("player_name")
+            or f"Player {selected_player_id}",
+            "rank": selected_standing.get("rank"),
+            "rating_jupr": selected_standing.get("rating_jupr"),
+            "rating_delta_jupr": selected_standing.get("rating_delta_jupr"),
+            "games": selected_cumulative.get("games", selected_standing.get("matches_played", 0)),
+            "wins": selected_cumulative.get("wins", selected_standing.get("wins", 0)),
+            "losses": selected_cumulative.get("losses", selected_standing.get("losses", 0)),
+            "win_pct": selected_cumulative.get("win_pct", selected_standing.get("win_pct")),
+        }
+        if selected_player_id is not None
+        else None
+    )
+    player_weekly = [
+        row for row in weekly if int(row.get("player_id") or 0) == int(selected_player_id or 0)
+    ]
 
     return {
         **overview,
         "selected_league": selected,
-        "league": _league_meta(overview, selected),
-        "standings": _standing_rows(supabase, club_id=cid, league_name=selected, players_by_id=players_by_id),
-        "weeks": _week_list(matches),
+        "league": league,
+        "standings": standings,
+        "weeks": weeks,
+        "selected_week": selected_week,
         "weekly_results": weekly,
         "cumulative": cumulative,
-        "highlights": _weekly_highlights(weekly),
+        "players": player_options,
+        "selected_player_id": selected_player_id,
+        "player_summary": player_summary,
+        "player_weekly": player_weekly,
+        "recent_matches": _recent_player_matches(
+            matches,
+            player_id=selected_player_id,
+            players_by_id=players_by_id,
+        ),
+        "weekly_highlights": weekly_highlights,
+        "season_highlights": season_highlights,
+        # Compatibility alias for the former latest-week highlight object.
+        "highlights": weekly_highlights,
     }

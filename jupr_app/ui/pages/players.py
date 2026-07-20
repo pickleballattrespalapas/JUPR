@@ -1494,9 +1494,9 @@ def render(ctx):
                         border-radius:999px;
                         font-size:0.78rem;
                         font-weight:700;
-                        color:#e6f0ff;
-                        background:linear-gradient(135deg,#246BFD,#11A6FF);
-                        box-shadow:0 1px 6px rgba(36,107,253,0.35);
+                        color:var(--accent-contrast);
+                        background:linear-gradient(135deg,var(--accent),var(--status-info));
+                        box-shadow:var(--shadow);
                         vertical-align:middle;
                         white-space:nowrap;
                     ">✓ Verified</span></h3>"""

@@ -23,12 +23,43 @@ on:
         description: "Club ID used by staging admin status verification"
         required: true
         default: "tres_palapas"
+      write_wave:
+        description: "One least-privilege staging write wave; none blocks business-data mutations while retaining denial audits"
+        required: true
+        type: choice
+        default: "none"
+        options:
+          - none
+          - public-intake-auth
+          - communications
+          - match-player
+          - support-requests
+          - league-manager
+          - league-awards
+          - league-live-domain
+          - league-live-submit
+          - badge-diagnostics
+          - admin-tools
+          - challenge-ladder
+          - moneyball
+          - jupr-live
+          - public-live
+          - tournament-mutations
+          - tournament-setup
+          - tournament-registration
+          - tournament-operations
+          - tournament-official-publish
+          - tournament-email-handoff
+          - tournament-live
+          - tournament-live-official-publish
 
 permissions:
   contents: read
 
 concurrency:
-  group: fly-api-staging-deploy
+  # Shared with parity-final-evidence.yml so evidence cannot run across a
+  # staging deployment boundary.
+  group: jupr-staging-api-and-parity-evidence
   cancel-in-progress: false
 
 jobs:
@@ -37,40 +68,88 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     env:
-      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
-      SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
       EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
-      FLY_APP_NAME: ${{ inputs.app_name }}
-      FLY_PRIMARY_REGION: ${{ inputs.primary_region }}
-      FLY_ORG: ${{ inputs.fly_org }}
+      # The staging deploy target is deliberately not derived from dispatch
+      # input, even after that input is validated below.
+      FLY_APP_NAME: juprleagues-api-staging
       JUPR_ENV: staging
       JUPR_EMAIL_MODE: dry_run
       JUPR_REQUIRE_API_AUDIT_LOG: "1"
-      JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT: "1"
+      JUPR_REQUIRE_WORKER_RUN_LOG: "1"
+      JUPR_SUPABASE_JWT_MODE: jwks
+      JUPR_STAGING_WRITE_WAVE: none
+      JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT: "0"
       JUPR_ENABLE_NEXT_ADMIN_SHELL: "1"
       JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG: "1"
-      JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY: "1"
-      JUPR_ENABLE_NEXT_ADMIN_REPLAY: "1"
-      JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY: "1"
-      JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER: "1"
-      JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR: "1"
-      JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES: "1"
-      JUPR_ENABLE_NEXT_ADMIN_SUPPORT_REQUESTS: "1"
+      JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY: "0"
+      JUPR_ENABLE_NEXT_ADMIN_REPLAY: "0"
+      JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY: "0"
+      JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER: "0"
+      JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR: "0"
+      JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES: "0"
+      JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL: "0"
+      JUPR_ENABLE_NEXT_ADMIN_SUPPORT_REQUESTS: "0"
       JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER: "1"
+      JUPR_ENABLE_STAGING_NEXT_ADMIN_LEAGUE_MANAGER_WRITES: "0"
+      JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN: "0"
+      JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT: "0"
+      JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE: "0"
       JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS: "1"
-      JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP: "1"
-      JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS: "1"
+      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS: "0"
+      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_SETUP_MUTATIONS: "0"
+      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_REGISTRATION_MUTATIONS: "0"
+      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_IMPORT_HANDOFF: "0"
+      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OPERATIONS_MUTATIONS: "0"
+      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH: "0"
+      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF: "0"
+      JUPR_ENABLE_STAGING_NEXT_ADMIN_TOURNAMENT_LIVE_WRITES: "0"
+      JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP: "0"
+      JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS: "0"
       JUPR_ENABLE_NEXT_ADMIN_MONEYBALL: "1"
+      JUPR_ENABLE_STAGING_NEXT_ADMIN_MONEYBALL_WRITES: "0"
       JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE: "1"
+      JUPR_ENABLE_STAGING_NEXT_ADMIN_JUPR_LIVE_WRITES: "0"
       JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER: "1"
+      JUPR_ENABLE_STAGING_NEXT_ADMIN_CHALLENGE_LADDER_WRITES: "0"
+      JUPR_ENABLE_PUBLIC_LIVE_WRITES: "0"
       JUPR_ENABLE_NEXT_ADMIN_MATCH_CANONICAL_AUDIT: "1"
-      JUPR_ENABLE_NEXT_ADMIN_TOOLS: "1"
-      JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS: "1"
+      JUPR_ENABLE_STAGING_NEXT_ADMIN_MATCH_CANONICAL_NORMALIZE_WRITES: "0"
+      JUPR_ENABLE_NEXT_ADMIN_TOOLS: "0"
+      JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS: "0"
+      JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES: "0"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: staging
+
+      - name: Verify canonical staging workflow provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/staging" ]; then
+            echo "::error title=Source branch rejected::Staging API deploys must run from refs/heads/staging."
+            exit 2
+          fi
+          HEAD_SHA="$(git rev-parse HEAD)"
+          STAGING_SHA="$(git rev-parse refs/remotes/origin/staging)"
+          if [ "$HEAD_SHA" != "$GITHUB_SHA" ] || [ "$HEAD_SHA" != "$STAGING_SHA" ]; then
+            echo "::error title=Staging provenance rejected::Checked-out HEAD, GITHUB_SHA, and canonical origin/staging must be identical."
+            exit 2
+          fi
+
+      - name: Configure one least-privilege staging write wave
+        shell: bash
+        env:
+          SELECTED_WRITE_WAVE: ${{ inputs.write_wave }}
+        run: |
+          set -euo pipefail
+          python scripts/staging_write_waves.py \
+            --wave "$SELECTED_WRITE_WAVE" \
+            --fly-config fly.staging.toml \
+            --github-env "$GITHUB_ENV"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -79,10 +158,61 @@ jobs:
           cache: pip
 
       - name: Set up flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@master
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: "0.4.49"
 
-      - name: Validate staging inputs and secrets
+      - name: Validate staging dispatch inputs
+        id: validate-inputs
         shell: bash
+        env:
+          CLUB_ID_INPUT: ${{ inputs.club_id }}
+          CLUB_SLUG_INPUT: ${{ inputs.club_slug }}
+          FLY_APP_NAME_INPUT: ${{ inputs.app_name }}
+          FLY_ORG_INPUT: ${{ inputs.fly_org }}
+          FLY_PRIMARY_REGION_INPUT: ${{ inputs.primary_region }}
+        run: |
+          set -euo pipefail
+
+          if [ "$FLY_APP_NAME_INPUT" != "juprleagues-api-staging" ]; then
+            echo "::error title=Fly app rejected::app_name must equal juprleagues-api-staging."
+            exit 2
+          fi
+          if [[ ! "$FLY_PRIMARY_REGION_INPUT" =~ ^[a-z]{3}$ ]]; then
+            echo "::error title=Fly region rejected::primary_region must be a three-letter lowercase Fly region."
+            exit 2
+          fi
+          if [ -n "$FLY_ORG_INPUT" ] && [[ ! "$FLY_ORG_INPUT" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
+            echo "::error title=Fly organization rejected::fly_org must be an empty value or a lowercase Fly organization slug."
+            exit 2
+          fi
+          if [ "${#CLUB_SLUG_INPUT}" -gt 80 ] || [[ ! "$CLUB_SLUG_INPUT" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "::error title=Club slug rejected::club_slug must be a lowercase kebab-case slug of at most 80 characters."
+            exit 2
+          fi
+          if [ "${#CLUB_ID_INPUT}" -gt 128 ] || [[ ! "$CLUB_ID_INPUT" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+            echo "::error title=Club ID rejected::club_id must contain only letters, numbers, underscores, or hyphens."
+            exit 2
+          fi
+
+          {
+            printf 'club_id=%s\n' "$CLUB_ID_INPUT"
+            printf 'club_slug=%s\n' "$CLUB_SLUG_INPUT"
+            printf 'fly_org=%s\n' "$FLY_ORG_INPUT"
+            printf 'primary_region=%s\n' "$FLY_PRIMARY_REGION_INPUT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate required staging secrets
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          STAGING_REGISTRATION_CONFIRMATION_SECRET: ${{ secrets.STAGING_REGISTRATION_CONFIRMATION_SECRET }}
+          STAGING_REGISTRATION_EDIT_SECRET: ${{ secrets.STAGING_REGISTRATION_EDIT_SECRET }}
+          STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET }}
+          STAGING_PUBLIC_LIVE_TOKEN_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_TOKEN_SECRET }}
         run: |
           set -euo pipefail
           missing=0
@@ -92,36 +222,73 @@ jobs:
               missing=1
             fi
           done
-          if [ "$FLY_APP_NAME" = "juprleagues-api" ]; then
-            echo "::error title=Production app rejected::The staging workflow refuses to deploy to juprleagues-api."
-            missing=1
-          fi
           if [ "$JUPR_ENV" != "staging" ]; then
             echo "::error title=Environment rejected::JUPR_ENV must equal staging."
             missing=1
           fi
+          python - <<'PY'
+          import os
+
+          wave = os.environ["JUPR_STAGING_WRITE_WAVE"].strip()
+
+          def require_distinct_secrets(first_name: str, second_name: str, label: str) -> None:
+              first = os.environ.get(first_name, "").strip()
+              second = os.environ.get(second_name, "").strip()
+              if len(first) < 32 or len(second) < 32:
+                  raise SystemExit(
+                      f"{label} requires two stripped staging secrets of at least 32 characters."
+                  )
+              if first == second:
+                  raise SystemExit(f"{label} staging secrets must be distinct after trimming.")
+
+          if wave in {"public-intake-auth", "tournament-registration"}:
+              require_distinct_secrets(
+                  "STAGING_REGISTRATION_EDIT_SECRET",
+                  "STAGING_REGISTRATION_CONFIRMATION_SECRET",
+                  "Registration safety",
+              )
+          if wave == "public-live":
+              require_distinct_secrets(
+                  "STAGING_PUBLIC_LIVE_TOKEN_SECRET",
+                  "STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET",
+                  "Public Live safety",
+              )
+          PY
           exit "$missing"
 
       - name: Verify staging Supabase isolation before deploy
         shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
         run: |
           set -euo pipefail
           python - <<'PY'
           import os
           from urllib.parse import urlsplit
 
-          host = (urlsplit(os.environ["SUPABASE_URL"]).hostname or "").lower()
+          parsed = urlsplit(os.environ["SUPABASE_URL"])
+          host = (parsed.hostname or "").lower()
           expected = os.environ["EXPECTED_SUPABASE_PROJECT_REF"].strip().lower()
-          actual = host.split(".", 1)[0]
-          if not host.endswith(".supabase.co"):
-              raise SystemExit("STAGING_SUPABASE_URL must use a *.supabase.co host")
-          if actual != expected:
-              raise SystemExit(f"Staging Supabase project mismatch: expected {expected!r}, got {actual!r}")
+          expected_host = f"{expected}.supabase.co"
+          if (
+              parsed.scheme != "https"
+              or parsed.username is not None
+              or parsed.password is not None
+              or parsed.port is not None
+              or parsed.path not in {"", "/"}
+              or parsed.query
+              or parsed.fragment
+              or host != expected_host
+          ):
+              raise SystemExit("STAGING_SUPABASE_URL must be the canonical isolated staging HTTPS origin")
+          actual = host.removesuffix(".supabase.co")
           print(f"Verified isolated staging Supabase project ref: {actual}")
           PY
 
       - name: Apply deployment inputs to staging config
         shell: bash
+        env:
+          FLY_PRIMARY_REGION: ${{ steps.validate-inputs.outputs.primary_region }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -131,10 +298,10 @@ jobs:
 
           app_name = os.environ["FLY_APP_NAME"].strip()
           primary_region = os.environ["FLY_PRIMARY_REGION"].strip()
-          if not app_name or not primary_region:
-              raise SystemExit("Fly app name and primary region are required")
-          if app_name == "juprleagues-api":
-              raise SystemExit("Refusing to target the production Fly app")
+          if app_name != "juprleagues-api-staging":
+              raise SystemExit("Refusing to target anything except the dedicated staging Fly app")
+          if not primary_region:
+              raise SystemExit("Fly primary region is required")
 
           path = Path("fly.staging.toml")
           text = path.read_text(encoding="utf-8")
@@ -145,6 +312,9 @@ jobs:
 
       - name: Ensure dedicated Fly staging app exists
         shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_ORG: ${{ steps.validate-inputs.outputs.fly_org }}
         run: |
           set -euo pipefail
           if flyctl status -a "$FLY_APP_NAME" >/dev/null 2>&1; then
@@ -157,21 +327,60 @@ jobs:
 
       - name: Stage staging-only runtime secrets
         shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          STAGING_REGISTRATION_CONFIRMATION_SECRET: ${{ secrets.STAGING_REGISTRATION_CONFIRMATION_SECRET }}
+          STAGING_REGISTRATION_EDIT_SECRET: ${{ secrets.STAGING_REGISTRATION_EDIT_SECRET }}
+          STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET }}
+          STAGING_PUBLIC_LIVE_TOKEN_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_TOKEN_SECRET }}
         run: |
           set -euo pipefail
-          flyctl secrets set \
-            --stage \
-            -a "$FLY_APP_NAME" \
-            SUPABASE_URL="$SUPABASE_URL" \
-            SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY" \
-            SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
+          secret_args=(
+            "JUPR_ENV=staging"
+            "JUPR_EMAIL_MODE=dry_run"
+            "JUPR_REQUIRE_API_AUDIT_LOG=1"
+            "JUPR_REQUIRE_WORKER_RUN_LOG=1"
+            "JUPR_WEB_BASE_URL=https://jupr-git-staging-pickleballattrespalapas1.vercel.app"
+            "SUPABASE_URL=$SUPABASE_URL"
+            "SUPABASE_JWKS_URL=${SUPABASE_URL%/}/auth/v1/.well-known/jwks.json"
+            "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY"
+            "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+            "JUPR_SUPABASE_JWT_MODE=jwks"
+            "JUPR_DEPLOYMENT_GIT_SHA=$GITHUB_SHA"
+            "JUPR_STAGING_WRITE_WAVE=$JUPR_STAGING_WRITE_WAVE"
+            "JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL=0"
+            "JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION=0"
+          )
+          while IFS= read -r name; do
+            secret_args+=("$name=${!name}")
+          done < <(python -c 'from scripts.staging_write_waves import ALL_STAGING_WRITE_FLAGS; print("\n".join(ALL_STAGING_WRITE_FLAGS))')
+          if [ "$JUPR_STAGING_WRITE_WAVE" = "public-intake-auth" ] || [ "$JUPR_STAGING_WRITE_WAVE" = "tournament-registration" ]; then
+            secret_args+=(
+              "JUPR_REGISTRATION_EDIT_SECRET=$STAGING_REGISTRATION_EDIT_SECRET"
+              "JUPR_REGISTRATION_CONFIRMATION_SECRET=$STAGING_REGISTRATION_CONFIRMATION_SECRET"
+            )
+          fi
+          if [ "$JUPR_STAGING_WRITE_WAVE" = "public-live" ]; then
+            secret_args+=(
+              "JUPR_PUBLIC_LIVE_TOKEN_SECRET=$STAGING_PUBLIC_LIVE_TOKEN_SECRET"
+              "JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET=$STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET"
+            )
+          fi
+          flyctl secrets set --stage -a "$FLY_APP_NAME" "${secret_args[@]}"
 
       - name: Validate Fly staging config
         shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: flyctl config validate --config fly.staging.toml -a "$FLY_APP_NAME"
 
       - name: Deploy staging API to Fly
         shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: flyctl deploy --remote-only -a "$FLY_APP_NAME" --config fly.staging.toml
 
       - name: Wait for staging API health
@@ -197,7 +406,15 @@ jobs:
       - name: Verify full staging API, schema, and feature surface
         shell: bash
         env:
+          CLUB_ID: ${{ steps.validate-inputs.outputs.club_id }}
+          CLUB_SLUG: ${{ steps.validate-inputs.outputs.club_slug }}
+          JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET }}
+          JUPR_PUBLIC_LIVE_TOKEN_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_TOKEN_SECRET }}
+          JUPR_REGISTRATION_CONFIRMATION_SECRET: ${{ secrets.STAGING_REGISTRATION_CONFIRMATION_SECRET }}
+          JUPR_REGISTRATION_EDIT_SECRET: ${{ secrets.STAGING_REGISTRATION_EDIT_SECRET }}
           PYTHONPATH: ${{ github.workspace }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
         run: |
           set -euo pipefail
           python scripts/check_staging_environment.py \
@@ -206,7 +423,11 @@ jobs:
             --require-supabase \
             --require-supabase-isolation \
             --expected-supabase-project-ref "$EXPECTED_SUPABASE_PROJECT_REF" \
+            --expected-git-sha "$GITHUB_SHA" \
+            --expected-fly-app-name "$FLY_APP_NAME" \
+            --expected-web-origin "https://jupr-git-staging-pickleballattrespalapas1.vercel.app" \
+            --write-wave "$JUPR_STAGING_WRITE_WAVE" \
             --api-base-url "https://${FLY_APP_NAME}.fly.dev" \
-            --club-slug "${{ inputs.club_slug }}" \
-            --club-id "${{ inputs.club_id }}" \
+            --club-slug "$CLUB_SLUG" \
+            --club-id "$CLUB_ID" \
             --json

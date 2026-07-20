@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-from typing import Any
+import json
 import math
 import re
 import uuid
+from datetime import date, datetime, timezone
+from typing import Any
 
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
+from jupr_app.domain.tournament_public_references import build_public_tournament_reference
 
 from .tournament_registration_compiler import compile_tournament_registration_state, validate_selection_against_skill
 
@@ -26,13 +28,36 @@ class StaleTournamentRegistrationSelectionError(SelectionWriteConflict):
     """Backward-compatible name for an admin selection write conflict."""
 
 
+class StaleTournamentRegistrationAdminError(SelectionWriteConflict):
+    """An admin registration write lost its compare-and-swap version."""
+
+
+class TournamentRegistrationEditConflictError(ValueError):
+    """Raised when a token-gated edit was based on a stale registration view."""
+
+
+class TournamentRegistrationImportedDrawError(ValueError):
+    """Raised when a registration is locked because its event reached a draw."""
+
+
+class TournamentRegistrationRelationshipLockedError(ValueError):
+    """Raised when an edit would invalidate an active partner relationship."""
+
+
 ADMIN_SELECTION_UPDATE_RPC = "admin_update_tournament_registration_selection"
+PUBLIC_REGISTRATION_EDIT_RPC = "server_update_public_tournament_registration_edit"
 SELECTION_WRITE_CONFLICT_CODE = "SELECTION_WRITE_CONFLICT"
 SELECTION_WRITE_CONFLICT_MARKER = "JUPR_SELECTION_WRITE_CONFLICT"
 SELECTION_NOT_FOUND_CODE = "SELECTION_NOT_FOUND"
 RELATION_SELECTION_NOT_FOUND_MARKER = "JUPR_RELATION_SELECTION_NOT_FOUND"
 SELECTION_INVALID_TARGET_MARKER = "JUPR_SELECTION_INVALID_TARGET"
 SELECTION_INVALID_PATCH_MARKER = "JUPR_SELECTION_INVALID_PATCH"
+REGISTRATION_EDIT_CONFLICT_CODE = "REGISTRATION_EDIT_CONFLICT"
+REGISTRATION_EDIT_CONFLICT_MARKER = "JUPR_REGISTRATION_EDIT_CONFLICT"
+REGISTRATION_EDIT_IMPORTED_CODE = "REGISTRATION_IMPORTED_TO_DRAW"
+REGISTRATION_EDIT_IMPORTED_MARKER = "JUPR_REGISTRATION_IMPORTED_TO_DRAW"
+REGISTRATION_EDIT_RELATIONSHIP_CODE = "REGISTRATION_RELATIONSHIP_LOCKED"
+REGISTRATION_EDIT_RELATIONSHIP_MARKER = "JUPR_REGISTRATION_RELATIONSHIP_LOCKED"
 
 
 REGISTRATION_SCHEMA_CONTRACT_MIGRATIONS = [
@@ -710,6 +735,182 @@ def _event_identity_key(event: dict[str, Any]) -> tuple[str, ...]:
     )
 
 
+DAY_CONFIGURATION_WRITE_FIELDS = {
+    "id",
+    "tournament_id",
+    "sort_order",
+    "label",
+    "event_date",
+    "enabled",
+}
+EVENT_CONFIGURATION_WRITE_FIELDS = {
+    "id",
+    "tournament_id",
+    "registration_day_id",
+    "sort_order",
+    "label",
+    "event_type",
+    "gender_restriction",
+    "skill_label",
+    "age_label",
+    "partner_required",
+    "capacity_teams",
+    "public_partner_board",
+    "price_usd",
+    "event_family_label",
+    "division_name",
+    "event_format_default",
+    "scoring_default",
+    "event_format_override",
+    "scoring_override",
+    "skill_mode",
+    "age_mode",
+    "age_rules",
+    "waitlist_enabled",
+    "partner_board_enabled",
+    "status",
+    "enabled",
+}
+
+
+def _deterministic_configuration_id(
+    *,
+    tournament_id: str,
+    kind: str,
+    index: int,
+    row: dict[str, Any],
+) -> str:
+    canonical = json.dumps(row, sort_keys=True, separators=(",", ":"), default=str)
+    return f"{kind}_{uuid.uuid5(uuid.NAMESPACE_URL, f'jupr:{tournament_id}:{kind}:{index}:{canonical}').hex[:12]}"
+
+
+def normalize_registration_configuration_payload(
+    *,
+    tournament_id: str,
+    days: list[dict[str, Any]],
+    event_options: list[dict[str, Any]],
+    published_events: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return deterministic, tournament-scoped rows safe for service-role writes."""
+
+    tournament_id = str(tournament_id)
+    raw_days = _json_safe_value(list(days or []))
+    raw_events = _json_safe_value(list(event_options or []))
+    normalized_days: list[dict[str, Any]] = []
+    day_aliases: dict[str, str] = {}
+    day_ids: set[str] = set()
+    for index, raw in enumerate(raw_days, start=1):
+        supplied_tournament_id = str(raw.get("tournament_id") or "").strip()
+        if supplied_tournament_id and supplied_tournament_id != tournament_id:
+            raise ValueError(f"Invalid day payload at row {index}: tournament_id mismatch.")
+        row_id = str(raw.get("id") or "").strip() or _deterministic_configuration_id(
+            tournament_id=tournament_id,
+            kind="day",
+            index=index,
+            row=raw,
+        )
+        if row_id in day_ids:
+            raise ValueError(f"Invalid day payload at row {index}: duplicate id '{row_id}'.")
+        day_ids.add(row_id)
+        day_aliases[f"day_{index}"] = row_id
+        clean = {key: raw.get(key) for key in DAY_CONFIGURATION_WRITE_FIELDS if key in raw}
+        clean.update(
+            {
+                "id": row_id,
+                "tournament_id": tournament_id,
+                "sort_order": raw.get("sort_order") or index,
+                "label": str(raw.get("label") or f"Day {index}"),
+                "enabled": _coerce_bool(raw.get("enabled", True)),
+            }
+        )
+        event_date = raw.get("event_date") or raw.get("date") or raw.get("start_date")
+        if event_date not in (None, ""):
+            clean["event_date"] = event_date
+        normalized_days.append(clean)
+
+    published_ids_by_identity = {
+        _event_identity_key(row): str(row.get("id"))
+        for row in (published_events or [])
+        if str(row.get("id") or "").strip()
+    }
+    normalized_events: list[dict[str, Any]] = []
+    event_ids: set[str] = set()
+    for index, raw in enumerate(raw_events, start=1):
+        supplied_tournament_id = str(raw.get("tournament_id") or "").strip()
+        if supplied_tournament_id and supplied_tournament_id != tournament_id:
+            raise ValueError(f"Invalid event payload at row {index}: tournament_id mismatch.")
+        row_id = str(raw.get("id") or "").strip()
+        if not row_id:
+            row_id = published_ids_by_identity.get(_event_identity_key(raw)) or _deterministic_configuration_id(
+                tournament_id=tournament_id,
+                kind="event",
+                index=index,
+                row=raw,
+            )
+        if row_id in event_ids:
+            raise ValueError(f"Invalid event payload at row {index}: duplicate id '{row_id}'.")
+        event_ids.add(row_id)
+        registration_day_id = str(raw.get("registration_day_id") or "").strip()
+        registration_day_id = day_aliases.get(registration_day_id, registration_day_id)
+        if not registration_day_id and len(normalized_days) == 1:
+            registration_day_id = str(normalized_days[0]["id"])
+        if registration_day_id not in day_ids:
+            raise ValueError(
+                f"Invalid event payload at row {index}: registration_day_id '{registration_day_id}' is not present in day payload."
+            )
+        clean = {key: raw.get(key) for key in EVENT_CONFIGURATION_WRITE_FIELDS if key in raw}
+        event_type = str(raw.get("event_type") or "").strip().upper()
+        clean.update(
+            {
+                "id": row_id,
+                "tournament_id": tournament_id,
+                "registration_day_id": registration_day_id,
+                "sort_order": raw.get("sort_order") or index,
+                "label": str(raw.get("label") or raw.get("division_name") or raw.get("event_family_label") or f"Event {index}"),
+                "event_type": event_type,
+                "gender_restriction": str(raw.get("gender_restriction") or "ANY").strip().upper(),
+                "partner_required": _coerce_bool(raw.get("partner_required", event_type != "SINGLES")),
+                "public_partner_board": _coerce_bool(raw.get("public_partner_board", raw.get("partner_board_enabled", True))),
+                "waitlist_enabled": _coerce_bool(raw.get("waitlist_enabled", True)),
+                "partner_board_enabled": _coerce_bool(raw.get("partner_board_enabled", True)),
+                "enabled": _coerce_bool(raw.get("enabled", True)),
+                "status": str(raw.get("status") or "draft").strip().lower(),
+            }
+        )
+        if isinstance(clean.get("age_rules"), (dict, list)):
+            clean["age_rules"] = json.dumps(clean["age_rules"], sort_keys=True, separators=(",", ":"))
+        normalized_events.append(clean)
+    return normalized_days, normalized_events
+
+
+def assert_registration_configuration_row_ownership(
+    supabase,
+    *,
+    tournament_id: str,
+    days: list[dict[str, Any]],
+    event_options: list[dict[str, Any]],
+) -> None:
+    """Reject an ID already owned by another tournament before any write."""
+
+    for table_name, rows in (
+        ("tournament_registration_days", days),
+        ("tournament_event_options", event_options),
+    ):
+        for row in rows:
+            row_id = str(row.get("id") or "").strip()
+            existing = _safe_first(
+                supabase.table(table_name)
+                .select("id,tournament_id")
+                .eq("id", row_id)
+                .limit(1)
+                .execute()
+            )
+            if existing and str(existing.get("tournament_id") or "") != str(tournament_id):
+                raise ValueError(
+                    f"Configuration row '{row_id}' belongs to another tournament and cannot be published here."
+                )
+
+
 def analyze_registration_publish_impact(
     supabase,
     *,
@@ -718,37 +919,30 @@ def analyze_registration_publish_impact(
     event_options: list[dict[str, Any]],
 ) -> dict[str, Any]:
     tournament_id = str(tournament_id)
-    days = _json_safe_value(list(days or []))
-    event_options = _json_safe_value(list(event_options or []))
     published_days = list_registration_days(supabase, tournament_id)
     published_events = list_event_options(supabase, tournament_id)
+    days, event_options = normalize_registration_configuration_payload(
+        tournament_id=tournament_id,
+        days=days,
+        event_options=event_options,
+        published_events=published_events,
+    )
+    assert_registration_configuration_row_ownership(
+        supabase,
+        tournament_id=tournament_id,
+        days=days,
+        event_options=event_options,
+    )
     usage_by_event = list_registration_usage_by_event_option(supabase, tournament_id)
     usage_by_day = list_registration_usage_by_day(supabase, tournament_id)
 
     published_days_by_id = {str(row.get("id")): row for row in published_days if str(row.get("id") or "").strip()}
     published_events_by_id = {str(row.get("id")): row for row in published_events if str(row.get("id") or "").strip()}
-    published_event_ids_by_identity = {_event_identity_key(row): str(row.get("id")) for row in published_events if str(row.get("id") or "").strip()}
 
-    draft_days: list[dict[str, Any]] = []
-    draft_day_ids: set[str] = set()
-    for row in days or []:
-        row_id = str(row.get("id") or "").strip()
-        if not row_id:
-            row = {**row, "id": _uid("day")}
-            row_id = str(row.get("id"))
-        draft_day_ids.add(row_id)
-        draft_days.append({**row, "id": row_id})
-
-    draft_events: list[dict[str, Any]] = []
-    draft_event_ids: set[str] = set()
-    for row in event_options or []:
-        row_id = str(row.get("id") or "").strip()
-        if not row_id:
-            fallback_id = published_event_ids_by_identity.get(_event_identity_key(row))
-            row_id = fallback_id or _uid("event")
-            row = {**row, "id": row_id}
-        draft_event_ids.add(row_id)
-        draft_events.append({**row, "id": row_id})
+    draft_days = list(days)
+    draft_day_ids = {str(row.get("id")) for row in draft_days}
+    draft_events = list(event_options)
+    draft_event_ids = {str(row.get("id")) for row in draft_events}
 
     creates: list[str] = []
     updates: list[str] = []
@@ -886,8 +1080,18 @@ def replace_registration_configuration(
     event_options: list[dict[str, Any]],
     allow_replace_with_registrations: bool = False,
 ) -> None:
-    days = _json_safe_value(list(days or []))
-    event_options = _json_safe_value(list(event_options or []))
+    days, event_options = normalize_registration_configuration_payload(
+        tournament_id=str(tournament_id),
+        days=days,
+        event_options=event_options,
+        published_events=list_event_options(supabase, str(tournament_id)),
+    )
+    assert_registration_configuration_row_ownership(
+        supabase,
+        tournament_id=str(tournament_id),
+        days=days,
+        event_options=event_options,
+    )
     assert_registration_schema_contract(
         supabase,
         required_tables=["tournament_registration_settings", "tournament_registration_days", "tournament_event_options"],
@@ -981,8 +1185,18 @@ def publish_registration_configuration(
       and convert removed populated rows into soft-closed/disabled records.
     - Public registration continues to consume published day/event rows only.
     """
-    days = _json_safe_value(list(days or []))
-    event_options = _json_safe_value(list(event_options or []))
+    days, event_options = normalize_registration_configuration_payload(
+        tournament_id=str(tournament_id),
+        days=days,
+        event_options=event_options,
+        published_events=list_event_options(supabase, str(tournament_id)),
+    )
+    assert_registration_configuration_row_ownership(
+        supabase,
+        tournament_id=str(tournament_id),
+        days=days,
+        event_options=event_options,
+    )
     registration_count = count_tournament_registrations(supabase, tournament_id)
     if registration_count == 0:
         replace_registration_configuration(
@@ -1027,7 +1241,6 @@ def publish_registration_configuration(
                     **row,
                     "enabled": False,
                     "status": "closed",
-                    "updated_at": _now_iso(),
                 }
             )
         else:
@@ -1042,16 +1255,47 @@ def publish_registration_configuration(
                 {
                     **row,
                     "enabled": False,
-                    "updated_at": _now_iso(),
                 }
             )
         else:
             day_delete_ids.append(row_id)
 
-    if day_upserts:
-        supabase.table("tournament_registration_days").upsert(day_upserts).execute()
-    if event_upserts:
-        supabase.table("tournament_event_options").upsert(event_upserts).execute()
+    published_day_ids = {str(row.get("id") or "") for row in published_days}
+    published_event_ids = {str(row.get("id") or "") for row in published_events}
+    day_inserts = [row for row in day_upserts if str(row.get("id") or "") not in published_day_ids]
+    day_updates = [row for row in day_upserts if str(row.get("id") or "") in published_day_ids]
+    event_inserts = [row for row in event_upserts if str(row.get("id") or "") not in published_event_ids]
+    event_updates = [row for row in event_upserts if str(row.get("id") or "") in published_event_ids]
+
+    for row in day_updates:
+        row_id = str(row.get("id") or "")
+        patch = {key: value for key, value in row.items() if key not in {"id", "tournament_id", "created_at"}}
+        updated = _safe_data(
+            supabase.table("tournament_registration_days")
+            .update(patch)
+            .eq("tournament_id", str(tournament_id))
+            .eq("id", row_id)
+            .execute()
+        )
+        if not updated:
+            raise SelectionWriteConflict(f"Tournament day '{row_id}' changed during publish.")
+    if day_inserts:
+        supabase.table("tournament_registration_days").insert(day_inserts).execute()
+
+    for row in event_updates:
+        row_id = str(row.get("id") or "")
+        patch = {key: value for key, value in row.items() if key not in {"id", "tournament_id", "created_at"}}
+        updated = _safe_data(
+            supabase.table("tournament_event_options")
+            .update(patch)
+            .eq("tournament_id", str(tournament_id))
+            .eq("id", row_id)
+            .execute()
+        )
+        if not updated:
+            raise SelectionWriteConflict(f"Tournament event '{row_id}' changed during publish.")
+    if event_inserts:
+        supabase.table("tournament_event_options").insert(event_inserts).execute()
     if event_delete_ids:
         supabase.table("tournament_event_options").delete().eq("tournament_id", str(tournament_id)).in_("id", event_delete_ids).execute()
     if day_delete_ids:
@@ -1153,6 +1397,7 @@ def update_admin_registration(
     tournament_id: str,
     registration_id: str,
     payload: dict[str, Any],
+    expected_updated_at: str | None = None,
 ) -> dict[str, Any]:
     update_payload = {
         "first_name": str(payload.get("first_name") or "").strip() or None,
@@ -1180,15 +1425,21 @@ def update_admin_registration(
         if existing and str(existing.get("id")) != str(registration_id):
             raise ValueError("Another registration already uses that email.")
 
-    resp = (
+    query = (
         supabase.table("tournament_registrations")
         .update(clean_payload)
         .eq("tournament_id", str(tournament_id))
         .eq("id", str(registration_id))
-        .execute()
     )
+    if expected_updated_at is not None:
+        query = query.eq("updated_at", str(expected_updated_at))
+    resp = query.execute()
     updated = _safe_first(resp)
     if not updated:
+        if expected_updated_at is not None:
+            raise StaleTournamentRegistrationAdminError(
+                "Registration changed after it was loaded. Refresh and try again."
+            )
         raise ValueError("Registration not found for this tournament.")
     return updated
 
@@ -1294,7 +1545,7 @@ def registration_is_imported_to_draw(
 ) -> bool:
     if not selection_id and not registration_id:
         return False
-    selection = None
+    selections: list[dict[str, Any]] = []
     if selection_id:
         selection_resp = (
             supabase.table("tournament_registration_selections")
@@ -1305,34 +1556,52 @@ def registration_is_imported_to_draw(
             .execute()
         )
         selection = _safe_first(selection_resp)
-    if not selection and registration_id:
+        if selection:
+            selections = [selection]
+    if not selections and registration_id:
         selection_resp = (
             supabase.table("tournament_registration_selections")
             .select("*")
             .eq("tournament_id", str(tournament_id))
             .eq("registration_id", str(registration_id))
+            .execute()
+        )
+        selections = _safe_data(selection_resp)
+    if not selections:
+        return False
+    for selection in selections:
+        day_id = str(selection.get("registration_day_id") or "")
+        event_option_id = str(selection.get("event_option_id") or "")
+        if not day_id or not event_option_id:
+            continue
+        teams_resp = (
+            supabase.table("tournament_teams")
+            .select("id")
+            .eq("tournament_id", str(tournament_id))
+            .eq("registration_day_id", day_id)
+            .eq("event_option_id", event_option_id)
+            .eq("source", "REGISTRATION")
             .limit(1)
             .execute()
         )
-        selection = _safe_first(selection_resp)
-    if not selection:
-        return False
-    day_id = str(selection.get("registration_day_id") or "")
-    event_option_id = str(selection.get("event_option_id") or "")
-    if not day_id or not event_option_id:
-        return False
+        if _safe_data(teams_resp):
+            return True
+    return False
 
-    teams_resp = (
-        supabase.table("tournament_teams")
-        .select("id")
-        .eq("tournament_id", str(tournament_id))
-        .eq("registration_day_id", day_id)
-        .eq("event_option_id", event_option_id)
-        .eq("source", "REGISTRATION")
-        .limit(1)
-        .execute()
+
+def registration_has_imported_draw_selection(
+    supabase,
+    *,
+    tournament_id: str,
+    registration_id: str,
+) -> bool:
+    """Return whether any event on a registration has been imported to a draw."""
+
+    return registration_is_imported_to_draw(
+        supabase,
+        tournament_id=str(tournament_id),
+        registration_id=str(registration_id),
     )
-    return bool(_safe_data(teams_resp))
 
 
 def cancel_registration(supabase, *, tournament_id: str, registration_id: str) -> dict[str, Any]:
@@ -1443,6 +1712,9 @@ def save_registration(
     payload: dict[str, Any],
     expected_registration_id: str | None = None,
     allow_existing_unselectable_event_ids: set[str] | None = None,
+    expected_updated_at: str | None = None,
+    expected_selection_versions: list[dict[str, Any]] | None = None,
+    atomic_edit: bool = False,
 ) -> dict[str, Any]:
     email = _normalize_email(payload.get("email"))
     if not email:
@@ -1575,8 +1847,85 @@ def save_registration(
                 "show_on_partner_board": _coerce_bool(selection.get("show_on_partner_board", False)),
                 "sort_order": index,
                 "created_at": submitted_at,
+                "updated_at": submitted_at,
             }
         )
+
+    if atomic_edit:
+        if not expected_registration_id:
+            raise ValueError("Atomic registration edits require an expected registration id.")
+        if not str(expected_updated_at or "").strip():
+            raise TournamentRegistrationEditConflictError(
+                "Registration changed after it was loaded. Refresh the edit link and try again."
+            )
+        registration_patch = {
+            key: reg_row.get(key)
+            for key in (
+                "first_name",
+                "last_name",
+                "display_name",
+                "phone",
+                "dupr_id",
+                "doubles_skill",
+                "singles_skill",
+                "age",
+                "age_bracket",
+                "gender",
+                "notes",
+                "wants_partner_board_contact",
+            )
+        }
+        params = {
+            "p_tournament_id": str(tournament_id),
+            "p_registration_id": str(expected_registration_id),
+            "p_expected_updated_at": str(expected_updated_at),
+            "p_expected_selection_versions": list(expected_selection_versions or []),
+            "p_registration_patch": registration_patch,
+            "p_selections": rows,
+        }
+        try:
+            resp = supabase.rpc(PUBLIC_REGISTRATION_EDIT_RPC, params).execute()
+        except Exception as exc:
+            if _database_error_contains(exc, REGISTRATION_EDIT_CONFLICT_MARKER):
+                raise TournamentRegistrationEditConflictError(
+                    "Registration changed after it was loaded. Refresh the edit link and try again."
+                ) from exc
+            if _database_error_contains(exc, REGISTRATION_EDIT_IMPORTED_MARKER):
+                raise TournamentRegistrationImportedDrawError(
+                    "This registration is already imported into a draw and can no longer be edited publicly."
+                ) from exc
+            if _database_error_contains(exc, REGISTRATION_EDIT_RELATIONSHIP_MARKER):
+                raise TournamentRegistrationRelationshipLockedError(
+                    "This registration has an active partner relationship. Tournament staff must review the change."
+                ) from exc
+            raise RuntimeError("Tournament registration edit failed without changing the registration.") from exc
+
+        result = _rpc_object(resp)
+        if result is None:
+            raise RuntimeError("Tournament registration edit returned an invalid response.")
+        code = str(result.get("code") or "").strip().upper()
+        if code == REGISTRATION_EDIT_CONFLICT_CODE:
+            raise TournamentRegistrationEditConflictError(
+                "Registration changed after it was loaded. Refresh the edit link and try again."
+            )
+        if code == REGISTRATION_EDIT_IMPORTED_CODE:
+            raise TournamentRegistrationImportedDrawError(
+                "This registration is already imported into a draw and can no longer be edited publicly."
+            )
+        if code == REGISTRATION_EDIT_RELATIONSHIP_CODE:
+            raise TournamentRegistrationRelationshipLockedError(
+                "This registration has an active partner relationship. Tournament staff must review the change."
+            )
+        if code == "REGISTRATION_NOT_FOUND":
+            raise ValueError("Expected registration was not found for this tournament.")
+        if result.get("ok") is not True:
+            raise RuntimeError("Tournament registration edit returned an invalid response.")
+        return {
+            "registration_id": str(result.get("registration_id") or registration_id),
+            "submitted_at": (expected or {}).get("submitted_at") or submitted_at,
+            "updated_at": result.get("updated_at"),
+            "selection_count": int(result.get("selection_count") or 0),
+        }
 
     (
         supabase.table("tournament_registrations")
@@ -1700,26 +2049,74 @@ def build_public_tournament_roster_state(
     event_lookup = {str(row.get("id")): row for row in (state.get("event_options") or [])}
 
     status_map = {
-        "CONFIRMED": None,
-        "ADMIN_CONFIRMED": None,
+        "CONFIRMED": "Registered",
+        "ADMIN_CONFIRMED": "Registered",
         "WAITLIST": "Waitlist",
-        "REVIEW": None,
-        "PARTNER_MISSING": None,
+        "REVIEW": "Review",
+        "PARTNER_MISSING": "Review",
         "NEEDS_PARTNER": "Needs Partner",
         "PENDING_PARTNER_REQUEST": "Pending Partner Request",
-        "LEGACY_PARTNER_UNRESOLVED": None,
+        "LEGACY_PARTNER_UNRESOLVED": "Review",
     }
+
+    email_pattern = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+    phone_pattern = re.compile(r"(?<!\w)(?:\+?\d[\s().-]*){7,}\d(?!\w)")
+
+    def _public_text(value: Any, *, limit: int = 160) -> str:
+        return str(value or "").replace("<", "").replace(">", "").strip()[:limit]
+
+    def _public_display_name(value: Any) -> str:
+        text = _public_text(value)
+        if not text or email_pattern.search(text) or phone_pattern.search(text):
+            return "Player"
+        return text
+
+    def _public_age_bracket(member: dict[str, Any]) -> str | None:
+        explicit = _public_text(member.get("age_bracket"), limit=40)
+        if explicit:
+            return explicit
+        try:
+            age = int(member.get("age"))
+        except (TypeError, ValueError):
+            return None
+        if age < 18:
+            return "Under 18"
+        if age >= 60:
+            return "60+"
+        lower = (age // 10) * 10
+        return f"{lower}-{lower + 9}"
+
+    def _public_note(value: Any) -> str:
+        text = _public_text(value, limit=240)
+        text = email_pattern.sub("[contact removed]", text)
+        text = phone_pattern.sub("[contact removed]", text)
+        return text
+
+    def _public_skill(value: Any) -> str | int | float | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return value
+        text = _public_text(value, limit=24)
+        return text or None
+
+    def _public_status(value: Any) -> str:
+        # Unknown and unresolved states fail closed to Review. A missing value
+        # must never be interpreted as a confirmed registration in the browser.
+        return status_map.get(str(value or "").upper(), "Review")
+
+    def _public_entry_type(value: Any) -> str:
+        return {
+            "confirmed_team": "Team",
+            "needs_partner": "Player",
+            "pending_partner_request": "Pairing",
+        }.get(str(value or "").strip().lower(), "Registration")
 
     def _public_member(member: dict[str, Any]) -> dict[str, Any]:
         return {
-            "registration_id": member.get("registration_id"),
-            "selection_id": member.get("selection_id"),
-            "player_id": member.get("player_id"),
-            "display_name": str(member.get("display_name") or "Player").strip(),
-            "skill": member.get("skill"),
-            "age": member.get("age"),
-            "age_bracket": member.get("age_bracket"),
-            "dupr_id": member.get("dupr_id"),
+            "display_name": _public_display_name(member.get("display_name")),
+            "skill": _public_skill(member.get("skill")),
+            "age_bracket": _public_age_bracket(member),
         }
 
     registrations_by_event: list[dict[str, Any]] = []
@@ -1727,7 +2124,34 @@ def build_public_tournament_roster_state(
     pending_partner_requests: list[dict[str, Any]] = []
     unresolved_partner_entries: list[dict[str, Any]] = []
     players_needing_partners: list[dict[str, Any]] = []
+    partner_board_entries: list[dict[str, Any]] = []
     unique_players: set[str] = set()
+    public_board_enabled = _coerce_bool(
+        (state.get("settings") or settings or {}).get("partner_board_enabled", False)
+    )
+    board_event_ids = {
+        str(row.get("id") or "")
+        for row in (state.get("event_options") or [])
+        if str(row.get("id") or "")
+        and _coerce_bool(row.get("enabled", True))
+        and _coerce_bool(row.get("partner_board_enabled", row.get("public_partner_board", False)))
+        and str(row.get("status") or "draft").strip().lower()
+        in {"open", "tentative", "confirmed", "published", "active"}
+    }
+    board_selection_ids = {
+        str(row.get("selection_id") or "")
+        for row in (state.get("partner_board") or [])
+        if public_board_enabled
+        and str(row.get("selection_id") or "")
+        and str(row.get("event_option_id") or "") in board_event_ids
+    }
+    contact_registration_ids = {
+        str(row.get("id") or "")
+        for row in (state.get("registrations") or [])
+        if str(row.get("id") or "")
+        and _coerce_bool(row.get("wants_partner_board_contact", False))
+        and str(row.get("status") or "confirmed").strip().upper() not in {"CANCELLED", "WITHDRAWN"}
+    }
 
     for roster in state.get("event_rosters", []):
         event_option_id = str(roster.get("event_option_id") or "")
@@ -1735,58 +2159,86 @@ def build_public_tournament_roster_state(
         event_rows: list[dict[str, Any]] = []
 
         for entry in roster.get("entries", []):
-            members = [_public_member(member or {}) for member in (entry.get("members") or [])]
+            source_members = [member or {} for member in (entry.get("members") or [])]
+            members = [_public_member(member) for member in source_members]
             if not members:
                 continue
-            for member in members:
-                name_key = str(member.get("display_name") or "").strip().lower()
-                if name_key:
-                    unique_players.add(name_key)
+            for index, member in enumerate(source_members):
+                identity = next(
+                    (
+                        str(member.get(field) or "").strip()
+                        for field in ("player_id", "registration_id", "selection_id")
+                        if str(member.get(field) or "").strip()
+                    ),
+                    "",
+                )
+                if not identity:
+                    identity = str(members[index].get("display_name") or "").strip().lower()
+                if identity:
+                    unique_players.add(identity)
 
             status = str(entry.get("status") or "").upper()
+            selection_ids = sorted(
+                str(value).strip()
+                for value in (entry.get("source_selection_ids") or [])
+                if str(value or "").strip()
+            )
+            registration_ids = sorted(
+                str(value).strip()
+                for value in (entry.get("source_registration_ids") or [])
+                if str(value or "").strip()
+            )
+            entry_source = "|".join(selection_ids or registration_ids)
+            public_entry_key = build_public_tournament_reference(
+                tournament_id=str(tournament.get("id") or ""),
+                namespace="roster-entry",
+                source_id=entry_source,
+            )
             event_row = {
-                "event_day_id": str(roster.get("event_day_id") or ""),
-                "event_day_label": str(roster.get("event_day_label") or "").strip(),
-                "event_family": str(event_option.get("event_family_label") or roster.get("event_label") or "Event").strip(),
-                "division": str(event_option.get("division_name") or roster.get("event_label") or "Division").strip(),
-                "event_label": str(roster.get("event_label") or "").strip(),
-                "status": status_map.get(status),
-                "entry_type": str(entry.get("entry_type") or "").strip(),
-                "partner_request_id": entry.get("partner_request_id"),
-                "partner_link_id": entry.get("partner_link_id"),
-                "source_registration_ids": entry.get("source_registration_ids") or [],
-                "source_selection_ids": entry.get("source_selection_ids") or [],
-                "source_player_ids": entry.get("source_player_ids") or [],
+                "public_entry_key": public_entry_key or None,
+                "event_day_label": _public_text(roster.get("event_day_label"), limit=120),
+                "event_family": _public_text(event_option.get("event_family_label") or roster.get("event_label") or "Event", limit=160),
+                "division": _public_text(event_option.get("division_name") or roster.get("event_label") or "Division", limit=160),
+                "event_label": _public_text(roster.get("event_label"), limit=160),
+                "status": _public_status(status),
+                "entry_type": _public_entry_type(entry.get("entry_type")),
                 "members": members,
             }
             registrations_by_event.append(event_row)
             event_rows.append(event_row)
-            if status in {"CONFIRMED", "ADMIN_CONFIRMED", "WAITLIST"}:
+            if status in {"CONFIRMED", "ADMIN_CONFIRMED"}:
                 confirmed_teams.append(event_row)
             elif status == "PENDING_PARTNER_REQUEST":
                 pending_partner_requests.append(event_row)
-            elif status in {"LEGACY_PARTNER_UNRESOLVED", "PARTNER_MISSING", "REVIEW"}:
+            elif status not in {"NEEDS_PARTNER", "WAITLIST"}:
                 unresolved_partner_entries.append(event_row)
 
             if status == "NEEDS_PARTNER":
                 primary = members[0] if members else {}
-                players_needing_partners.append(
-                    {
-                        "player_name": primary.get("display_name"),
-                        "selection_id": primary.get("selection_id") or (entry.get("source_selection_ids") or [None])[0],
-                        "registration_id": primary.get("registration_id") or (entry.get("source_registration_ids") or [None])[0],
-                        "player_id": primary.get("player_id") or (entry.get("source_player_ids") or [None])[0],
-                        "event_option_id": event_option_id,
-                        "event_day_label": event_row["event_day_label"],
-                        "event_family": event_row["event_family"],
-                        "division": event_row["division"],
-                        "event_label": event_row["event_label"],
-                        "skill": primary.get("skill"),
-                        "age": primary.get("age"),
-                        "age_bracket": primary.get("age_bracket"),
-                        "note": str(entry.get("notes") or "").strip(),
-                    }
+                source_selection_id = selection_ids[0] if selection_ids else str((source_members[0] if source_members else {}).get("selection_id") or "").strip()
+                source_registration_id = registration_ids[0] if registration_ids else str((source_members[0] if source_members else {}).get("registration_id") or "").strip()
+                board_entry_key = build_public_tournament_reference(
+                    tournament_id=str(tournament.get("id") or ""),
+                    namespace="partner-board-selection",
+                    source_id=source_selection_id,
                 )
+                needs_partner_row = {
+                    "player_name": primary.get("display_name"),
+                    "board_entry_key": board_entry_key or None,
+                    "event_day_label": event_row["event_day_label"],
+                    "event_family": event_row["event_family"],
+                    "division": event_row["division"],
+                    "event_label": event_row["event_label"],
+                    "skill": primary.get("skill"),
+                    "age_bracket": primary.get("age_bracket"),
+                    "note": _public_note(entry.get("notes")),
+                }
+                players_needing_partners.append(needs_partner_row)
+                if (
+                    source_selection_id in board_selection_ids
+                    and source_registration_id in contact_registration_ids
+                ):
+                    partner_board_entries.append(dict(needs_partner_row))
 
     return {
         "registrations_by_event": registrations_by_event,
@@ -1794,10 +2246,12 @@ def build_public_tournament_roster_state(
         "pending_partner_requests": pending_partner_requests,
         "unresolved_partner_entries": unresolved_partner_entries,
         "players_needing_partners": players_needing_partners,
+        "partner_board_entries": partner_board_entries,
         "summary": {
             "total_registrations": int(state.get("summary", {}).get("total_registrations") or 0),
             "total_players": len(unique_players),
             "players_needing_partners": len(players_needing_partners),
+            "partner_board_entries": len(partner_board_entries),
             "waitlist": int(state.get("summary", {}).get("waitlist_entries") or 0),
         },
     }

@@ -151,6 +151,7 @@ def _install_api(monkeypatch, supabase: FakeSupabase) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only-local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
     monkeypatch.setattr(
         "services.api.admin_league_manager_routes.authenticate_bearer",

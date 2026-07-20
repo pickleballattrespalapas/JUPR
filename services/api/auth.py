@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import jwt
 from fastapi import Header, HTTPException
@@ -106,6 +107,17 @@ def jwt_verification_mode() -> str:
 
 def jwt_verification_configured() -> bool:
     return jwt_verification_mode() != "unconfigured"
+
+
+def jwt_verification_project_ref() -> str | None:
+    """Return the public Supabase project ref used for asymmetric JWT checks."""
+
+    if jwt_verification_mode() not in {"jwks", "auto"}:
+        return None
+    host = (urlparse(get_supabase_jwks_url()).hostname or "").strip().lower()
+    if not host.endswith(".supabase.co"):
+        return None
+    return host.split(".", 1)[0] or None
 
 
 def get_token_decoder() -> Callable[[str], dict[str, Any]]:

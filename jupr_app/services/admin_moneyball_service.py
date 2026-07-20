@@ -8,10 +8,16 @@ from typing import Any
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.schedule import get_match_schedule
 from jupr_app.services import ServiceContext, submit_match_batch
+from jupr_app.services.admin_live_ladder_operation_service import (
+    deterministic_match_context_id,
+    is_staging_write_gate_enabled,
+    stable_request_fingerprint,
+)
 from jupr_app.data.load import load_data
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
 CONFIRM = "SAVE MONEYBALL"
+MONEYBALL_WRITE_FLAG = "JUPR_ENABLE_STAGING_NEXT_ADMIN_MONEYBALL_WRITES"
 
 
 def is_admin_moneyball_enabled() -> bool:
@@ -107,7 +113,21 @@ def build_admin_moneyball_status(supabase: Any | None, *, club_id: str) -> dict[
     if not is_admin_moneyball_enabled():
         return {"enabled": False, "status": "guarded_off", "warnings": ["Enable JUPR_ENABLE_NEXT_ADMIN_MONEYBALL to use Moneyball in Next."]}
     players = _players(supabase, club_id=str(club_id)) if supabase is not None else []
-    return {"enabled": True, "status": "ready_for_moneyball", "players": players, "league_options": _league_options(supabase, club_id=str(club_id)) if supabase is not None else ["OVERALL"], "warnings": []}
+    writes_enabled = is_staging_write_gate_enabled(MONEYBALL_WRITE_FLAG)
+    return {
+        "enabled": True,
+        "authority": "python_fastapi",
+        "writes_enabled": writes_enabled,
+        "status": "ready_for_moneyball" if writes_enabled else "read_only_streamlit_fallback",
+        "players": players,
+        "league_options": _league_options(supabase, club_id=str(club_id)) if supabase is not None else ["OVERALL"],
+        "warnings": [] if writes_enabled else [
+            f"Next Moneyball writes require JUPR_ENV=staging and {MONEYBALL_WRITE_FLAG}=1 on FastAPI. Use Streamlit Moneyball otherwise."
+        ],
+        "confirmation_text": {"publish": CONFIRM},
+        "streamlit_fallback": "moneyball",
+        "recovery": {"match_log_url": "/admin/match-log", "replay_history_url": "/admin/replay-history"},
+    }
 
 
 def build_moneyball_preview(supabase: Any, *, club_id: str, player_ids: list[int], rating_context: str = "OVERALL", win_rate: float = 5.0, point_rate: float = 2.0) -> dict[str, Any]:
@@ -147,7 +167,20 @@ def build_moneyball_preview(supabase: Any, *, club_id: str, player_ids: list[int
             "expected_score": f"{s1}–{s2}",
             "expected_margin": margin,
         })
-    return {"ok": True, "mode": "moneyball_preview", "rating_context": rating_context, "win_rate": float(win_rate), "point_rate": float(point_rate), "players": [players[pid] for pid in ids], "ratings": {str(pid): ratings[pid] for pid in ids}, "matches": matches}
+    payload = {"ok": True, "mode": "moneyball_preview", "rating_context": rating_context, "win_rate": float(win_rate), "point_rate": float(point_rate), "players": [players[pid] for pid in ids], "ratings": {str(pid): ratings[pid] for pid in ids}, "matches": matches}
+    payload["preview_fingerprint"] = stable_request_fingerprint(
+        {
+            "club_id": str(club_id),
+            "rating_context": str(rating_context),
+            "win_rate": float(win_rate),
+            "point_rate": float(point_rate),
+            "player_ids_in_order": ids,
+            "ratings": payload["ratings"],
+            "matches": matches,
+        }
+    )
+    payload["authority"] = "python_fastapi"
+    return payload
 
 
 def compute_moneyball_settlement(*, matches: list[dict[str, Any]], scores: list[dict[str, Any]], win_rate: float, point_rate: float) -> dict[str, Any]:
@@ -195,7 +228,71 @@ def compute_moneyball_settlement(*, matches: list[dict[str, Any]], scores: list[
         idx = max(range(len(rows)), key=lambda i: abs(float(rows[i]["net"])))
         rows[idx]["net"] = round(float(rows[idx]["net"]) + drift, 2)
     rows.sort(key=lambda row: float(row["net"]), reverse=True)
-    return {"standings": rows, "tie_matches": tie_matches}
+    for row in rows:
+        net = float(row.get("net") or 0.0)
+        row["settlement_direction"] = "receives" if net > 0 else ("owes" if net < 0 else "even")
+        row["settlement_amount"] = abs(net)
+    return {"standings": rows, "tie_matches": tie_matches, "net_total": round(sum(float(row["net"]) for row in rows), 2)}
+
+
+def build_moneyball_settlement_preview(
+    supabase: Any,
+    *,
+    club_id: str,
+    player_ids: list[int],
+    scores: list[dict[str, Any]],
+    rating_context: str = "OVERALL",
+    win_rate: float = 5.0,
+    point_rate: float = 2.0,
+) -> dict[str, Any]:
+    preview = build_moneyball_preview(
+        supabase,
+        club_id=str(club_id),
+        player_ids=player_ids,
+        rating_context=rating_context,
+        win_rate=win_rate,
+        point_rate=point_rate,
+    )
+    settlement = compute_moneyball_settlement(
+        matches=preview["matches"],
+        scores=scores,
+        win_rate=win_rate,
+        point_rate=point_rate,
+    )
+    names = {int(row["id"]): str(row["name"]) for row in preview["players"]}
+    for row in settlement["standings"]:
+        row["player_name"] = names.get(int(row["player_id"]), f"Player {row['player_id']}")
+    scored_rows = [
+        {
+            "row_id": str(row.get("row_id") or ""),
+            "score_t1": _safe_int(row.get("score_t1")),
+            "score_t2": _safe_int(row.get("score_t2")),
+        }
+        for row in scores or []
+    ]
+    fingerprint = stable_request_fingerprint(
+        {"preview_fingerprint": preview["preview_fingerprint"], "scores": scored_rows, "settlement": settlement}
+    )
+    scores_by_row_id = {str(row.get("row_id") or ""): row for row in scored_rows}
+    would_publish_count = sum(
+        1
+        for match in preview["matches"]
+        if (
+            (score := scores_by_row_id.get(str(match.get("row_id") or ""))) is not None
+            and (int(score.get("score_t1") or 0) + int(score.get("score_t2") or 0)) > 0
+            and int(score.get("score_t1") or 0) != int(score.get("score_t2") or 0)
+        )
+    )
+    return {
+        "ok": True,
+        "mode": "moneyball_settlement_preview",
+        "authority": "python_fastapi",
+        "preview_fingerprint": preview["preview_fingerprint"],
+        "settlement_fingerprint": fingerprint,
+        "preview": preview,
+        "settlement": settlement,
+        "would_publish_count": would_publish_count,
+    }
 
 
 def submit_admin_moneyball(
@@ -213,12 +310,25 @@ def submit_admin_moneyball(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    expected_settlement_fingerprint: str | None = None,
+    publish_context_prefix: str | None = None,
     source: str = "next_moneyball_admin",
 ) -> dict[str, Any]:
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM:
         raise ValueError(f"Type {CONFIRM} to save Moneyball matches.")
-    preview = build_moneyball_preview(supabase, club_id=club_id, player_ids=player_ids, rating_context=rating_context, win_rate=win_rate, point_rate=point_rate)
-    settlement = compute_moneyball_settlement(matches=preview["matches"], scores=scores, win_rate=win_rate, point_rate=point_rate)
+    settlement_preview = build_moneyball_settlement_preview(
+        supabase,
+        club_id=str(club_id),
+        player_ids=player_ids,
+        scores=scores,
+        rating_context=rating_context,
+        win_rate=win_rate,
+        point_rate=point_rate,
+    )
+    if expected_settlement_fingerprint and str(expected_settlement_fingerprint) != str(settlement_preview["settlement_fingerprint"]):
+        raise ValueError("Moneyball settlement preview is stale. Review the Python settlement again before official publish.")
+    preview = settlement_preview["preview"]
+    settlement = settlement_preview["settlement"]
     by_id = {str(score.get("row_id")): score for score in scores or []}
     match_payloads: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc).isoformat()
@@ -236,7 +346,14 @@ def submit_admin_moneyball(
             "week_tag": _clean_text(week_tag, limit=120) or f"Moneyball {now[:10]}",
             "match_type": _clean_text(match_type, limit=120) or "Moneyball RR",
             "context_type": "moneyball",
-            "context_id": f"{_clean_text(week_tag, limit=120) or now[:10]}:match-{match['match_index']}",
+            "context_id": (
+                deterministic_match_context_id(
+                    operation_key=_clean_text(publish_context_prefix, limit=80),
+                    slot=int(match["match_index"]),
+                )
+                if _clean_text(publish_context_prefix, limit=80)
+                else f"{_clean_text(week_tag, limit=120) or now[:10]}:match-{match['match_index']}"
+            ),
             "is_popup": False,
         })
     if not match_payloads:
@@ -253,4 +370,20 @@ def submit_admin_moneyball(
     write = write_admin_activity_log(supabase, audit)
     if not write.ok and os.getenv("JUPR_REQUIRE_API_AUDIT_LOG", "").strip().lower() in TRUTHY:
         raise RuntimeError("audit log write required but unavailable")
-    return {"ok": True, "mode": "moneyball_submit", "submitted_count": len(match_payloads), "settlement": settlement, "preview": preview, "result": result.data, "warnings": [write.warning] if write.warning else []}
+    return {
+        "ok": True,
+        "mode": "moneyball_submit",
+        "official_publish": True,
+        "submitted_count": len(match_payloads),
+        "settlement": settlement,
+        "settlement_fingerprint": settlement_preview["settlement_fingerprint"],
+        "preview": preview,
+        "result": result.data,
+        "match_context_ids": [str(row["context_id"]) for row in match_payloads],
+        "correction": {
+            "match_log_url": f"/admin/match-log?context_type=moneyball&context_id={match_payloads[0]['context_id']}",
+            "replay_history_url": f"/admin/replay-history?context_type=moneyball&context_id={match_payloads[0]['context_id']}",
+            "instructions": "Correct official Moneyball rows in Match Log, then run and verify Replay History. Never resubmit the night as a correction.",
+        },
+        "warnings": [write.warning] if write.warning else [],
+    }

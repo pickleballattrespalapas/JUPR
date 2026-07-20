@@ -19,32 +19,42 @@ Current public and staff-facing routes include:
 - `/` public product home.
 - `/site-map` public click-through route map.
 - `/clubs/[clubSlug]` club landing page.
-- `/clubs/[clubSlug]/leaderboards` public leaderboard page.
+- `/clubs/[clubSlug]/leaderboards` public Overall/league leaderboards with Active-by-default status, search/snapshot links, qualification and badge context, stable filters, and pagination.
 - `/clubs/[clubSlug]/league-results` public league standings, weekly results, and season summaries.
-- `/clubs/[clubSlug]/badge-codex` public badge definitions, unlock paths, prestige, and recent badge earners.
-- `/clubs/[clubSlug]/challenge-ladder` public ladder tiers, player status, active challenge buckets, and quick rules.
+- `/clubs/[clubSlug]/badge-codex` Python-authoritative badge definitions grouped by availability/timing, category and scope filters, direct anchors, paged public earners, and privacy-safe trophy-room context.
+- `/clubs/[clubSlug]/challenge-ladder` public tiers/status/challenge deep links, Python-computed eligible-opponent hints, a complete rulebook, and the canonical status legend.
 - `/clubs/[clubSlug]/weekly-recap` public published weekly recap with spotlight reel, around-the-club highlights, tournament podiums, print view, and PDF download.
-- `/clubs/[clubSlug]/tournament-registration` public tournament registration intake, including secure edit-link request.
-- `/clubs/[clubSlug]/tournament-registration/confirmation?registration_id=...` public registration confirmation page.
+- `/clubs/[clubSlug]/tournament-registration` four-step public tournament registration intake with exact-match profile preflight, duplicate/closed recovery, partner policy, sponsor/refund/roster content, and secure edit-link request.
+- `/clubs/[clubSlug]/tournament-registration/confirmation?confirmation_token=...` signed, registrant-specific confirmation page.
 - `/clubs/[clubSlug]/tournament-registration/edit?edit_token=...` tokenized registration edit page.
 - `/clubs/[clubSlug]/tournament-roster` public-safe tournament roster.
 - `/clubs/[clubSlug]/tournament-partner-board` public-safe tournament board with token-gated interest flow.
 - `/clubs/[clubSlug]/match-explorer` public matchup odds and projected rating movement preview.
-- `/clubs/[clubSlug]/players` public player directory.
-- `/clubs/[clubSlug]/players/[playerId]` public player profile.
+- `/clubs/[clubSlug]/players` active-by-default public player directory with visible search, status/sort controls, paging, and stable profile/row links.
+- `/clubs/[clubSlug]/players/[playerId]` public-display-only profile with rating trend and format/league breakdowns, badges/trophies, partner/rival summaries, Club Social aggregates, verified-update entry, and recent/full match history.
 - `/clubs/[clubSlug]/players/[playerId]/matches` public player match history.
 - `/clubs/[clubSlug]/matches` public match history.
 - `/clubs/[clubSlug]/matches/[matchId]` public match detail.
 - `/clubs/[clubSlug]/live` public live-session list.
 - `/clubs/[clubSlug]/live/[sessionKey]` public live-session detail.
+
+Public JUPR Live write parity (Round Robin, League/Ladder, Club Social, recovery,
+substitutions, and exports) is staged behind server-only gates. See
+`docs/public_live_parity_runbook.md`; no public-live token or rate-limit secret
+belongs in Vercel.
 - `/how-ratings-work` public ratings explainer.
 - `/faq` public rating FAQ.
 - `/privacy` first-party privacy policy copy.
 - `/terms` first-party terms copy.
-- `/support` and `/contact` support/contact shell routed to `joe@juprleagues.com`.
-- `/data-corrections` public correction intake instructions with no direct mutation.
+- `/support` and `/contact` durable general-support intake plus a populated email fallback.
+- `/data-corrections` public correction intake with no direct data mutation.
+- `/profile-privacy` identity-reviewed privacy fulfillment intake with no direct public-profile mutation.
 - `/admin` staff operations cockpit for the Streamlit-to-Next migration.
-- `/admin/match-log`, `/admin/replay-history`, `/admin/match-uploader`, `/admin/players`, and `/admin/league-manager` guarded staff migration surfaces.
+- `/admin/match-log`, `/admin/replay-history`, `/admin/match-uploader`, `/admin/players`, `/admin/league-manager`, and `/admin/league-manager/awards` guarded staff migration surfaces.
+- `/admin/league-manager/print` authenticated browser-print schedule, weekly leaders, configured Top Performers, standings, and attendance roster.
+- `/admin/top-players-printable` authenticated previous-calendar-month Top 50 browser export.
+- `/admin/weekly-recap` guarded full draft preview/print and recap lifecycle surface.
+- `/admin/player-updates` guarded subscription, digest, queue, delivery-history, retry, delete, and replacement workspace.
 - `/clubs/[clubSlug]/admin/score-entry` staging-only score-entry MVP, still feature-flagged and not production-active by default.
 
 ## Environment variables
@@ -57,12 +67,20 @@ Use one of the following API base URL variables:
 - `NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` (keep disabled outside controlled staging)
 - `JUPR_STAGING_API_BASE_URL` (optional preview override; defaults to the dedicated Fly staging API)
 - `NEXT_PUBLIC_STAGING_SUPABASE_URL` and `NEXT_PUBLIC_STAGING_SUPABASE_ANON_KEY` (preview-only staging auth project; never use service-role credentials)
+- `JUPR_SUPPORT_EMAIL` (server-rendered support/contact fallback; defaults to `joe@juprleagues.com`)
 
 Use this public web URL variable for metadata and sitemap generation:
 
 - `NEXT_PUBLIC_JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com`
 
-The `/admin` cockpit reads `GET /admin/operations/status` from FastAPI. Its workflow flags live on the API deployment, not in Vercel. `/admin/match-log` reads `GET /admin/clubs/{club_id}/match-log` and shows fallback instructions until `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` is enabled on FastAPI.
+Set the matching server-side `JUPR_WEB_BASE_URL` on FastAPI/Fly. Player update
+emails use it to generate tokenized Next `/email-preferences` links. The API
+fails the individual outbox send closed when no unsubscribe token is available;
+it never falls back to a public subscription ID.
+
+The `/admin` cockpit reads `GET /admin/operations/status` from FastAPI. Its workflow flags live on the API deployment, not in Vercel. `/admin/match-log` reads `GET /admin/clubs/{club_id}/match-log` and shows fallback instructions until `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` is enabled on FastAPI. When apply mode is enabled, guided and bulk edits carry stable idempotency keys; rating-affecting edits expose their durable Replay History job and block further editing when mandatory recovery is required.
+
+League Awards has a separate API-only `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE` gate. It must never be mirrored into a browser variable. The page persists freeze/preview/override/mint/archive recovery state through FastAPI, blocks mint while any required badge definition is missing, and reports mint success only after FastAPI verifies all expected badge rows.
 
 Example:
 
@@ -135,6 +153,8 @@ NEXT_PUBLIC_JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com
 
 Do **not** configure `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-only secrets in Vercel.
 
+Weekly Recap Admin and Player Updates Admin receive authenticated FastAPI projections only. Their database service role and SMTP configuration remain on Fly. Follow `docs/communications_parity_runbook.md` for staging flags, safe email modes, recovery, and the deferred manual checklist.
+
 If a Vercel preview build is rate-limited, rerun the preview after quota resets and wait for a fresh green Vercel status before merging frontend PRs.
 
 ## Public smoke checks
@@ -179,3 +199,5 @@ npm run test:e2e:staging
 The score-entry page at `/clubs/[clubSlug]/admin/score-entry` is an MVP surface only. Rated admin writes remain blocked unless the backend feature flag is explicitly enabled and Supabase JWT role authorization succeeds.
 
 Closed-club production-write pilot work may enable one workflow at a time through FastAPI-side flags. Keep the permanent safety boundaries from `docs/next_admin_operations_migration.md` in place: no browser secrets, no direct browser writes to rating tables, and no JavaScript rating logic.
+
+Admin login also requires `NEXT_PUBLIC_JUPR_API_BASE_URL` so the browser can exchange a Supabase user JWT for the caller's server-verified JUPR club capabilities. Optional `NEXT_PUBLIC_JUPR_ADMIN_CLUB_ID` selects the requested workspace and defaults to `tres_palapas`. Supabase Auth recovery redirects must allow the exact `/admin/reset-password` URL for each deployed origin; recovery requests use PKCE and the Next page retains legacy implicit recovery links only as a fallback.

@@ -4,19 +4,13 @@ import LiveSessionRunner from "./LiveSessionRunner";
 
 type LiveSessionPageProps = {
   params: { clubSlug: string; sessionKey: string };
-  searchParams?: { edit?: string | string[] };
 };
 
 function apiBase(): string {
   return "/api";
 }
 
-function searchParamText(value: string | string[] | undefined): string {
-  if (Array.isArray(value)) return value[0] || "";
-  return value || "";
-}
-
-export default async function ClubLiveSessionPage({ params, searchParams }: LiveSessionPageProps) {
+export default async function ClubLiveSessionPage({ params }: LiveSessionPageProps) {
   const { clubSlug, sessionKey } = params;
   const { data, error } = await getClubLiveSession(clubSlug, sessionKey);
   const clubName = data?.club?.name ?? clubSlug;
@@ -44,7 +38,6 @@ export default async function ClubLiveSessionPage({ params, searchParams }: Live
         apiBase={apiBase()}
         clubSlug={clubSlug}
         initialSession={session}
-        editToken={searchParamText(searchParams?.edit)}
       />
     </section>
   );

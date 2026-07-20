@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { loadAdminSession, refreshAdminSession } from "@/lib/adminAuthClient";
+import { restoreAuthorizedAdminSession } from "@/lib/adminAuthClient";
 import type { AdminSession } from "@/lib/adminAuthClient";
 
 type AdminSessionState = {
@@ -23,10 +23,8 @@ export function useAdminSession(): AdminSessionState {
       setLoading(true);
       setMessage(null);
       try {
-        const current = loadAdminSession();
-        if (!cancelled) setSession(current);
-        const refreshed = await refreshAdminSession(current || undefined);
-        if (!cancelled && refreshed) setSession(refreshed);
+        const authorized = await restoreAuthorizedAdminSession();
+        if (!cancelled) setSession(authorized);
       } catch (error) {
         if (!cancelled) {
           setSession(null);

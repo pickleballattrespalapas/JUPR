@@ -7,6 +7,8 @@ from jupr_app.domain.tournament_registration_repo import (
     ADMIN_PAYMENT_STATUS_OPTIONS,
     ADMIN_REGISTRATION_STATUS_OPTIONS,
     update_admin_registration,
+    registration_is_imported_to_draw,
+    StaleTournamentRegistrationAdminError,
 )
 from jupr_app.services.admin_tournament_service import (
     TOURNAMENT_SELECT,
@@ -55,10 +57,12 @@ def bulk_update_admin_tournament_registrations(
     tournament_id: str,
     registration_ids: list[str],
     patch: dict[str, Any],
+    expected_versions: dict[str, str] | None = None,
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
     source: str = "next_tournament_admin_registration_bulk_update",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -79,12 +83,54 @@ def bulk_update_admin_tournament_registrations(
     if not common_payload and not note_text:
         raise ValueError("Choose a registration status, payment status, or note to apply.")
 
+    # Preflight every selected row before the first write so a stale or imported
+    # registration cannot leave a partially applied bulk operation.
+    before_by_id: dict[str, dict[str, Any]] = {}
+    for registration_id in ids:
+        before = _fetch_registration_by_id(
+            supabase,
+            tournament_id=clean_tournament_id,
+            registration_id=registration_id,
+        )
+        if before is None:
+            if expected_versions is not None:
+                raise StaleTournamentRegistrationAdminError(
+                    f"Registration {registration_id} is no longer present. Refresh and review the entire bulk selection."
+                )
+            continue
+        before_by_id[registration_id] = before
+        expected = str((expected_versions or {}).get(registration_id) or "").strip()
+        if expected_versions is not None and (
+            not expected or expected != str(before.get("updated_at") or "").strip()
+        ):
+            raise StaleTournamentRegistrationAdminError(
+                f"Registration {registration_id} changed after the bulk selection was loaded. Refresh and review the entire selection."
+            )
+        if "status" in common_payload and registration_is_imported_to_draw(
+            supabase,
+            tournament_id=clean_tournament_id,
+            registration_id=registration_id,
+        ):
+            raise ValueError(
+                "A selected registration is already imported into a draw. Change draw membership in Tournament Ops before applying a bulk registration-status update."
+            )
+
+    if dry_run:
+        return {
+            "ok": True,
+            "mode": "tournament_registration_bulk_update_preflight",
+            "dry_run": True,
+            "write_count": 0,
+            "registration_ids": ids,
+            "patch": {**common_payload, "append_note": note_text or None},
+        }
+
     before_payloads: list[dict[str, Any]] = []
     after_payloads: list[dict[str, Any]] = []
     updated_ids: list[str] = []
     skipped: list[str] = []
     for registration_id in ids:
-        before = _fetch_registration_by_id(supabase, tournament_id=clean_tournament_id, registration_id=registration_id)
+        before = before_by_id.get(registration_id)
         if before is None:
             skipped.append(f"{registration_id}: not found")
             continue
@@ -97,6 +143,7 @@ def bulk_update_admin_tournament_registrations(
             tournament_id=clean_tournament_id,
             registration_id=registration_id,
             payload=update_payload,
+            expected_updated_at=(expected_versions or {}).get(registration_id) if expected_versions is not None else None,
         )
         selection_count = _selection_count_for_registration(supabase, tournament_id=clean_tournament_id, registration_id=registration_id)
         before_payloads.append(_registration_payload(before, selection_count=selection_count))

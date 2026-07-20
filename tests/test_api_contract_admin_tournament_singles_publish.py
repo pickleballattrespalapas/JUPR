@@ -17,10 +17,32 @@ def singles_tournament_tables() -> dict[str, list[dict]]:
     return {
         "tournaments": [{"club_id": "club", "id": "tour_1", "name": "Spring Classic", "status": "PUBLISHED", "start_date": "2026-04-10"}],
         "tournament_event_options": [{"id": "event_1", "tournament_id": "tour_1", "event_family_label": "Singles", "division_name": "4.0"}],
-        "tournament_event_draws": [{"id": "draw_1", "tournament_id": "tour_1", "event_option_id": "event_1", "name": "Singles 4.0"}],
+        "tournament_event_draws": [{
+            "id": "draw_1",
+            "tournament_id": "tour_1",
+            "event_option_id": "event_1",
+            "name": "Singles 4.0",
+            "updated_at": "2026-04-10T16:00:00Z",
+        }],
         "tournament_teams": [
-            {"id": "team_1", "tournament_id": "tour_1", "draw_id": "draw_1", "team_number": 1, "player1_id": 1, "player2_id": None},
-            {"id": "team_2", "tournament_id": "tour_1", "draw_id": "draw_1", "team_number": 2, "player1_id": 2, "player2_id": None},
+            {
+                "id": "team_1",
+                "tournament_id": "tour_1",
+                "draw_id": "draw_1",
+                "team_number": 1,
+                "player1_id": 1,
+                "player2_id": None,
+                "updated_at": "2026-04-10T16:00:00Z",
+            },
+            {
+                "id": "team_2",
+                "tournament_id": "tour_1",
+                "draw_id": "draw_1",
+                "team_number": 2,
+                "player1_id": 2,
+                "player2_id": None,
+                "updated_at": "2026-04-10T16:00:00Z",
+            },
         ],
         "tournament_games": [
             {
@@ -36,6 +58,7 @@ def singles_tournament_tables() -> dict[str, list[dict]]:
                 "winner_team_id": "team_1",
                 "loser_team_id": "team_2",
                 "finalized_at": "2026-04-10T17:00:00Z",
+                "updated_at": "2026-04-10T17:00:00Z",
             }
         ],
         "players": [

@@ -8,8 +8,6 @@ type Props = {
   initial: PublicEmailPreferencesResponse | null;
   token?: string | null;
   ut?: string | null;
-  sid?: string | null;
-  subscriptionId?: string | null;
 };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -20,7 +18,7 @@ function statusText(value?: string | null): string {
   return String(value || "unknown").replace(/_/g, " ");
 }
 
-export default function EmailPreferencesPanel({ initial, token, ut, sid, subscriptionId }: Props) {
+export default function EmailPreferencesPanel({ initial, token, ut }: Props) {
   const [scope, setScope] = useState("player_updates");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PublicEmailUnsubscribeResponse | null>(null);
@@ -28,12 +26,15 @@ export default function EmailPreferencesPanel({ initial, token, ut, sid, subscri
   const subscription = result?.subscription || initial?.subscription || null;
   const currentStatus = subscription?.request_status || "";
   const alreadyUnsubscribed = String(currentStatus).toLowerCase() === "unsubscribed";
+  const storedScope = String(subscription?.preferences_json?.unsubscribe_scope || "").toLowerCase();
+  const globallyUnsubscribed = storedScope === "global" || subscription?.preferences_json?.optional_emails_enabled === false;
+  const selectedScopeAlreadyApplied = alreadyUnsubscribed && (scope === "player_updates" || globallyUnsubscribed);
 
   async function unsubscribe() {
     setBusy(true);
     setMessage(null);
     try {
-      const response = await unsubscribeEmailPreferences({ token, ut, sid, subscription_id: subscriptionId, scope });
+      const response = await unsubscribeEmailPreferences({ token, ut, scope });
       if (response.error) throw new Error(response.error);
       setResult(response.data);
       setMessage(response.data?.message || "Your preference has been updated.");
@@ -64,7 +65,7 @@ export default function EmailPreferencesPanel({ initial, token, ut, sid, subscri
           <div><strong>Status</strong><br />{statusText(currentStatus)}</div>
           <div><strong>Verified</strong><br />{subscription?.verified_at ? String(subscription.verified_at).slice(0, 10) : "—"}</div>
         </div>
-        {alreadyUnsubscribed ? <p style={{ color: "#166534" }}>This subscription is already unsubscribed.</p> : null}
+        {alreadyUnsubscribed ? <p style={{ color: "#166534" }}>This subscription is unsubscribed{globallyUnsubscribed ? " from all optional email categories" : " from player updates"}.</p> : null}
       </article>
 
       <article style={{ ...cardStyle, borderColor: "#fecaca", background: "#fef2f2" }}>
@@ -75,11 +76,12 @@ export default function EmailPreferencesPanel({ initial, token, ut, sid, subscri
         <label><strong>Scope</strong><br />
           <select value={scope} onChange={(event) => setScope(event.target.value)} style={inputStyle}>
             <option value="player_updates">Player update emails</option>
-            <option value="global">All optional JUPR emails currently managed by this link</option>
+            <option value="global">All optional JUPR emails now and in the future</option>
           </select>
         </label>
-        <p><button type="button" disabled={busy || alreadyUnsubscribed} onClick={unsubscribe} style={buttonStyle}>{busy ? "Updating…" : alreadyUnsubscribed ? "Already unsubscribed" : "Unsubscribe"}</button></p>
-        {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("api error") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+        <p style={{ color: "#7f1d1d" }}>{scope === "global" ? "Global scope opts this address out of every optional category managed by JUPR, including categories added later. Transactional service messages remain enabled." : "Category scope disables verified player update digests only."}</p>
+        <p><button type="button" disabled={busy || selectedScopeAlreadyApplied} onClick={unsubscribe} style={buttonStyle}>{busy ? "Updating…" : selectedScopeAlreadyApplied ? "Preference already applied" : alreadyUnsubscribed && scope === "global" ? "Expand to global opt-out" : "Unsubscribe"}</button></p>
+        {message ? <p aria-live="polite" style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("api error") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
     </section>
   );

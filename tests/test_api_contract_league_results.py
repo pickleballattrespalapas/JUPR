@@ -102,11 +102,26 @@ def test_public_league_results_contract(client):
     payload = response.json()
     assert payload["club"] == {"id": "club-1", "slug": "tres-palapas", "name": "Tres Palapas"}
     assert payload["selected_league"] == "Open"
-    assert payload["league"] == {"name": "Open", "min_games": 4, "k_factor": 24}
+    assert payload["league"] == {
+        "name": "Open",
+        "min_games": 4,
+        "k_factor": 24,
+        "start_week": None,
+        "end_week": None,
+        "num_weeks": None,
+    }
     assert payload["standings"][0]["player_name"] == "Alex"
-    assert payload["weeks"] == [{"week_num": 1, "week_label": "Week 1"}]
+    assert payload["weeks"] == [{"week_num": 1, "week_label": "Week 1", "has_results": True}]
+    assert payload["selected_week"] == 1
     assert payload["weekly_results"]
     assert payload["cumulative"]
+    assert payload["weekly_results"][0]["rank"]
+    assert payload["weekly_results"][0]["rank_delta"] is None
+    assert payload["weekly_highlights"]["scope"] == "week"
+    assert payload["season_highlights"]["scope"] == "season"
+    assert payload["players"]
+    assert payload["player_summary"]
+    assert payload["recent_matches"]
 
     assert "admin_notes" not in payload["club"]
     assert "admin_notes" not in payload["standings"][0]
@@ -119,3 +134,26 @@ def test_public_league_results_defaults_to_first_available_league(client):
 
     assert response.status_code == 200
     assert response.json()["selected_league"] == "Open"
+
+
+def test_public_league_results_deep_link_selectors_are_server_authoritative(client):
+    response = client.get(
+        "/clubs/tres-palapas/league-results",
+        params={"league_name": "Open", "week": 1, "player": 2, "weekly_min_games": 1},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_week"] == 1
+    assert payload["selected_player_id"] == 2
+    assert payload["player_summary"]["player_name"] == "Blair"
+    assert payload["weekly_highlights"]["min_games"] == 1
+    assert payload["recent_matches"][0]["partner"]["player_name"] == "Alex"
+
+
+def test_public_league_results_rejects_invalid_qualification(client):
+    response = client.get(
+        "/clubs/tres-palapas/league-results?weekly_min_games=0"
+    )
+
+    assert response.status_code == 422

@@ -287,10 +287,13 @@ def public_live_session_summary(row: dict[str, Any]) -> dict[str, Any]:
     event = _event(row)
     state = _state_payload(row)
     session_key = str(row.get("session_key") or state.get("session_key") or "")
+    state_mode = str(state.get("mode") or "public_quick_session")
     return {
         "session_key": session_key,
         "title": _event_name(row),
         "status": str(row.get("status") or "active"),
+        "version": int(row.get("version") or 1),
+        "live_mode": "club_social" if state_mode == "public_club_social" else "quick",
         "event_type": _event_type(row),
         "current_round": _current_round(event) if event else None,
         "has_event": bool(event),
@@ -298,17 +301,50 @@ def public_live_session_summary(row: dict[str, Any]) -> dict[str, Any]:
         "updated_at": row.get("updated_at"),
         "last_seen_at": row.get("last_seen_at"),
         "expires_at": row.get("expires_at"),
+        "completed_at": row.get("completed_at"),
     }
 
 
 def public_live_session_detail(row: dict[str, Any]) -> dict[str, Any]:
     event = _event(row)
+    state = _state_payload(row)
     summary = public_live_session_summary(row)
+    participants = [
+        {
+            "id": str(participant.get("id") or ""),
+            "name": str(participant.get("name") or ""),
+            "player_id": participant.get("player_id"),
+        }
+        for participant in (event.get("participants") or [])
+        if str(participant.get("id") or "")
+    ]
+    substitutions = [
+        {
+            "id": str(substitution.get("id") or ""),
+            "scope": str(substitution.get("scope") or ""),
+            "round_number": substitution.get("round_number"),
+            "match_id": substitution.get("match_id"),
+            "original_participant_id": str(substitution.get("original_participant_id") or ""),
+            "original_player_name": str(substitution.get("original_player_name") or ""),
+            "substitute_name": str(substitution.get("substitute_name") or ""),
+            "affected_match_ids": [str(value) for value in (substitution.get("affected_match_ids") or [])],
+        }
+        for substitution in (event.get("substitutions") or [])
+    ]
+    social = state.get("social") if isinstance(state.get("social"), dict) else {}
+    submission = social.get("submission") if isinstance(social.get("submission"), dict) else None
     payload = {
         **summary,
         "rounds": _rounds(event) if event else [],
         "standings": _standings(event) if event else [],
         "bracket": _bracket(event) if event else None,
+        "participants": participants,
+        "substitutions": substitutions,
+        "social": {
+            "enabled": bool(social.get("enabled")),
+            "skill_levels": [str(value) for value in (social.get("skill_levels") or [])],
+            "submission_status": str(submission.get("status") or "") or None if submission else None,
+        },
     }
     if str(event.get("type") or "") == "league":
         try:
@@ -318,10 +354,15 @@ def public_live_session_detail(row: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def public_live_sessions_from_rows(rows: list[dict[str, Any]], *, limit: int = 20) -> list[dict[str, Any]]:
+def public_live_sessions_from_rows(
+    rows: list[dict[str, Any]],
+    *,
+    limit: int = 20,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
     sessions: list[dict[str, Any]] = []
     for row in rows or []:
-        if not is_public_live_session_row(row):
+        if not is_public_live_session_row(row, now=now):
             continue
         summary = public_live_session_summary(row)
         if not summary.get("session_key"):

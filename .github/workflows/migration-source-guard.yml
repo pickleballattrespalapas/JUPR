@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
 
+permissions:
+  contents: read
+
 jobs:
   guard:
     runs-on: ubuntu-latest
@@ -28,3 +31,9 @@ jobs:
 
       - name: Check supabase migration version prefixes
         run: python scripts/check_supabase_migration_versions.py
+
+      - name: Check Next parity matrix
+        run: python scripts/check_next_parity_matrix.py
+
+      - name: Check parity closure program
+        run: python scripts/check_parity_closure_program.py

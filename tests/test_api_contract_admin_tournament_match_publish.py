@@ -42,6 +42,7 @@ def match_publish_tables() -> dict[str, list[dict]]:
                 "event_option_id": "event_1",
                 "name": "Men's Doubles 4.0",
                 "status": "draft",
+                "updated_at": "2026-04-10T16:00:00Z",
             }
         ],
         "tournament_teams": [
@@ -52,6 +53,7 @@ def match_publish_tables() -> dict[str, list[dict]]:
                 "team_number": 1,
                 "player1_id": 1,
                 "player2_id": 2,
+                "updated_at": "2026-04-10T16:00:00Z",
             },
             {
                 "id": "team_2",
@@ -60,6 +62,7 @@ def match_publish_tables() -> dict[str, list[dict]]:
                 "team_number": 2,
                 "player1_id": 3,
                 "player2_id": 4,
+                "updated_at": "2026-04-10T16:00:00Z",
             },
         ],
         "tournament_games": [
@@ -77,6 +80,7 @@ def match_publish_tables() -> dict[str, list[dict]]:
                 "winner_team_id": "team_1",
                 "loser_team_id": "team_2",
                 "finalized_at": "2026-04-10T17:00:00Z",
+                "updated_at": "2026-04-10T17:00:00Z",
             }
         ],
         "players": [

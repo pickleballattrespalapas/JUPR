@@ -7,7 +7,8 @@ import uuid
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_tournament_draw_service import _draw_payload
-from jupr_app.services.admin_tournament_team_service import _team_payload
+from jupr_app.services.admin_tournament_game_service import _require_reviewed_draw_version
+from jupr_app.services.admin_tournament_team_service import _team_payload, write_admin_tournament_draw_teams_atomic
 from jupr_app.services.admin_tournament_service import TOURNAMENT_SELECT, _clean_text, _first_row, is_admin_tournament_admin_enabled
 
 CONFIRM_IMPORT_REGISTRATIONS = "IMPORT REGISTRATIONS"
@@ -40,23 +41,23 @@ def _safe_int(value: Any) -> int | None:
 def _fetch_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> dict[str, Any] | None:
     try:
         rows = _safe_rows(supabase.table("tournament_event_draws").select("*").eq("tournament_id", str(tournament_id)).eq("id", str(draw_id)).limit(1).execute())
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not verify the tournament draw; registration import was refused.") from exc
     return rows[0] if rows else None
 
 
 def _registrations(supabase: Any, *, tournament_id: str) -> list[dict[str, Any]]:
     try:
         return _safe_rows(supabase.table("tournament_registrations").select("*").eq("tournament_id", str(tournament_id)).execute())
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("Could not load tournament registrations; registration import was refused.") from exc
 
 
 def _selections_for_draw(supabase: Any, *, tournament_id: str, draw: dict[str, Any]) -> list[dict[str, Any]]:
     try:
         rows = _safe_rows(supabase.table("tournament_registration_selections").select("*").eq("tournament_id", str(tournament_id)).execute())
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("Could not load tournament registration selections; registration import was refused.") from exc
     event_option_id = _clean_text(draw.get("event_option_id"), limit=120)
     day_id = _clean_text(draw.get("registration_day_id"), limit=120)
     if event_option_id:
@@ -69,15 +70,15 @@ def _selections_for_draw(supabase: Any, *, tournament_id: str, draw: dict[str, A
 def _games_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[dict[str, Any]]:
     try:
         return _safe_rows(supabase.table("tournament_games").select("id").eq("tournament_id", str(tournament_id)).eq("draw_id", str(draw_id)).limit(1).execute())
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("Could not verify whether this draw already has games; registration import was refused.") from exc
 
 
 def _teams_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[dict[str, Any]]:
     try:
         return _safe_rows(supabase.table("tournament_teams").select("*").eq("tournament_id", str(tournament_id)).eq("draw_id", str(draw_id)).execute())
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("Could not load current draw teams; registration import was refused.") from exc
 
 
 def _email(value: Any) -> str:
@@ -94,7 +95,10 @@ def import_admin_tournament_registrations_to_draw(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    expected_draw_updated_at: str | None = None,
     source: str = "next_tournament_admin_import_registrations",
+    dry_run: bool = False,
+    atomic: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -109,6 +113,11 @@ def import_admin_tournament_registrations_to_draw(
     draw = _fetch_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not draw:
         raise ValueError("draw not found for this tournament")
+    reviewed_draw_version = _require_reviewed_draw_version(
+        draw,
+        expected_draw_updated_at=expected_draw_updated_at,
+        atomic=atomic,
+    )
     if _games_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id):
         raise ValueError("This draw already has games. Registration import is blocked after scheduling begins.")
 
@@ -174,9 +183,33 @@ def import_admin_tournament_registrations_to_draw(
         raise ValueError("No confirmed registrations with linked player IDs were available for this draw.")
 
     before = [_team_payload(row) for row in current_teams]
-    if mode == "REPLACE":
-        supabase.table("tournament_teams").delete().eq("tournament_id", clean_tournament_id).eq("draw_id", clean_draw_id).execute()
-    inserted = _safe_rows(supabase.table("tournament_teams").insert(rows).execute())
+    if dry_run:
+        teams = [_team_payload(row) for row in rows]
+        return {
+            "ok": True,
+            "mode": "tournament_registration_team_import_preview",
+            "dry_run": True,
+            "write_count": 0,
+            "draw_id": clean_draw_id,
+            "import_mode": mode,
+            "updated_count": len(teams),
+            "teams": teams,
+            "warnings": [],
+        }
+    if atomic:
+        inserted = write_admin_tournament_draw_teams_atomic(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=clean_tournament_id,
+            draw_id=clean_draw_id,
+            expected_draw_updated_at=reviewed_draw_version,
+            rows=rows,
+            replace=mode == "REPLACE",
+        )
+    else:
+        if mode == "REPLACE":
+            supabase.table("tournament_teams").delete().eq("tournament_id", clean_tournament_id).eq("draw_id", clean_draw_id).execute()
+        inserted = _safe_rows(supabase.table("tournament_teams").insert(rows).execute())
     teams = [_team_payload(row) for row in (inserted or rows)]
 
     audit_payload = build_activity_payload(

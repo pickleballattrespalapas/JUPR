@@ -112,21 +112,35 @@ Before enabling Next.js admin score entry for rated workflows, future implementa
 ## Next admin login foundation
 
 - `/admin/login` now provides a Next-side Supabase Auth login shell using browser-safe public Supabase configuration.
-- The login shell supports password sign-in, magic-link requests, hash-token callback consumption, token refresh, and sign-out.
+- The login shell supports password sign-in, non-enumerating magic-link requests, legacy hash-token callback consumption, refresh-token rotation, and local-scope sign-out.
+- A Supabase session is not persisted as an admin session until FastAPI verifies its JWT and finds a matching `admin_role_assignments` row for the requested club. User-editable metadata is never used for authorization.
+- `GET /admin/auth/capabilities` is the server boundary for that check. It returns only the authenticated email plus the caller's club/role/permission projection; missing, mismatched-user, and wrong-club assignments fail closed.
+- `next` redirects accept only same-site `/admin` and `/clubs/<slug>/admin` paths. Absolute, protocol-relative, control-character, backslash, login-loop, and reset-loop targets fall back to `/admin`.
 - The admin operations cockpit shows whether the current browser has a stored admin session.
 - Runtime configuration required on Vercel:
   - `NEXT_PUBLIC_SUPABASE_URL`
   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+  - `NEXT_PUBLIC_JUPR_API_BASE_URL`
+  - optional `NEXT_PUBLIC_JUPR_ADMIN_CLUB_ID` (defaults to `tres_palapas`)
 - The login shell does **not** enable writes by itself. Every write workflow still requires its FastAPI feature flag, server-side JWT validation, role authorization, club scope, and audit/correction protections.
+
+## Password recovery contract
+
+- Recovery requests use Supabase PKCE (`S256`) and store the one-time verifier only in browser local storage long enough to consume the emailed code. Request and resend messages do not reveal whether an account exists.
+- `/admin/reset-password` accepts PKCE `code`, `token_hash`, and legacy implicit `type=recovery` callbacks. An ordinary signed-in session cannot update a password through the recovery form.
+- The recovered JWT must pass the same FastAPI capability check before the password form is enabled.
+- The browser enforces Streamlit's existing eight-character minimum and explains that the Supabase project may enforce stronger character, leaked-password, or reuse rules. Supabase remains the final password-policy authority.
+- Callback parameters, PKCE verifier, recovery session, and the general admin session are cleared after success or invalid/expired recovery. The recovery session is revoked with local scope after a successful password update.
+- Supabase redirect allowlisting must include the exact staging and production `/admin/login` and `/admin/reset-password` URLs. Streamlit login/reset remains the fallback until staging manual acceptance is signed off.
 
 ## Next admin form session wiring
 
-- A shared admin session hook now lets guarded client forms read and refresh the stored Supabase Auth session.
+- A shared admin session hook now refreshes the stored Supabase Auth session and rechecks its FastAPI club capability before exposing an access token to guarded client forms.
 - Match Log apply/duplicate-cleanup, Replay History, Score Entry MVP, and Match Uploader now use the stored admin session instead of asking staff to paste a Supabase access token.
 - Buttons stay disabled and link back to `/admin/login` when no browser admin session is available.
 
 ## Remaining admin-login work before broad admin cutover
 
 - Add server/route-handler validation helpers where same-origin Next admin API routes are introduced.
-- Add browser E2E or equivalent staging validation for sign-in, sign-out, expired token, wrong-club, and permission-denied cases.
+- Run the checked-in staging browser contract with dedicated staging roles for sign-in, sign-out, expired token, wrong-club, permission-denied, recovery email, and post-reset login cases.
 - Keep Streamlit fallback available until each workflow-specific pilot is proven.

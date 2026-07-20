@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { getClubTournamentRegistration } from "@/lib/tournamentRegistrationApi";
-import EditLinkRequestForm from "./EditLinkRequestForm";
 import TournamentRegistrationForm from "./TournamentRegistrationForm";
 
 type TournamentRegistrationPageProps = {
@@ -37,6 +36,11 @@ export default async function TournamentRegistrationPage({ params, searchParams 
   const tournament = data?.tournament;
   const settings = data?.settings;
   const selectableCount = data?.events?.filter((event) => event.selectable).length ?? 0;
+  const tournamentQuery = settings?.registration_slug
+    ? `tournament=${encodeURIComponent(settings.registration_slug)}`
+    : tournament?.id
+      ? `tournament_id=${encodeURIComponent(tournament.id)}`
+      : "";
 
   return (
     <section>
@@ -76,34 +80,52 @@ export default async function TournamentRegistrationPage({ params, searchParams 
         </div>
       ) : null}
 
-      {tournament ? (
-        <article style={{ ...cardStyle, marginBottom: "1rem", background: "#f8fafc" }}>
-          <h2 style={{ marginTop: 0 }}>Already registered?</h2>
-          <p style={{ color: "#475569" }}>Enter the email address used for your registration and we will send a secure edit link if a matching registration exists.</p>
-          <EditLinkRequestForm clubSlug={clubSlug} tournamentId={tournament.id} registrationSlug={settings?.registration_slug ?? null} />
-        </article>
-      ) : null}
-
       {tournament && !data?.registration_open ? (
         <article style={{ ...cardStyle, marginBottom: "1rem" }}>
           <h2 style={{ marginTop: 0 }}>Registration is closed</h2>
-          <p style={{ color: "#475569" }}>{data?.registration_closed_reason || "Registration is not currently open."}</p>
+          <p style={{ color: "#475569" }}>{data?.registration_closed_reason || "Registration is not currently open."} Existing registrants can still request a secure edit link below.</p>
           <Link href="/support">Contact support</Link>
+        </article>
+      ) : null}
+
+      {tournament && settings?.sponsor_markdown ? (
+        <article style={{ ...cardStyle, marginBottom: "1rem", background: "#fffbeb", borderColor: "#fde68a" }}>
+          <h2 style={{ marginTop: 0 }}>Tournament sponsors</h2>
+          {markdownish(settings.sponsor_markdown)}
         </article>
       ) : null}
 
       {tournament && settings?.rules_markdown ? (
         <article style={{ ...cardStyle, marginBottom: "1rem" }}>
-          <h2 style={{ marginTop: 0 }}>Rules</h2>
+          <h2 style={{ marginTop: 0 }}>Rules and registration notes</h2>
           {markdownish(settings.rules_markdown)}
         </article>
       ) : null}
 
-      {tournament && data?.registration_open ? (
+      {tournament && settings?.refund_policy_markdown ? (
+        <article style={{ ...cardStyle, marginBottom: "1rem" }}>
+          <h2 style={{ marginTop: 0 }}>Refund policy</h2>
+          {markdownish(settings.refund_policy_markdown)}
+        </article>
+      ) : null}
+
+      {tournament ? (
+        <article style={{ ...cardStyle, marginBottom: "1rem", display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Public tournament roster</h2>
+            <p style={{ color: "#475569", margin: "0.35rem 0 0" }}>Review published entries and players still looking for partners before choosing your events.</p>
+          </div>
+          <Link href={`/clubs/${clubSlug}/tournament-roster${tournamentQuery ? `?${tournamentQuery}` : ""}`} style={{ fontWeight: 800 }}>View Tournament Roster</Link>
+        </article>
+      ) : null}
+
+      {tournament ? (
         <TournamentRegistrationForm
           clubSlug={clubSlug}
           tournamentId={tournament.id}
           registrationSlug={settings?.registration_slug ?? null}
+          registrationOpen={Boolean(data?.registration_open)}
+          registrationClosedReason={data?.registration_closed_reason ?? null}
           days={data.days ?? []}
           events={data.events ?? []}
         />

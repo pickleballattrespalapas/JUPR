@@ -17,6 +17,7 @@ def _vm():
             {"id": "event_2", "registration_day_id": "day_2", "event_family_label": "Mixed Doubles", "division_name": "4.0", "price_usd": "40"},
         ],
         confirmation_url="https://example.test/?page=tournament_registration_confirmation",
+        roster_url="https://example.test/clubs/tres-palapas/tournament-roster?tournament=tres-open",
         sender_from_name="JUPR Notifications",
         sender_from_email="noreply@example.com",
     )
@@ -47,6 +48,7 @@ def test_html_email_contains_required_details():
     assert "Mixed Doubles" in html
     assert "Total due: $80" in html
     assert emailer.PAYMENT_NOTE in html
+    assert "View the public tournament roster" in html
 
 
 def test_text_email_contains_event_list_total_and_payment_note():
@@ -56,6 +58,17 @@ def test_text_email_contains_event_list_total_and_payment_note():
     assert "Mixed Doubles" in text
     assert "Total due: $80" in text
     assert emailer.PAYMENT_NOTE in text
+    assert "Public roster:" in text
+
+
+def test_empty_confirmation_email_calls_out_missing_selections():
+    vm = emailer.build_registration_confirmation_view_model(
+        tournament={"name": "Empty Open"},
+        registration={"display_name": "Player", "email": "p@example.com"},
+        selections=[],
+    )
+    assert "No event selections were found" in emailer.build_tournament_registration_confirmation_html(vm)
+    assert "No event selections were found" in emailer.build_tournament_registration_confirmation_text(vm)
 
 
 def test_sender_from_address_in_view_model_when_provided():

@@ -178,6 +178,41 @@ def test_create_challenge_rejects_locked_players_without_override(monkeypatch):
     assert len(supabase.storage["ladder_challenges"]) == 1
 
 
+def test_create_challenge_uses_shared_protected_and_cooldown_policy(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    supabase.storage["ladder_challenges"] = [
+        {
+            "club_id": "club",
+            "id": 100,
+            "challenger_id": 1,
+            "defender_id": 2,
+            "tier_id": "ADV",
+            "status": "COMPLETED",
+            "created_at": "2099-01-01T00:00:00Z",
+            "completed_at": "2099-01-02T00:00:00Z",
+            "winner_id": 2,
+        }
+    ]
+
+    created = create_admin_challenge_ladder_challenge(
+        supabase,
+        club_id="club",
+        challenger_id=2,
+        defender_id=1,
+        tier_id="ADV",
+        ledger_ref=None,
+        override=False,
+        start_clock=False,
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+        confirmation_text="CREATE LADDER CHALLENGE",
+    )
+
+    assert created["challenge"]["challenger_id"] == 2
+    assert created["challenge"]["defender_id"] == 1
+
+
 def test_create_challenge_override_returns_copyable_notice(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
     monkeypatch.setenv("LADDER_ADMIN_NAME", "Director Dana")

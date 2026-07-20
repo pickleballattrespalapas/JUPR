@@ -79,7 +79,7 @@ def _player_payload(row: dict[str, Any]) -> dict[str, Any]:
         "wins": row.get("wins"),
         "losses": row.get("losses"),
         "matches_played": row.get("matches_played"),
-        "active": bool(row.get("active", row.get("is_active", True))),
+        "active": bool(row.get("active", row.get("is_active", True))) and not bool(row.get("inactive_at")),
         "inactive_at": row.get("inactive_at"),
         "last_game_at": row.get("last_game_at"),
     }
@@ -163,22 +163,44 @@ def build_admin_player_editor_status(supabase: Any | None, *, club_id: str) -> d
             "players_endpoint": None,
             "player_detail_endpoint": None,
             "social_identities_endpoint": None,
+            "player_merge_endpoint": None,
+            "merge_operation_endpoint": None,
+            "transactional_merge_ready": False,
             "warnings": ["Next Player Editor is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR on FastAPI for a closed-club pilot."],
         }
     player_count = None
+    transactional_merge_ready = False
     if supabase is not None:
         try:
             player_count = len(_fetch_players(supabase, club_id=str(club_id)))
         except Exception:
             player_count = None
+        if os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+            try:
+                _safe_rows(
+                    supabase.table("admin_player_merge_operations")
+                    .select("id")
+                    .eq("club_id", str(club_id))
+                    .limit(1)
+                    .execute()
+                )
+                transactional_merge_ready = True
+            except Exception:
+                transactional_merge_ready = False
     return {
         "enabled": True,
-        "status": "ready_for_player_editor_social_identity_pilot",
+        "status": "ready_for_transactional_player_editor_pilot",
         "players_endpoint": "/admin/clubs/{club_id}/players/editor/players",
         "player_detail_endpoint": "/admin/clubs/{club_id}/players/editor/players/{player_id}",
         "social_identities_endpoint": "/admin/clubs/{club_id}/players/editor/social-identities",
+        "player_merge_endpoint": "/admin/clubs/{club_id}/players/editor/merge",
+        "merge_operation_endpoint": "/admin/clubs/{club_id}/players/editor/merge/{operation_id}",
+        "transactional_merge_ready": transactional_merge_ready,
         "player_count": player_count,
-        "warnings": ["Player create/update, league-rating edits, and social identity linking are enabled. Merge remains Streamlit-only until replay/correction safety is proven in Next."],
+        "warnings": [
+            "Player create/update, league-rating edits, social identity linking, and stale-guarded atomic merge are enabled. Every merge remains pending until succeeded full-replay evidence is attached or pre-replay compensation completes.",
+            *([] if transactional_merge_ready else ["Transactional merge is not write-ready until FastAPI has SUPABASE_SERVICE_ROLE_KEY and the merge migration."]),
+        ],
     }
 
 

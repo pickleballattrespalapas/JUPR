@@ -1,22 +1,32 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from fastapi import HTTPException, Query
+from fastapi import HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from supabase import Client
 
+from jupr_app.domain.tournament_registration_repo import (
+    TournamentRegistrationEditConflictError,
+    TournamentRegistrationImportedDrawError,
+    TournamentRegistrationRelationshipLockedError,
+)
 from jupr_app.services.public_tournament_registration_edit_service import (
+    PublicRegistrationEditUnavailableError,
     build_public_tournament_registration_edit_page,
     request_public_tournament_registration_edit_link,
     submit_public_tournament_registration_edit,
 )
 from jupr_app.services.public_tournament_registration_service import (
+    DuplicateTournamentRegistrationError,
     build_public_tournament_registration_confirmation,
     build_public_tournament_registration_page,
+    resolve_public_tournament_registration_profile,
     submit_public_tournament_registration,
 )
 from jupr_app.services.public_tournament_roster_service import build_public_tournament_roster_page
+from services.api.staging_write_guard import require_public_intake_or_403
 
 
 class PublicTournamentRegistrationRequest(BaseModel):
@@ -42,6 +52,8 @@ class PublicTournamentRegistrationRequest(BaseModel):
 
 class PublicTournamentRegistrationEditRequest(PublicTournamentRegistrationRequest):
     edit_token: str
+    expected_updated_at: str
+    expected_selection_versions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PublicTournamentRegistrationEditLinkRequest(BaseModel):
@@ -51,10 +63,29 @@ class PublicTournamentRegistrationEditLinkRequest(BaseModel):
     website: str | None = None
 
 
+class PublicTournamentRegistrationProfileResolutionRequest(BaseModel):
+    tournament_id: str | None = None
+    registration_slug: str | None = None
+    first_name: str
+    last_name: str
+    email: str
+    age: int
+    gender: str
+    website: str | None = None
+
+
 def _dump_model(model: BaseModel) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
+
+
+def _require_registration_edit_service_role() -> None:
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+        raise HTTPException(
+            status_code=503,
+            detail="Public registration editing is temporarily unavailable because its server credential is not configured.",
+        )
 
 
 def install_public_tournament_registration_routes(
@@ -88,6 +119,8 @@ def install_public_tournament_registration_routes(
         club_slug: str,
         payload: PublicTournamentRegistrationEditLinkRequest,
     ) -> dict[str, Any]:
+        require_public_intake_or_403()
+        _require_registration_edit_service_role()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
@@ -101,6 +134,27 @@ def install_public_tournament_registration_routes(
                 registration_slug=payload.registration_slug,
                 website=payload.website,
             )
+        except PublicRegistrationEditUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"club": public_club_payload(club, club_slug), **result}
+
+    @app.post("/clubs/{club_slug}/tournament-registration/profile-resolution")
+    def resolve_club_tournament_registration_profile(
+        club_slug: str,
+        payload: PublicTournamentRegistrationProfileResolutionRequest,
+    ) -> dict[str, Any]:
+        require_public_intake_or_403()
+        club = get_club(club_slug)
+        club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        supabase: Client = get_supabase_client()
+        try:
+            result = resolve_public_tournament_registration_profile(
+                supabase,
+                club_id=club_id,
+                payload=_dump_model(payload),
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"club": public_club_payload(club, club_slug), **result}
@@ -108,10 +162,13 @@ def install_public_tournament_registration_routes(
     @app.get("/clubs/{club_slug}/tournament-registration/edit")
     def get_club_tournament_registration_edit(
         club_slug: str,
+        response: Response,
         edit_token: str = Query(...),
         tournament_id: str | None = Query(default=None),
         registration_slug: str | None = Query(default=None),
     ) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store, private"
+        _require_registration_edit_service_role()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
@@ -123,6 +180,10 @@ def install_public_tournament_registration_routes(
                 tournament_id=tournament_id,
                 registration_slug=registration_slug,
             )
+        except PublicRegistrationEditUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except (TournamentRegistrationImportedDrawError, TournamentRegistrationEditConflictError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"club": public_club_payload(club, club_slug), **page}
@@ -132,6 +193,8 @@ def install_public_tournament_registration_routes(
         club_slug: str,
         payload: PublicTournamentRegistrationEditRequest,
     ) -> dict[str, Any]:
+        require_public_intake_or_403()
+        _require_registration_edit_service_role()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
@@ -139,9 +202,18 @@ def install_public_tournament_registration_routes(
             result = submit_public_tournament_registration_edit(
                 supabase,
                 club_id=club_id,
+                club_slug=club_slug,
                 edit_token=payload.edit_token,
                 payload=_dump_model(payload),
             )
+        except PublicRegistrationEditUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except (
+            TournamentRegistrationImportedDrawError,
+            TournamentRegistrationEditConflictError,
+            TournamentRegistrationRelationshipLockedError,
+        ) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"club": public_club_payload(club, club_slug), **result}
@@ -168,36 +240,41 @@ def install_public_tournament_registration_routes(
         club_slug: str,
         payload: PublicTournamentRegistrationRequest,
     ) -> dict[str, Any]:
+        require_public_intake_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
         try:
+            request_payload = _dump_model(payload)
+            request_payload["_require_demographics"] = True
             result = submit_public_tournament_registration(
                 supabase,
                 club_id=club_id,
-                payload=_dump_model(payload),
+                club_slug=club_slug,
+                payload=request_payload,
             )
+        except DuplicateTournamentRegistrationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"club": public_club_payload(club, club_slug), **result}
 
-    @app.get("/clubs/{club_slug}/tournament-registration/confirmations/{registration_id}")
+    @app.get("/clubs/{club_slug}/tournament-registration/confirmation")
     def get_club_tournament_registration_confirmation(
         club_slug: str,
-        registration_id: str,
-        tournament_id: str | None = Query(default=None),
-        registration_slug: str | None = Query(default=None),
+        confirmation_token: str = Query(...),
     ) -> dict[str, Any]:
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
-        confirmation = build_public_tournament_registration_confirmation(
-            supabase,
-            club_id=club_id,
-            registration_id=registration_id,
-            tournament_id=tournament_id,
-            registration_slug=registration_slug,
-        )
+        try:
+            confirmation = build_public_tournament_registration_confirmation(
+                supabase,
+                club_id=club_id,
+                confirmation_token=confirmation_token,
+            )
+        except ValueError:
+            confirmation = None
         if not confirmation:
             raise HTTPException(status_code=404, detail="registration confirmation not found")
         return {"club": public_club_payload(club, club_slug), **confirmation}

@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date, datetime
 from typing import Any
+from urllib.parse import urlencode
 
+from jupr_app.config import get_env_or_default
 from jupr_app.domain.tournament_registration_compiler import validate_selection_against_skill
+from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
+from jupr_app.domain.notifications.tournament_registration_confirmation_email import (
+    PAYMENT_NOTE,
+    build_registration_confirmation_view_model,
+    send_tournament_registration_confirmation_email,
+)
+from jupr_app.domain.tournament_registration_confirmation_tokens import (
+    build_registration_confirmation_token,
+    verify_registration_confirmation_token,
+)
 from jupr_app.domain.tournament_registration_repo import (
     build_public_tournament_roster_state,
     get_public_tournament_bundle,
@@ -32,6 +45,21 @@ _PARTNER_IDENTITY_RATING_AGE_FIELDS = (
 
 _WOMEN_GENDERS = {"f", "female", "woman", "women", "womens", "girl", "girls"}
 _MEN_GENDERS = {"m", "male", "man", "men", "mens", "boy", "boys"}
+LOGGER = logging.getLogger(__name__)
+
+
+class DuplicateTournamentRegistrationError(ValueError):
+    """Raised when a public intake must switch to the secure edit-link flow."""
+
+
+def _mask_email(value: Any) -> str:
+    email = _clean_email(value)
+    if "@" not in email:
+        return "***"
+    local, domain = email.split("@", 1)
+    if not local:
+        return f"***@{domain}"
+    return f"{local[0]}***{local[-1:] if len(local) > 1 else ''}@{domain}"
 
 
 def _json_safe(value: Any) -> Any:
@@ -108,6 +136,77 @@ def _public_registration_player(row: dict[str, Any]) -> dict[str, Any]:
         "doubles_skill": doubles_skill,
         "singles_skill": singles_skill,
     }
+
+
+def _normalized_name(value: Any) -> str:
+    return " ".join(re.sub(r"[^a-z0-9 ]", " ", str(value or "").lower()).split())
+
+
+def _player_full_name(row: dict[str, Any]) -> str:
+    first = _clean_text(row.get("first_name"), limit=80)
+    last = _clean_text(row.get("last_name"), limit=80)
+    return " ".join(part for part in (first, last) if part) or _clean_text(
+        row.get("display_name") or row.get("name"), limit=160
+    )
+
+
+def _profile_candidates(
+    supabase: Any,
+    *,
+    club_id: str,
+    first_name: Any,
+    last_name: Any,
+    email: Any,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Return a bounded, public-safe exact-match projection.
+
+    This is a discovery hint, not proof of identity. Public intake never persists
+    the returned player id; tournament staff must verify and link the profile.
+    """
+
+    try:
+        rows = _safe_rows(
+            supabase.table("players")
+            .select("*")
+            .eq("club_id", str(club_id))
+            .limit(2000)
+            .execute()
+        )
+    except Exception:
+        rows = []
+    active_rows = [row for row in rows if _player_is_active(row)]
+    clean_email = _clean_email(email)
+    email_matches = [row for row in active_rows if clean_email and _clean_email(row.get("email")) == clean_email]
+    if email_matches:
+        match_kind = "email_exact"
+        matches = email_matches
+    else:
+        requested_name = _normalized_name(
+            " ".join(
+                part
+                for part in (_clean_text(first_name, limit=80), _clean_text(last_name, limit=80))
+                if part
+            )
+        )
+        matches = [
+            row
+            for row in active_rows
+            if requested_name and _normalized_name(_player_full_name(row)) == requested_name
+        ]
+        match_kind = "name_exact" if matches else "none"
+
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in matches:
+        candidate = _public_registration_player(row)
+        candidate_id = str(candidate.get("id") or "")
+        if not candidate_id or candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+        candidates.append(candidate)
+        if len(candidates) >= 3:
+            break
+    return match_kind, candidates
 
 
 def _list_public_registration_players(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
@@ -292,6 +391,177 @@ def _open_tournament_choices(supabase: Any, *, club_id: str) -> list[dict[str, A
     return choices
 
 
+def _public_web_base_url(public_base_url: str | None = None) -> str:
+    """Return an explicitly configured Next.js origin.
+
+    Do not inherit ``get_public_base_url()`` here: its localhost:8501 default
+    and ``JUPR_PUBLIC_BASE_URL`` compatibility value belong to the Streamlit
+    surface. Confirmation email links must either target the Next.js site or
+    fail visibly after the registration has been saved.
+    """
+
+    for candidate in (
+        public_base_url,
+        get_env_or_default("JUPR_WEB_BASE_URL"),
+        get_env_or_default("STAGING_WEB_BASE_URL"),
+        get_env_or_default("NEXT_PUBLIC_JUPR_WEB_BASE_URL"),
+    ):
+        value = str(candidate or "").strip().rstrip("/")
+        if value:
+            return value
+    return ""
+
+
+def _confirmation_page_url(
+    *,
+    club_slug: str,
+    confirmation_token: str,
+    email_status: str | None = None,
+    public_base_url: str | None = None,
+) -> str:
+    query = {"confirmation_token": str(confirmation_token)}
+    if email_status:
+        query["email_status"] = str(email_status)
+    return (
+        f"{_public_web_base_url(public_base_url)}/clubs/{club_slug}/"
+        f"tournament-registration/confirmation?{urlencode(query)}"
+    )
+
+
+def _roster_page_url(
+    *,
+    club_slug: str,
+    tournament_id: str,
+    registration_slug: str | None,
+    public_base_url: str | None = None,
+) -> str:
+    query = {
+        "tournament": str(registration_slug)
+    } if registration_slug else {"tournament_id": str(tournament_id)}
+    return (
+        f"{_public_web_base_url(public_base_url)}/clubs/{club_slug}/"
+        f"tournament-roster?{urlencode(query)}"
+    )
+
+
+def build_registration_confirmation_delivery(
+    supabase: Any,
+    *,
+    club_id: str,
+    club_slug: str,
+    tournament_id: str,
+    registration_id: str,
+    public_base_url: str | None = None,
+) -> dict[str, Any]:
+    """Build signed confirmation access and attempt email after persistence.
+
+    This function is deliberately called only after `save_registration` returns.
+    A token/config/mail failure therefore cannot roll back or disguise a saved
+    registration.
+    """
+
+    try:
+        bundle = get_registration_confirmation_bundle(
+            supabase,
+            str(tournament_id),
+            str(registration_id),
+        )
+    except Exception:
+        LOGGER.exception("Tournament registration was saved but confirmation details could not be loaded")
+        return {
+            "confirmation_available": False,
+            "confirmation_token": None,
+            "email_delivery": {
+                "status": "failed",
+                "message": "Registration was saved, but confirmation details could not be prepared.",
+            },
+        }
+    registration = bundle.get("registration") or {}
+    tournament = bundle.get("tournament") or {}
+    settings = bundle.get("settings") or {}
+    if not registration or str(tournament.get("club_id") or club_id) != str(club_id):
+        return {
+            "confirmation_available": False,
+            "confirmation_token": None,
+            "email_delivery": {
+                "status": "failed",
+                "message": "Registration was saved, but confirmation details could not be prepared.",
+            },
+        }
+
+    try:
+        token = build_registration_confirmation_token(
+            tournament_id=str(tournament_id),
+            registration_id=str(registration_id),
+            email=_clean_email(registration.get("email")),
+        )
+    except Exception:
+        LOGGER.exception("Unable to create a tournament registration confirmation token")
+        return {
+            "confirmation_available": False,
+            "confirmation_token": None,
+            "email_delivery": {
+                "status": "failed",
+                "message": "Registration was saved, but secure confirmation access is not configured.",
+            },
+        }
+
+    web_base = _public_web_base_url(public_base_url)
+    if not web_base:
+        return {
+            "confirmation_available": True,
+            "confirmation_token": token,
+            "email_delivery": {
+                "status": "failed",
+                "message": "Registration was saved, but the confirmation email link is not configured.",
+            },
+        }
+
+    try:
+        smtp_status = get_smtp_config_status()
+        confirmation_url = _confirmation_page_url(
+            club_slug=str(club_slug),
+            confirmation_token=token,
+            public_base_url=web_base,
+        )
+        roster_url = _roster_page_url(
+            club_slug=str(club_slug),
+            tournament_id=str(tournament_id),
+            registration_slug=_clean_text(settings.get("registration_slug"), limit=120) or None,
+            public_base_url=web_base,
+        )
+        view_model = build_registration_confirmation_view_model(
+            tournament=tournament,
+            registration=registration,
+            selections=bundle.get("selections") or [],
+            days=bundle.get("days") or [],
+            event_options=bundle.get("event_options") or [],
+            confirmation_url=confirmation_url,
+            roster_url=roster_url,
+            sender_from_name=smtp_status.get("from_name"),
+            sender_from_email=smtp_status.get("from_email"),
+        )
+        send_result = send_tournament_registration_confirmation_email(
+            view_model=view_model
+        )
+        status = _clean_text(send_result.get("status"), limit=40) or "sent"
+        message = {
+            "dry_run": "Registration was saved; confirmation email was safely dry-run.",
+            "staging_redirect": "Registration was saved; confirmation email was sent to the staging redirect.",
+            "sent": "Registration was saved and the confirmation email was sent.",
+        }.get(status, "Registration was saved and confirmation delivery was accepted.")
+    except Exception:
+        LOGGER.exception("Tournament registration was saved but confirmation email failed")
+        status = "failed"
+        message = "Registration was saved, but the confirmation email could not be sent."
+
+    return {
+        "confirmation_available": True,
+        "confirmation_token": token,
+        "email_delivery": {"status": status, "message": message},
+    }
+
+
 def build_public_tournament_registration_page(
     supabase: Any,
     *,
@@ -371,6 +641,111 @@ def build_public_tournament_registration_page(
     }
 
 
+def resolve_public_tournament_registration_profile(
+    supabase: Any,
+    *,
+    club_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Preflight the first registration step without trusting browser identity.
+
+    The endpoint intentionally returns only exact-match, public-safe profile
+    suggestions. A suggestion can prefill the browser wizard, but a new public
+    registration remains unlinked until staff verify the player relationship.
+    """
+
+    if _clean_text(payload.get("website")):
+        raise ValueError("Unable to continue registration.")
+    email = _clean_email(payload.get("email"))
+    if not email or not _EMAIL_RE.match(email):
+        raise ValueError("A valid email is required.")
+    first_name = _clean_text(payload.get("first_name"), limit=80)
+    last_name = _clean_text(payload.get("last_name"), limit=80)
+    if not first_name or not last_name:
+        raise ValueError("First and last name are required.")
+    age = _validated_age(payload.get("age"), label="Age")
+    if age is None:
+        raise ValueError("Age is required.")
+    gender = _clean_text(payload.get("gender"), limit=40)
+    if not gender:
+        raise ValueError("Gender is required.")
+
+    page = build_public_tournament_registration_page(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=_clean_text(payload.get("tournament_id"), limit=120) or None,
+        registration_slug=_clean_text(payload.get("registration_slug"), limit=120) or None,
+    )
+    if not page.get("available"):
+        raise ValueError("Tournament registration is not configured.")
+    tournament = page.get("tournament") or {}
+    tournament_id = str(tournament.get("id") or "").strip()
+    if not tournament_id:
+        raise ValueError("Tournament registration was not found.")
+
+    existing = get_registration_by_email(supabase, tournament_id, email)
+    if existing:
+        return {
+            "ok": True,
+            "status": "existing_registration",
+            "can_start_new": False,
+            "registration_open": bool(page.get("registration_open")),
+            "registration_closed_reason": page.get("registration_closed_reason"),
+            "masked_email": _mask_email(email),
+            "profile_match_kind": "none",
+            "profile_candidates": [],
+            "profile_policy": {
+                "linkage": "staff_review_required",
+                "public_submission_links_player": False,
+            },
+            "message": "A registration already exists for this email. Use the secure edit-link flow.",
+        }
+
+    if not page.get("registration_open"):
+        return {
+            "ok": True,
+            "status": "closed",
+            "can_start_new": False,
+            "registration_open": False,
+            "registration_closed_reason": page.get("registration_closed_reason"),
+            "masked_email": _mask_email(email),
+            "profile_match_kind": "none",
+            "profile_candidates": [],
+            "profile_policy": {
+                "linkage": "staff_review_required",
+                "public_submission_links_player": False,
+            },
+            "message": str(page.get("registration_closed_reason") or "Registration is not open."),
+        }
+
+    match_kind, candidates = _profile_candidates(
+        supabase,
+        club_id=str(club_id),
+        first_name=first_name,
+        last_name=last_name,
+        email=email,
+    )
+    return {
+        "ok": True,
+        "status": "ready",
+        "can_start_new": True,
+        "registration_open": True,
+        "registration_closed_reason": None,
+        "masked_email": _mask_email(email),
+        "profile_match_kind": match_kind,
+        "profile_candidates": candidates,
+        "profile_policy": {
+            "linkage": "staff_review_required",
+            "public_submission_links_player": False,
+        },
+        "message": (
+            "Review the suggested profile or continue without one. Tournament staff verify all public profile links."
+            if candidates
+            else "No exact active profile match was found. You can continue and staff can connect it later."
+        ),
+    }
+
+
 def _validate_submit_payload(payload: dict[str, Any]) -> None:
     if _clean_text(payload.get("website")):
         raise ValueError("Unable to submit registration.")
@@ -382,6 +757,11 @@ def _validate_submit_payload(payload: dict[str, Any]) -> None:
     display_name = _clean_text(payload.get("display_name") or " ".join(part for part in [payload.get("first_name"), payload.get("last_name")] if _clean_text(part)))
     if not display_name:
         raise ValueError("Player name is required.")
+    if _safe_bool(payload.get("_require_demographics")):
+        if _validated_age(payload.get("age"), label="Age") is None:
+            raise ValueError("Age is required.")
+        if not _clean_text(payload.get("gender"), limit=40):
+            raise ValueError("Gender is required.")
     selections = payload.get("selections") or []
     if not isinstance(selections, list) or not selections:
         raise ValueError("Select at least one event.")
@@ -531,9 +911,9 @@ def validate_and_clean_tournament_selection(
     if not event_option_id:
         raise ValueError("Each event selection must identify a division.")
 
-    partner_required = _safe_bool(event.get("partner_required"))
     event_type = _clean_text(event.get("event_type"), limit=40).upper()
     singles_event = event_type == "SINGLES"
+    partner_required = _safe_bool(event.get("partner_required"))
     partner_mode = str(clean_selection.get("partner_mode") or "NONE")
     if partner_required and partner_mode not in {"HAS_PARTNER", "NEEDS_PARTNER"}:
         raise ValueError(f"{_event_label(event)}: choose whether you have or need a partner.")
@@ -561,20 +941,42 @@ def validate_and_clean_tournament_selection(
             primary_player_id=player_profile.get("player_id"),
         )
         if registered_partner:
-            partner_profile = {
-                "doubles_skill": _safe_float(registered_partner.get("doubles_skill")),
-                "singles_skill": _safe_float(registered_partner.get("singles_skill")),
-            }
-            partner_gender = registered_partner.get("gender") or partner_gender
-            clean_selection["partner_skill"] = (
-                partner_profile.get("doubles_skill")
-                if partner_profile.get("doubles_skill") is not None
-                else partner_profile.get("singles_skill")
+            submitted_skill = _validated_rating(clean_selection.get("partner_skill"), label="Partner skill")
+            registered_doubles = _safe_float(registered_partner.get("doubles_skill"))
+            registered_singles = _safe_float(registered_partner.get("singles_skill"))
+            resolved_skill = (
+                registered_doubles
+                if registered_doubles is not None
+                else registered_singles
+                if registered_singles is not None
+                else submitted_skill
             )
-            clean_selection["partner_age"] = _safe_int(registered_partner.get("age"))
+            registered_age = _validated_age(registered_partner.get("age"), label="Partner age")
+            submitted_age = _validated_age(clean_selection.get("partner_age"), label="Partner age")
+            resolved_age = registered_age if registered_age is not None else submitted_age
+            partner_gender = registered_partner.get("gender") or partner_gender
+            partner_profile = {
+                "doubles_skill": registered_doubles if registered_doubles is not None else resolved_skill,
+                "singles_skill": registered_singles if registered_singles is not None else resolved_skill,
+                "age": resolved_age,
+                "gender": _clean_text(partner_gender, limit=40),
+            }
+            clean_selection["partner_skill"] = resolved_skill
+            clean_selection["partner_age"] = resolved_age
         else:
             partner_skill = _validated_rating(clean_selection.get("partner_skill"), label="Partner skill")
-            partner_profile = {"doubles_skill": partner_skill, "singles_skill": partner_skill}
+            partner_profile = {
+                "doubles_skill": partner_skill,
+                "singles_skill": partner_skill,
+                "age": _validated_age(clean_selection.get("partner_age"), label="Partner age"),
+                "gender": _clean_text(partner_gender, limit=40),
+            }
+        partner_age = _validated_age(clean_selection.get("partner_age"), label="Partner age")
+        if partner_age is None:
+            raise ValueError(f"{_event_label(event)}: partner age is required.")
+        if not _clean_text(partner_gender, limit=40):
+            raise ValueError(f"{_event_label(event)}: partner gender is required.")
+        clean_selection["partner_age"] = partner_age
         clean_selection["show_on_partner_board"] = False
     elif partner_mode == "NEEDS_PARTNER":
         if _safe_bool(clean_selection.get("show_on_partner_board")):
@@ -727,6 +1129,10 @@ def build_validated_public_registration_save_payload(
         primary_registration_id=str(locked.get("id") or "") if locked else None,
         existing_event_options=existing_event_options,
     )
+    if any(_safe_bool(selection.get("show_on_partner_board")) for selection in selections) and not _safe_bool(
+        payload.get("wants_partner_board_contact")
+    ):
+        raise ValueError("Partner-board contact consent is required before publishing a needs-partner listing.")
 
     save_payload = {
         "first_name": _clean_text(payload.get("first_name"), limit=80),
@@ -754,6 +1160,7 @@ def submit_public_tournament_registration(
     supabase: Any,
     *,
     club_id: str,
+    club_slug: str | None = None,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     page = build_public_tournament_registration_page(
@@ -770,6 +1177,10 @@ def submit_public_tournament_registration(
     tournament_id = str(tournament.get("id") or "").strip()
     if not tournament_id:
         raise ValueError("Tournament registration was not found.")
+    if get_registration_by_email(supabase, tournament_id, _clean_email(payload.get("email"))):
+        raise DuplicateTournamentRegistrationError(
+            "A registration already exists for this email. Please use the secure edit-link flow."
+        )
     save_payload = build_validated_public_registration_save_payload(
         supabase,
         club_id=str(club_id),
@@ -778,6 +1189,13 @@ def submit_public_tournament_registration(
         payload=payload,
     )
     result = save_registration(supabase, tournament_id=tournament_id, payload=save_payload)
+    delivery = build_registration_confirmation_delivery(
+        supabase,
+        club_id=str(club_id),
+        club_slug=str(club_slug or club_id),
+        tournament_id=tournament_id,
+        registration_id=str(result.get("registration_id") or ""),
+    )
     return {
         "ok": True,
         "tournament": tournament,
@@ -785,6 +1203,7 @@ def submit_public_tournament_registration(
         "registration_id": result.get("registration_id"),
         "submitted_at": result.get("submitted_at"),
         "selection_count": result.get("selection_count"),
+        **delivery,
     }
 
 
@@ -792,18 +1211,11 @@ def build_public_tournament_registration_confirmation(
     supabase: Any,
     *,
     club_id: str,
-    registration_id: str,
-    tournament_id: str | None = None,
-    registration_slug: str | None = None,
+    confirmation_token: str,
 ) -> dict[str, Any] | None:
-    page = build_public_tournament_registration_page(
-        supabase,
-        club_id=str(club_id),
-        tournament_id=tournament_id,
-        registration_slug=registration_slug,
-    )
-    tournament = page.get("tournament") or {}
-    tid = str(tournament.get("id") or tournament_id or "").strip()
+    verified = verify_registration_confirmation_token(confirmation_token)
+    tid = str(verified.get("tournament_id") or "").strip()
+    registration_id = str(verified.get("registration_id") or "").strip()
     if not tid:
         return None
     bundle = get_registration_confirmation_bundle(supabase, tid, str(registration_id))
@@ -812,6 +1224,12 @@ def build_public_tournament_registration_confirmation(
         return None
     if str((bundle.get("tournament") or {}).get("club_id") or club_id) != str(club_id):
         return None
+    verify_registration_confirmation_token(
+        confirmation_token,
+        expected_tournament_id=tid,
+        expected_registration_id=registration_id,
+        expected_email=_clean_email(registration.get("email")),
+    )
     event_lookup = {str(row.get("id")): row for row in (bundle.get("event_options") or [])}
     day_lookup = {str(row.get("id")): row for row in (bundle.get("days") or [])}
     selections = []
@@ -820,26 +1238,34 @@ def build_public_tournament_registration_confirmation(
         day = day_lookup.get(str(selection.get("registration_day_id") or "")) or {}
         selections.append(
             {
-                "selection_id": str(selection.get("id") or ""),
                 "event_label": _clean_text(event.get("division_name") or event.get("label") or "Division"),
                 "event_family_label": _clean_text(event.get("event_family_label") or event.get("label") or "Event"),
                 "day_label": _clean_text(day.get("label") or "Day"),
+                "event_date": _json_safe(day.get("event_date")),
+                "skill_label": _clean_text(event.get("skill_label"), limit=80),
+                "age_label": _clean_text(event.get("age_label"), limit=80),
+                "price_usd": _safe_float(event.get("price_usd")) or 0,
                 "partner_mode": _clean_text(selection.get("partner_mode")),
                 "partner_name": _clean_text(selection.get("partner_name")),
                 "show_on_partner_board": _safe_bool(selection.get("show_on_partner_board")),
             }
         )
+    sender_status = get_smtp_config_status()
     return {
         "tournament": _public_tournament(bundle.get("tournament") or {}),
         "settings": _public_settings(bundle.get("settings") or {}),
         "registration": {
-            "id": str(registration.get("id") or ""),
             "display_name": _clean_text(registration.get("display_name") or "Player"),
-            "email": _clean_email(registration.get("email")),
             "status": _clean_text(registration.get("status")),
             "payment_status": _clean_text(registration.get("payment_status")),
             "submitted_at": _json_safe(registration.get("submitted_at")),
         },
         "selections": selections,
         "total_price_usd": float(bundle.get("total_price_usd") or 0),
+        "payment_note": PAYMENT_NOTE,
+        "confirmation_expires_at": verified.get("exp"),
+        "notification_sender": {
+            "from_name": _clean_text(sender_status.get("from_name"), limit=120),
+            "from_email": _clean_email(sender_status.get("from_email")),
+        },
     }

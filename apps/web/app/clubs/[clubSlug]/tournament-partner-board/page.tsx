@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getClubTournamentRegistrationEdit, getClubTournamentRoster } from "@/lib/tournamentRegistrationApi";
-import type { PublicTournamentNeedsPartnerEntry } from "@/lib/tournamentRegistrationApi";
+import type { PublicRegistrationDay, PublicRegistrationEditSelection, PublicRegistrationEvent, PublicTournamentNeedsPartnerEntry } from "@/lib/tournamentRegistrationApi";
 import PairingInterestPanel from "./PairingInterestPanel";
 import PartnerRequestReviewPanel from "./PartnerRequestReviewPanel";
 
@@ -35,7 +35,24 @@ function entryEventKey(entry: PublicTournamentNeedsPartnerEntry): string {
 }
 
 function entryAnchor(entry: PublicTournamentNeedsPartnerEntry): string {
-  return `partner-${slugify(`${entry.selection_id || entry.player_id || entry.player_name || "player"}`)}`;
+  return `partner-${slugify(entry.board_entry_key || entry.player_name || "player")}`;
+}
+
+function requesterSelectionsForEntry(
+  entry: PublicTournamentNeedsPartnerEntry,
+  selections: PublicRegistrationEditSelection[],
+  events: PublicRegistrationEvent[],
+  days: PublicRegistrationDay[]
+): PublicRegistrationEditSelection[] {
+  const dayById = new Map(days.map((day) => [day.id, day]));
+  const eventById = new Map(events.map((event) => [event.id, event]));
+  const targetKey = entryEventKey(entry);
+  return selections.filter((selection) => {
+    const event = eventById.get(String(selection.event_option_id || ""));
+    if (!event) return false;
+    const day = dayById.get(event.registration_day_id);
+    return slugify([day?.label || "Day", event.event_family_label || "Event", event.division_name || "Division"].join(" · ")) === targetKey;
+  });
 }
 
 function queryFor({ tournamentId, registrationSlug, editToken, event, partnerRequestId }: { tournamentId?: string | null; registrationSlug?: string | null; editToken?: string | null; event?: string | null; partnerRequestId?: string | null }): string {
@@ -72,7 +89,10 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
 
   const tournament = data?.tournament;
   const settings = data?.settings;
-  const partnerEntries = data?.roster?.players_needing_partners ?? [];
+  // Fail closed: only the explicit board projection carries both display and
+  // contact consent. The broader roster list may contain players who need a
+  // partner but did not opt into public pairing requests.
+  const partnerEntries = data?.roster?.partner_board_entries ?? [];
   const eventChoices = Array.from(new Map(partnerEntries.map((entry) => [entryEventKey(entry), entryEventLabel(entry)])).entries()).sort((a, b) => a[1].localeCompare(b[1]));
   const visibleEntries = selectedEvent ? partnerEntries.filter((entry) => entryEventKey(entry) === selectedEvent) : partnerEntries;
   const query = queryFor({ tournamentId: tournament?.id, registrationSlug: settings?.registration_slug });
@@ -111,7 +131,7 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
 
       {tournament ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
-          <article style={cardStyle}><strong>Players looking</strong><br />{partnerEntries.length}</article>
+          <article style={cardStyle}><strong>Public board entries</strong><br />{partnerEntries.length}</article>
           <article style={cardStyle}><strong>Showing</strong><br />{visibleEntries.length}</article>
           <article style={cardStyle}><strong>Registrations</strong><br />{data?.summary?.total_registrations ?? 0}</article>
           <article style={cardStyle}><strong>Roster players</strong><br />{data?.summary?.total_players ?? 0}</article>
@@ -162,7 +182,7 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
       {visibleEntries.length ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem" }}>
           {visibleEntries.map((entry) => (
-            <article key={`${entry.selection_id}-${entry.player_name}`} id={entryAnchor(entry)} style={cardStyle}>
+            <article key={entry.board_entry_key || String(entry.player_name)} id={entryAnchor(entry)} style={cardStyle}>
               <h2 style={{ marginTop: 0, fontSize: "1.05rem" }}>{entry.player_name}</h2>
               <p style={{ color: "#475569" }}>{entryEventLabel(entry)}</p>
               <dl style={{ display: "grid", gap: "0.35rem", margin: 0 }}>
@@ -178,7 +198,7 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
                   tournamentId={tournament.id}
                   registrationSlug={settings?.registration_slug ?? null}
                   editToken={editToken}
-                  requesterSelections={editResponse.data.selections ?? []}
+                  requesterSelections={requesterSelectionsForEntry(entry, editResponse.data.selections ?? [], data?.events ?? [], data?.days ?? [])}
                   boardEntries={[entry]}
                 />
               ) : null}

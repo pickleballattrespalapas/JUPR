@@ -45,6 +45,7 @@ JUPR_ENABLE_NEXT_ADMIN_TOOLS
 6. FastAPI has JWT verification configured with either:
    - `SUPABASE_JWT_SECRET`, or
    - `SUPABASE_JWKS_URL` plus `JUPR_SUPABASE_JWT_MODE=jwks`.
+7. `supabase/migrations/20260719172000_replay_job_idempotency.sql` is applied to staging before Match Log apply is enabled.
 
 ## Non-mutating preflight
 
@@ -103,8 +104,11 @@ Operator steps:
 2. Paste one patch only.
 3. Type `APPLY`.
 4. Confirm FastAPI response is `ok: true`.
-5. Confirm an audit row exists in `admin_activity_log`.
-6. Review the match on public match history or Streamlit.
+5. Confirm the operation appears as `succeeded` in the recent durable edit operations table.
+6. Confirm an audit row exists in `admin_activity_log`.
+7. Review the match on public match history or Streamlit.
+
+For a later rating-affecting smoke, confirm the response includes a replay job ID and the corresponding Replay History row is `succeeded`. If the page shows **Mandatory replay recovery required**, stop additional edits, type `RECOVER`, and complete the same job before continuing.
 
 ### Step 3 — Duplicate cleanup only if preview is correct
 

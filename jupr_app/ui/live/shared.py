@@ -132,55 +132,55 @@ def inject_styles() -> None:
         """
         <style>
         .jupr-live-card {
-            border: 1px solid rgba(47,111,237,0.12);
+            border: 1px solid var(--accent-border);
             border-radius: 18px;
             padding: 1rem 1rem 0.75rem;
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,249,255,0.98));
-            box-shadow: 0 8px 28px rgba(17, 24, 39, 0.06);
+            background: linear-gradient(180deg, var(--panel), var(--accent-soft));
+            box-shadow: var(--shadow-lg);
             margin-bottom: 1rem;
         }
-        .jupr-live-kicker { font-size: 0.8rem; font-weight: 700; color: #2F6FED; text-transform: uppercase; letter-spacing: 0.08em; }
+        .jupr-live-kicker { font-size: 0.8rem; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; }
         .jupr-live-score-shell {
-            border: 1px solid rgba(15,23,42,0.08);
+            border: 1px solid var(--border);
             border-radius: 18px;
             padding: 0.9rem 1rem;
-            background: #fff;
-            color: #0f172a;
+            background: var(--panel);
+            color: var(--text-primary);
             margin-bottom: 0.9rem;
         }
-        .jupr-live-team { color: #0f172a; font-weight: 700; font-size: 1rem; }
-        .jupr-live-vs { text-align: center; font-size: 0.9rem; font-weight: 700; color: #475569; margin-top: 1.9rem; }
+        .jupr-live-team { color: var(--text-primary); font-weight: 700; font-size: 1rem; }
+        .jupr-live-vs { text-align: center; font-size: 0.9rem; font-weight: 700; color: var(--text-secondary); margin-top: 1.9rem; }
         .jupr-live-actions button[kind="primary"] {
             min-height: 3rem;
             font-weight: 700;
         }
         .jupr-live-pill {
-            display:inline-block; padding:0.35rem 0.7rem; border-radius:999px; background:#eaf2ff; color:#2F6FED; font-weight:600; margin-right:0.4rem;
+            display:inline-block; padding:0.35rem 0.7rem; border-radius:999px; background:var(--accent-soft); color:var(--accent); font-weight:600; margin-right:0.4rem;
         }
         .jupr-live-slot {
-            border: 1px solid rgba(15,23,42,0.08);
+            border: 1px solid var(--border);
             border-radius: 14px;
             padding: 0.6rem 0.7rem;
-            background: rgba(248, 250, 252, 0.95);
+            background: var(--pill-bg);
             margin-bottom: 0.45rem;
         }
         .jupr-live-slot-label {
             font-size: 0.72rem;
             text-transform: uppercase;
             letter-spacing: 0.06em;
-            color: #475569;
+            color: var(--text-secondary);
             margin-bottom: 0.15rem;
         }
         .jupr-live-slot-name {
-            color: #0f172a;
+            color: var(--text-primary);
             font-weight: 700;
             font-size: 0.98rem;
             line-height: 1.3;
         }
         .jupr-live-sub-summary {
-            border: 1px solid rgba(47,111,237,0.12);
+            border: 1px solid var(--accent-border);
             border-radius: 14px;
-            background: #f8fbff;
+            background: var(--accent-soft);
             padding: 0.65rem 0.8rem;
             margin: 0.4rem 0 0.8rem;
             font-size: 0.92rem;

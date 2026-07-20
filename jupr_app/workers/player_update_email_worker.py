@@ -6,7 +6,7 @@ import json
 import os
 from typing import Any
 
-from jupr_app.config import get_public_base_url
+from jupr_app.config import get_next_web_base_url
 from jupr_app.data.client import make_supabase
 from jupr_app.domain.notifications.player_update_sender import send_pending_player_update_emails
 from jupr_app.services.context import ServiceContext
@@ -15,14 +15,11 @@ from jupr_app.services.context import ServiceContext
 def _resolve_supabase_config() -> tuple[str, str, str]:
     url = str(os.getenv("SUPABASE_URL") or "").strip()
     service_role = str(os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
-    anon = str(os.getenv("SUPABASE_ANON_KEY") or "").strip()
-    key = service_role or anon
-    key_source = "SUPABASE_SERVICE_ROLE_KEY" if service_role else "SUPABASE_ANON_KEY"
     if not url:
         raise ValueError("Missing required environment variable: SUPABASE_URL")
-    if not key:
-        raise ValueError("Missing Supabase key. Set SUPABASE_SERVICE_ROLE_KEY (preferred) or SUPABASE_ANON_KEY.")
-    return url, key, key_source
+    if not service_role:
+        raise ValueError("Missing SUPABASE_SERVICE_ROLE_KEY. The player update worker cannot use an anon key.")
+    return url, service_role, "SUPABASE_SERVICE_ROLE_KEY"
 
 
 def _require_worker_run_log() -> bool:
@@ -48,7 +45,7 @@ def run_player_update_email_worker(club_id: str, *, limit: int = 250) -> dict[st
         if not (_is_missing_table_error(exc) and not _require_worker_run_log()):
             raise
 
-    public_base_url = get_public_base_url()
+    public_base_url = get_next_web_base_url()
     ctx = ServiceContext(supabase=supabase, club_id=club_id, public_base_url=public_base_url)
 
     try:
@@ -61,6 +58,8 @@ def run_player_update_email_worker(club_id: str, *, limit: int = 250) -> dict[st
             "sent": int(summary.get("sent") or 0),
             "skipped": int(summary.get("skipped") or 0),
             "errors": int(summary.get("errors") or 0),
+            "stale": int(summary.get("stale") or 0),
+            "uncertain": int(summary.get("uncertain") or 0),
             "email_mode": str(summary.get("email_mode") or "unknown"),
         }
         if run_id:
@@ -73,6 +72,8 @@ def run_player_update_email_worker(club_id: str, *, limit: int = 250) -> dict[st
                         "sent": result["sent"],
                         "skipped": result["skipped"],
                         "errors": result["errors"],
+                        "stale": result["stale"],
+                        "uncertain": result["uncertain"],
                         "email_mode": result["email_mode"],
                     },
                 }

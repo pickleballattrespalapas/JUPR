@@ -16,6 +16,9 @@ from services.api.main import app
 
 def _install_super_env(monkeypatch, supabase) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS", "1")
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "badge-diagnostics")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
@@ -44,7 +47,7 @@ def test_admin_badge_status_exposes_repair_endpoints(monkeypatch):
     assert payload["confirmation_text"]["state"] == "UPDATE BADGE STATE"
 
 
-def test_admin_badge_recompute_requires_confirmation(monkeypatch):
+def test_admin_badge_recompute_dry_run_needs_no_confirmation(monkeypatch):
     supabase = FakeSupabase(badge_tables())
     _install_super_env(monkeypatch, supabase)
 
@@ -54,8 +57,9 @@ def test_admin_badge_recompute_requires_confirmation(monkeypatch):
         json={"mode": "dry-run", "player_id": 1, "badge_id": "high_roller", "confirmation_text": "RUN"},
     )
 
-    assert response.status_code == 400
-    assert "RECOMPUTE BADGES" in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json()["read_only"] is True
+    assert supabase.tables["admin_guarded_operations"] == []
 
 
 def test_admin_badge_recompute_route_invokes_domain(monkeypatch):
@@ -79,6 +83,36 @@ def test_admin_badge_recompute_route_invokes_domain(monkeypatch):
     assert response.json()["recompute_mode"] == "dry-run"
 
 
+def test_admin_badge_recompute_permission_is_mode_specific(monkeypatch):
+    tables = badge_tables()
+    supabase = FakeSupabase(tables)
+    _install_super_env(monkeypatch, supabase)
+    monkeypatch.setattr(
+        "services.api.admin_badge_diagnostics_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="read_only", assigned=True, source="admin_role_assignments"),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_badge_diagnostics_routes.run_admin_badge_recompute",
+        lambda *_args, **_kwargs: {"ok": True, "read_only": True, "recompute_mode": "dry-run"},
+    )
+    client = TestClient(app)
+
+    preview = client.post(
+        "/admin/clubs/club/badges/recompute",
+        headers={"Authorization": "Bearer local"},
+        json={"mode": "dry-run", "player_id": 1},
+    )
+    apply = client.post(
+        "/admin/clubs/club/badges/recompute",
+        headers={"Authorization": "Bearer local"},
+        json={"mode": "append-only", "player_id": 1, "confirmation_text": "RECOMPUTE BADGES", "operation_key": "badge-mode-apply"},
+    )
+
+    assert preview.status_code == 200
+    assert apply.status_code == 403
+    assert tables["admin_activity_log"][-1]["after_json"]["required_permission"] == "run_replay"
+
+
 def test_admin_badge_revoke_updates_rows_and_audit(monkeypatch):
     tables = badge_tables()
     supabase = FakeSupabase(tables)
@@ -87,7 +121,7 @@ def test_admin_badge_revoke_updates_rows_and_audit(monkeypatch):
     response = TestClient(app).patch(
         "/admin/clubs/club/badges/revoke",
         headers={"Authorization": "Bearer local"},
-        json={"player_badge_id": "pb1", "revoke_reason": "duplicate award", "confirmation_text": "REVOKE BADGE"},
+        json={"player_badge_id": "pb1", "revoke_reason": "duplicate award", "confirmation_text": "REVOKE BADGE", "operation_key": "badge-revoke-1"},
     )
 
     assert response.status_code == 200
@@ -111,6 +145,7 @@ def test_admin_badge_state_transition_is_stale_safe_and_audited(monkeypatch):
             "target_state": "frozen",
             "reason": "Pause awards during rule review",
             "confirmation_text": "UPDATE BADGE STATE",
+            "operation_key": "badge-state-1",
         },
     )
 
@@ -139,6 +174,7 @@ def test_admin_badge_state_rejects_nonstandard_transition_without_force(monkeypa
             "target_state": "deprecated",
             "reason": "Retire immediately",
             "confirmation_text": "UPDATE BADGE STATE",
+            "operation_key": "badge-state-stale",
         },
     )
 
@@ -172,6 +208,7 @@ def test_admin_badge_state_requires_exact_confirmation_and_reason(monkeypatch):
             "target_state": "frozen",
             "reason": "",
             "confirmation_text": "UPDATE BADGE STATE",
+            "operation_key": "badge-state-force",
         },
     )
 
@@ -209,6 +246,7 @@ def test_admin_badge_state_force_override_and_stale_expected_state(monkeypatch):
             "reason": "Emergency rule retirement",
             "force": True,
             "confirmation_text": "UPDATE BADGE STATE",
+            "operation_key": "badge-state-forced",
         },
     )
 

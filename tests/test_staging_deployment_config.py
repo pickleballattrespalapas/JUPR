@@ -11,6 +11,13 @@ from pathlib import Path
 import pytest
 
 from scripts.check_staging_environment import FULL_NEXT_ADMIN_FLAGS
+from scripts.staging_write_waves import (
+    ALL_STAGING_WRITE_FLAGS,
+    ALWAYS_DISABLED_FLAGS,
+    STAGING_WRITE_WAVES,
+    configure_fly_staging,
+    expected_write_flags,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -68,9 +75,12 @@ def test_staging_fly_config_is_isolated_and_full_surface():
     env = staging["env"]
     assert env["JUPR_ENV"] == "staging"
     assert env["JUPR_EMAIL_MODE"] == "dry_run"
+    assert env["JUPR_WEB_BASE_URL"] == EXPECTED_STAGING_WEB_ORIGIN
     assert env["JUPR_REQUIRE_API_AUDIT_LOG"] == "1"
-    assert env["JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT"] == "1"
-    assert env["JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS"] == "1"
+    assert env["JUPR_REQUIRE_WORKER_RUN_LOG"] == "1"
+    assert env["JUPR_STAGING_WRITE_WAVE"] == "none"
+    assert all(env.get(name) == "0" for name in ALL_STAGING_WRITE_FLAGS)
+    assert all(env.get(name, "0") == "0" for name in ALWAYS_DISABLED_FLAGS)
     assert all(env.get(name) == "1" for name in FULL_NEXT_ADMIN_FLAGS)
     assert env["JUPR_ALLOWED_ORIGIN_REGEX"].startswith("^https://jupr")
     assert env["JUPR_ALLOWED_ORIGIN_REGEX"].endswith("vercel\\.app$")
@@ -80,22 +90,81 @@ def test_staging_fly_config_is_isolated_and_full_surface():
     )
 
 
+def test_staging_wave_configurator_opens_only_the_selected_wave(tmp_path: Path):
+    config = tmp_path / "fly.staging.toml"
+    config.write_text((ROOT / "fly.staging.toml").read_text(encoding="utf-8"), encoding="utf-8")
+
+    configure_fly_staging(config, wave="public-live")
+
+    env = tomllib.loads(config.read_text(encoding="utf-8"))["env"]
+    expected = expected_write_flags("public-live")
+    assert env["JUPR_STAGING_WRITE_WAVE"] == "public-live"
+    assert {name: env[name] == "1" for name in ALL_STAGING_WRITE_FLAGS} == expected
+    assert expected["JUPR_ENABLE_PUBLIC_LIVE_WRITES"] is True
+
+
 def test_staging_deploy_workflow_has_production_and_database_guards():
     workflow = (ROOT / ".github/workflows/fly_api_staging_deploy.yml").read_text(encoding="utf-8")
 
     assert "STAGING_SUPABASE_URL" in workflow
     assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" in workflow
     assert "STAGING_SUPABASE_PROJECT_REF" in workflow
-    assert 'if [ "$FLY_APP_NAME" = "juprleagues-api" ]' in workflow
+    # Reject every target except the dedicated staging app. This exact allowlist
+    # is stricter than the former guard that rejected only the production name.
+    assert "FLY_APP_NAME: juprleagues-api-staging" in workflow
+    assert "FLY_APP_NAME_INPUT: ${{ inputs.app_name }}" in workflow
+    assert 'if [ "$FLY_APP_NAME_INPUT" != "juprleagues-api-staging" ]; then' in workflow
+    assert 'if [ "$GITHUB_REF" != "refs/heads/staging" ]; then' in workflow
+    assert "HEAD_SHA=\"$(git rev-parse HEAD)\"" in workflow
+    assert "STAGING_SHA=\"$(git rev-parse refs/remotes/origin/staging)\"" in workflow
+    assert '[ "$HEAD_SHA" != "$GITHUB_SHA" ] || [ "$HEAD_SHA" != "$STAGING_SHA" ]' in workflow
+    assert workflow.index('if [ "$GITHUB_REF" != "refs/heads/staging" ]; then') < workflow.index(
+        "flyctl secrets set --stage"
+    )
+    assert 'if app_name != "juprleagues-api-staging":' in workflow
     assert "--require-supabase-isolation" in workflow
     assert "--expect-full-next-admin" in workflow
+    assert "--write-wave \"$JUPR_STAGING_WRITE_WAVE\"" in workflow
+    assert "scripts/staging_write_waves.py" in workflow
+    assert 'JUPR_REQUIRE_WORKER_RUN_LOG: "1"' in workflow
+    for staged_safety_value in (
+        '"JUPR_ENV=staging"',
+        '"JUPR_EMAIL_MODE=dry_run"',
+        '"JUPR_REQUIRE_API_AUDIT_LOG=1"',
+        '"JUPR_REQUIRE_WORKER_RUN_LOG=1"',
+        f'"JUPR_WEB_BASE_URL={EXPECTED_STAGING_WEB_ORIGIN}"',
+    ):
+        assert staged_safety_value in workflow
+    assert '"SUPABASE_JWKS_URL=${SUPABASE_URL%/}/auth/v1/.well-known/jwks.json"' in workflow
+    assert '"JUPR_SUPABASE_JWT_MODE=jwks"' in workflow
+    assert f'--expected-web-origin "{EXPECTED_STAGING_WEB_ORIGIN}"' in workflow
     assert "fly.staging.toml" in workflow
 
 
+def test_staging_deploy_wave_choices_exactly_match_the_code_ledger():
+    workflow = (ROOT / ".github/workflows/fly_api_staging_deploy.yml").read_text(
+        encoding="utf-8"
+    )
+    write_wave = workflow.split("      write_wave:\n", 1)[1].split(
+        "\npermissions:", 1
+    )[0]
+    options = write_wave.split("        options:\n", 1)[1]
+    choices = tuple(
+        line.strip().removeprefix("- ")
+        for line in options.splitlines()
+        if line.strip().startswith("- ")
+    )
+
+    assert 'default: "none"' in write_wave
+    assert choices == tuple(STAGING_WRITE_WAVES)
+
+
 def test_production_cors_includes_both_public_domains():
-    origins = set(_toml("fly.toml")["env"]["JUPR_ALLOWED_ORIGINS"].split(","))
+    production_env = _toml("fly.toml")["env"]
+    origins = set(production_env["JUPR_ALLOWED_ORIGINS"].split(","))
     assert "https://juprleagues.com" in origins
     assert "https://pickleballclubsandwich.com" in origins
+    assert production_env["JUPR_WEB_BASE_URL"] == "https://pickleballclubsandwich.com"
 
 
 def test_only_one_staging_smoke_workflow_remains():
@@ -108,13 +177,23 @@ def test_only_one_staging_smoke_workflow_remains():
     assert [path.name for path in staging_smokes] == ["staging_smoke.yml"]
 
 
+def test_staging_smoke_shares_the_deploy_and_evidence_lock():
+    workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
+    assert "group: jupr-staging-api-and-parity-evidence" in workflow
+    assert "cancel-in-progress: false" in workflow
+
+
 def test_staging_smoke_validates_exact_isolated_targets_before_requests():
     workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
 
     validation = workflow.index("- name: Validate staging smoke configuration")
     checkout = workflow.index("- name: Check out repository")
+    provenance = workflow.index("- name: Verify canonical staging workflow provenance")
     public_smoke = workflow.index("- name: Run public smoke checks")
-    assert validation < checkout < public_smoke
+    assert checkout < provenance < validation < public_smoke
+    assert "${{ secrets." not in workflow[:provenance]
+    assert 'if [ "$GITHUB_REF" != "refs/heads/staging" ]; then' in workflow
+    assert '[ "$HEAD_SHA" != "$GITHUB_SHA" ] || [ "$HEAD_SHA" != "$STAGING_SHA" ]' in workflow
     assert 'JUPR_EXPECTED_STAGING_API_ORIGIN: "https://juprleagues-api-staging.fly.dev"' in workflow
     assert 'JUPR_EXPECTED_STAGING_WEB_ORIGIN: "https://jupr-git-staging-pickleballattrespalapas1.vercel.app"' in workflow
     assert "Missing Vercel automation bypass secret" in workflow
@@ -219,30 +298,33 @@ def test_staging_smoke_does_not_print_raw_invalid_input_or_bypass_secret(tmp_pat
 def test_browser_smoke_bootstraps_an_origin_scoped_cookie_without_routing():
     config = (ROOT / "apps/web/playwright.config.ts").read_text(encoding="utf-8")
     spec = (ROOT / "apps/web/e2e/staging.smoke.spec.ts").read_text(encoding="utf-8")
+    helper = (ROOT / "apps/web/e2e/support/staging.ts").read_text(encoding="utf-8")
 
     assert "extraHTTPHeaders" not in config
     assert 'trace: protectedVercelRun ? "off" : "retain-on-failure"' in config
-    assert '"https://jupr-git-staging-pickleballattrespalapas1.vercel.app"' in spec
-    assert "remoteBaseUrl !== expectedStagingWebOrigin" in spec
-    assert spec.count("context.request.get(bootstrapUrl") == 2
-    assert "`${vercelBypassOrigin}/api/environment`" in spec
-    assert spec.count('"x-vercel-protection-bypass": bypassSecret') == 1
-    assert spec.count('"x-vercel-set-bypass-cookie": "true"') == 1
-    assert spec.count("maxRedirects: 0") == 2
-    assert spec.count("failOnStatusCode: false") == 2
-    assert "headersArray().some" in spec
-    assert 'name.toLowerCase() === "set-cookie"' in spec
-    assert 'verification.status(), "Vercel bypass cookie was not accepted"' in spec
-    assert 'verification.headers()["content-type"]' in spec
-    assert "await bootstrap.dispose()" in spec
-    assert "await verification.dispose()" in spec
-    assert "context.route" not in spec
-    assert "route.fetch" not in spec
-    assert "route.fulfill" not in spec
-    assert "route.continue" not in spec
-    assert "fetched.body" not in spec
-    assert "?x-vercel-protection-bypass" not in spec
-    assert "storageState" not in spec
+    assert '"https://jupr-git-staging-pickleballattrespalapas1.vercel.app"' in helper
+    assert "remoteBaseUrl !== expectedStagingWebOrigin" in helper
+    assert helper.count("context.request.get(bootstrapUrl") == 2
+    assert "`${vercelBypassOrigin}/api/environment`" in helper
+    assert helper.count('"x-vercel-protection-bypass": bypassSecret') == 1
+    assert helper.count('"x-vercel-set-bypass-cookie": "true"') == 1
+    assert helper.count("maxRedirects: 0") == 2
+    assert helper.count("failOnStatusCode: false") == 2
+    assert "headersArray().some" in helper
+    assert 'name.toLowerCase() === "set-cookie"' in helper
+    assert 'verification.status(), "Vercel bypass cookie was not accepted"' in helper
+    assert 'verification.headers()["content-type"]' in helper
+    assert "await bootstrap.dispose()" in helper
+    assert "await verification.dispose()" in helper
+    assert "bootstrapStagingContext(context)" in spec
+    combined = spec + helper
+    assert "context.route" not in combined
+    assert "route.fetch" not in combined
+    assert "route.fulfill" not in combined
+    assert "route.continue" not in combined
+    assert "fetched.body" not in combined
+    assert "?x-vercel-protection-bypass" not in combined
+    assert "storageState" not in combined
 
 
 def test_schema_copy_workflow_has_explicit_apply_confirmation():

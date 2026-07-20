@@ -18,6 +18,7 @@ class FakeQuery:
         self.filters = []
         self.in_filters = []
         self.insert_payload = None
+        self.update_payload = None
         self.limit_value = None
 
     def select(self, *_args, **_kwargs):
@@ -39,6 +40,10 @@ class FakeQuery:
         self.insert_payload = dict(payload)
         return self
 
+    def update(self, payload):
+        self.update_payload = dict(payload)
+        return self
+
     def execute(self):
         rows = self.storage.setdefault(self.table_name, [])
         if self.insert_payload is not None:
@@ -50,6 +55,10 @@ class FakeQuery:
             scoped = [row for row in scoped if str(row.get(key)) == str(expected)]
         for key, expected_values in self.in_filters:
             scoped = [row for row in scoped if str(row.get(key)) in expected_values]
+        if self.update_payload is not None:
+            for row in scoped:
+                row.update(self.update_payload)
+            return SimpleNamespace(data=[dict(row) for row in scoped])
         if self.limit_value is not None:
             scoped = scoped[: self.limit_value]
         return SimpleNamespace(data=scoped)
@@ -67,6 +76,9 @@ class FakeSupabase:
                 {"id": "run2", "status": "done", "scope_json": {"club_id": "other"}},
             ],
             "admin_activity_log": [],
+            "admin_guarded_operations": [],
+            "badges": [],
+            "player_badges": [],
             "tournaments": [],
             "tournament_games": [],
             "tournament_teams": [],
@@ -78,6 +90,12 @@ class FakeSupabase:
 
     def table(self, name):
         return FakeQuery(self.storage, name)
+
+
+def install_write_env(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
 
 
 def test_admin_worker_status_counts_queue(monkeypatch):
@@ -136,6 +154,24 @@ def test_admin_rating_reports_are_club_scoped_read_only_and_match_streamlit_calc
         assert "available" in str(exc).lower()
     else:
         raise AssertionError("expected cross-club report scope rejection")
+    assert supabase.storage == before
+
+
+def test_admin_rating_report_csv_neutralizes_spreadsheet_formulas(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    supabase = FakeSupabase()
+    supabase.storage["players"] = [
+        {"id": 1, "club_id": "club", "name": "=HYPERLINK(\"https://invalid\")", "rating": 1600, "starting_rating": 1400, "wins": 1, "losses": 0, "matches_played": 1, "active": True, "inactive_at": None},
+        {"id": 2, "club_id": "club", "name": "  @SUM(1,1)", "rating": 1500, "starting_rating": 1500, "wins": 0, "losses": 1, "matches_played": 1, "active": True, "inactive_at": None},
+    ]
+    before = deepcopy(supabase.storage)
+
+    report = build_admin_rating_report(supabase, club_id="club")
+
+    assert report["csv_formula_neutralized"] is True
+    assert "'=HYPERLINK" in report["csv_text"]
+    assert "'  @SUM" in report["csv_text"]
+    assert report["rows"][0]["name"].startswith("=")
     assert supabase.storage == before
 
 
@@ -199,7 +235,7 @@ def test_tournament_match_backfill_preview_is_read_only_and_classifies_candidate
 
 
 def test_tournament_match_backfill_apply_requires_current_selected_preview(monkeypatch):
-    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    install_write_env(monkeypatch)
     monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
     supabase = FakeSupabase()
     supabase.storage["tournaments"] = [
@@ -243,6 +279,7 @@ def test_tournament_match_backfill_apply_requires_current_selected_preview(monke
             confirmation_text="BACKFILL TOURNAMENT MATCHES",
             actor_email="owner@example.com",
             actor_role="super_admin",
+            operation_key="backfill-wrong-limit",
         )
     except ValueError as exc:
         assert "stale" in str(exc).lower()
@@ -259,6 +296,7 @@ def test_tournament_match_backfill_apply_requires_current_selected_preview(monke
         confirmation_text="BACKFILL TOURNAMENT MATCHES",
         actor_email="owner@example.com",
         actor_role="super_admin",
+        operation_key="backfill-ready-one",
     )
 
     assert result["inserted_count"] == 1
@@ -266,13 +304,13 @@ def test_tournament_match_backfill_apply_requires_current_selected_preview(monke
     assert captured["club_id"] == "club"
     assert captured["payloads"][0]["t1_p2"] == 2
     assert [row["action_type"] for row in supabase.storage["admin_activity_log"]] == [
-        "tournament_match_backfill_apply_started",
+        "tournament_match_backfill_apply_intent",
         "tournament_match_backfill_applied",
     ]
 
 
 def test_tournament_match_backfill_apply_rejects_stale_preview_without_writes(monkeypatch):
-    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    install_write_env(monkeypatch)
     supabase = FakeSupabase()
     before = deepcopy(supabase.storage)
     called = {"process": False}
@@ -290,6 +328,7 @@ def test_tournament_match_backfill_apply_rejects_stale_preview_without_writes(mo
             confirmation_text="BACKFILL TOURNAMENT MATCHES",
             actor_email="owner@example.com",
             actor_role="super_admin",
+            operation_key="backfill-stale-one",
         )
     except ValueError as exc:
         assert "stale" in str(exc).lower()
@@ -300,7 +339,7 @@ def test_tournament_match_backfill_apply_rejects_stale_preview_without_writes(mo
 
 
 def test_badge_queue_worker_requires_confirmation(monkeypatch):
-    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    install_write_env(monkeypatch)
     try:
         run_admin_badge_queue_worker(
             FakeSupabase(),
@@ -311,6 +350,7 @@ def test_badge_queue_worker_requires_confirmation(monkeypatch):
             actor_email="admin@example.com",
             actor_role="super_admin",
             confirmation_text="PROCESS",
+            operation_key="badge-queue-bad",
         )
     except ValueError as exc:
         assert "PROCESS BADGE QUEUE" in str(exc)
@@ -319,7 +359,7 @@ def test_badge_queue_worker_requires_confirmation(monkeypatch):
 
 
 def test_badge_queue_worker_writes_audit(monkeypatch):
-    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    install_write_env(monkeypatch)
     captured = {}
 
     def fake_process(_supabase, club_id, **_kwargs):
@@ -340,6 +380,7 @@ def test_badge_queue_worker_writes_audit(monkeypatch):
         actor_email="admin@example.com",
         actor_role="super_admin",
         confirmation_text="PROCESS BADGE QUEUE",
+        operation_key="badge-queue-good",
     )
     assert result["result"]["processed"] == 2
     assert captured["club_id"] == "club"
@@ -347,7 +388,7 @@ def test_badge_queue_worker_writes_audit(monkeypatch):
 
 
 def test_badge_recompute_apply_requires_confirmation(monkeypatch):
-    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    install_write_env(monkeypatch)
     try:
         run_admin_badge_recompute_job(
             FakeSupabase(),
@@ -365,6 +406,7 @@ def test_badge_recompute_apply_requires_confirmation(monkeypatch):
             actor_email="admin@example.com",
             actor_role="super_admin",
             confirmation_text="RUN",
+            operation_key="badge-recompute-bad",
         )
     except ValueError as exc:
         assert "RUN BADGE RECOMPUTE" in str(exc)
@@ -373,7 +415,7 @@ def test_badge_recompute_apply_requires_confirmation(monkeypatch):
 
 
 def test_badge_recompute_invokes_python_domain(monkeypatch):
-    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    install_write_env(monkeypatch)
     monkeypatch.setattr(
         "jupr_app.services.admin_tools_service.run_badge_recompute",
         lambda *_args, **_kwargs: {"mode": _kwargs.get("mode"), "new_awards_count": 3},
@@ -395,6 +437,7 @@ def test_badge_recompute_invokes_python_domain(monkeypatch):
         actor_email="admin@example.com",
         actor_role="super_admin",
         confirmation_text="RUN BADGE RECOMPUTE",
+        operation_key="badge-recompute-good",
     )
     assert result["summary"]["new_awards_count"] == 3
     assert supabase.storage["admin_activity_log"]

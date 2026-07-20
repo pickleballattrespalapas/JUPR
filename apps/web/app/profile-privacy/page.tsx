@@ -27,6 +27,8 @@ export default function ProfilePrivacyPage() {
             <li>Match and tournament records may need to remain in history for ratings, disputes, audit trails, and event results.</li>
             <li>When approved, staff can adjust public display details without silently changing official match history.</li>
             <li>Contact details such as email and phone are not shown on public roster or partner-board pages by default.</li>
+            <li>A request cannot be marked resolved until identity is verified, the approved action is completed through an authorized workflow, and staff record which public projections they checked.</li>
+            <li>Do not attach identity documents to the form; staff will arrange an appropriate verification method.</li>
           </ul>
         </article>
         <article style={cardStyle}>

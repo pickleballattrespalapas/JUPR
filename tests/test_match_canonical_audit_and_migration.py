@@ -48,9 +48,11 @@ class FakeQuery:
 class FakeSupabase:
     def __init__(self, rows):
         self.rows = rows
+        self.mutation_calls = 0
 
     def table(self, name):
         assert name == "matches"
+        self.mutation_calls += 1
         return FakeQuery(self.rows)
 
 
@@ -104,9 +106,43 @@ def test_dry_run_normalization_reports_changes_without_updating_rows():
 
     assert result["proposed_update_count"] == 1
     assert result["applied_update_count"] == 0
+    assert fake_supabase.mutation_calls == 0
     assert rows[0]["score_t1"] == 0
     patch = result["proposals"][0]["patch"]
     assert patch["score_t1"] == 11
+
+
+def test_dry_run_fingerprint_is_bound_to_exact_proposals_not_input_format():
+    rows = [
+        {
+            "id": 22,
+            "club_id": "club",
+            "date": "2026-01-04",
+            "league": "L1",
+            "match_type": "League",
+            "score_t1": 0,
+            "score_t2": 0,
+            "team1_score": 11,
+            "team2_score": 9,
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+        },
+    ]
+    ctx = _ctx_from_rows(rows)
+    supabase = FakeSupabase(rows)
+
+    full_preview = normalize_legacy_matches_for_canonical(
+        supabase, ctx=ctx, club_id="club", player_id=1, match_ids=[], dry_run=True
+    )
+    exact_preview = normalize_legacy_matches_for_canonical(
+        supabase, ctx=ctx, club_id="club", player_id=1, match_ids=[22], dry_run=True
+    )
+
+    assert full_preview["proposals"] == exact_preview["proposals"]
+    assert full_preview["preview_fingerprint"] == exact_preview["preview_fingerprint"]
+    assert supabase.mutation_calls == 0
 
 
 def test_apply_normalization_updates_rows_and_leaves_shared_untouched():

@@ -3,20 +3,21 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from jupr_app.services.public_verified_updates_service import (
     create_public_verified_update_request,
     get_public_verified_update_request_status,
     list_public_verified_update_player_options,
 )
+from services.api.staging_write_guard import require_public_intake_or_403
 
 
 class PublicVerifiedUpdateRequest(BaseModel):
     player_id: int
-    email: str
-    request_note: str | None = None
-    website: str | None = None
+    email: str = Field(min_length=3, max_length=320)
+    request_note: str | None = Field(default=None, max_length=1000)
+    website: str | None = Field(default=None, max_length=200)
 
 
 def install_public_verified_updates_routes(app, *, get_club, get_supabase_client, public_club_payload) -> None:
@@ -53,6 +54,7 @@ def install_public_verified_updates_routes(app, *, get_club, get_supabase_client
 
     @app.post("/clubs/{club_slug}/verified-updates/request")
     def post_verified_updates_request(club_slug: str, payload: PublicVerifiedUpdateRequest) -> dict[str, Any]:
+        require_public_intake_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase = get_supabase_client()
@@ -67,6 +69,8 @@ def install_public_verified_updates_routes(app, *, get_club, get_supabase_client
             )
         except ValueError as exc:
             message = str(exc)
+            if "too many" in message.lower():
+                raise HTTPException(status_code=429, detail=message) from exc
             if "already" in message.lower():
                 raise HTTPException(status_code=409, detail=message) from exc
             raise HTTPException(status_code=400, detail=message) from exc

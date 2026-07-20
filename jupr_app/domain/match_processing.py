@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 import logging
 from typing import Any, Callable
 
+import pandas as pd
+
 from jupr_app.domain.player_activity import build_player_activity_update, coerce_utc_datetime, max_activity_time
 from jupr_app.domain.player_ratings_source import build_seed_rating_maps, current_seed_rating
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
@@ -35,6 +37,37 @@ def _safe_positive_float(value: Any) -> float:
         return 0.0
 
 
+def _json_value(value: Any) -> Any:
+    """Convert DataFrame scalars into deterministic JSON-safe values."""
+
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return value
+
+
+def _frame_rows(frame: Any, **conditions: Any) -> list[dict[str, Any]]:
+    if frame is None or getattr(frame, "empty", True):
+        return []
+    selected = frame
+    try:
+        for field, expected in conditions.items():
+            selected = selected[selected[field].astype(str) == str(expected)]
+    except Exception:
+        return []
+    return [
+        {str(key): _json_value(value) for key, value in dict(row).items()}
+        for _, row in selected.iterrows()
+    ]
+
+
 def process_matches(
     match_list: list[dict[str, Any]],
     *,
@@ -48,6 +81,7 @@ def process_matches(
     default_k_factor: int = 32,
     min_win_delta_elo: float = 1.0,
     cap_loser_gain_elo: float | None = 16.0,
+    build_write_plan_only: bool = False,
 ) -> dict[str, Any]:
     if sb_retry is None:
         def sb_retry(fn):
@@ -260,6 +294,134 @@ def process_matches(
         )
         match_payloads.append({"league": league_name, "date": dt_val, "score_t1": s1, "score_t2": s2})
         successful_match_dates.append(dt_val)
+
+    if build_write_plan_only:
+        player_updates: list[dict[str, Any]] = []
+        for pid, stats in sorted(overall_updates.items()):
+            rows = _frame_rows(df_players_all, id=int(pid))
+            if len(rows) != 1:
+                raise RuntimeError(
+                    f"Official publish requires one existing player snapshot for player {int(pid)}."
+                )
+            current = rows[0]
+            latest_match_at = last_game_updates.get(int(pid))
+            activity_update = build_player_activity_update(current.get("last_game_at"), latest_match_at)
+            expected = {
+                "rating": float(current.get("rating", 1200.0) or 1200.0),
+                "wins": int(current.get("wins", 0) or 0),
+                "losses": int(current.get("losses", 0) or 0),
+                "matches_played": int(current.get("matches_played", 0) or 0),
+                "last_game_at": current.get("last_game_at"),
+                "inactive_at": current.get("inactive_at"),
+                "active": bool(current.get("active", True)) if current.get("active") is not None else None,
+            }
+            after = {
+                "rating": float(stats["r"]),
+                "wins": int(stats["w"]),
+                "losses": int(stats["l"]),
+                "matches_played": int(stats["mp"]),
+                **activity_update,
+            }
+            player_updates.append(
+                {"player_id": int(pid), "rating_mode": "doubles", "expected": expected, "after": after}
+            )
+
+        league_rating_updates: list[dict[str, Any]] = []
+        for (pid, league_name), stats in sorted(island_updates.items()):
+            rows = _frame_rows(
+                df_leagues,
+                player_id=int(pid),
+                league_name=str(league_name),
+            )
+            if len(rows) > 1:
+                raise RuntimeError(
+                    f"Official publish found duplicate league-rating rows for player {int(pid)} in {league_name}."
+                )
+            current = rows[0] if rows else None
+            expected = None
+            if current is not None:
+                expected = {
+                    "id": int(current["id"]),
+                    "rating": float(current.get("rating", 1200.0) or 1200.0),
+                    "wins": int(current.get("wins", 0) or 0),
+                    "losses": int(current.get("losses", 0) or 0),
+                    "matches_played": int(current.get("matches_played", 0) or 0),
+                    "starting_rating": (
+                        float(current["starting_rating"])
+                        if current.get("starting_rating") is not None
+                        else None
+                    ),
+                    "is_active": (
+                        bool(current.get("is_active")) if current.get("is_active") is not None else None
+                    ),
+                    "inactive_at": current.get("inactive_at"),
+                }
+            after = {
+                "rating": float(stats["r"]),
+                "wins": int(stats["w"]) + int((current or {}).get("wins", 0) or 0),
+                "losses": int(stats["l"]) + int((current or {}).get("losses", 0) or 0),
+                "matches_played": int(stats["mp"]) + int((current or {}).get("matches_played", 0) or 0),
+                "starting_rating": (
+                    float(current["starting_rating"])
+                    if current and current.get("starting_rating") is not None
+                    else float(stats.get("start", 1200.0))
+                ),
+                "is_active": True,
+                "inactive_at": None,
+            }
+            league_rating_updates.append(
+                {
+                    "player_id": int(pid),
+                    "league_name": str(league_name),
+                    "expected": expected,
+                    "after": after,
+                }
+            )
+        league_metadata_expectations: list[dict[str, Any]] = []
+        for league_name in sorted({str(name) for _, name in island_updates}):
+            rows = _frame_rows(df_meta, league_name=league_name)
+            if len(rows) > 1:
+                raise RuntimeError(
+                    f"Official publish found duplicate league metadata for {league_name}."
+                )
+            current = rows[0] if rows else None
+            league_metadata_expectations.append(
+                {
+                    "league_name": league_name,
+                    "expected": (
+                        {
+                            "id": current.get("id"),
+                            "club_id": str(current.get("club_id") or club_id),
+                            "league_name": str(current.get("league_name") or league_name),
+                            "k_factor": int(current.get("k_factor", default_k_factor) or default_k_factor),
+                        }
+                        if current
+                        else None
+                    ),
+                }
+            )
+        return {
+            "inserted": len(db_matches),
+            "skipped_incomplete": int(skipped_incomplete),
+            "skipped_empty": int(skipped_empty),
+            "skipped_unrated": int(skipped_unrated),
+            "winner_bonus_summary": {
+                "match_count": int(bonus_match_count),
+                "player_elo_total": float(bonus_player_elo_total),
+            },
+            "write_plan": {
+                "match_rows": db_matches,
+                "player_updates": player_updates,
+                "league_rating_updates": league_rating_updates,
+                "league_metadata_expectations": league_metadata_expectations,
+            },
+            "side_effect_context": {
+                "affected_player_ids": sorted(affected_players),
+                "successful_match_dates": successful_match_dates,
+                "has_badge_eligible_match": bool(has_badge_eligible_match),
+                "match_payloads": match_payloads,
+            },
+        }
 
     badge_summary: dict[str, Any] = {"mode": "skipped", "awarded_count": 0, "candidate_count": 0, "badge_ids": []}
     if db_matches:

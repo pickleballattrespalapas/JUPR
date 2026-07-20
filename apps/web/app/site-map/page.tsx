@@ -40,7 +40,7 @@ const routeGroups = [
       ["Contact", "/contact"],
       ["Data corrections", "/data-corrections"],
       ["Profile privacy request", "/profile-privacy"],
-      ["Verified updates request", "/verified-updates"],
+      ["Verified updates request", "/clubs/tres-palapas/verified-updates"],
       ["Email preferences", "/email-preferences"],
       ["Privacy", "/privacy"],
       ["Terms", "/terms"]

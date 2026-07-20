@@ -3,7 +3,7 @@ import TournamentSetupPanel from "./TournamentSetupPanel";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
-type StatusResponse = { enabled: boolean; status: string; tournament_count?: number | null; warnings?: string[]; confirmation_text?: Record<string, string> };
+type StatusResponse = { enabled: boolean; status: string; tournament_count?: number | null; warnings?: string[]; confirmation_text?: Record<string, string>; streamlit_fallback_url?: string };
 
 function apiBase(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
@@ -33,7 +33,7 @@ export default async function TournamentSetupPage() {
       </p>
       {error ? <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>Tournament Setup status unavailable. {error}</article> : null}
       <TournamentSetupPanel apiBase={apiBase()} clubId={clubId} status={status} />
-      <p style={{ marginTop: "1rem" }}><Link href="/admin/tournaments">Tournament Admin</Link> · <Link href="/admin/tournaments/ops">Tournament Ops</Link> · <Link href="/admin/tournament-live">Tournament Live</Link> · <Link href="/admin">Operations cockpit</Link></p>
+      <p style={{ marginTop: "1rem" }}><Link href="/admin/tournaments">Tournament Admin</Link> · <Link href="/admin/tournaments/ops">Tournament Ops</Link> · <Link href="/admin/tournament-live">Tournament Live</Link> · <Link href="/admin">Operations cockpit</Link>{status?.streamlit_fallback_url ? <> · <a href={status.streamlit_fallback_url} target="_blank" rel="noreferrer">Open Streamlit Tournament Setup fallback</a></> : null}</p>
     </section>
   );
 }

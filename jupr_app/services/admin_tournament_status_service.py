@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from datetime import datetime, timezone
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.tournament_registration_repo import archive_tournament, unarchive_tournament
@@ -23,10 +24,12 @@ def apply_admin_tournament_status_action(
     club_id: str,
     tournament_id: str,
     action: str,
+    expected_updated_at: str | None = None,
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
     source: str = "next_tournament_admin_status_action",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -46,8 +49,24 @@ def apply_admin_tournament_status_action(
         raise ValueError("Tournament is already archived.")
     if normalized_action == "unarchive" and str(before.get("status") or "").upper() != "ARCHIVED":
         raise ValueError("Only archived tournaments can be unarchived.")
+    if dry_run:
+        return {"ok": True, "mode": "tournament_status_action_preflight", "dry_run": True, "write_count": 0, "action": normalized_action}
 
-    if normalized_action == "archive":
+    if expected_updated_at:
+        next_status = "ARCHIVED" if normalized_action == "archive" else "DRAFT"
+        rows = (
+            supabase.table("tournaments")
+            .update({"status": next_status, "updated_at": datetime.now(timezone.utc).isoformat()})
+            .eq("club_id", str(club_id))
+            .eq("id", clean_tournament_id)
+            .eq("updated_at", str(expected_updated_at))
+            .execute()
+        )
+        if not list(getattr(rows, "data", None) or []):
+            from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
+
+            raise StaleTournamentAdminStateError("Tournament changed after it was loaded. Reload before changing status.")
+    elif normalized_action == "archive":
         archive_tournament(supabase, clean_tournament_id)
     else:
         unarchive_tournament(supabase, clean_tournament_id)

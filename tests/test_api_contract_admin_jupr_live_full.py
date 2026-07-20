@@ -1,10 +1,13 @@
+from copy import deepcopy
 from types import SimpleNamespace
 
 from jupr_app.services.admin_jupr_live_service import (
     create_admin_jupr_live_session,
+    list_admin_jupr_live_sessions,
     publish_admin_jupr_live_matches,
     update_admin_jupr_live_scores,
 )
+from jupr_app.services.public_live_service import public_live_session_detail
 
 
 class FakeQuery:
@@ -207,3 +210,42 @@ def test_jupr_live_publish_blocks_unlinked_participants(monkeypatch):
         assert "linked" in str(exc)
     else:
         raise AssertionError("expected linked participant error")
+
+
+def test_admin_scored_session_projects_same_state_to_public_live(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE", "1")
+    supabase = FakeSupabase()
+    created = _create_linked_rr(supabase)
+    session_key = created["session"]["session_key"]
+    match_id = created["session"]["state"]["page_state"]["event"]["rounds"][0]["matches"][0]["id"]
+
+    scored = update_admin_jupr_live_scores(
+        supabase,
+        club_id="club",
+        session_key=session_key,
+        scores=[{"match_id": match_id, "score_a": 11, "score_b": 6}],
+        actor_email="admin@example.com",
+        actor_role="scorekeeper",
+        confirmation_text="SAVE LIVE SCORES",
+        expected_version=created["session"]["version"],
+    )
+    raw = next(row for row in supabase.storage["live_sessions"] if row["session_key"] == session_key)
+    public = public_live_session_detail(raw)
+    public_match = public["rounds"][0]["matches"][0]
+
+    assert public_match["score_a"] == 11
+    assert public_match["score_b"] == 6
+    assert "state" not in public
+    assert scored["session"]["public_url_path"] is None
+
+
+def test_admin_live_list_is_read_only(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE", "1")
+    supabase = FakeSupabase()
+    _create_linked_rr(supabase)
+    before = deepcopy(supabase.storage)
+
+    result = list_admin_jupr_live_sessions(supabase, club_id="club", status="active")
+
+    assert result["count"] == 1
+    assert supabase.storage == before

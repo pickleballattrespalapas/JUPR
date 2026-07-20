@@ -1,0 +1,440 @@
+.root {
+  display: grid;
+  gap: 1rem;
+}
+
+.card,
+.recoveryCard {
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: clamp(0.9rem, 2vw, 1.2rem);
+  background: #fff;
+  min-width: 0;
+}
+
+.card h2,
+.recoveryCard h2 {
+  margin-top: 0;
+}
+
+.recoveryCard {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.headingRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.headingRow h2,
+.headingRow p {
+  margin-top: 0;
+}
+
+.muted,
+.stateVersion {
+  color: #475569;
+}
+
+.eyebrow {
+  margin: 0 0 0.25rem;
+  color: #2563eb;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.boundaryCallout,
+.sessionReady,
+.sessionWarning {
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  padding: 0.8rem;
+  margin: 0.85rem 0;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.sessionReady {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.sessionWarning {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.sessionReady p,
+.sessionWarning p {
+  margin: 0.35rem 0 0;
+}
+
+.controlGrid,
+.scoreGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+  gap: 0.85rem;
+  align-items: end;
+}
+
+.scoreGrid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+}
+
+.wideControl {
+  grid-column: 1 / -1;
+}
+
+.controlGrid label,
+.scoreGrid label,
+.commandCard label,
+.dangerCard label,
+.recoveryCard label {
+  display: grid;
+  gap: 0.35rem;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.checkboxLabel {
+  display: flex !important;
+  align-items: center;
+  align-self: center;
+}
+
+.checkboxLabel input {
+  inline-size: 1.1rem;
+  block-size: 1.1rem;
+}
+
+.input {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 0.58rem 0.66rem;
+  border: 1px solid #94a3b8;
+  border-radius: 9px;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
+}
+
+.input:focus-visible,
+.primaryButton:focus-visible,
+.secondaryButton:focus-visible,
+.dangerButton:focus-visible,
+.root a:focus-visible {
+  outline: 3px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.primaryButton,
+.secondaryButton,
+.dangerButton {
+  min-height: 44px;
+  padding: 0.62rem 0.95rem;
+  border: 1px solid #0f172a;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #fff;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.secondaryButton {
+  background: #fff;
+  color: #0f172a;
+}
+
+.dangerButton {
+  border-color: #991b1b;
+  background: #991b1b;
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.dangerButton:disabled,
+.input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.buttonRow,
+.linkRow {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
+  gap: 0.7rem;
+}
+
+.statsGrid > div {
+  border: 1px solid #e2e8f0;
+  border-radius: 11px;
+  padding: 0.7rem;
+  background: #f8fafc;
+}
+
+.statsGrid span,
+.labelText {
+  display: block;
+  margin-bottom: 0.2rem;
+  color: #64748b;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.statsGrid strong {
+  display: block;
+  font-size: 1.1rem;
+}
+
+.commandGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.commandCard,
+.dangerCard {
+  display: grid;
+  align-content: start;
+  gap: 0.7rem;
+  min-width: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 13px;
+  padding: 0.85rem;
+  background: #fff;
+}
+
+.commandCard h3,
+.commandCard p,
+.dangerCard h3,
+.dangerCard p {
+  margin: 0;
+}
+
+.dangerCard {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.commandCard hr {
+  width: 100%;
+  margin: 0.2rem 0;
+  border: 0;
+  border-top: 1px solid #e2e8f0;
+}
+
+.blockers,
+.warnings {
+  margin: 0.55rem 0;
+  padding-left: 1.2rem;
+  color: #92400e;
+}
+
+.blockers {
+  font-size: 0.9rem;
+}
+
+.readyText {
+  margin: 0.5rem 0;
+  color: #166534;
+  font-weight: 700;
+}
+
+.successChip,
+.openChip,
+.recoveryChip,
+.neutralChip {
+  display: inline-block;
+  border: 1px solid #86efac;
+  border-radius: 999px;
+  padding: 0.17rem 0.48rem;
+  background: #dcfce7;
+  color: #166534;
+  font-size: 0.78rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.openChip,
+.recoveryChip {
+  border-color: #fcd34d;
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.neutralChip {
+  border-color: #cbd5e1;
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.gameTable {
+  width: 100%;
+  min-width: 820px;
+  border-collapse: collapse;
+}
+
+.gameTable caption {
+  padding: 0 0 0.65rem;
+  color: #475569;
+  text-align: left;
+}
+
+.gameTable th,
+.gameTable td {
+  padding: 0.62rem;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.gameTable thead th {
+  border-bottom-color: #94a3b8;
+}
+
+.mobileGames {
+  display: none;
+}
+
+.gameCard {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 0.8rem;
+}
+
+.gameCard dl {
+  display: grid;
+  grid-template-columns: minmax(70px, auto) 1fr;
+  gap: 0.35rem 0.65rem;
+  margin-bottom: 0;
+}
+
+.gameCard dt {
+  color: #64748b;
+  font-weight: 700;
+}
+
+.gameCard dd {
+  margin: 0;
+}
+
+.operationList {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.8rem;
+}
+
+.operationRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 11px;
+  padding: 0.72rem;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.operationRow p {
+  margin: 0.35rem 0 0;
+}
+
+.operationRow code,
+.recoveryCard code,
+.stateVersion code {
+  overflow-wrap: anywhere;
+}
+
+.errorText,
+.noticeError {
+  color: #b91c1c;
+}
+
+.noticeError,
+.noticeSuccess,
+.noticeInfo {
+  position: sticky;
+  bottom: 0.75rem;
+  z-index: 2;
+  margin: 0;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  padding: 0.8rem;
+  background: #fef2f2;
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.12);
+  font-weight: 700;
+}
+
+.noticeSuccess {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.noticeInfo {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+@media (max-width: 760px) {
+  .commandGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .tableWrap {
+    display: none;
+  }
+
+  .mobileGames {
+    display: grid;
+    gap: 0.7rem;
+  }
+
+  .operationRow {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .operationRow .primaryButton {
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .card,
+  .recoveryCard {
+    border-radius: 12px;
+    padding: 0.8rem;
+  }
+
+  .buttonRow > button,
+  .controlGrid > button,
+  .commandCard > button,
+  .dangerCard > button {
+    width: 100%;
+  }
+}
