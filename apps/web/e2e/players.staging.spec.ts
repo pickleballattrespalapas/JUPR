@@ -21,8 +21,7 @@ test("player directory defaults active and keeps search plus stable links determ
   await search.fill(firstName);
   await page.getByTestId("players-search-form").getByRole("button", { name: "Search" }).click();
   await expect(page).toHaveURL(/q=/);
-  expect(await page.getByTestId("players-row").count(), "search should retain at least the selected public display name").toBeGreaterThan(0);
-  await expect(page.getByTestId("players-row").first()).toContainText(firstName);
+  await expect(rows.first(), "search should retain the selected public display name").toContainText(firstName);
 
   const stableRowLink = page.getByRole("link", { name: `${firstName} stable row link` });
   const stableHref = await stableRowLink.getAttribute("href");
