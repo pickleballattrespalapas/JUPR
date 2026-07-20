@@ -60,7 +60,9 @@ test("new-registration wizard requires demographics and resolves profiles throug
   await expect(page.getByTestId("registration-step-contact")).toBeVisible();
 
   await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("First name, last name, email, age, and gender are required");
+  await expect(
+    page.getByRole("alert").filter({ hasText: "First name, last name, email, age, and gender are required" })
+  ).toBeVisible();
 
   await page.getByLabel("First name").fill("Avery");
   await page.getByLabel("Last name").fill("Ace");

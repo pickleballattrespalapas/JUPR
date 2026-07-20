@@ -145,6 +145,10 @@ The same check is available through the manual GitHub Actions workflow
 configure the following in the GitHub `staging` environment (or provide the URL
 input where supported):
 
+The workflow form pre-fills the two canonical staging origins. Clearing either
+field uses its corresponding environment secret; every resolved value still
+must match the hardcoded staging allowlist before any request is made.
+
 - `STAGING_JUPR_API_BASE_URL`: the isolated FastAPI staging origin;
 - `STAGING_WEB_BASE_URL`: the protected Vercel Preview/staging origin;
 - `STAGING_SUPABASE_URL`: the exact isolated Auth origin the Preview must report;
@@ -155,11 +159,20 @@ input where supported):
   without requesting a cookie redirect; Chromium owns the optional bypass-cookie
   handshake used by the browser suite.
 
-The Chromium pass covers the critical public and admin shells, fails on page or
-console errors, refuses known production domains, and asserts the sanitized
-`/api/environment` contract reports Preview + staging API + staging Auth
-isolation. Browser traces, screenshots, and video are retained as GitHub
-artifacts when the gate fails.
+The Chromium pass runs the exact non-mutating `public-read` parity manifest,
+covers the critical public and disabled-admin shells in that manifest, refuses
+known production domains, and asserts the sanitized `/api/environment` contract
+reports Preview + staging API + staging Auth isolation. Retries are disabled so
+an intermittent first-attempt failure cannot be accepted as green evidence.
+The JSON evidence gate also rejects skips, failures, flakes, focused tests, and
+any count other than the committed 56-test manifest. Screenshots, video, error
+contexts, and the JSON report are retained as GitHub artifacts when the gate
+fails. Traces stay disabled for protected Vercel runs so the automation bypass
+credential cannot be captured. The workflow does not run real-auth, admin-read,
+or write-wave specs. Before Chromium starts, the workflow also requires Vercel
+and Fly to attest the exact checked-out staging SHA, the isolated Supabase/Auth
+project, `write_wave: none`, and the complete all-false controlled-write flag
+projection.
 
 ## Guardrails and explicit warnings
 

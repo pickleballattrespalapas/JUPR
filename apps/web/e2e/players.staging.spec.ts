@@ -9,7 +9,8 @@ test("player directory defaults active and keeps search plus stable links determ
   await page.goto(`/clubs/${clubSlug}/players`, { waitUntil: "domcontentloaded" });
 
   await expect(page.getByTestId("players-status-active")).toHaveAttribute("aria-current", "page");
-  await expect(page.getByRole("textbox", { name: "Find player" })).toBeVisible();
+  const search = page.getByRole("searchbox", { name: "Find player" });
+  await expect(search).toBeVisible();
   const rows = page.getByTestId("players-row");
   expect(await rows.count(), "staging should contain an active public player fixture").toBeGreaterThan(0);
   for (let index = 0; index < await rows.count(); index += 1) {
@@ -17,7 +18,7 @@ test("player directory defaults active and keeps search plus stable links determ
   }
 
   const firstName = (await rows.first().locator("td").first().innerText()).trim();
-  await page.getByRole("textbox", { name: "Find player" }).fill(firstName);
+  await search.fill(firstName);
   await page.getByTestId("players-search-form").getByRole("button", { name: "Search" }).click();
   await expect(page).toHaveURL(/q=/);
   expect(await page.getByTestId("players-row").count(), "search should retain at least the selected public display name").toBeGreaterThan(0);

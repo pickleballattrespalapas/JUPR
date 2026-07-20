@@ -175,11 +175,15 @@ JUPR_SMOKE_ARGS=--allow-live-unconfigured make public-web-smoke
 
 The same check is available through the manual GitHub Actions workflow `Staging Smoke`.
 
-That workflow also runs a Chromium smoke over the critical public and admin
-shell routes, rejects production domains, fails on browser/page errors, and
-asserts `/api/environment` is an isolated Vercel Preview backed by the staging
-API and staging Supabase Auth project. Configure these `staging` environment
-secrets before using the full gate:
+That workflow also runs the exact non-mutating 56-test `public-read` Chromium
+manifest with retries disabled. Its JSON evidence check rejects skips, flakes,
+failures, focused tests, and count drift. It covers its critical public and
+disabled-admin shell routes, rejects production domains, fails on browser/page
+errors, and asserts `/api/environment` is an isolated Vercel Preview backed by
+the staging API and staging Supabase Auth project. It also binds Vercel and Fly
+to the checked-out staging SHA and requires `write_wave: none` with every
+controlled write flag disabled. Configure these `staging` environment secrets
+before using the gate:
 
 - `STAGING_WEB_BASE_URL`: the protected Vercel Preview or staging alias;
 - `STAGING_SUPABASE_URL`: the exact staging Auth origin the Preview must report;
@@ -191,8 +195,11 @@ For a local Preview-mode browser check, install Chromium once and run:
 ```bash
 cd apps/web
 npx playwright install chromium
-npm run test:e2e:staging
+npm run test:e2e:public-read
 ```
+
+`npm run test:e2e:staging` remains the intentionally broad local command for all
+E2E waves; do not use it as the read-only deployment gate.
 
 ## Admin score-entry guard
 

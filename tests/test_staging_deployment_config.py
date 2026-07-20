@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -11,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from scripts.check_staging_environment import FULL_NEXT_ADMIN_FLAGS
+from scripts.run_parity_staging_wave import WAVES
 from scripts.staging_write_waves import (
     ALL_STAGING_WRITE_FLAGS,
     ALWAYS_DISABLED_FLAGS,
@@ -32,6 +34,15 @@ def _toml(path: str) -> dict:
 def _staging_validation_script() -> str:
     workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
     step = workflow.split("      - name: Validate staging smoke configuration\n", 1)[1]
+    block = step.split("        run: |\n", 1)[1].split("\n      - name:", 1)[0]
+    return textwrap.dedent(block)
+
+
+def _browser_evidence_script() -> str:
+    workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Reject incomplete browser public-read evidence\n", 1
+    )[1]
     block = step.split("        run: |\n", 1)[1].split("\n      - name:", 1)[0]
     return textwrap.dedent(block)
 
@@ -62,6 +73,27 @@ def _run_staging_validation(
     )
     output = github_env.read_text(encoding="utf-8") if github_env.exists() else ""
     return result, output
+
+
+def _run_browser_evidence_validation(
+    tmp_path: Path, report: object | None
+) -> subprocess.CompletedProcess[str]:
+    report_path = tmp_path / "apps/web/test-results/public-read-report.json"
+    if report is not None:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, "-c", _browser_evidence_script()],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "EXPECTED_PUBLIC_READ_TESTS": "56",
+            "PYTHONPATH": str(ROOT),
+        },
+    )
 
 
 def test_staging_fly_config_is_isolated_and_full_surface():
@@ -183,6 +215,55 @@ def test_staging_smoke_shares_the_deploy_and_evidence_lock():
     assert "cancel-in-progress: false" in workflow
 
 
+def test_staging_smoke_runs_only_the_strict_public_read_manifest():
+    workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
+    package = json.loads((ROOT / "apps/web/package.json").read_text(encoding="utf-8"))
+    command = package["scripts"]["test:e2e:public-read"].split()
+    expected_specs = tuple(WAVES["public-read"][0]["specs"])
+
+    assert f'default: "{EXPECTED_STAGING_API_ORIGIN}"' in workflow
+    assert f'default: "{EXPECTED_STAGING_WEB_ORIGIN}"' in workflow
+    assert "default: false" in workflow.split("      allow_live_unconfigured:\n", 1)[1].split(
+        "\npermissions:", 1
+    )[0]
+    assert "run: npm run test:e2e:public-read -- --reporter=list,json" in workflow
+    assert "run: npm run test:e2e:staging" not in workflow
+    assert command[:2] == ["playwright", "test"]
+    assert tuple(token for token in command[2:] if not token.startswith("--")) == expected_specs
+    assert {"--retries=0", "--forbid-only"}.issubset(command)
+    assert "PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/public-read-report.json" in workflow
+    assert 'EXPECTED_PUBLIC_READ_TESTS: "56"' in workflow
+    assert "from scripts.run_parity_staging_wave import report_errors" in workflow
+    assert "Reject incomplete browser public-read evidence" in workflow
+
+
+def test_staging_smoke_browser_evidence_gate_requires_all_56_clean_tests(
+    tmp_path: Path,
+):
+    valid = _run_browser_evidence_validation(
+        tmp_path,
+        {"stats": {"expected": 56, "skipped": 0, "unexpected": 0, "flaky": 0}},
+    )
+    assert valid.returncode == 0, valid.stdout + valid.stderr
+
+    incomplete = _run_browser_evidence_validation(
+        tmp_path,
+        {"stats": {"expected": 55, "skipped": 1, "unexpected": 0, "flaky": 0}},
+    )
+    assert incomplete.returncode == 1
+    assert "skipped 1 test" in incomplete.stdout
+    assert "requires exactly 56" in incomplete.stdout
+
+
+def test_staging_smoke_browser_evidence_gate_fails_when_report_is_missing(
+    tmp_path: Path,
+):
+    result = _run_browser_evidence_validation(tmp_path, None)
+
+    assert result.returncode == 1
+    assert "Missing browser evidence" in result.stdout
+
+
 def test_staging_smoke_validates_exact_isolated_targets_before_requests():
     workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
 
@@ -214,7 +295,22 @@ def test_staging_smoke_scopes_bypass_secret_to_request_steps():
     assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in job_env
     assert workflow.count(
         "VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}"
-    ) == 3
+    ) == 4
+
+
+def test_staging_smoke_attests_exact_sha_and_disabled_write_projection():
+    workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
+    identity = workflow.split("      - name: Attest exact read-only deployment identity\n", 1)[
+        1
+    ].split("\n      - name:", 1)[0]
+
+    assert "deployment_identity_errors(" in identity
+    assert 'candidate_sha=os.environ["GITHUB_SHA"]' in identity
+    assert 'expected_write_wave="none"' in identity
+    assert "expected_web_origin=web_origin" in identity
+    assert "_immutable_vercel_origin" in identity
+    assert "juprleagues-api-staging:deployment-" in identity
+    assert "x-vercel-protection-bypass" in identity
 
 
 @pytest.mark.parametrize(
