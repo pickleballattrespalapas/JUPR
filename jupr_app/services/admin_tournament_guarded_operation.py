@@ -14,6 +14,7 @@ SURFACE_MUTATION_FLAGS = {
     "setup": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_SETUP_MUTATIONS",
     "registration": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_REGISTRATION_MUTATIONS",
     "import_handoff": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_IMPORT_HANDOFF",
+    "tournament_live": "JUPR_ENABLE_STAGING_NEXT_ADMIN_TOURNAMENT_LIVE_WRITES",
     "operations": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OPERATIONS_MUTATIONS",
 }
 TRUTHY = {"1", "true", "yes", "y", "on"}
@@ -99,6 +100,30 @@ def _get_operation(supabase: Any, *, club_id: str, operation_key: str) -> dict[s
     except Exception as exc:
         raise RuntimeError(
             "Tournament Admin durable operation storage is unavailable. Apply the order-26 migration before enabling staging mutations."
+        ) from exc
+    return rows[0] if rows else None
+
+
+def _get_operation_by_idempotency_key(
+    supabase: Any,
+    *,
+    club_id: str,
+    surface: str,
+    idempotency_key: str,
+) -> dict[str, Any] | None:
+    try:
+        rows = _safe_rows(
+            supabase.table(TOURNAMENT_ADMIN_OPERATION_TABLE)
+            .select("*")
+            .eq("club_id", str(club_id))
+            .eq("surface", str(surface))
+            .eq("client_idempotency_key", str(idempotency_key))
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Tournament Admin idempotency storage is unavailable. Apply the surface migration before enabling staging writes."
         ) from exc
     return rows[0] if rows else None
 
@@ -220,8 +245,172 @@ def _public_result(operation: dict[str, Any], result: dict[str, Any], *, replay:
         **dict(result or {}),
         "operation_key": str(operation.get("operation_key") or ""),
         "request_fingerprint": str(operation.get("request_fingerprint") or ""),
+        "client_idempotency_key": str(
+            operation.get("client_idempotency_key")
+            or (operation.get("request_json") or {}).get("idempotency_key")
+            or ""
+        ),
         "idempotent_replay": bool(replay),
         "reconciled": bool(reconciled),
+    }
+
+
+def get_tournament_admin_operation_record(
+    supabase: Any,
+    *,
+    club_id: str,
+    operation_key: str,
+) -> dict[str, Any] | None:
+    """Return one server-private operation for an authorized service caller."""
+
+    return _get_operation(
+        supabase,
+        club_id=str(club_id),
+        operation_key=str(operation_key),
+    )
+
+
+def get_tournament_admin_operation_record_by_idempotency_key(
+    supabase: Any,
+    *,
+    club_id: str,
+    surface: str,
+    idempotency_key: str,
+) -> dict[str, Any] | None:
+    """Return one private operation for an exact client retry.
+
+    Surface services use this before rebuilding server-derived request evidence.
+    If the first attempt changed domain state, the original evidence must be
+    reused so the guarded runner can reconcile the same request instead of
+    deriving a different request from post-mutation state.
+    """
+
+    return _get_operation_by_idempotency_key(
+        supabase,
+        club_id=str(club_id),
+        surface=str(surface),
+        idempotency_key=str(idempotency_key),
+    )
+
+
+def reconcile_tournament_admin_guarded_operation(
+    supabase: Any,
+    *,
+    club_id: str,
+    surface: str,
+    operation_key: str,
+    entity_type: str,
+    entity_id: str,
+    actor_email: str,
+    actor_role: str,
+    source: str,
+    verify_outcome: Callable[[dict[str, Any]], dict[str, Any]],
+) -> dict[str, Any]:
+    """Resolve an interrupted mutation from authoritative domain evidence.
+
+    The verifier may report ``completed``, ``not_applied``, or ``uncertain``.
+    Only the first two release the durable lock, and both require a dedicated
+    audit record before the operation status is changed.
+    """
+
+    require_tournament_admin_mutation_runtime(surface)
+    operation = _get_operation(
+        supabase,
+        club_id=str(club_id),
+        operation_key=str(operation_key),
+    )
+    if not operation:
+        raise ValueError("Tournament Admin operation not found for this club.")
+    if str(operation.get("surface") or "") != str(surface):
+        raise ValueError("Tournament Admin operation belongs to another surface.")
+    if str(operation.get("entity_type") or "") != str(entity_type) or str(operation.get("entity_id") or "") != str(entity_id):
+        raise ValueError("Tournament Admin operation does not belong to this draw.")
+
+    status = str(operation.get("status") or "")
+    stored_result = operation.get("result_json")
+    if status == "completed" and isinstance(stored_result, dict):
+        return {
+            **_public_result(operation, stored_result, replay=True, reconciled=True),
+            "recovery_disposition": "already_completed",
+            "recovery_evidence": {},
+        }
+    if status == "failed":
+        raise ValueError("This Tournament Admin operation is already closed as not applied or failed.")
+
+    if status in {"mutated", "recovery_required"} and isinstance(stored_result, dict) and stored_result:
+        verification = {
+            "status": "completed",
+            "result": stored_result,
+            "evidence": {"source": "stored_result"},
+        }
+    else:
+        verification = dict(verify_outcome(dict(operation)) or {})
+    disposition = str(verification.get("status") or "uncertain").strip().lower()
+    evidence = verification.get("evidence") if isinstance(verification.get("evidence"), dict) else {}
+    if disposition not in {"completed", "not_applied"}:
+        raise TournamentAdminRecoveryRequiredError(
+            "Authoritative Tournament Admin evidence cannot prove that this operation fully completed or never started. Keep its scope locked, use the documented fallback, and inspect audit/replay evidence before any new write."
+        )
+
+    action = str(operation.get("action") or "tournament_admin")
+    audit_action = f"{action}_reconciliation" if disposition == "completed" else f"{action}_recovery_not_applied"
+    _write_required_audit(
+        supabase,
+        club_id=str(club_id),
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action_type=audit_action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        operation=operation,
+        source=source,
+        before_json={"status": status, "error": operation.get("error_text")},
+        after_json={"disposition": disposition, "evidence": evidence},
+    )
+
+    attempt_count = max(1, int(operation.get("attempt_count") or 1)) + 1
+    if disposition == "completed":
+        verified_result = verification.get("result") if isinstance(verification.get("result"), dict) else {}
+        completed = _update_operation(
+            supabase,
+            club_id=str(club_id),
+            operation_key=str(operation_key),
+            patch={
+                "status": "completed",
+                "result_json": verified_result,
+                "error_text": None,
+                "attempt_count": attempt_count,
+                "updated_by": str(actor_email or ""),
+                "completion_audited_at": _now_iso(),
+            },
+        )
+        return {
+            **_public_result(completed, verified_result, replay=True, reconciled=True),
+            "recovery_disposition": "completed",
+            "recovery_evidence": evidence,
+        }
+
+    closed = _update_operation(
+        supabase,
+        club_id=str(club_id),
+        operation_key=str(operation_key),
+        patch={
+            "status": "failed",
+            "result_json": {},
+            "error_text": "authoritative recovery verified no domain effect",
+            "attempt_count": attempt_count,
+            "updated_by": str(actor_email or ""),
+        },
+    )
+    return {
+        "ok": True,
+        "operation_key": str(closed.get("operation_key") or operation_key),
+        "request_fingerprint": str(closed.get("request_fingerprint") or ""),
+        "client_idempotency_key": str(closed.get("client_idempotency_key") or ""),
+        "idempotent_replay": True,
+        "reconciled": True,
+        "recovery_disposition": "not_applied",
+        "recovery_evidence": evidence,
     }
 
 
@@ -243,6 +432,7 @@ def run_tournament_admin_guarded_operation(
     preflight: Callable[[], Any] | None = None,
     reconcile: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     mutate: Callable[[], dict[str, Any]],
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     """Run one tournament mutation with intent, replay, and recovery state.
 
@@ -264,12 +454,27 @@ def run_tournament_admin_guarded_operation(
         lock_scope=str(lock_scope or entity_id),
         expected_state=reviewed_state,
         payload=payload,
+        idempotency_key=idempotency_key,
     )
     existing = _get_operation(
         supabase,
         club_id=str(club_id),
         operation_key=operation_request["operation_key"],
     )
+    clean_idempotency_key = str(idempotency_key or "").strip()
+    if clean_idempotency_key:
+        idempotent_existing = _get_operation_by_idempotency_key(
+            supabase,
+            club_id=str(club_id),
+            surface=str(surface),
+            idempotency_key=clean_idempotency_key,
+        )
+        if idempotent_existing:
+            if str(idempotent_existing.get("request_fingerprint") or "") != operation_request["request_fingerprint"]:
+                raise ValueError(
+                    "This idempotency key was already used for a different Tournament Admin request. Reload and create a new command."
+                )
+            existing = idempotent_existing
     if existing:
         if str(existing.get("request_fingerprint") or "") != operation_request["request_fingerprint"]:
             raise ValueError("Tournament Admin operation key conflicts with a different request.")
@@ -369,27 +574,30 @@ def run_tournament_admin_guarded_operation(
         preflight()
 
     now = _now_iso()
+    operation_payload = {
+        "operation_key": operation_request["operation_key"],
+        "request_fingerprint": operation_request["request_fingerprint"],
+        "club_id": str(club_id),
+        "surface": str(surface),
+        "action": str(action),
+        "entity_type": str(entity_type),
+        "entity_id": str(entity_id),
+        "lock_scope": str(lock_scope or entity_id),
+        "expected_state": reviewed_state,
+        "status": "intent",
+        "request_json": operation_request,
+        "result_json": {},
+        "attempt_count": 1,
+        "created_by": str(actor_email or ""),
+        "updated_by": str(actor_email or ""),
+        "created_at": now,
+        "updated_at": now,
+    }
+    if clean_idempotency_key:
+        operation_payload["client_idempotency_key"] = clean_idempotency_key
     operation = _insert_operation(
         supabase,
-        {
-            "operation_key": operation_request["operation_key"],
-            "request_fingerprint": operation_request["request_fingerprint"],
-            "club_id": str(club_id),
-            "surface": str(surface),
-            "action": str(action),
-            "entity_type": str(entity_type),
-            "entity_id": str(entity_id),
-            "lock_scope": str(lock_scope or entity_id),
-            "expected_state": reviewed_state,
-            "status": "intent",
-            "request_json": operation_request,
-            "result_json": {},
-            "attempt_count": 1,
-            "created_by": str(actor_email or ""),
-            "updated_by": str(actor_email or ""),
-            "created_at": now,
-            "updated_at": now,
-        },
+        operation_payload,
     )
     locked_state = str(current_state() or "").strip()
     if locked_state != reviewed_state:

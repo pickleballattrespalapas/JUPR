@@ -6,7 +6,12 @@ import os
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.tournaments import finalize_game, resolve_playoff_dependencies
-from jupr_app.services.admin_tournament_game_service import _fetch_draw, _game_payload, _require_reviewed_draw_version
+from jupr_app.services.admin_tournament_game_service import (
+    _fetch_draw,
+    _game_payload,
+    _require_reviewed_draw_version,
+    _require_reviewed_row_versions,
+)
 from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
 from jupr_app.services.admin_tournament_service import TOURNAMENT_SELECT, _clean_text, _first_row, is_admin_tournament_admin_enabled
 
@@ -152,6 +157,7 @@ def update_admin_tournament_game_score(
     confirmation_text: str,
     expected_updated_at: str | None = None,
     expected_draw_updated_at: str | None = None,
+    expected_source_game_versions: list[dict[str, Any]] | None = None,
     source: str = "next_tournament_admin_score_game",
     dry_run: bool = False,
     atomic: bool = False,
@@ -194,6 +200,20 @@ def update_admin_tournament_game_score(
         atomic=atomic,
     )
     existing_games = _games_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=draw_id)
+    reviewed_source_game_versions = (
+        _require_reviewed_row_versions(
+            existing_games,
+            expected_source_game_versions,
+            label="source game set",
+            atomic=atomic,
+        )
+        if expected_source_game_versions is not None
+        else []
+    )
+    reviewed_source_versions_by_id = {
+        str(row["id"]): str(row["updated_at"])
+        for row in reviewed_source_game_versions
+    }
     if stage == "ROUND_ROBIN":
         if any(_clean_text(row.get("stage"), limit=80).upper() == "PLAYOFF" for row in existing_games):
             raise ValueError("This draw already has playoff games. Remove/recreate playoffs before changing round-robin scores.")
@@ -234,7 +254,11 @@ def update_admin_tournament_game_score(
             raise ValueError(
                 "This score would invalidate an already-scored downstream playoff game. Recover downstream results before changing it."
             )
-        expected_dependency_version = str(target.get("updated_at") or "").strip()
+        expected_dependency_version = str(
+            reviewed_source_versions_by_id.get(str(update.get("id")))
+            or target.get("updated_at")
+            or ""
+        ).strip()
         if atomic and not expected_dependency_version:
             raise StaleTournamentAdminStateError(
                 "A reviewed version is required for every downstream playoff game. Reload the Ops snapshot."

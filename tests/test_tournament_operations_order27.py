@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from jupr_app.domain.tournament_admin_operations import stable_tournament_admin_fingerprint
+
 from jupr_app.services.admin_tournament_game_service import (
     _insert_tournament_draw_games_atomic,
     _require_reviewed_row_versions,
@@ -13,38 +15,142 @@ from jupr_app.services.admin_tournament_guarded_operation import (
     StaleTournamentAdminStateError,
     TournamentAdminRecoveryRequiredError,
 )
-from jupr_app.services.admin_tournament_match_publish_service import reconcile_admin_tournament_official_publish
+from jupr_app.services.admin_tournament_match_publish_service import (
+    build_admin_tournament_official_publish_plan,
+    reconcile_admin_tournament_official_publish,
+)
 from tests.test_admin_match_log_service import FakeSupabase
 
 
-def _publish_plan() -> dict:
+RECONCILE_IDENTITY = {
+    "guarded_operation_key": "order27-operation-key",
+    "guarded_request_fingerprint": "order27-request-fingerprint",
+    "client_idempotency_key": "",
+}
+
+
+def _publish_plan(tables: dict[str, list[dict]]) -> dict:
+    return build_admin_tournament_official_publish_plan(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tournament-1",
+        draw_id="draw-1",
+    )
+
+
+def _match(
+    game_id: str,
+    *,
+    date: str,
+    t1: tuple[int, int],
+    t2: tuple[int, int],
+    score: tuple[int, int],
+) -> dict:
     return {
-        "draw_id": "draw-1",
-        "tournament_game_ids": ["game-1", "game-2"],
-        "match_count": 2,
-        "singles_match_count": 1,
-        "doubles_match_count": 1,
-        "playoff_winner_bonus_elo": 0.0,
-        "bonus_tournament_game_ids": [],
+        "id": f"match-{game_id}",
+        "club_id": "club-1",
+        "date": date,
+        "league": "Tournament · Tournament · Draw",
+        "week_tag": "Draw",
+        "match_type": "Tournament",
+        "match_format": "doubles",
+        "t1_p1": t1[0],
+        "t1_p2": t1[1],
+        "t2_p1": t2[0],
+        "t2_p2": t2[1],
+        "score_t1": score[0],
+        "score_t2": score[1],
+        "context_type": "tournament_game",
+        "context_id": game_id,
+        "tournament_id": "tournament-1",
+        "tournament_game_id": game_id,
+        "rating_scope": "",
     }
 
 
 def _tables(matches: list[dict]) -> dict[str, list[dict]]:
     return {
+        "tournaments": [
+            {
+                "id": "tournament-1",
+                "club_id": "club-1",
+                "name": "Tournament",
+                "status": "PUBLISHED",
+                "start_date": "2026-07-20",
+            }
+        ],
+        "tournament_event_draws": [
+            {
+                "id": "draw-1",
+                "tournament_id": "tournament-1",
+                "name": "Draw",
+                "updated_at": "2026-07-19T10:00:00Z",
+            }
+        ],
+        "tournament_event_options": [],
+        "tournament_teams": [
+            {
+                "id": f"team-{number}",
+                "tournament_id": "tournament-1",
+                "draw_id": "draw-1",
+                "team_number": number,
+                "player1_id": number * 2 - 1,
+                "player2_id": number * 2,
+                "updated_at": "2026-07-19T10:00:00Z",
+            }
+            for number in range(1, 5)
+        ],
         "tournament_games": [
-            {"id": "game-1", "tournament_id": "tournament-1", "draw_id": "draw-1", "stage": "ROUND_ROBIN"},
-            {"id": "game-2", "tournament_id": "tournament-1", "draw_id": "draw-1", "stage": "PLAYOFF"},
+            {
+                "id": "game-1", "tournament_id": "tournament-1", "draw_id": "draw-1", "stage": "ROUND_ROBIN",
+                "rr_round_number": 1, "rr_slot_number": 1, "team_a_id": "team-1", "team_b_id": "team-2",
+                "score_a": 11, "score_b": 7, "winner_team_id": "team-1", "loser_team_id": "team-2",
+                "finalized_at": "2026-07-19T11:00:00Z", "updated_at": "2026-07-19T11:00:00Z",
+            },
+            {
+                "id": "game-2", "tournament_id": "tournament-1", "draw_id": "draw-1", "stage": "PLAYOFF",
+                "playoff_game_code": "F", "playoff_round": "Final", "team_a_id": "team-3", "team_b_id": "team-4",
+                "score_a": 8, "score_b": 11, "winner_team_id": "team-4", "loser_team_id": "team-3",
+                "finalized_at": "2026-07-19T12:00:00Z", "updated_at": "2026-07-19T12:00:00Z",
+            },
         ],
         "matches": matches,
+        "admin_activity_log": [],
     }
 
 
 def test_official_publish_complete_set_reconstructs_result_without_a_write() -> None:
     tables = _tables(
         [
-            {"id": "match-1", "club_id": "club-1", "tournament_id": "tournament-1", "tournament_game_id": "game-1"},
-            {"id": "match-2", "club_id": "club-1", "tournament_id": "tournament-1", "tournament_game_id": "game-2"},
+            _match(
+                "game-1",
+                date="2026-07-19T11:00:00+00:00",
+                t1=(1, 2),
+                t2=(3, 4),
+                score=(11, 7),
+            ),
+            _match(
+                "game-2",
+                date="2026-07-19T12:00:00+00:00",
+                t1=(5, 6),
+                t2=(7, 8),
+                score=(8, 11),
+            ),
         ]
+    )
+    plan = _publish_plan(tables)
+    tables["admin_activity_log"].append(
+        {
+            "club_id": "club-1",
+            "entity_id": "draw-1",
+            "action_type": "publish_tournament_games_to_matches_admin",
+            "after_json": {
+                "publish_plan_fingerprint": stable_tournament_admin_fingerprint(plan),
+                "guarded_operation_key": RECONCILE_IDENTITY["guarded_operation_key"],
+                "guarded_request_fingerprint": RECONCILE_IDENTITY["guarded_request_fingerprint"],
+                "client_idempotency_key": "",
+            },
+        }
     )
     before = {name: [dict(row) for row in rows] for name, rows in tables.items()}
 
@@ -53,7 +159,8 @@ def test_official_publish_complete_set_reconstructs_result_without_a_write() -> 
         club_id="club-1",
         tournament_id="tournament-1",
         draw_id="draw-1",
-        expected_plan=_publish_plan(),
+        expected_plan=plan,
+        **RECONCILE_IDENTITY,
     )
 
     assert result["match_count"] == 2
@@ -79,13 +186,16 @@ def test_official_publish_complete_set_reconstructs_result_without_a_write() -> 
     ],
 )
 def test_official_publish_zero_partial_or_duplicate_set_stays_recovery_required(matches, evidence) -> None:
+    tables = _tables(matches)
+    plan = _publish_plan(tables)
     with pytest.raises(TournamentAdminRecoveryRequiredError, match=evidence):
         reconcile_admin_tournament_official_publish(
-            FakeSupabase(_tables(matches)),
+            FakeSupabase(tables),
             club_id="club-1",
             tournament_id="tournament-1",
             draw_id="draw-1",
-            expected_plan=_publish_plan(),
+            expected_plan=plan,
+            **RECONCILE_IDENTITY,
         )
 
 
@@ -95,13 +205,16 @@ def test_official_publish_reconciliation_isolated_by_club_and_tournament() -> No
         {"id": "foreign-tournament", "club_id": "club-1", "tournament_id": "tournament-2", "tournament_game_id": "game-2"},
     ]
 
+    tables = _tables(foreign_matches)
+    plan = _publish_plan(tables)
     with pytest.raises(TournamentAdminRecoveryRequiredError, match="zero"):
         reconcile_admin_tournament_official_publish(
-            FakeSupabase(_tables(foreign_matches)),
+            FakeSupabase(tables),
             club_id="club-1",
             tournament_id="tournament-1",
             draw_id="draw-1",
-            expected_plan=_publish_plan(),
+            expected_plan=plan,
+            **RECONCILE_IDENTITY,
         )
 
 

@@ -28,13 +28,13 @@ def build_tournament_admin_operation_request(
     lock_scope: str | None = None,
     expected_state: str,
     payload: dict[str, Any],
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     """Build one deterministic, server-owned mutation identity.
 
-    Confirmation text and browser-generated identifiers deliberately do not
-    participate. A retry of the same reviewed state and mutation therefore
-    resolves to the same operation, while a changed payload or state cannot be
-    replayed under the old key.
+    Confirmation text deliberately does not participate. When supplied, the
+    browser-retained idempotency UUID does participate so an exact retry maps to
+    one request while UUID reuse with changed state or payload is rejected.
     """
 
     request = {
@@ -47,6 +47,9 @@ def build_tournament_admin_operation_request(
         "expected_state": str(expected_state or "").strip(),
         "payload": dict(payload or {}),
     }
+    clean_idempotency_key = str(idempotency_key or "").strip()
+    if clean_idempotency_key:
+        request["idempotency_key"] = clean_idempotency_key
     fingerprint = stable_tournament_admin_fingerprint(request)
     operation_key = stable_tournament_admin_fingerprint(
         {"contract": "jupr:tournament-admin:v1", "request_fingerprint": fingerprint}

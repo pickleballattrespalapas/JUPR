@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { getAdminTournamentApiBaseUrl, getAdminTournamentStatus } from "@/lib/adminTournamentApi";
+import { getAdminTournamentApiBaseUrl, getAdminTournamentLiveStatus } from "@/lib/adminTournamentApi";
 import TournamentLivePanel from "./TournamentLivePanel";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
 export default async function AdminTournamentLivePage() {
   const clubId = "tres_palapas";
-  const { data: status, error: statusError } = await getAdminTournamentStatus(clubId);
+  const { data: status, error: statusError } = await getAdminTournamentLiveStatus(clubId);
 
   return (
     <section>
@@ -15,12 +15,12 @@ export default async function AdminTournamentLivePage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Tournament Live runner</h1>
       <p style={{ color: "#334155", maxWidth: "880px" }}>
-        A tournament-specific live control room for running a prepared draw during play. Tournament Ops remains the setup/import workspace; Tournament Live focuses on draw selection, live score entry, bracket progression, podiums, and official match publishing.
+        A draw-scoped control room for running a prepared tournament during play. FastAPI/Python owns scoring and progression; the browser submits reviewed commands and displays durable recovery evidence. This is explicitly separate from the one-off JUPR Live product.
       </p>
 
       {statusError ? <p style={{ color: "#b91c1c" }}>Tournament Admin status is unavailable. {statusError}</p> : null}
       {!status ? (
-        <article style={cardStyle}>Tournament Live is temporarily unavailable.</article>
+        <article style={cardStyle}>Tournament Live status is temporarily unavailable. Use the Streamlit fallback and do not attempt a write.</article>
       ) : (
         <TournamentLivePanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={status} />
       )}

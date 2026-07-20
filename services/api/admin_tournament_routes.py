@@ -29,7 +29,10 @@ from jupr_app.services.admin_tournament_match_publish_service import (
     publish_admin_tournament_draw_matches,
     reconcile_admin_tournament_official_publish,
 )
-from jupr_app.domain.tournament_admin_operations import stable_tournament_admin_fingerprint
+from jupr_app.domain.tournament_admin_operations import (
+    build_tournament_admin_operation_request,
+    stable_tournament_admin_fingerprint,
+)
 from jupr_app.services.admin_tournament_ops_service import (
     get_admin_tournament_ops_snapshot,
     get_admin_tournament_ops_state_fingerprint,
@@ -956,6 +959,29 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 draw_id=str(draw_id),
                 playoff_winner_bonus_elo=payload.playoff_winner_bonus_elo,
             )
+            kwargs["expected_plan"] = publish_plan
+            operation_payload = {
+                "draw_id": str(draw_id),
+                "playoff_winner_bonus_elo": payload.playoff_winner_bonus_elo,
+                "publish_plan": publish_plan,
+            }
+            operation_identity = build_tournament_admin_operation_request(
+                club_id=str(club_id),
+                surface="operations",
+                action="ops_official_publish",
+                entity_type="tournament_event_draw",
+                entity_id=str(draw_id),
+                lock_scope=str(tournament_id),
+                expected_state=str(payload.expected_state_fingerprint or ""),
+                payload=operation_payload,
+            )
+            if tournament_admin_guarded_runtime_enabled("operations"):
+                kwargs.update(
+                    {
+                        "guarded_operation_key": str(operation_identity["operation_key"]),
+                        "guarded_request_fingerprint": str(operation_identity["request_fingerprint"]),
+                    }
+                )
             return _guarded_ops_mutation(
                 supabase,
                 club_id=str(club_id),
@@ -964,21 +990,20 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 entity_type="tournament_event_draw",
                 entity_id=str(draw_id),
                 expected_state=str(payload.expected_state_fingerprint or ""),
-                payload={
-                    "draw_id": str(draw_id),
-                    "playoff_winner_bonus_elo": payload.playoff_winner_bonus_elo,
-                    "publish_plan": publish_plan,
-                },
+                payload=operation_payload,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 source=payload.source,
                 preflight=lambda: publish_admin_tournament_draw_matches(supabase, **kwargs, dry_run=True),
-                reconcile=lambda _operation: reconcile_admin_tournament_official_publish(
+                reconcile=lambda operation: reconcile_admin_tournament_official_publish(
                     supabase,
                     club_id=str(club_id),
                     tournament_id=str(tournament_id),
                     draw_id=str(draw_id),
                     expected_plan=publish_plan,
+                    guarded_operation_key=str(operation.get("operation_key") or ""),
+                    guarded_request_fingerprint=str(operation.get("request_fingerprint") or ""),
+                    client_idempotency_key=str(operation.get("client_idempotency_key") or ""),
                 ),
                 mutate=lambda: publish_admin_tournament_draw_matches(supabase, **kwargs),
             )

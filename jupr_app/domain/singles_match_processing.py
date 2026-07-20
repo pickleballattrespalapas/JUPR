@@ -57,7 +57,7 @@ def _fetch_player_rows(supabase: Any, *, club_id: str, player_ids: set[int]) -> 
     try:
         rows = (
             supabase.table("players")
-            .select("id,name,rating,wins,losses,matches_played,last_game_at,singles_rating,singles_wins,singles_losses,singles_matches_played,singles_last_game_at")
+            .select("id,name,rating,wins,losses,matches_played,last_game_at,inactive_at,active,singles_rating,singles_wins,singles_losses,singles_matches_played,singles_last_game_at")
             .eq("club_id", str(club_id))
             .in_("id", sorted(int(pid) for pid in player_ids))
             .execute()
@@ -124,6 +124,7 @@ def process_singles_matches(
     default_k_factor: int = 32,
     min_win_delta_elo: float = 1.0,
     cap_loser_gain_elo: float | None = 16.0,
+    build_write_plan_only: bool = False,
 ) -> dict[str, Any]:
     """Persist and rate one-on-one singles matches using players.singles_* fields.
 
@@ -258,6 +259,73 @@ def process_singles_matches(
             )
         )
         successful_match_dates.append(dt_val)
+
+    if build_write_plan_only:
+        planned_player_updates: list[dict[str, Any]] = []
+        for pid, stats in sorted(player_updates.items()):
+            if pid not in affected_players:
+                continue
+            if int(pid) not in live_players:
+                raise RuntimeError(
+                    f"Official publish requires one authoritative player snapshot for player {int(pid)}."
+                )
+            current = dict(live_players[int(pid)])
+            latest_match_at = last_game_updates.get(int(pid))
+            activity_update = build_player_activity_update(current.get("last_game_at"), latest_match_at)
+            expected = {
+                "singles_rating": _seed_singles_rating(current),
+                "singles_wins": _seed_stat(current, "singles_wins"),
+                "singles_losses": _seed_stat(current, "singles_losses"),
+                "singles_matches_played": _seed_stat(current, "singles_matches_played"),
+                "singles_last_game_at": current.get("singles_last_game_at"),
+                "last_game_at": current.get("last_game_at"),
+                "inactive_at": current.get("inactive_at"),
+                "active": bool(current.get("active", True)) if current.get("active") is not None else None,
+            }
+            after = {
+                "singles_rating": float(stats["r"]),
+                "singles_wins": int(stats["w"]),
+                "singles_losses": int(stats["l"]),
+                "singles_matches_played": int(stats["mp"]),
+                "singles_last_game_at": (
+                    latest_match_at.isoformat() if latest_match_at else current.get("singles_last_game_at")
+                ),
+                **activity_update,
+            }
+            planned_player_updates.append(
+                {"player_id": int(pid), "rating_mode": "singles", "expected": expected, "after": after}
+            )
+        return {
+            "inserted": len(db_matches),
+            "match_format": "singles",
+            "skipped_incomplete": int(skipped_incomplete),
+            "skipped_empty": int(skipped_empty),
+            "skipped_unrated": int(skipped_unrated),
+            "winner_bonus_summary": {
+                "match_count": int(bonus_match_count),
+                "player_elo_total": float(bonus_player_elo_total),
+            },
+            "write_plan": {
+                "match_rows": db_matches,
+                "player_updates": planned_player_updates,
+                "league_rating_updates": [],
+                "league_metadata_expectations": [],
+            },
+            "side_effect_context": {
+                "affected_player_ids": sorted(affected_players),
+                "successful_match_dates": successful_match_dates,
+                "has_badge_eligible_match": False,
+                "match_payloads": [
+                    {
+                        "league": str(row.get("league") or ""),
+                        "date": str(row.get("date") or ""),
+                        "score_t1": row.get("score_t1"),
+                        "score_t2": row.get("score_t2"),
+                    }
+                    for row in db_matches
+                ],
+            },
+        }
 
     if db_matches:
         insert_match_chunks_with_rating_scope_fallback(db_matches=db_matches, supabase=supabase, sb_retry=sb_retry)

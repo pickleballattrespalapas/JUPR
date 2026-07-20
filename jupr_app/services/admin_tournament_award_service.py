@@ -5,8 +5,11 @@ from typing import Any
 import os
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.gamification.badges_repo import build_player_badge_rows
 from jupr_app.domain.tournament_podium import award_tournament_trophies_from_podium, build_tournament_podium_candidates
 from jupr_app.services.admin_tournament_draw_service import _draw_payload
+from jupr_app.services.admin_tournament_game_service import _require_reviewed_row_versions
+from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
 from jupr_app.services.admin_tournament_podium_service import _podium_payload
 from jupr_app.services.admin_tournament_service import TOURNAMENT_SELECT, _clean_text, _first_row, is_admin_tournament_admin_enabled
 
@@ -53,6 +56,96 @@ def _podium_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list
     return rows
 
 
+def _teams_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[dict[str, Any]]:
+    try:
+        return _safe_rows(
+            supabase.table("tournament_teams")
+            .select("*")
+            .eq("tournament_id", str(tournament_id))
+            .eq("draw_id", str(draw_id))
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError("Could not load draw teams; podium awards were refused.") from exc
+
+
+def _podium_structure(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        [
+            {
+                "placement": int(row.get("placement") or 0),
+                "team_id": str(row.get("team_id") or ""),
+                "source": str(row.get("source") or "").upper(),
+            }
+            for row in rows
+        ],
+        key=lambda row: row["placement"],
+    )
+
+
+def _candidate_keys(candidates: list[Any]) -> list[dict[str, Any]]:
+    return sorted(
+        [
+            {
+                "player_id": int(candidate.player_id),
+                "badge_id": str(candidate.badge_id),
+                "context_id": str(candidate.context_id or ""),
+            }
+            for candidate in candidates
+        ],
+        key=lambda row: (row["context_id"], row["badge_id"], row["player_id"]),
+    )
+
+
+def _award_podium_atomic(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    draw_id: str,
+    expected_draw_updated_at: str,
+    expected_team_versions: list[dict[str, str]],
+    expected_podium: list[dict[str, Any]],
+    expected_awards: list[dict[str, Any]],
+    badge_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    try:
+        response = supabase.rpc(
+            "admin_award_tournament_draw_podium_cas",
+            {
+                "p_club_id": str(club_id),
+                "p_tournament_id": str(tournament_id),
+                "p_draw_id": str(draw_id),
+                "p_expected_draw_updated_at": str(expected_draw_updated_at),
+                "p_expected_teams": list(expected_team_versions),
+                "p_expected_podium": list(expected_podium),
+                "p_expected_awards": list(expected_awards),
+                "p_badges": list(badge_rows),
+            },
+        ).execute()
+    except Exception as exc:
+        if any(
+            marker in str(exc)
+            for marker in (
+                "JUPR_TOURNAMENT_DRAW_STALE",
+                "JUPR_TOURNAMENT_TEAM_SNAPSHOT_STALE",
+                "JUPR_TOURNAMENT_PODIUM_SNAPSHOT_STALE",
+                "JUPR_TOURNAMENT_AWARD_PLAN_STALE",
+                "JUPR_TOURNAMENT_AWARD_ALREADY_EXISTS",
+            )
+        ):
+            raise StaleTournamentAdminStateError(
+                "The draw, teams, podium, or award set changed while trophies were being awarded. Reload Tournament Live."
+            ) from exc
+        raise RuntimeError("Atomic tournament podium awards failed; no badge set was committed.") from exc
+    data = getattr(response, "data", None)
+    payload = data if isinstance(data, dict) else data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else {}
+    rows = payload.get("badges") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise RuntimeError("Atomic tournament podium awards returned no saved badge set.")
+    return [dict(row) for row in rows if isinstance(row, dict)]
+
+
 def award_admin_tournament_draw_podium(
     supabase: Any,
     *,
@@ -62,8 +155,13 @@ def award_admin_tournament_draw_podium(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    expected_draw_updated_at: str | None = None,
+    expected_team_versions: list[dict[str, Any]] | None = None,
+    expected_podium: list[dict[str, Any]] | None = None,
+    expected_awards: list[dict[str, Any]] | None = None,
     source: str = "next_tournament_admin_award_podium",
     dry_run: bool = False,
+    atomic: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -78,6 +176,18 @@ def award_admin_tournament_draw_podium(
     draw = _fetch_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not draw:
         raise ValueError("draw not found for this tournament")
+    reviewed_draw_version = str(expected_draw_updated_at or "").strip()
+    if atomic and not reviewed_draw_version:
+        raise StaleTournamentAdminStateError("A reviewed draw version is required for staging podium awards.")
+    if reviewed_draw_version and str(draw.get("updated_at") or "") != reviewed_draw_version:
+        raise StaleTournamentAdminStateError("This tournament draw changed after podium awards were reviewed.")
+    teams = _teams_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
+    reviewed_team_versions = _require_reviewed_row_versions(
+        teams,
+        expected_team_versions,
+        label="team set",
+        atomic=atomic,
+    )
     podium_rows = _podium_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not podium_rows:
         raise ValueError("Generate a draw-scoped podium before awarding trophies.")
@@ -86,6 +196,12 @@ def award_admin_tournament_draw_podium(
     candidates = build_tournament_podium_candidates(ctx, clean_tournament_id, str(tournament.get("name") or ""), draw_id=clean_draw_id)
     if not candidates:
         raise ValueError("No podium badge candidates could be built for this draw.")
+    current_podium = _podium_structure(podium_rows)
+    current_awards = _candidate_keys(candidates)
+    if atomic and (current_podium != list(expected_podium or []) or current_awards != list(expected_awards or [])):
+        raise StaleTournamentAdminStateError(
+            "The podium or exact award recipient set changed after review. Reload Tournament Live."
+        )
     if dry_run:
         return {
             "ok": True,
@@ -98,7 +214,28 @@ def award_admin_tournament_draw_podium(
             "badge_ids": sorted({str(candidate.badge_id) for candidate in candidates}),
             "warnings": [],
         }
-    awarded = award_tournament_trophies_from_podium(ctx, clean_tournament_id, str(tournament.get("name") or ""), draw_id=clean_draw_id)
+    if atomic:
+        badge_rows = build_player_badge_rows(str(club_id), candidates, awarded_by="engine")
+        saved_badges = _award_podium_atomic(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=clean_tournament_id,
+            draw_id=clean_draw_id,
+            expected_draw_updated_at=reviewed_draw_version,
+            expected_team_versions=reviewed_team_versions,
+            expected_podium=current_podium,
+            expected_awards=current_awards,
+            badge_rows=badge_rows,
+        )
+        awarded_count = len(saved_badges)
+    else:
+        awarded = award_tournament_trophies_from_podium(
+            ctx,
+            clean_tournament_id,
+            str(tournament.get("name") or ""),
+            draw_id=clean_draw_id,
+        )
+        awarded_count = len(awarded)
 
     audit_payload = build_activity_payload(
         club_id=str(club_id),
@@ -114,7 +251,7 @@ def award_admin_tournament_draw_podium(
             "draw": _draw_payload(draw),
             "podium": [_podium_payload(row) for row in podium_rows],
             "candidate_count": len(candidates),
-            "awarded_count": len(awarded),
+            "awarded_count": awarded_count,
             "badge_ids": sorted({str(candidate.badge_id) for candidate in candidates}),
         },
         source_page=source,
@@ -131,6 +268,6 @@ def award_admin_tournament_draw_podium(
         "mode": "tournament_draw_podium_award",
         "draw_id": clean_draw_id,
         "candidate_count": len(candidates),
-        "awarded_count": len(awarded),
+        "awarded_count": awarded_count,
         "warnings": warnings,
     }
