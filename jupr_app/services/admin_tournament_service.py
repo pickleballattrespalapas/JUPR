@@ -397,6 +397,7 @@ def _required_registration_settings(supabase: Any, *, tournament_id: str) -> dic
 
 def build_admin_tournament_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
     from jupr_app.services.admin_tournament_guarded_operation import tournament_admin_mutation_status
+    from jupr_app.services.admin_tournament_ops_service import build_admin_tournament_ops_runtime_status
 
     if not is_admin_tournament_admin_enabled():
         return {
@@ -412,6 +413,7 @@ def build_admin_tournament_status(supabase: Any | None, *, club_id: str) -> dict
             "import_handoff_endpoint": None,
             "warnings": ["Next Tournament Admin is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS on FastAPI for a closed-club pilot."],
             "mutation_runtime": tournament_admin_mutation_status(),
+            "operations_runtime": build_admin_tournament_ops_runtime_status(),
             "streamlit_fallback_url": os.getenv("JUPR_STREAMLIT_FALLBACK_URL", "").strip() or "https://juprtrespalapas.streamlit.app",
         }
     tournament_count = None
@@ -433,6 +435,7 @@ def build_admin_tournament_status(supabase: Any | None, *, club_id: str) -> dict
         "tournament_count": tournament_count,
         "warnings": warnings,
         "mutation_runtime": tournament_admin_mutation_status(),
+        "operations_runtime": build_admin_tournament_ops_runtime_status(),
         "streamlit_fallback_url": os.getenv("JUPR_STREAMLIT_FALLBACK_URL", "").strip() or "https://juprtrespalapas.streamlit.app",
     }
 

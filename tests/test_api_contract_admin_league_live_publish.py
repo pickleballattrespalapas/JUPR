@@ -37,6 +37,7 @@ def _tables() -> dict[str, Any]:
 def _install_submit_env(monkeypatch, supabase: FakeSupabase) -> None:
     _install_env(monkeypatch, supabase)
     monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "league-live-submit")
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT", "1")
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
 

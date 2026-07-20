@@ -114,6 +114,7 @@ def test_staging_delete_uses_one_atomic_versioned_rpc_and_replays(monkeypatch):
     supabase = AtomicDeleteSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
     monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "tournament-mutations")
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS", "1")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only")

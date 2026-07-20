@@ -58,8 +58,8 @@ create unique index if not exists live_ladder_admin_operations_active_version_un
 -- New order-24 official publishes derive one UUIDv5 context per operation/slot.
 -- The UUID-version predicate avoids imposing a constraint on legacy rows that
 -- used one shared event/challenge context for several matches. The canonical
--- matches.context_id column is UUID, so human-readable operation strings must
--- never be inserted there.
+-- matches.context_id column is text so every workflow can share the column;
+-- these operation-scoped values remain UUIDv5 strings to prevent collisions.
 create unique index if not exists matches_live_ladder_operation_context_unique
     on public.matches (club_id, context_type, context_id)
     where context_type in ('challenge_ladder', 'moneyball', 'jupr_live')

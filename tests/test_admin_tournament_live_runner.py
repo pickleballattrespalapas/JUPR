@@ -222,6 +222,7 @@ def live_tables() -> dict[str, list[dict]]:
 def _enable_live(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
     monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "tournament-live")
     monkeypatch.setenv("JUPR_ENABLE_STAGING_NEXT_ADMIN_TOURNAMENT_LIVE_WRITES", "1")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only-test-key")
 

@@ -2,6 +2,39 @@
 -- introduced through legacy root migrations during the Streamlit transition.
 -- The legacy files remain for fallback history; this is the deployable source.
 
+-- Match contexts predate the canonical Supabase migration ledger. Some legacy
+-- schemas added context_id as uuid, while the live application uses text for
+-- deterministic league, ladder, event, and tournament context identifiers.
+-- Normalize the column before any later context indexes or write RPCs exist.
+alter table public.matches
+  add column if not exists context_type text null,
+  add column if not exists context_id text null;
+
+do $canonical_match_context_id$
+declare
+  current_type text;
+begin
+  select format_type(attribute.atttypid, attribute.atttypmod)
+    into current_type
+    from pg_attribute attribute
+   where attribute.attrelid = 'public.matches'::regclass
+     and attribute.attname = 'context_id'
+     and not attribute.attisdropped;
+
+  if current_type is null then
+    raise exception 'public.matches.context_id must exist before canonicalization';
+  end if;
+
+  if current_type <> 'text' then
+    alter table public.matches
+      alter column context_id type text using context_id::text;
+  end if;
+end
+$canonical_match_context_id$;
+
+comment on column public.matches.context_id is
+  'Canonical text identifier for deterministic match source and workflow contexts.';
+
 create table if not exists public.weekly_recaps (
   id uuid primary key default gen_random_uuid(),
   club_id text not null,

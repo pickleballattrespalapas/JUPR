@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TOP_PERFORMER_BADGE_SEED = "supabase/migrations/20260720014744_seed_top_performer_badges.sql"
 
 
 def test_league_awards_browser_is_a_persisted_fastapi_wizard() -> None:
@@ -46,7 +47,7 @@ def test_league_awards_mint_fails_closed_without_seeded_badge_definitions() -> N
     assert "_badge_definition_readiness" in service
     assert "badge_definitions_ready" in service
     assert "mint was not attempted" in service
-    assert "migrations/20260215_end_league_top_performers.sql" in service
+    assert TOP_PERFORMER_BADGE_SEED in service
     assert "badge_definitions_ready" in panel
     assert "Badge minting is blocked" in panel
 

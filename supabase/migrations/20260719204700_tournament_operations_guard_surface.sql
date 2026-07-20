@@ -64,7 +64,7 @@ create table if not exists public.tournament_podium (
 
 alter table public.matches
   add column if not exists context_type text null,
-  add column if not exists context_id uuid null,
+  add column if not exists context_id text null,
   add column if not exists tournament_id uuid null,
   add column if not exists tournament_game_id uuid null;
 

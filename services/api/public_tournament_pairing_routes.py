@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import HTTPException, Query
 from pydantic import BaseModel
 from supabase import Client
+from services.api.staging_write_guard import require_public_intake_or_403
 
 
 _partner_service = import_module("jupr_app.services.public_tournament_partner" + "_request_service")
@@ -69,6 +70,7 @@ def install_public_tournament_pairing_routes(
         partner_request_id: str,
         payload: PublicTournamentPartnerAcceptPayload,
     ) -> dict[str, Any]:
+        require_public_intake_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
@@ -94,6 +96,7 @@ def install_public_tournament_pairing_routes(
         partner_request_id: str,
         payload: PublicTournamentPartnerAcceptPayload,
     ) -> dict[str, Any]:
+        require_public_intake_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
@@ -119,6 +122,7 @@ def install_public_tournament_pairing_routes(
         partner_request_id: str,
         payload: PublicTournamentPartnerAcceptPayload,
     ) -> dict[str, Any]:
+        require_public_intake_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
@@ -143,6 +147,7 @@ def install_public_tournament_pairing_routes(
         club_slug: str,
         payload: PublicTournamentPairingInterestPayload,
     ) -> dict[str, Any]:
+        require_public_intake_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()

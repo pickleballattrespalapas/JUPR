@@ -9,6 +9,7 @@ from jupr_app.services.public_email_preferences_service import (
     apply_public_email_unsubscribe,
     build_public_email_preferences,
 )
+from services.api.staging_write_guard import require_public_intake_or_403
 
 
 class PublicEmailUnsubscribeRequest(BaseModel):
@@ -43,6 +44,7 @@ def install_public_email_preferences_routes(app, *, get_supabase_client) -> None
 
     @app.post("/email-preferences/unsubscribe")
     def post_public_email_unsubscribe(payload: PublicEmailUnsubscribeRequest) -> dict[str, Any]:
+        require_public_intake_or_403()
         supabase = get_supabase_client()
         try:
             return apply_public_email_unsubscribe(

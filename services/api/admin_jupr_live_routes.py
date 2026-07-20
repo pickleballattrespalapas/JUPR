@@ -140,6 +140,12 @@ def _require_confirmation(actual: str, expected: str) -> None:
 def _require_staging_recovery() -> None:
     if os.getenv("JUPR_ENV", "").strip().lower() != "staging":
         raise HTTPException(status_code=403, detail="JUPR Live operation recovery is staging-only.")
+    try:
+        require_staging_write_gate(
+            surface_label="JUPR Live Admin", flag_name=JUPR_LIVE_WRITE_FLAG
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 def _model_payload(model: BaseModel) -> dict[str, Any]:

@@ -23,6 +23,8 @@ def client(monkeypatch):
     monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "api-test-confirmation-secret")
     monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://staging.example.test")
     monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "public-intake-auth")
+    monkeypatch.setenv("JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES", "1")
     monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
     return TestClient(app)
 
@@ -50,6 +52,8 @@ def integrity_client(monkeypatch):
     monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "api-test-confirmation-secret")
     monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://staging.example.test")
     monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "public-intake-auth")
+    monkeypatch.setenv("JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES", "1")
     monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
     return TestClient(app), storage
 

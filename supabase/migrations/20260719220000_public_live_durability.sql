@@ -14,6 +14,19 @@ alter table public.live_sessions
   add column if not exists pending_operation_action text,
   add column if not exists completed_at timestamptz;
 
+-- Keep the legacy token conversion atomic with respect to every session writer.
+-- Plaintext is removed only after every populated digest is proven to match.
+lock table public.live_sessions in access exclusive mode;
+
+update public.live_sessions
+   set edit_token_hash = null
+ where edit_token_hash is not null
+   and nullif(btrim(edit_token_hash), '') is null;
+
+update public.live_sessions
+   set edit_token_hash = lower(btrim(edit_token_hash))
+ where nullif(btrim(edit_token_hash), '') is not null;
+
 -- Migrate legacy web sessions without preserving their plaintext token.
 update public.live_sessions
    set edit_token_hash = encode(
@@ -23,9 +36,57 @@ update public.live_sessions
  where nullif(state #>> '{private,edit_token}', '') is not null
    and nullif(edit_token_hash, '') is null;
 
+do $legacy_edit_token_hash_guard$
+begin
+  if exists (
+    select 1
+      from public.live_sessions
+     where nullif(state #>> '{private,edit_token}', '') is not null
+       and (
+         edit_token_hash is null
+         or edit_token_hash !~ '^[0-9a-f]{64}$'
+         or edit_token_hash is distinct from encode(
+           digest(state #>> '{private,edit_token}', 'sha256'),
+           'hex'
+         )
+       )
+  ) then
+    raise exception using
+      errcode = '22000',
+      message = 'legacy live session edit token hash verification failed';
+  end if;
+
+  if exists (
+    select 1
+      from public.live_sessions
+     where edit_token_hash is not null
+       and edit_token_hash !~ '^[0-9a-f]{64}$'
+  ) then
+    raise exception using
+      errcode = '22000',
+      message = 'live session edit token hash format verification failed';
+  end if;
+end
+$legacy_edit_token_hash_guard$;
+
 update public.live_sessions
    set state = state #- '{private,edit_token}'
  where state #> '{private,edit_token}' is not null;
+
+do $live_session_edit_token_hash_constraint$
+begin
+  if not exists (
+    select 1
+      from pg_constraint
+     where conrelid = 'public.live_sessions'::regclass
+       and conname = 'live_sessions_edit_token_hash_check'
+  ) then
+    alter table public.live_sessions
+      add constraint live_sessions_edit_token_hash_check
+      check (edit_token_hash is null or edit_token_hash ~ '^[0-9a-f]{64}$');
+  end if;
+end
+$live_session_edit_token_hash_constraint$;
 
 create unique index if not exists live_sessions_creation_operation_unique
   on public.live_sessions (club_id, creation_operation_key)

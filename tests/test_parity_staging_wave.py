@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 
 import scripts.run_parity_staging_wave as staging_wave
 from scripts.run_parity_staging_wave import (
@@ -6,6 +7,7 @@ from scripts.run_parity_staging_wave import (
     EXPECTED_STAGING_AUTH_ORIGIN,
     EXPECTED_STAGING_PROJECT_REF,
     EXPECTED_STAGING_WEB_ORIGIN,
+    EXPECTED_WRITE_WAVE_BY_EVIDENCE_MODE,
     MUTATING_WAVES,
     MUTATION_CONFIRMATION,
     REQUIRED_REAL_SPECS,
@@ -17,6 +19,7 @@ from scripts.run_parity_staging_wave import (
     manifest_errors,
     report_errors,
 )
+from scripts.staging_write_waves import expected_write_flags
 
 
 def _base_env() -> dict[str, str]:
@@ -45,6 +48,43 @@ def _match_write_env() -> dict[str, str]:
         "JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_B": "8",
         "JUPR_TOURNAMENT_LIVE_ALLOW_MUTATION_E2E": "1",
         "JUPR_PARITY_MUTATION_CONFIRMATION": MUTATION_CONFIRMATION,
+    }
+
+
+def _api_identity(sha: str, fly_image: str, *, write_wave: str = "none") -> dict[str, object]:
+    flags = expected_write_flags(write_wave)
+    fingerprint = hashlib.sha256(
+        "\n".join(
+            f"{name}={1 if enabled else 0}" for name, enabled in sorted(flags.items())
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "ok": True,
+        "environment": "staging",
+        "git_commit_sha": sha,
+        "fly_app_name": "juprleagues-api-staging",
+        "fly_image_ref": fly_image,
+        "web_origin": EXPECTED_STAGING_WEB_ORIGIN,
+        "supabase_project_ref": EXPECTED_STAGING_PROJECT_REF,
+        "jwt_verification_configured": True,
+        "jwt_verification_mode": "jwks",
+        "jwt_verification_project_ref": EXPECTED_STAGING_PROJECT_REF,
+        "staging_write_wave": write_wave,
+        "business_data_write_wave_active": write_wave != "none",
+        "security_denial_audit_logging_required": True,
+        "public_live_writes_enabled": flags["JUPR_ENABLE_PUBLIC_LIVE_WRITES"],
+        "public_live_production_override_enabled": False,
+        "controlled_write_flags": flags,
+        "controlled_write_flag_fingerprint": fingerprint,
+        "registration_edit_secret_configured": write_wave == "public-intake-auth",
+        "registration_confirmation_secret_configured": write_wave == "public-intake-auth",
+        "write_prerequisites": {
+            "service_role_configured": True,
+            "api_audit_required": True,
+            "worker_run_log_required": True,
+            "email_mode": "dry_run",
+            "live_player_update_email_enabled": False,
+        },
     }
 
 
@@ -136,14 +176,7 @@ def test_deployment_identity_requires_immutable_web_and_exact_live_services() ->
         "vercel_deployment_id": vercel_id,
         "vercel_deployment_origin": immutable_origin,
     }
-    api = {
-        "ok": True,
-        "environment": "staging",
-        "git_commit_sha": sha,
-        "fly_app_name": "juprleagues-api-staging",
-        "fly_image_ref": fly_image,
-        "supabase_project_ref": EXPECTED_STAGING_PROJECT_REF,
-    }
+    api = _api_identity(sha, fly_image)
     assert deployment_identity_errors(
         web,
         api,
@@ -176,6 +209,82 @@ def test_deployment_identity_requires_immutable_web_and_exact_live_services() ->
     assert any("supabase_project_ref" in error for error in errors)
 
 
+def test_deployment_identity_binds_each_evidence_mode_to_exact_write_projection() -> None:
+    sha = "a" * 40
+    vercel_id = "dpl_staging123"
+    fly_image = "registry.fly.io/juprleagues-api-staging:deployment-1234567890"
+    immutable_origin = "https://jupr-a1b2c3d4-pickleballattrespalapas1.vercel.app"
+    web = {
+        "environment": "staging",
+        "vercel_environment": "preview",
+        "api_origin": EXPECTED_STAGING_API_ORIGIN,
+        "auth_origin": EXPECTED_STAGING_AUTH_ORIGIN,
+        "preview_isolation_active": True,
+        "preview_auth_isolation_active": True,
+        "git_commit_sha": sha,
+        "vercel_deployment_id": vercel_id,
+        "vercel_deployment_origin": immutable_origin,
+    }
+    for mode, write_wave in EXPECTED_WRITE_WAVE_BY_EVIDENCE_MODE.items():
+        api = _api_identity(sha, fly_image, write_wave=write_wave)
+        assert deployment_identity_errors(
+            web,
+            api,
+            candidate_sha=sha,
+            vercel_deployment_id=vercel_id,
+            fly_image_ref=fly_image,
+            expected_write_wave=write_wave,
+            expected_web_origin=immutable_origin,
+        ) == [], mode
+
+        drifted = dict(api, staging_write_wave="none" if write_wave != "none" else "public-live")
+        assert any(
+            "staging_write_wave" in error
+            for error in deployment_identity_errors(
+                web,
+                drifted,
+                candidate_sha=sha,
+                vercel_deployment_id=vercel_id,
+                fly_image_ref=fly_image,
+                expected_write_wave=write_wave,
+                expected_web_origin=immutable_origin,
+            )
+        )
+
+        drifted_web_origin = dict(
+            api, web_origin="https://pickleballclubsandwich.com"
+        )
+        assert any(
+            "web_origin" in error
+            for error in deployment_identity_errors(
+                web,
+                drifted_web_origin,
+                candidate_sha=sha,
+                vercel_deployment_id=vercel_id,
+                fly_image_ref=fly_image,
+                expected_write_wave=write_wave,
+                expected_web_origin=immutable_origin,
+            )
+        )
+
+    unsafe = _api_identity(sha, fly_image)
+    unsafe["write_prerequisites"] = {
+        **unsafe["write_prerequisites"],
+        "email_mode": "live",
+        "live_player_update_email_enabled": True,
+    }
+    errors = deployment_identity_errors(
+        web,
+        unsafe,
+        candidate_sha=sha,
+        vercel_deployment_id=vercel_id,
+        fly_image_ref=fly_image,
+        expected_web_origin=immutable_origin,
+    )
+    assert any("email_mode" in error for error in errors)
+    assert any("player-update email" in error for error in errors)
+
+
 def test_identity_preflight_queries_the_supplied_immutable_candidate_origin(
     monkeypatch,
 ) -> None:
@@ -199,14 +308,7 @@ def test_identity_preflight_queries_the_supplied_immutable_candidate_origin(
                 "vercel_deployment_id": vercel_id,
                 "vercel_deployment_origin": immutable_origin,
             }
-        return {
-            "ok": True,
-            "environment": "staging",
-            "git_commit_sha": sha,
-            "fly_app_name": "juprleagues-api-staging",
-            "fly_image_ref": fly_image,
-            "supabase_project_ref": EXPECTED_STAGING_PROJECT_REF,
-        }
+        return _api_identity(sha, fly_image)
 
     monkeypatch.setattr(staging_wave, "_get_json", fake_get_json)
     _identity, errors = staging_wave._deployment_identity(
@@ -224,6 +326,12 @@ def test_identity_preflight_queries_the_supplied_immutable_candidate_origin(
 
 def test_manifest_is_route_specific_and_generic_mutation_modes_are_absent(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/parity-final-evidence.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'if [ "$GITHUB_REF" != "refs/heads/staging" ]; then' in workflow
+    assert "WORKFLOW_SHA=\"$(git rev-parse HEAD)\"" in workflow
+    assert '[ "$WORKFLOW_SHA" != "$GITHUB_SHA" ] || [ "$WORKFLOW_SHA" != "$STAGING_SHA" ]' in workflow
     assert "reversible-admin-writes" not in WAVES
     assert "recovery" not in WAVES
     assert REQUIRED_REAL_SPECS["match-rating-writes"] == (

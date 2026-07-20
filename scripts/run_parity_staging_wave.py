@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -16,6 +17,11 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.staging_write_waves import expected_write_flags  # noqa: E402
+
 WEB_ROOT = ROOT / "apps" / "web"
 EXPECTED_STAGING_PROJECT_REF = "sijpxjxvdtrehmqvirfi"
 EXPECTED_STAGING_WEB_ORIGIN = (
@@ -25,6 +31,12 @@ EXPECTED_STAGING_API_ORIGIN = "https://juprleagues-api-staging.fly.dev"
 EXPECTED_STAGING_AUTH_ORIGIN = f"https://{EXPECTED_STAGING_PROJECT_REF}.supabase.co"
 EXPECTED_FLY_APP_NAME = "juprleagues-api-staging"
 MUTATION_CONFIRMATION = "RUN DISPOSABLE STAGING WRITES"
+EXPECTED_WRITE_WAVE_BY_EVIDENCE_MODE = {
+    "public-read": "none",
+    "public-intake-auth": "public-intake-auth",
+    "admin-read-export": "none",
+    "match-rating-writes": "tournament-live",
+}
 IMMUTABLE_VERCEL_HOST_RE = re.compile(
     r"[a-z0-9](?:[a-z0-9-]{0,180}[a-z0-9])?-[a-z0-9]{8,64}"
     r"-pickleballattrespalapas1\.vercel\.app"
@@ -296,6 +308,7 @@ def deployment_identity_errors(
     candidate_sha: str,
     vercel_deployment_id: str,
     fly_image_ref: str,
+    expected_write_wave: str = "none",
     expected_web_origin: str | None = None,
 ) -> list[str]:
     if not isinstance(web, dict):
@@ -319,7 +332,18 @@ def deployment_identity_errors(
         "git_commit_sha": candidate_sha.lower(),
         "fly_app_name": EXPECTED_FLY_APP_NAME,
         "fly_image_ref": fly_image_ref,
+        "web_origin": EXPECTED_STAGING_WEB_ORIGIN,
         "supabase_project_ref": EXPECTED_STAGING_PROJECT_REF,
+        "jwt_verification_configured": True,
+        "jwt_verification_mode": "jwks",
+        "jwt_verification_project_ref": EXPECTED_STAGING_PROJECT_REF,
+        "staging_write_wave": expected_write_wave,
+        "business_data_write_wave_active": expected_write_wave != "none",
+        "security_denial_audit_logging_required": True,
+        "public_live_writes_enabled": expected_write_flags(expected_write_wave)[
+            "JUPR_ENABLE_PUBLIC_LIVE_WRITES"
+        ],
+        "public_live_production_override_enabled": False,
     }
     errors: list[str] = []
     attested_web_origin = _immutable_vercel_origin(web.get("vercel_deployment_origin"))
@@ -339,6 +363,47 @@ def deployment_identity_errors(
             actual = actual.lower()
         if actual != expected:
             errors.append(f"Fly deployment identity mismatch for {key}.")
+    expected_flags = expected_write_flags(expected_write_wave)
+    if api.get("controlled_write_flags") != expected_flags:
+        errors.append(
+            "Fly deployment identity controlled_write_flags do not exactly match the required evidence wave."
+        )
+    expected_fingerprint = hashlib.sha256(
+        "\n".join(
+            f"{name}={1 if enabled else 0}"
+            for name, enabled in sorted(expected_flags.items())
+        ).encode("utf-8")
+    ).hexdigest()
+    if api.get("controlled_write_flag_fingerprint") != expected_fingerprint:
+        errors.append(
+            "Fly deployment identity controlled_write_flag_fingerprint does not match the required evidence wave."
+        )
+    prerequisites = api.get("write_prerequisites")
+    if not isinstance(prerequisites, dict):
+        errors.append("Fly deployment identity has no write_prerequisites object.")
+    else:
+        for key in (
+            "service_role_configured",
+            "api_audit_required",
+            "worker_run_log_required",
+        ):
+            if prerequisites.get(key) is not True:
+                errors.append(f"Fly deployment identity write prerequisite {key} is not true.")
+        if prerequisites.get("email_mode") != "dry_run":
+            errors.append(
+                "Fly deployment identity write prerequisite email_mode is not dry_run."
+            )
+        if prerequisites.get("live_player_update_email_enabled") is not False:
+            errors.append(
+                "Fly deployment identity live player-update email safety gate is not false."
+            )
+    if expected_write_wave == "public-intake-auth":
+        for key in (
+            "registration_edit_secret_configured",
+            "registration_confirmation_secret_configured",
+        ):
+            if api.get(key) is not True:
+                errors.append(f"Fly deployment identity {key} is not true for public intake.")
     return errors
 
 
@@ -365,6 +430,7 @@ def _deployment_identity(
     candidate_sha: str,
     vercel_deployment_id: str,
     fly_image_ref: str,
+    expected_write_wave: str = "none",
     web_origin: str = EXPECTED_STAGING_WEB_ORIGIN,
     expected_web_origin: str | None = None,
     phase: str = "preflight",
@@ -389,6 +455,7 @@ def _deployment_identity(
         candidate_sha=candidate_sha,
         vercel_deployment_id=vercel_deployment_id,
         fly_image_ref=fly_image_ref,
+        expected_write_wave=expected_write_wave,
         expected_web_origin=expected_web_origin,
     )
     evidence = {
@@ -446,11 +513,18 @@ def run_wave(
     fly_image_ref: str,
     report_dir: Path,
     identity_only: bool = False,
+    expected_write_wave: str | None = None,
 ) -> list[str]:
     report_dir.mkdir(parents=True, exist_ok=True)
     errors = environment_errors(wave, os.environ)
     errors.extend(candidate_errors(candidate_sha, _head_sha()))
     errors.extend(manifest_errors(wave))
+    required_write_wave = EXPECTED_WRITE_WAVE_BY_EVIDENCE_MODE[wave]
+    if expected_write_wave is not None and expected_write_wave != required_write_wave:
+        errors.append(
+            f"Evidence mode {wave} requires staging write wave {required_write_wave}, "
+            f"not {expected_write_wave}."
+        )
     candidate_web_origin = _immutable_vercel_origin(vercel_deployment_origin)
     if candidate_web_origin is None:
         errors.append(
@@ -459,6 +533,7 @@ def run_wave(
         )
     summary: dict[str, object] = {
         "wave": wave,
+        "required_staging_write_wave": required_write_wave,
         "candidate_sha": candidate_sha,
         "vercel_deployment_id": vercel_deployment_id,
         "vercel_deployment_origin": vercel_deployment_origin,
@@ -477,6 +552,7 @@ def run_wave(
         candidate_sha=candidate_sha,
         vercel_deployment_id=vercel_deployment_id,
         fly_image_ref=fly_image_ref,
+        expected_write_wave=required_write_wave,
         web_origin=candidate_web_origin,
         expected_web_origin=candidate_web_origin,
     )
@@ -543,6 +619,7 @@ def run_wave(
         candidate_sha=candidate_sha,
         vercel_deployment_id=vercel_deployment_id,
         fly_image_ref=fly_image_ref,
+        expected_write_wave=required_write_wave,
         web_origin=attested_web_origin,
         expected_web_origin=attested_web_origin,
         phase="post-wave re-attestation",
@@ -571,6 +648,10 @@ def main() -> int:
         help="Exact immutable Vercel origin for the candidate, never the staging alias.",
     )
     parser.add_argument("--fly-image-ref")
+    parser.add_argument(
+        "--expected-write-wave",
+        help="Explicit dispatch-bound staging write wave; must match the selected evidence mode.",
+    )
     parser.add_argument("--report-dir", type=Path, default=ROOT / "parity-staging-artifacts")
     parser.add_argument(
         "--identity-only",
@@ -616,6 +697,7 @@ def main() -> int:
         args.fly_image_ref,
         args.report_dir,
         identity_only=args.identity_only,
+        expected_write_wave=args.expected_write_wave,
     )
     if errors:
         for error in errors:

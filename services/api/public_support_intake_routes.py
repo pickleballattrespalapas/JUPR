@@ -10,6 +10,7 @@ from jupr_app.services.public_support_intake_service import (
     SupportIntakeRateLimitError,
     create_public_support_intake_request,
 )
+from services.api.staging_write_guard import require_public_intake_or_403
 
 
 class PublicSupportIntakeRequest(BaseModel):
@@ -49,6 +50,7 @@ def install_public_support_intake_routes(
         club_slug: str,
         payload: PublicSupportIntakeRequest,
     ) -> dict[str, Any]:
+        require_public_intake_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()

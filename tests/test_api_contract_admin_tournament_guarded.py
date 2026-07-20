@@ -16,6 +16,7 @@ from services.api.main import app
 def _install(monkeypatch, supabase) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
     monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "tournament-registration")
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_REGISTRATION_MUTATIONS", "1")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only")
@@ -76,6 +77,7 @@ def test_completed_archive_replays_before_already_archived_preflight(monkeypatch
     supabase = FakeSupabase(tables)
     _install(monkeypatch, supabase)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS", "1")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "tournament-mutations")
     request = {
         "action": "archive",
         "expected_updated_at": "2026-03-02T00:00:00Z",
@@ -138,7 +140,7 @@ def test_imported_draw_refusal_precedes_registration_mutation(monkeypatch) -> No
     )
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
-    monkeypatch.delenv("JUPR_ENV", raising=False)
+    monkeypatch.setenv("JUPR_ENV", "test")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
@@ -170,6 +172,7 @@ def test_tournament_date_preflight_uses_unchanged_start_date_and_writes_nothing(
     supabase = FakeSupabase(tables)
     _install(monkeypatch, supabase)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS", "1")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "tournament-mutations")
 
     response = TestClient(app).patch(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1",
@@ -194,6 +197,7 @@ def test_tournament_patch_preserves_explicit_null_to_clear_a_date(monkeypatch) -
     supabase = FakeSupabase(tables)
     _install(monkeypatch, supabase)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS", "1")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "tournament-mutations")
 
     response = TestClient(app).patch(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1",

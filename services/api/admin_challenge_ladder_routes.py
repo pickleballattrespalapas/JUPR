@@ -258,6 +258,12 @@ def _require_confirmation(actual: str, expected: str) -> None:
 def _require_staging_recovery() -> None:
     if os.getenv("JUPR_ENV", "").strip().lower() != "staging":
         raise HTTPException(status_code=403, detail="Challenge Ladder operation recovery is staging-only.")
+    try:
+        require_staging_write_gate(
+            surface_label="Challenge Ladder", flag_name=CHALLENGE_LADDER_WRITE_FLAG
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 def _prepare_write(

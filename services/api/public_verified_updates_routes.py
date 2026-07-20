@@ -10,6 +10,7 @@ from jupr_app.services.public_verified_updates_service import (
     get_public_verified_update_request_status,
     list_public_verified_update_player_options,
 )
+from services.api.staging_write_guard import require_public_intake_or_403
 
 
 class PublicVerifiedUpdateRequest(BaseModel):
@@ -53,6 +54,7 @@ def install_public_verified_updates_routes(app, *, get_club, get_supabase_client
 
     @app.post("/clubs/{club_slug}/verified-updates/request")
     def post_verified_updates_request(club_slug: str, payload: PublicVerifiedUpdateRequest) -> dict[str, Any]:
+        require_public_intake_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase = get_supabase_client()

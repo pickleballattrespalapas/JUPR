@@ -44,7 +44,7 @@ test("League Awards recovers and advances every persisted step without a browser
     badge_definition_count: 4,
     badge_definition_required_count: 4,
     missing_badge_ids: [],
-    badge_seed_migration: "migrations/20260215_end_league_top_performers.sql",
+    badge_seed_migration: "supabase/migrations/20260720014744_seed_top_performer_badges.sql",
     badge_expected_count: status === "minted" || status === "archived" ? 1 : 0,
     badge_verified_count: status === "minted" || status === "archived" ? 1 : 0,
     wizard: {

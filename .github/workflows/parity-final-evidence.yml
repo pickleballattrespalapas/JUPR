@@ -51,22 +51,37 @@ jobs:
       candidate_sha: ${{ steps.validate-inputs.outputs.candidate_sha }}
       fly_image_ref: ${{ steps.validate-inputs.outputs.fly_image_ref }}
       mode: ${{ steps.validate-inputs.outputs.mode }}
+      write_wave: ${{ steps.validate-inputs.outputs.write_wave }}
       mutation_confirmation: ${{ steps.validate-inputs.outputs.mutation_confirmation }}
       vercel_deployment_id: ${{ steps.validate-inputs.outputs.vercel_deployment_id }}
       vercel_deployment_origin: ${{ steps.validate-inputs.outputs.vercel_deployment_origin }}
     steps:
-      - name: Check out evidence branch
+      - name: Check out canonical staging workflow
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+          ref: staging
+
+      - name: Verify canonical staging workflow provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/staging" ]; then
+            echo "parity evidence workflow must be dispatched from refs/heads/staging" >&2
+            exit 2
+          fi
+          WORKFLOW_SHA="$(git rev-parse HEAD)"
+          STAGING_SHA="$(git rev-parse refs/remotes/origin/staging)"
+          if [ "$WORKFLOW_SHA" != "$GITHUB_SHA" ] || [ "$WORKFLOW_SHA" != "$STAGING_SHA" ]; then
+            echo "workflow definition HEAD, GITHUB_SHA, and canonical origin/staging must be identical" >&2
+            exit 2
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Fetch canonical staging branch
-        run: git fetch --no-tags origin '+refs/heads/staging:refs/remotes/origin/staging'
 
       - name: Validate dispatch inputs and candidate ancestry
         id: validate-inputs
@@ -81,6 +96,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          STAGING_SHA="$(git rev-parse refs/remotes/origin/staging)"
           if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "candidate_sha must be a lowercase, full 40-character Git SHA" >&2
             exit 2
@@ -106,6 +122,17 @@ jobs:
               ;;
           esac
           case "$PARITY_MODE" in
+            public-read|admin-read-export|complete-book)
+              WRITE_WAVE="none"
+              ;;
+            public-intake-auth)
+              WRITE_WAVE="public-intake-auth"
+              ;;
+            match-rating-writes)
+              WRITE_WAVE="tournament-live"
+              ;;
+          esac
+          case "$PARITY_MODE" in
             match-rating-writes)
               if [ "$MUTATION_CONFIRMATION" != "RUN DISPOSABLE STAGING WRITES" ]; then
                 echo "mutating evidence modes require the exact mutation confirmation" >&2
@@ -121,7 +148,6 @@ jobs:
           esac
 
           git cat-file -e "${CANDIDATE_SHA}^{commit}"
-          STAGING_SHA="$(git rev-parse refs/remotes/origin/staging)"
           if [ "$PARITY_MODE" = "complete-book" ]; then
             git merge-base --is-ancestor "$CANDIDATE_SHA" "$STAGING_SHA" || {
               echo "complete-book candidate_sha must be an ancestor of canonical origin/staging" >&2
@@ -142,6 +168,7 @@ jobs:
             printf 'candidate_sha=%s\n' "$CANDIDATE_SHA"
             printf 'fly_image_ref=%s\n' "$FLY_IMAGE_REF"
             printf 'mode=%s\n' "$PARITY_MODE"
+            printf 'write_wave=%s\n' "$WRITE_WAVE"
             printf 'mutation_confirmation=%s\n' "$MUTATION_CONFIRMATION"
             printf 'vercel_deployment_id=%s\n' "$VERCEL_DEPLOYMENT_ID"
             printf 'vercel_deployment_origin=%s\n' "$VERCEL_DEPLOYMENT_ORIGIN"
@@ -178,7 +205,7 @@ jobs:
           retention-days: 90
 
   staging-wave:
-    name: Candidate-bound ${{ needs.evidence-contract.outputs.mode }} wave
+    name: Candidate-bound ${{ needs.evidence-contract.outputs.mode }} / ${{ needs.evidence-contract.outputs.write_wave }} wave
     if: needs.evidence-contract.outputs.mode != 'complete-book'
     needs: evidence-contract
     runs-on: ubuntu-latest
@@ -242,6 +269,7 @@ jobs:
           JUPR_STAGING_ADMIN_ACCESS_TOKEN: ${{ needs.evidence-contract.outputs.mode == 'admin-read-export' && secrets.STAGING_ADMIN_BEARER_TOKEN || '' }}
           NEXT_PUBLIC_JUPR_API_BASE_URL: ${{ secrets.STAGING_JUPR_API_BASE_URL }}
           PARITY_MODE: ${{ needs.evidence-contract.outputs.mode }}
+          REQUIRED_STAGING_WRITE_WAVE: ${{ needs.evidence-contract.outputs.write_wave }}
           STAGING_ADMIN_BEARER_TOKEN: ${{ (needs.evidence-contract.outputs.mode == 'admin-read-export' || needs.evidence-contract.outputs.mode == 'match-rating-writes') && secrets.STAGING_ADMIN_BEARER_TOKEN || '' }}
           STAGING_ADMIN_PASSWORD: ${{ needs.evidence-contract.outputs.mode == 'public-intake-auth' && secrets.STAGING_ADMIN_PASSWORD || '' }}
           STAGING_API_BASE_URL: ${{ secrets.STAGING_JUPR_API_BASE_URL }}
@@ -257,6 +285,7 @@ jobs:
             --vercel-deployment-id "$VERCEL_DEPLOYMENT_ID" \
             --vercel-deployment-origin "$VERCEL_DEPLOYMENT_ORIGIN" \
             --fly-image-ref "$FLY_IMAGE_REF" \
+            --expected-write-wave "$REQUIRED_STAGING_WRITE_WAVE" \
             --report-dir parity-staging-artifacts
 
       - name: Retain success and failure evidence
@@ -294,6 +323,7 @@ jobs:
           FLY_IMAGE_REF: ${{ needs.evidence-contract.outputs.fly_image_ref }}
           JUPR_EXPECTED_STAGING_API_ORIGIN: "https://juprleagues-api-staging.fly.dev"
           JUPR_EXPECTED_STAGING_AUTH_ORIGIN: ${{ secrets.STAGING_SUPABASE_URL }}
+          REQUIRED_STAGING_WRITE_WAVE: ${{ needs.evidence-contract.outputs.write_wave }}
           NEXT_PUBLIC_JUPR_API_BASE_URL: ${{ secrets.STAGING_JUPR_API_BASE_URL }}
           STAGING_API_BASE_URL: ${{ secrets.STAGING_JUPR_API_BASE_URL }}
           STAGING_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
@@ -310,6 +340,7 @@ jobs:
             --vercel-deployment-id "$VERCEL_DEPLOYMENT_ID" \
             --vercel-deployment-origin "$VERCEL_DEPLOYMENT_ORIGIN" \
             --fly-image-ref "$FLY_IMAGE_REF" \
+            --expected-write-wave "$REQUIRED_STAGING_WRITE_WAVE" \
             --report-dir parity-staging-artifacts
 
       - name: Retain completion identity evidence

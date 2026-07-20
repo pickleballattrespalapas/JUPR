@@ -88,6 +88,11 @@ def _require_service_role() -> None:
         )
 
 
+def _require_player_updates_enabled() -> None:
+    if not is_admin_player_updates_enabled():
+        raise HTTPException(status_code=403, detail="Next Player Updates Admin is disabled.")
+
+
 def _resolve_player_updates_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str) -> tuple[str, str]:
     user = authenticate_bearer(authorization)
     role_resolution = resolve_admin_role(
@@ -203,6 +208,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         payload: PlayerDigestPreviewRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        _require_player_updates_enabled()
         _require_service_role()
         supabase = get_supabase_client()
         _resolve_player_updates_role_or_403(
@@ -228,6 +234,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         payload: PlayerDigestQueueRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        _require_player_updates_enabled()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_player_updates_role_or_403(
@@ -259,6 +266,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         payload: OutboxSelectionRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        _require_player_updates_enabled()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_player_updates_role_or_403(
@@ -287,6 +295,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         payload: OutboxSelectionRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        _require_player_updates_enabled()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_player_updates_role_or_403(
@@ -314,6 +323,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         payload: OutboxSelectionRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        _require_player_updates_enabled()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_player_updates_role_or_403(
@@ -342,6 +352,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         payload: SubscriptionReplaceRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        _require_player_updates_enabled()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_player_updates_role_or_403(
@@ -375,6 +386,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         payload: SubscriptionDeactivateRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        _require_player_updates_enabled()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_player_updates_role_or_403(

@@ -85,3 +85,13 @@ def test_legacy_server_tables_are_in_canonical_history_and_locked_down() -> None
         "revoke all on table public.%i from public, anon, authenticated" in sql
     )
     assert "grant all privileges on table public.%i to service_role" in sql
+
+
+def test_canonical_history_normalizes_match_context_id_to_text() -> None:
+    sql = _normalized(CANONICAL_TABLES)
+
+    assert "alter table public.matches" in sql
+    assert "add column if not exists context_type text null" in sql
+    assert "add column if not exists context_id text null" in sql
+    assert "alter column context_id type text using context_id::text" in sql
+    assert "if current_type <> 'text' then" in sql

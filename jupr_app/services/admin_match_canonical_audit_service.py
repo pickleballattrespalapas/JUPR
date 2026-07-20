@@ -16,6 +16,9 @@ from jupr_app.services.admin_guarded_write_service import (
     require_staging_service_role_write,
     update_guarded_operation,
 )
+from jupr_app.services.staging_write_guard import (
+    staging_match_canonical_normalize_writes_enabled,
+)
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
 CONFIRM_APPLY = "APPLY NORMALIZE"
@@ -36,6 +39,7 @@ def build_admin_match_canonical_audit_status(supabase: Any | None, *, club_id: s
         "required_permissions": {"audit": "view_audit_log", "apply": "manage_matches"},
         "write_environment": "staging_only",
         "service_role_required": True,
+        "normalize_writes_enabled": staging_match_canonical_normalize_writes_enabled(),
         "options_endpoint": f"/admin/clubs/{club_id}/match-canonical-audit/options" if enabled else None,
         "audit_endpoint": f"/admin/clubs/{club_id}/match-canonical-audit/run" if enabled else None,
         "normalize_endpoint": f"/admin/clubs/{club_id}/match-canonical-audit/normalize" if enabled else None,

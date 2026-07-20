@@ -231,6 +231,8 @@ def test_order27_migration_and_private_surface_static_contract() -> None:
     assert "enable row level security" in sql
     assert "revoke all on table public.tournament_games from public, anon, authenticated" in sql
     assert "grant select, insert, update, delete on table public.tournament_games to service_role" in sql
+    assert "add column if not exists context_id text null" in sql
+    assert "add column if not exists context_id uuid null" not in sql
     assert "idx_matches_unique_tournament_game_id" in sql
     assert "lower(btrim(name))" in sql
     assert "tournament_games_nonnegative_scores" in sql

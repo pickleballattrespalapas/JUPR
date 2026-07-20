@@ -17,6 +17,7 @@ from services.api.main import app
 def _install_super_env(monkeypatch, supabase) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS", "1")
     monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "badge-diagnostics")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")

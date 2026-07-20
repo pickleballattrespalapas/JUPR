@@ -26,6 +26,7 @@ from jupr_app.services.public_tournament_registration_service import (
     submit_public_tournament_registration,
 )
 from jupr_app.services.public_tournament_roster_service import build_public_tournament_roster_page
+from services.api.staging_write_guard import require_public_intake_or_403
 
 
 class PublicTournamentRegistrationRequest(BaseModel):
@@ -118,6 +119,7 @@ def install_public_tournament_registration_routes(
         club_slug: str,
         payload: PublicTournamentRegistrationEditLinkRequest,
     ) -> dict[str, Any]:
+        require_public_intake_or_403()
         _require_registration_edit_service_role()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
@@ -143,6 +145,7 @@ def install_public_tournament_registration_routes(
         club_slug: str,
         payload: PublicTournamentRegistrationProfileResolutionRequest,
     ) -> dict[str, Any]:
+        require_public_intake_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
@@ -190,6 +193,7 @@ def install_public_tournament_registration_routes(
         club_slug: str,
         payload: PublicTournamentRegistrationEditRequest,
     ) -> dict[str, Any]:
+        require_public_intake_or_403()
         _require_registration_edit_service_role()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
@@ -236,6 +240,7 @@ def install_public_tournament_registration_routes(
         club_slug: str,
         payload: PublicTournamentRegistrationRequest,
     ) -> dict[str, Any]:
+        require_public_intake_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()

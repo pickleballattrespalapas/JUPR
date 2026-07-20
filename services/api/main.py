@@ -33,8 +33,15 @@ from jupr_app.services.public_live_write_service import (
     update_public_live_scores,
 )
 from jupr_app.services.public_player_service import build_public_player_directory, get_public_match_detail, get_public_matches, get_public_player_profile
-from services.api.auth import authenticate_bearer, auth_header
-from services.api.middleware import StructuredRequestLoggingMiddleware
+from scripts.staging_write_waves import ALL_STAGING_WRITE_FLAGS
+from services.api.auth import (
+    authenticate_bearer,
+    auth_header,
+    jwt_verification_configured,
+    jwt_verification_mode,
+    jwt_verification_project_ref,
+)
+from services.api.middleware import StagingWriteWaveMiddleware, StructuredRequestLoggingMiddleware
 from services.api.public_badge_codex_routes import install_public_badge_codex_routes
 from services.api.public_challenge_ladder_routes import install_public_challenge_ladder_routes
 from services.api.public_league_results_routes import install_public_league_results_routes
@@ -93,6 +100,29 @@ def get_jupr_env() -> str:
     return os.getenv("JUPR_ENV", "").strip().lower()
 
 
+def _canonical_https_origin(raw: str | None) -> str | None:
+    """Return a credential-free HTTPS origin, or None for non-origin input."""
+    try:
+        parsed = urlparse(str(raw or "").strip())
+        port = parsed.port
+    except (TypeError, ValueError):
+        return None
+    host = (parsed.hostname or "").strip().lower()
+    if (
+        parsed.scheme.lower() != "https"
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    return f"https://{host}"
+
+
 def is_staging_env() -> bool:
     return get_jupr_env() == "staging"
 
@@ -135,6 +165,7 @@ def _log_runtime_guardrails() -> None:
 
 app = FastAPI(title="JUPR API", version="0.1.0")
 app.add_middleware(StructuredRequestLoggingMiddleware)
+app.add_middleware(StagingWriteWaveMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_cors_allowed_origins(),
@@ -228,9 +259,10 @@ def is_public_live_write_enabled() -> bool:
     enabled = os.getenv("JUPR_ENABLE_PUBLIC_LIVE_WRITES", "").strip().lower() in {"1", "true", "yes"}
     if not enabled:
         return False
-    if get_jupr_env() == "production":
+    environment = get_jupr_env()
+    if environment == "production":
         return os.getenv("JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION", "").strip().lower() in {"1", "true", "yes"}
-    return True
+    return environment in {"staging", "local", "test", "development", "dev"}
 
 
 def _public_live_secrets_ready() -> bool:
@@ -652,6 +684,16 @@ def health() -> dict[str, Any]:
     payload: dict[str, Any] = {"ok": True, "service": "jupr-api"}
     if is_staging_env():
         supabase_host = (urlparse(os.getenv("SUPABASE_URL", "")).hostname or "").lower()
+        controlled_write_flags = {
+            name: os.getenv(name, "").strip().lower() in {"1", "true", "yes", "y", "on"}
+            for name in ALL_STAGING_WRITE_FLAGS
+        }
+        controlled_write_flag_fingerprint = hashlib.sha256(
+            "\n".join(
+                f"{name}={1 if enabled else 0}"
+                for name, enabled in sorted(controlled_write_flags.items())
+            ).encode("utf-8")
+        ).hexdigest()
         payload.update(
             {
                 "environment": get_jupr_env(),
@@ -659,6 +701,49 @@ def health() -> dict[str, Any]:
                 "fly_app_name": os.getenv("FLY_APP_NAME", "").strip() or None,
                 "fly_image_ref": os.getenv("FLY_IMAGE_REF", "").strip() or None,
                 "fly_machine_version": os.getenv("FLY_MACHINE_VERSION", "").strip() or None,
+                "web_origin": _canonical_https_origin(os.getenv("JUPR_WEB_BASE_URL")),
+                "staging_write_wave": os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip() or None,
+                "business_data_write_wave_active": os.getenv(
+                    "JUPR_STAGING_WRITE_WAVE", ""
+                ).strip()
+                not in {"", "none"},
+                "security_denial_audit_logging_required": is_api_audit_log_required(),
+                "jwt_verification_configured": jwt_verification_configured(),
+                "jwt_verification_mode": jwt_verification_mode(),
+                "jwt_verification_project_ref": jwt_verification_project_ref(),
+                "controlled_write_flags": controlled_write_flags,
+                "controlled_write_flag_fingerprint": controlled_write_flag_fingerprint,
+                "public_live_writes_enabled": is_public_live_write_enabled(),
+                "public_live_production_override_enabled": os.getenv(
+                    "JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION", ""
+                ).strip().lower()
+                in {"1", "true", "yes"},
+                "registration_edit_secret_configured": len(
+                    os.getenv("JUPR_REGISTRATION_EDIT_SECRET", "").strip()
+                )
+                >= 32,
+                "registration_confirmation_secret_configured": len(
+                    os.getenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "").strip()
+                )
+                >= 32,
+                "write_prerequisites": {
+                    "service_role_configured": bool(
+                        os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+                    ),
+                    "api_audit_required": os.getenv(
+                        "JUPR_REQUIRE_API_AUDIT_LOG", ""
+                    ).strip().lower()
+                    in {"1", "true", "yes", "y", "on"},
+                    "worker_run_log_required": os.getenv(
+                        "JUPR_REQUIRE_WORKER_RUN_LOG", ""
+                    ).strip().lower()
+                    in {"1", "true", "yes", "y", "on"},
+                    "email_mode": os.getenv("JUPR_EMAIL_MODE", "").strip().lower() or None,
+                    "live_player_update_email_enabled": os.getenv(
+                        "JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL", ""
+                    ).strip().lower()
+                    in {"1", "true", "yes", "y", "on"},
+                },
                 "supabase_project_ref": (
                     supabase_host.split(".", 1)[0]
                     if supabase_host.endswith(".supabase.co")
@@ -698,15 +783,6 @@ def health_live_sessions() -> dict[str, Any]:
         return {"ok": False, "service": "jupr-api", "supabase_host": host, "service_role_configured": True, "live_sessions_query_ok": False, "detail": _error_payload_text(exc) or exc.__class__.__name__}
     try:
         supabase.table("public_live_operations").select("operation_key,status,executor_token,lease_expires_at").limit(1).execute()
-        supabase.rpc(
-            "claim_public_live_completion_executor",
-            {
-                "p_club_id": "__healthcheck__",
-                "p_operation_key": "0" * 64,
-                "p_executor_token": "healthcheck-no-write",
-                "p_lease_seconds": 30,
-            },
-        ).execute()
     except Exception:
         return {
             "ok": False,

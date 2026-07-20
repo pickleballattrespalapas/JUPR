@@ -92,7 +92,7 @@ Individual workflow flags are intentionally separate:
 - `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER=1`
 - `JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR=1`
 - `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER=1`
-- `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE=1` enables only the persisted League Awards mutations and additionally requires `SUPABASE_SERVICE_ROLE_KEY` on FastAPI. Mint still fails closed until all four top-performer badge definitions from `migrations/20260215_end_league_top_performers.sql` are readable. Keep it off in production until the manual staging gate passes.
+- `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE=1` enables only the persisted League Awards mutations and additionally requires `SUPABASE_SERVICE_ROLE_KEY` on FastAPI. Mint still fails closed until all four top-performer badge definitions from `supabase/migrations/20260720014744_seed_top_performer_badges.sql` are readable; the seed also aligns present legacy `_v2` compatibility columns on newly inserted rows. Keep it off in production until the manual staging gate passes.
 - `JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER=1`
 - `JUPR_ENABLE_STAGING_NEXT_ADMIN_CHALLENGE_LADDER_WRITES=1` permits Challenge Ladder mutations only when `JUPR_ENV=staging`.
 - `JUPR_ENABLE_NEXT_ADMIN_MONEYBALL=1` enables the Python-authoritative Moneyball preview/settlement surface.

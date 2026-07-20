@@ -13,8 +13,18 @@ def _read(path: str) -> str:
 def test_public_live_migration_hashes_legacy_tokens_and_locks_private_tables() -> None:
     sql = _read("supabase/migrations/20260719220000_public_live_durability.sql").lower()
 
+    lock_position = sql.index("lock table public.live_sessions in access exclusive mode")
+    hash_position = sql.index("set edit_token_hash = encode(")
+    guard_position = sql.index("do $legacy_edit_token_hash_guard$")
+    delete_position = sql.index("set state = state #- '{private,edit_token}'")
+    assert lock_position < hash_position < guard_position < delete_position
     assert "digest(coalesce(state #>> '{private,edit_token}', ''), 'sha256')" in sql
+    assert "edit_token_hash is distinct from encode(" in sql
+    assert "legacy live session edit token hash verification failed" in sql
+    assert "live session edit token hash format verification failed" in sql
     assert "state = state #- '{private,edit_token}'" in sql
+    assert "live_sessions_edit_token_hash_check" in sql
+    assert "edit_token_hash ~ '^[0-9a-f]{64}$'" in sql
     assert "alter table public.live_sessions force row level security" in sql
     assert "alter table public.public_live_operations force row level security" in sql
     assert "revoke all on table public.live_sessions from public, anon, authenticated" in sql
@@ -59,7 +69,7 @@ def test_public_live_old_league_rounds_are_read_only_and_writes_are_staging_gate
     assert "editableMatches.map" in runner
     assert "JUPR_ENABLE_PUBLIC_LIVE_WRITES" in api
     assert "JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION" in api
-    assert 'JUPR_ENABLE_PUBLIC_LIVE_WRITES = "1"' in staging
+    assert 'JUPR_ENABLE_PUBLIC_LIVE_WRITES = "0"' in staging
     assert 'JUPR_ENABLE_PUBLIC_LIVE_WRITES = "0"' in production
     assert 'JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION = "0"' in production
     assert 'address_scope = f"{fly_address}\\x1f{visitor_address}"' in api

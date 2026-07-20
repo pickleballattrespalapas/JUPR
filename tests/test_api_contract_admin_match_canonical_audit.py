@@ -125,6 +125,11 @@ def test_match_canonical_options_and_audit(monkeypatch):
 
 def test_match_canonical_apply_requires_confirmation(monkeypatch):
     install_env(monkeypatch)
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "match-player")
+    monkeypatch.setenv(
+        "JUPR_ENABLE_STAGING_NEXT_ADMIN_MATCH_CANONICAL_NORMALIZE_WRITES", "1"
+    )
     response = TestClient(app).post(
         "/admin/clubs/club/match-canonical-audit/normalize",
         headers={"Authorization": "Bearer local"},

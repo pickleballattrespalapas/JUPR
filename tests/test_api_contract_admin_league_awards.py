@@ -290,7 +290,7 @@ def test_admin_league_awards_mint_fails_closed_when_badge_definitions_are_missin
     assert missing_badge_id in confirmed["missing_badge_ids"]
     assert response.status_code == 500
     assert "mint was not attempted" in response.json()["detail"]
-    assert "migrations/20260215_end_league_top_performers.sql" in response.json()["detail"]
+    assert "supabase/migrations/20260720014744_seed_top_performer_badges.sql" in response.json()["detail"]
     workflow_after = tables["leagues_metadata"][0]["end_awards"]["workflow"]
     assert workflow_after["status"] == "overrides_confirmed"
     assert workflow_after["revision"] == revision_before

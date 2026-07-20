@@ -61,6 +61,7 @@ from jupr_app.services.admin_league_manager_update_service import (
     update_admin_league_manager_settings,
 )
 from services.api.auth import authenticate_bearer, auth_header
+from services.api.staging_write_guard import require_league_manager_write_or_403
 
 
 class AdminLeagueManagerSettingsUpdateRequest(BaseModel):
@@ -742,6 +743,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_league_manager_enabled():
             raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        require_league_manager_write_or_403()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_league_manager_role_or_403(
             supabase=supabase,
@@ -775,6 +777,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_league_manager_enabled():
             raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        require_league_manager_write_or_403()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_league_manager_role_or_403(
             supabase=supabase,
@@ -806,6 +809,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_league_manager_enabled():
             raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        require_league_manager_write_or_403()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_league_manager_role_or_403(
             supabase=supabase,
@@ -1118,6 +1122,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_league_manager_enabled():
             raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        require_league_manager_write_or_403()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_league_manager_role_or_403(
             supabase=supabase,
@@ -1153,6 +1158,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_league_manager_enabled():
             raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        require_league_manager_write_or_403()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_league_manager_role_or_403(
             supabase=supabase,

@@ -5,13 +5,20 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 try:
-    from services.api.auth import jwt_verification_configured, jwt_verification_mode
+    from services.api.auth import (
+        jwt_verification_configured,
+        jwt_verification_mode,
+        jwt_verification_project_ref,
+    )
 except Exception:  # pragma: no cover - imported by non-API contexts too
     def jwt_verification_configured() -> bool:
         return False
 
     def jwt_verification_mode() -> str:
         return "unavailable"
+
+    def jwt_verification_project_ref() -> str | None:
+        return None
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 STREAMLIT_FALLBACK_DEFAULT = "https://juprtrespalapas.streamlit.app"
@@ -315,6 +322,7 @@ def build_admin_operations_status() -> dict[str, Any]:
         "service_role_configured": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()),
         "jwt_verification_configured": jwt_verification_configured(),
         "jwt_verification_mode": jwt_verification_mode(),
+        "jwt_verification_project_ref": jwt_verification_project_ref(),
         "enabled_workflows": enabled_workflows,
         "recommended_sequence": [
             "admin_shell",

@@ -249,6 +249,7 @@ def write_client(monkeypatch):
     monkeypatch.setenv("JUPR_PUBLIC_LIVE_TOKEN_SECRET", "api-public-live-token-secret-long-enough")
     monkeypatch.setenv("JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET", "api-public-live-rate-secret-long-enough")
     monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "public-live")
     monkeypatch.setenv("JUPR_ENABLE_PUBLIC_LIVE_WRITES", "1")
     monkeypatch.setattr("services.api.main.get_supabase_client", lambda: supabase)
     return TestClient(app), supabase
@@ -397,3 +398,16 @@ def test_public_live_write_api_needs_separate_production_gate(write_client, monk
     )
     assert response.status_code == 403
     assert supabase.tables["live_sessions"] == []
+
+
+def test_public_live_write_gate_fails_closed_for_unknown_runtime(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_PUBLIC_LIVE_WRITES", "1")
+    monkeypatch.setenv("JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION", "1")
+    monkeypatch.setenv("JUPR_ENV", "stagin")
+
+    from services.api.main import is_public_live_write_enabled
+
+    assert is_public_live_write_enabled() is False
+
+    monkeypatch.delenv("JUPR_ENV")
+    assert is_public_live_write_enabled() is False

@@ -20,6 +20,9 @@ from jupr_app.services.admin_match_canonical_audit_service import (
     run_admin_match_canonical_audit,
     run_admin_match_canonical_normalize,
 )
+from jupr_app.services.staging_write_guard import (
+    require_staging_match_canonical_normalize_writes,
+)
 from jupr_app.services.admin_guarded_write_service import GuardedWriteRecoveryRequired
 from services.api.auth import authenticate_bearer, auth_header
 
@@ -134,6 +137,11 @@ def install_admin_match_canonical_audit_routes(app, *, get_supabase_client) -> N
     ) -> dict[str, Any]:
         if not is_admin_match_canonical_audit_enabled():
             raise HTTPException(status_code=403, detail="Next Match Canonical Audit is disabled.")
+        if not payload.dry_run:
+            try:
+                require_staging_match_canonical_normalize_writes()
+            except PermissionError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
         supabase = get_supabase_client()
         required_permission = PERMISSION_VIEW_AUDIT_LOG if payload.dry_run else PERMISSION_MANAGE_MATCHES
         actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source, permission=required_permission)

@@ -127,6 +127,7 @@ class FakeSupabase:
 def install_env(monkeypatch, supabase):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
     monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "admin-tools")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")

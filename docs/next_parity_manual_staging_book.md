@@ -200,9 +200,9 @@ or Tournament Live writes unless both the Order-27 guard surface and the Order-2
 | `migration:order-27-tournament-ops` | `supabase/migrations/20260719204700_tournament_operations_guard_surface.sql` | — | — | Close Tournament Operations mutations; reconcile ledger | — |
 | `migration:order-28-tournament-live` | `supabase/migrations/20260719205000_tournament_live_operations.sql` after resolved Order 27 | — | — | Close Tournament Live write gate; reconcile ledger | — |
 | `migration:order-25-public-live` | `supabase/migrations/20260719220000_public_live_durability.sql` | — | — | Close public-live writes; preserve recovery records | — |
+| `migration:legacy-top-performer-seed` | `supabase/migrations/20260720014744_seed_top_performer_badges.sql`; verify `4/4` IDs, any present `_v2` columns aligned, and existing customized rows preserved | — | — | Close Awards write; do not remove definitions or minted evidence | — |
 | `migration:baseline-registration-player` | `supabase/migrations/20261020000000_tournament_registrations_player_id_postgrest_reload.sql` | — | — | Close tournament registration/admin writes | — |
 | `migration:legacy-league-awards-schema` | Reviewed canonical equivalent of `migrations/20260701_league_manager_end_wizard_columns.sql` | — | — | Close League Manager/Awards writes; restore candidate | — |
-| `migration:legacy-top-performer-seed` | Reviewed canonical equivalent of `migrations/20260215_end_league_top_performers.sql` with `4/4` definitions | — | — | Close Awards write; do not remove minted evidence | — |
 
 ## Exact feature-flag and disable ledger
 

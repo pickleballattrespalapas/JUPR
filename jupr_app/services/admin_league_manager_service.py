@@ -4,6 +4,7 @@ import json
 import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from jupr_app.services.staging_write_guard import staging_league_manager_writes_enabled
 
 from jupr_app.domain.leagues import normalize_league_status
 
@@ -426,6 +427,7 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
             "league_live_sessions_endpoint": None,
             "league_awards_endpoint": None,
             "awards_write_enabled": False,
+            "league_manager_writes_enabled": False,
             "warnings": ["Next League Manager is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER on FastAPI for a closed-club pilot."],
         }
     leagues: list[dict[str, Any]] = []
@@ -450,6 +452,7 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
         "league_live_sessions_endpoint": "/admin/clubs/{club_id}/league-manager/live-sessions",
         "league_awards_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards",
         "awards_write_enabled": is_admin_league_awards_write_enabled(),
+        "league_manager_writes_enabled": staging_league_manager_writes_enabled(),
         "league_count": len(leagues),
         "active_count": len([league for league in leagues if league.get("status") == "active"]),
         "warnings": [
