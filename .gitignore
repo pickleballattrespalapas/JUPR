@@ -12,7 +12,7 @@ archive/
 
 # Browser test artifacts
 apps/web/.next/
-apps/web/node_modules/
+apps/web/node_modules
 apps/web/playwright-report/
 apps/web/test-results/
 apps/web/tsconfig.tsbuildinfo

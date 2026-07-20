@@ -7,6 +7,9 @@ on:
       - ".github/workflows/next-web-build.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest

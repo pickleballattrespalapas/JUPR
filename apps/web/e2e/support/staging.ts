@@ -19,13 +19,36 @@ export const expectedAuthOrigin = String(process.env.JUPR_EXPECTED_STAGING_AUTH_
 const expectedStagingWebOrigin =
   "https://jupr-git-staging-pickleballattrespalapas1.vercel.app";
 const remoteBaseUrl = String(process.env.STAGING_WEB_BASE_URL || "").trim().replace(/\/$/, "");
+const attestedDeploymentOrigin = String(
+  process.env.JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN || ""
+).trim().replace(/\/$/, "");
 const bypassSecret = String(process.env.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
+const immutableDeploymentHostname =
+  /^[a-z0-9](?:[a-z0-9-]{0,180}[a-z0-9])?-[a-z0-9]{8,64}-pickleballattrespalapas1\.vercel\.app$/;
 const vercelBypassOrigin = (() => {
   if (!remoteBaseUrl || !bypassSecret) return "";
-  if (remoteBaseUrl !== expectedStagingWebOrigin) {
-    throw new Error("Refusing to send Vercel bypass credentials to a non-staging web origin.");
+  if (!attestedDeploymentOrigin) {
+    if (remoteBaseUrl !== expectedStagingWebOrigin) {
+      throw new Error("Refusing to send Vercel bypass credentials to a non-staging web origin.");
+    }
+    return expectedStagingWebOrigin;
   }
-  return expectedStagingWebOrigin;
+  let hostname = "";
+  try {
+    const parsed = new URL(remoteBaseUrl);
+    if (parsed.origin !== remoteBaseUrl || parsed.protocol !== "https:") throw new Error();
+    hostname = parsed.hostname;
+  } catch {
+    throw new Error("Refusing a non-canonical attested Vercel deployment origin.");
+  }
+  if (
+    remoteBaseUrl === expectedStagingWebOrigin ||
+    remoteBaseUrl !== attestedDeploymentOrigin ||
+    !immutableDeploymentHostname.test(hostname)
+  ) {
+    throw new Error("Refusing to send Vercel bypass credentials outside the attested immutable deployment.");
+  }
+  return remoteBaseUrl;
 })();
 
 export type Surface = {
@@ -104,4 +127,3 @@ export async function expectHealthySurface(page: Page, surface: Surface): Promis
   expect(pageErrors, `${surface.name} raised browser page errors`).toEqual([]);
   expect(consoleErrors, `${surface.name} emitted console errors`).toEqual([]);
 }
-

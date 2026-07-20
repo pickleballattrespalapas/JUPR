@@ -28,7 +28,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: fly-api-staging-deploy
+  # Shared with parity-final-evidence.yml so evidence cannot run across a
+  # staging deployment boundary.
+  group: jupr-staging-api-and-parity-evidence
   cancel-in-progress: false
 
 jobs:
@@ -37,14 +39,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     env:
-      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
-      SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
       EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
-      FLY_APP_NAME: ${{ inputs.app_name }}
-      FLY_PRIMARY_REGION: ${{ inputs.primary_region }}
-      FLY_ORG: ${{ inputs.fly_org }}
+      # The staging deploy target is deliberately not derived from dispatch
+      # input, even after that input is validated below.
+      FLY_APP_NAME: juprleagues-api-staging
       JUPR_ENV: staging
       JUPR_EMAIL_MODE: dry_run
       JUPR_REQUIRE_API_AUDIT_LOG: "1"
@@ -82,10 +80,57 @@ jobs:
           cache: pip
 
       - name: Set up flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@master
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: "0.4.49"
 
-      - name: Validate staging inputs and secrets
+      - name: Validate staging dispatch inputs
+        id: validate-inputs
         shell: bash
+        env:
+          CLUB_ID_INPUT: ${{ inputs.club_id }}
+          CLUB_SLUG_INPUT: ${{ inputs.club_slug }}
+          FLY_APP_NAME_INPUT: ${{ inputs.app_name }}
+          FLY_ORG_INPUT: ${{ inputs.fly_org }}
+          FLY_PRIMARY_REGION_INPUT: ${{ inputs.primary_region }}
+        run: |
+          set -euo pipefail
+
+          if [ "$FLY_APP_NAME_INPUT" != "juprleagues-api-staging" ]; then
+            echo "::error title=Fly app rejected::app_name must equal juprleagues-api-staging."
+            exit 2
+          fi
+          if [[ ! "$FLY_PRIMARY_REGION_INPUT" =~ ^[a-z]{3}$ ]]; then
+            echo "::error title=Fly region rejected::primary_region must be a three-letter lowercase Fly region."
+            exit 2
+          fi
+          if [ -n "$FLY_ORG_INPUT" ] && [[ ! "$FLY_ORG_INPUT" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
+            echo "::error title=Fly organization rejected::fly_org must be an empty value or a lowercase Fly organization slug."
+            exit 2
+          fi
+          if [ "${#CLUB_SLUG_INPUT}" -gt 80 ] || [[ ! "$CLUB_SLUG_INPUT" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "::error title=Club slug rejected::club_slug must be a lowercase kebab-case slug of at most 80 characters."
+            exit 2
+          fi
+          if [ "${#CLUB_ID_INPUT}" -gt 128 ] || [[ ! "$CLUB_ID_INPUT" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+            echo "::error title=Club ID rejected::club_id must contain only letters, numbers, underscores, or hyphens."
+            exit 2
+          fi
+
+          {
+            printf 'club_id=%s\n' "$CLUB_ID_INPUT"
+            printf 'club_slug=%s\n' "$CLUB_SLUG_INPUT"
+            printf 'fly_org=%s\n' "$FLY_ORG_INPUT"
+            printf 'primary_region=%s\n' "$FLY_PRIMARY_REGION_INPUT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate required staging secrets
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
         run: |
           set -euo pipefail
           missing=0
@@ -95,10 +140,6 @@ jobs:
               missing=1
             fi
           done
-          if [ "$FLY_APP_NAME" = "juprleagues-api" ]; then
-            echo "::error title=Production app rejected::The staging workflow refuses to deploy to juprleagues-api."
-            missing=1
-          fi
           if [ "$JUPR_ENV" != "staging" ]; then
             echo "::error title=Environment rejected::JUPR_ENV must equal staging."
             missing=1
@@ -107,6 +148,8 @@ jobs:
 
       - name: Verify staging Supabase isolation before deploy
         shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -125,6 +168,8 @@ jobs:
 
       - name: Apply deployment inputs to staging config
         shell: bash
+        env:
+          FLY_PRIMARY_REGION: ${{ steps.validate-inputs.outputs.primary_region }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -134,10 +179,10 @@ jobs:
 
           app_name = os.environ["FLY_APP_NAME"].strip()
           primary_region = os.environ["FLY_PRIMARY_REGION"].strip()
-          if not app_name or not primary_region:
-              raise SystemExit("Fly app name and primary region are required")
-          if app_name == "juprleagues-api":
-              raise SystemExit("Refusing to target the production Fly app")
+          if app_name != "juprleagues-api-staging":
+              raise SystemExit("Refusing to target anything except the dedicated staging Fly app")
+          if not primary_region:
+              raise SystemExit("Fly primary region is required")
 
           path = Path("fly.staging.toml")
           text = path.read_text(encoding="utf-8")
@@ -148,6 +193,9 @@ jobs:
 
       - name: Ensure dedicated Fly staging app exists
         shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_ORG: ${{ steps.validate-inputs.outputs.fly_org }}
         run: |
           set -euo pipefail
           if flyctl status -a "$FLY_APP_NAME" >/dev/null 2>&1; then
@@ -160,6 +208,11 @@ jobs:
 
       - name: Stage staging-only runtime secrets
         shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
         run: |
           set -euo pipefail
           flyctl secrets set \
@@ -167,14 +220,19 @@ jobs:
             -a "$FLY_APP_NAME" \
             SUPABASE_URL="$SUPABASE_URL" \
             SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY" \
-            SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
+            SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
+            JUPR_DEPLOYMENT_GIT_SHA="$GITHUB_SHA"
 
       - name: Validate Fly staging config
         shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: flyctl config validate --config fly.staging.toml -a "$FLY_APP_NAME"
 
       - name: Deploy staging API to Fly
         shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: flyctl deploy --remote-only -a "$FLY_APP_NAME" --config fly.staging.toml
 
       - name: Wait for staging API health
@@ -200,7 +258,11 @@ jobs:
       - name: Verify full staging API, schema, and feature surface
         shell: bash
         env:
+          CLUB_ID: ${{ steps.validate-inputs.outputs.club_id }}
+          CLUB_SLUG: ${{ steps.validate-inputs.outputs.club_slug }}
           PYTHONPATH: ${{ github.workspace }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
         run: |
           set -euo pipefail
           python scripts/check_staging_environment.py \
@@ -210,6 +272,6 @@ jobs:
             --require-supabase-isolation \
             --expected-supabase-project-ref "$EXPECTED_SUPABASE_PROJECT_REF" \
             --api-base-url "https://${FLY_APP_NAME}.fly.dev" \
-            --club-slug "${{ inputs.club_slug }}" \
-            --club-id "${{ inputs.club_id }}" \
+            --club-slug "$CLUB_SLUG" \
+            --club-id "$CLUB_ID" \
             --json

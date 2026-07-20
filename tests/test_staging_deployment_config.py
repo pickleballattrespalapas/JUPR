@@ -89,7 +89,12 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
     assert "STAGING_SUPABASE_URL" in workflow
     assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" in workflow
     assert "STAGING_SUPABASE_PROJECT_REF" in workflow
-    assert 'if [ "$FLY_APP_NAME" = "juprleagues-api" ]' in workflow
+    # Reject every target except the dedicated staging app. This exact allowlist
+    # is stricter than the former guard that rejected only the production name.
+    assert "FLY_APP_NAME: juprleagues-api-staging" in workflow
+    assert "FLY_APP_NAME_INPUT: ${{ inputs.app_name }}" in workflow
+    assert 'if [ "$FLY_APP_NAME_INPUT" != "juprleagues-api-staging" ]; then' in workflow
+    assert 'if app_name != "juprleagues-api-staging":' in workflow
     assert "--require-supabase-isolation" in workflow
     assert "--expect-full-next-admin" in workflow
     assert 'JUPR_REQUIRE_WORKER_RUN_LOG: "1"' in workflow

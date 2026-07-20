@@ -649,7 +649,24 @@ def startup_checks() -> None:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "service": "jupr-api"}
+    payload: dict[str, Any] = {"ok": True, "service": "jupr-api"}
+    if is_staging_env():
+        supabase_host = (urlparse(os.getenv("SUPABASE_URL", "")).hostname or "").lower()
+        payload.update(
+            {
+                "environment": get_jupr_env(),
+                "git_commit_sha": os.getenv("JUPR_DEPLOYMENT_GIT_SHA", "").strip().lower() or None,
+                "fly_app_name": os.getenv("FLY_APP_NAME", "").strip() or None,
+                "fly_image_ref": os.getenv("FLY_IMAGE_REF", "").strip() or None,
+                "fly_machine_version": os.getenv("FLY_MACHINE_VERSION", "").strip() or None,
+                "supabase_project_ref": (
+                    supabase_host.split(".", 1)[0]
+                    if supabase_host.endswith(".supabase.co")
+                    else None
+                ),
+            }
+        )
+    return payload
 
 
 @app.get("/health/live-sessions")
