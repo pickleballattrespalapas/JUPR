@@ -313,6 +313,21 @@ def test_staging_smoke_attests_exact_sha_and_disabled_write_projection():
     assert "x-vercel-protection-bypass" in identity
 
 
+def test_staging_smoke_repo_import_steps_set_workspace_pythonpath():
+    workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
+
+    for step_name in (
+        "Attest exact read-only deployment identity",
+        "Reject incomplete browser public-read evidence",
+    ):
+        step = workflow.split(f"      - name: {step_name}\n", 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        assert "shell: python" in step
+        assert "from scripts.run_parity_staging_wave import" in step
+        assert "PYTHONPATH: ${{ github.workspace }}" in step
+
+
 @pytest.mark.parametrize(
     ("api", "web"),
     [
