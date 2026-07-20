@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pandas as pd
@@ -8,10 +8,20 @@ import pandas as pd
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.notifications.player_profile_update_repo import (
     REQUEST_STATUS_ACTIVE,
+    _coerce_date,
     bulk_delete_pending_outbox_rows,
     delete_pending_outbox_row,
     queue_player_updates_for_affected_subscribers,
 )
+
+
+def test_queue_date_coercion_preserves_calendar_days_and_normalizes_aware_instants():
+    assert _coerce_date("2026-02-10") == date(2026, 2, 10)
+    assert _coerce_date(datetime(2026, 2, 10, 23, 30)) == date(2026, 2, 10)
+    assert _coerce_date(
+        datetime(2026, 2, 10, 0, 30, tzinfo=timezone(timedelta(hours=14)))
+    ) == date(2026, 2, 9)
+    assert _coerce_date("2026-02-10T00:30:00+14:00") == date(2026, 2, 9)
 
 
 class _Query:

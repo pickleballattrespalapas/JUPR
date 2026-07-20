@@ -1,9 +1,18 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from jupr_app.domain.notifications import player_update_sender as sender
+
+
+def test_match_day_coercion_preserves_calendar_days_and_normalizes_aware_instants():
+    assert sender._coerce_match_day("2026-02-10") == date(2026, 2, 10)
+    assert sender._coerce_match_day(datetime(2026, 2, 10, 23, 30)) == date(2026, 2, 10)
+    assert sender._coerce_match_day(
+        datetime(2026, 2, 10, 0, 30, tzinfo=timezone(timedelta(hours=14)))
+    ) == date(2026, 2, 9)
+    assert sender._coerce_match_day("2026-02-10T00:30:00+14:00") == date(2026, 2, 9)
 
 
 class _Query:

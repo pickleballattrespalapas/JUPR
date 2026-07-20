@@ -4,7 +4,7 @@ This runbook covers the Next/FastAPI Weekly Recap Admin and Player Updates Admin
 
 ## Deployment prerequisites
 
-Apply `supabase/migrations/20260511170000_worker_run_log.sql` and then `supabase/migrations/20260719182606_communications_outbox_stale_guards.sql` to the staging Supabase project before deploying the API. The first supplies the worker's required durable pre-run marker. The second adds optimistic row versions, idempotency keys, delivery-attempt metadata, an atomic verified-subscriber replacement RPC, and explicit service-role-only Data API grants.
+Apply the canonical migration history through `supabase/migrations/20260720123402_baseline_worker_run_log.sql` to the staging Supabase project before deploying the API. This includes `supabase/migrations/20260719182606_communications_outbox_stale_guards.sql`, which adds optimistic row versions, idempotency keys, delivery-attempt metadata, an atomic verified-subscriber replacement RPC, and explicit service-role-only Data API grants. The forward worker-ledger baseline creates the durable pre-run marker if the historical migration is absent, enables RLS, revokes browser-role access, and preserves service-role access.
 
 FastAPI staging requires:
 

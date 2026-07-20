@@ -504,6 +504,12 @@ def build_admin_league_live_status(supabase: Any | None, *, club_id: str) -> dic
             "sessions_endpoint": None,
             "roster_suggestion_endpoint": None,
             "round_plan_endpoint": None,
+            "submit_enabled": False,
+            "round_submit_endpoint": None,
+            "round_reconcile_endpoint": None,
+            "round_compensate_endpoint": None,
+            "guest_endpoint": None,
+            "export_endpoint": None,
             "streamlit_fallback": "league_manager",
             "warnings": ["Next League Manager is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER on FastAPI."],
         }
@@ -514,6 +520,12 @@ def build_admin_league_live_status(supabase: Any | None, *, club_id: str) -> dic
             "sessions_endpoint": None,
             "roster_suggestion_endpoint": None,
             "round_plan_endpoint": None,
+            "submit_enabled": False,
+            "round_submit_endpoint": None,
+            "round_reconcile_endpoint": None,
+            "round_compensate_endpoint": None,
+            "guest_endpoint": None,
+            "export_endpoint": None,
             "streamlit_fallback": "league_manager",
             "warnings": [
                 "Python-authoritative League Live is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN on staging FastAPI only."

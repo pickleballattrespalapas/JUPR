@@ -98,6 +98,8 @@ def _coerce_date(value: date | datetime | str | None) -> date | None:
     if value is None:
         return None
     if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.date()
         return value.astimezone(timezone.utc).date()
     if isinstance(value, date):
         return value
@@ -105,7 +107,10 @@ def _coerce_date(value: date | datetime | str | None) -> date | None:
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc).date()
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.date()
+        return parsed.astimezone(timezone.utc).date()
     except Exception:
         try:
             return date.fromisoformat(text[:10])

@@ -323,8 +323,21 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         payload = build_admin_league_live_status(None, club_id=str(club_id))
         payload["service_role_configured"] = service_role_configured
         if payload.get("enabled") and not service_role_configured:
-            payload["enabled"] = False
-            payload["status"] = "service_role_required"
+            payload.update(
+                {
+                    "enabled": False,
+                    "status": "service_role_required",
+                    "sessions_endpoint": None,
+                    "roster_suggestion_endpoint": None,
+                    "round_plan_endpoint": None,
+                    "submit_enabled": False,
+                    "round_submit_endpoint": None,
+                    "round_reconcile_endpoint": None,
+                    "round_compensate_endpoint": None,
+                    "guest_endpoint": None,
+                    "export_endpoint": None,
+                }
+            )
             payload.setdefault("warnings", []).append("SUPABASE_SERVICE_ROLE_KEY is required on FastAPI for League Live.")
         return payload
 

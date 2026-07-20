@@ -15,7 +15,7 @@ builds on the partner-link tables provisioned by
 `migrations/20261019_tournament_registration_partner_links.sql` and the canonical
 selection lock protocol already captured under `supabase/migrations/`.
 
-## Current inventory (as of 2026-07-19)
+## Current inventory (as of 2026-07-20)
 
 Inventory below reflects files currently present in this repository.
 
@@ -49,6 +49,7 @@ Inventory below reflects files currently present in this repository.
 - `20260719190954_league_live_publish_reconciliation.sql`
 - `20260719193000_admin_player_merge_transactions.sql`
 - `20260719194500_public_partner_pairing_lifecycle.sql`
+- `20260720123402_baseline_worker_run_log.sql`
 - `20261020000000_tournament_registrations_player_id_postgrest_reload.sql`
 - `2026XX_backport_tournament_engine.sql`
 

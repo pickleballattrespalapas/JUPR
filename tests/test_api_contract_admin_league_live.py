@@ -115,6 +115,33 @@ def test_admin_league_live_requires_server_only_supabase_key(monkeypatch):
     assert "SUPABASE_SERVICE_ROLE_KEY" in response.json()["detail"]
 
 
+def test_admin_league_live_status_fails_closed_without_server_only_key(monkeypatch):
+    supabase = FakeSupabase(league_live_tables())
+    _install_env(monkeypatch, supabase, service_role=False)
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT", "1")
+
+    response = TestClient(app).get("/admin/clubs/club/league-manager/live/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enabled"] is False
+    assert payload["status"] == "service_role_required"
+    assert payload["service_role_configured"] is False
+    assert payload["submit_enabled"] is False
+    for endpoint_key in (
+        "sessions_endpoint",
+        "roster_suggestion_endpoint",
+        "round_plan_endpoint",
+        "round_submit_endpoint",
+        "round_reconcile_endpoint",
+        "round_compensate_endpoint",
+        "guest_endpoint",
+        "export_endpoint",
+    ):
+        assert payload[endpoint_key] is None
+
+
 def test_admin_league_live_status_is_configuration_only(monkeypatch):
     class NoDataPlaneSupabase:
         def table(self, _name):
@@ -128,6 +155,35 @@ def test_admin_league_live_status_is_configuration_only(monkeypatch):
     assert response.json()["enabled"] is True
     assert response.json()["movement_authority"] == "python_fastapi"
     assert "session_count" not in response.json()
+
+
+def test_admin_league_live_disabled_status_attests_submit_gate_closed(monkeypatch):
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT", "1")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only")
+
+    for manager_enabled, domain_enabled, expected_status in (
+        ("0", "0", "guarded_off"),
+        ("1", "0", "streamlit_fallback"),
+    ):
+        monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", manager_enabled)
+        monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN", domain_enabled)
+
+        response = TestClient(app).get("/admin/clubs/club/league-manager/live/status")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["enabled"] is False
+        assert payload["status"] == expected_status
+        assert payload["submit_enabled"] is False
+        for endpoint_key in (
+            "round_submit_endpoint",
+            "round_reconcile_endpoint",
+            "round_compensate_endpoint",
+            "guest_endpoint",
+            "export_endpoint",
+        ):
+            assert payload[endpoint_key] is None
 
 
 def test_admin_league_live_private_storage_failure_is_fail_closed(monkeypatch):
