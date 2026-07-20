@@ -128,6 +128,10 @@ def _is_send_only_if_changed_and_unchanged(subscription: dict, digest: dict) -> 
 
 
 def _coerce_date(value: Any) -> date:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.date()
+        return value.astimezone(timezone.utc).date()
     if isinstance(value, date):
         return value
     text = str(value or "").strip()
@@ -148,6 +152,8 @@ def _find_active_subscription_for_player(active_rows: list[dict[str, Any]], play
 
 def _coerce_match_day(value: Any) -> date | None:
     if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.date()
         return value.astimezone(timezone.utc).date()
     if isinstance(value, date):
         return value
@@ -155,7 +161,10 @@ def _coerce_match_day(value: Any) -> date | None:
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc).date()
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.date()
+        return parsed.astimezone(timezone.utc).date()
     except Exception:
         try:
             return date.fromisoformat(text[:10])

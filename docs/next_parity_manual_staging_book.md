@@ -176,7 +176,6 @@ or Tournament Live writes unless both the Order-27 guard surface and the Order-2
 | `migration:baseline-leaderboards` | `supabase/migrations/20260502133000_public_leaderboards_view.sql` | — | — | Restore candidate release; no destructive schema rollback | — |
 | `migration:baseline-role-scope` | `supabase/migrations/20260511120000_admin_role_assignments_club_scope.sql` | — | — | Close admin shell/write pilot on scope mismatch | — |
 | `migration:baseline-club-onboarding` | `supabase/migrations/20260511143000_clubs_saas_onboarding_fields.sql` | — | — | Close affected feature gate; restore candidate release | — |
-| `migration:baseline-worker-log` | `supabase/migrations/20260511170000_worker_run_log.sql` | — | — | Stop email workers and close player-update gates | — |
 | `migration:baseline-confirmations` | `supabase/migrations/20260624000000_confirm_tournament_registrations.sql` | — | — | Close registration intake; preserve saved registrations | — |
 | `migration:baseline-live-sessions` | `supabase/migrations/20260702080000_live_sessions.sql` | — | — | Close live write gates; preserve sessions | — |
 | `migration:baseline-live-contract` | `supabase/migrations/20260702170000_live_sessions_schema_contract.sql` | — | — | Close live write gates; preserve sessions | — |
@@ -201,6 +200,7 @@ or Tournament Live writes unless both the Order-27 guard surface and the Order-2
 | `migration:order-28-tournament-live` | `supabase/migrations/20260719205000_tournament_live_operations.sql` after resolved Order 27 | — | — | Close Tournament Live write gate; reconcile ledger | — |
 | `migration:order-25-public-live` | `supabase/migrations/20260719220000_public_live_durability.sql` | — | — | Close public-live writes; preserve recovery records | — |
 | `migration:legacy-top-performer-seed` | `supabase/migrations/20260720014744_seed_top_performer_badges.sql`; verify `4/4` IDs, any present `_v2` columns aligned, and existing customized rows preserved | — | — | Close Awards write; do not remove definitions or minted evidence | — |
+| `migration:baseline-worker-log` | `supabase/migrations/20260720123402_baseline_worker_run_log.sql` (canonical forward repair for the historical `20260511170000` prerequisite) | — | — | Stop email workers and close player-update gates | — |
 | `migration:baseline-registration-player` | `supabase/migrations/20261020000000_tournament_registrations_player_id_postgrest_reload.sql` | — | — | Close tournament registration/admin writes | — |
 | `migration:legacy-league-awards-schema` | Reviewed canonical equivalent of `migrations/20260701_league_manager_end_wizard_columns.sql` | — | — | Close League Manager/Awards writes; restore candidate | — |
 
