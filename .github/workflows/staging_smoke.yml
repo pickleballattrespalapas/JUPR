@@ -133,6 +133,7 @@ jobs:
       - name: Attest exact read-only deployment identity
         shell: python
         env:
+          PYTHONPATH: ${{ github.workspace }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           import os
@@ -207,6 +208,7 @@ jobs:
         shell: python
         env:
           EXPECTED_PUBLIC_READ_TESTS: "56"
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           import json
           import os
