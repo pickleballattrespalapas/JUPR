@@ -94,11 +94,16 @@ Individual workflow flags are intentionally separate:
 - `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER=1`
 - `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE=1` enables only the persisted League Awards mutations and additionally requires `SUPABASE_SERVICE_ROLE_KEY` on FastAPI. Mint still fails closed until all four top-performer badge definitions from `migrations/20260215_end_league_top_performers.sql` are readable. Keep it off in production until the manual staging gate passes.
 - `JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER=1`
+- `JUPR_ENABLE_STAGING_NEXT_ADMIN_CHALLENGE_LADDER_WRITES=1` permits Challenge Ladder mutations only when `JUPR_ENV=staging`.
+- `JUPR_ENABLE_NEXT_ADMIN_MONEYBALL=1` enables the Python-authoritative Moneyball preview/settlement surface.
+- `JUPR_ENABLE_STAGING_NEXT_ADMIN_MONEYBALL_WRITES=1` permits Moneyball official publish only when `JUPR_ENV=staging`.
+- `JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE=1` enables one-off JUPR Live administration; Tournament Live remains separate.
+- `JUPR_ENABLE_STAGING_NEXT_ADMIN_JUPR_LIVE_WRITES=1` permits one-off session mutations only when `JUPR_ENV=staging`.
 - `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS=1`
 - `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS=1`, `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_SETUP_MUTATIONS=1`, and `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_REGISTRATION_MUTATIONS=1` independently open the order-26 staging-only mutation surfaces. They require `JUPR_ENV=staging`, `SUPABASE_SERVICE_ROLE_KEY`, the private operation migration, reviewed row/state versions, and strict audit intent/completion. Production refuses them.
 - `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_IMPORT_HANDOFF=1` documents the separate staging Operations handoff gate; Registration Admin itself remains no-write for draw teams.
-- `JUPR_ENABLE_STAGING_NEXT_ADMIN_TOURNAMENT_LIVE_WRITES=1` opens only the draw-scoped Order-28 in-play runner in `JUPR_ENV=staging`. It requires the order-26 and order-28 private operation migrations, a reviewed draw fingerprint, an exact idempotency UUID, required audit writes, and the FastAPI-only service role. Production and local environments remain read-only.
 - `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OPERATIONS_MUTATIONS=1` enables Order-27 draw/import/scoring/playoff/podium/award mutations in staging only. Official publishing additionally requires `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH=1`; automatic player-update handoff additionally requires `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF=1` and `JUPR_EMAIL_MODE=dry_run|staging_redirect`.
+- `JUPR_ENABLE_STAGING_NEXT_ADMIN_TOURNAMENT_LIVE_WRITES=1` opens only the draw-scoped Order-28 in-play runner in `JUPR_ENV=staging`. It requires the order-26 and order-28 private operation migrations, a reviewed draw fingerprint, an exact idempotency UUID, required audit writes, and the FastAPI-only service role. Production and local environments remain read-only.
 - `JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=1`
 - `JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=1`
 - `JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL=0` keeps Next live delivery blocked independently of the admin UI flag
@@ -159,6 +164,8 @@ returns the same structured rulebook/status policy consumed by the Next route.
 - `GET /admin/clubs/{club_id}/league-manager/top-players-printable?limit=...` authenticated, read-only previous-calendar-month ranking model
 
 League Manager create, duplicate, lifecycle, settings, and roster mutations fail closed unless FastAPI has `SUPABASE_SERVICE_ROLE_KEY`; the anonymous/publishable key is never accepted as their mutation credential.
+
+Challenge Ladder, Moneyball, and JUPR Live mutations additionally require the private `live_ladder_admin_operations` migration, a stable idempotency key, the current Python version/fingerprint, strict intent/completion/failure audit writes, and the surface-specific staging write flag. Operation status/reconcile routes live below each surface at `/operations/{operation_key}`. See `docs/live_ladder_parity_runbook.md` for exact phrases, response-loss handling, Match Log/Replay recovery, and disposable staging evidence.
 - `GET /admin/clubs/{club_id}/weekly-recap/recaps` and guarded generate/save/publish routes
 - `GET /admin/clubs/{club_id}/player-updates/workspace`
 - `POST /admin/clubs/{club_id}/player-updates/digests/preview` and `/digests/queue`

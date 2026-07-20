@@ -62,11 +62,20 @@ the final evidence PR does that only after the consolidated manual session.
 
 Order 21 is automated-ready: durable submit/reconcile/compensation, rating readback, guest and export contracts are implemented behind a separate staging-only gate. The `league_manager` matrix row intentionally remains `Partial` until the consolidated staging book is executed.
 
+Order 24 is automated-ready and manual-ready: Challenge Ladder, Moneyball, and one-off JUPR Live use Python/FastAPI authority, separate staging-only write gates, version leases, durable idempotent result recovery, strict audit evidence, and Match Log/Replay handoffs. The three matrix rows intentionally remain `Partial` until `docs/live_ladder_parity_runbook.md` is executed and signed off.
+
+Order 25 is automated-ready: public Quick Round Robin, League/Ladder, and Club
+Social sessions now use versioned, idempotent FastAPI writes, hashed edit
+credentials, durable recovery records, atomic completion reservations, private
+database access, exports, and a truthful view-only fallback. The `jupr_live`
+matrix row intentionally remains `Partial` until the consolidated staging book is
+executed.
+
 Order 26 is automated-ready/manual-ready on its branch: dedicated setup, Python templates and impact review, stale-safe tournament/registration edits, durable audit/replay semantics, imported-draw refusal, and the read-only Operations import handoff are covered. The three tournament rows intentionally remain `Partial` until the consolidated staging book is executed.
 
-Order 28 is automated-ready/manual-ready on its branch: the in-play runner is draw-scoped and Python-authoritative, uses a separate staging-only write gate, retains exact requests for deterministic replay, exposes durable audit/recovery evidence, and refuses to unlock ambiguous official publishing. Tournament Live remains `Partial` until the documented desktop/mobile staging book and Order-29 sign-off are complete.
-
 Order 27 has automated implementation and focused recovery evidence on its branch: route-specific draw/import/results/publish workflows, Python-authoritative lifecycle checks, reviewed DUPR import, atomic result/player persistence, game score CAS, and deterministic exact-set official-publish reconciliation are covered. The tournament rows intentionally remain `Partial`; no `Done` marker is allowed until the disposable staging acceptance and cumulative Order-29 evidence are recorded.
+
+Order 28 is automated-ready/manual-ready on its branch: the in-play runner is draw-scoped and Python-authoritative, uses a separate staging-only write gate, retains exact requests for deterministic replay, exposes durable audit/recovery evidence, and refuses to unlock ambiguous official publishing. Tournament Live remains `Partial` until the documented desktop/mobile staging book and Order-29 sign-off are complete.
 
 ## Page-level closure contracts
 

@@ -39,6 +39,8 @@ Inventory below reflects files currently present in this repository.
 - `20260717141224_selection_update_transaction_guards.sql`
 - `20260717142402_selection_relationship_update_lock_scope.sql`
 - `20260718141016_badge_eval_queue_atomic_club_claim.sql`
+- `20260719155515_server_only_data_api_lockdown.sql`
+- `20260719155737_canonicalize_server_only_tables.sql`
 - `20260719160821_public_registration_edit_transaction.sql`
 - `20260719171000_public_support_intake_guardrails.sql`
 - `20260719172000_replay_job_idempotency.sql`
