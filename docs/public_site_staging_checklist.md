@@ -1,6 +1,8 @@
 # Public Site Staging Checklist
 
-Use this checklist to review the first full Next/Vercel public website draft before or immediately after custom-domain cutover.
+Use this checklist to review the Next/Vercel public website candidate before any
+custom-domain cutover. The candidate must come from canonical branch `staging`;
+`Test` is a legacy/deprecated staging branch and is not an acceptance source.
 
 ## Required environment
 
@@ -61,9 +63,16 @@ Every public web PR should pass:
 - API Contract Tests.
 - Next Web Build when web files change.
 
-## Smoke command
+## Canonical smoke and diagnostics
 
-Run this against staging after FastAPI and Vercel are deployed:
+The evidence-grade gate is the manually dispatched GitHub Actions workflow
+`Staging Smoke`. Run it from the final deployed `staging` SHA only after Fly has
+been restored to `write_wave=none` and `/health` reports every controlled write
+flag false. Vercel and Fly must attest the same SHA, deployment identity, staging
+Supabase/Auth origin, and immutable Vercel candidate.
+
+This local command is useful for diagnosis after FastAPI and Vercel are deployed,
+but it is not the canonical acceptance gate:
 
 ```bash
 python scripts/smoke_public_web.py \
@@ -73,6 +82,9 @@ python scripts/smoke_public_web.py \
 ```
 
 `--allow-live-unconfigured` is allowed for the first public draft while live-session staging migrations/grants are still being verified. Remove it once live sessions are fully configured.
+
+The legacy `Public Web Smoke` workflow is also noncanonical. A green diagnostic
+does not replace the strict browser manifest and identity binding in `Staging Smoke`.
 
 Run the same smoke against both public domains after production deploy:
 
@@ -116,8 +128,10 @@ Review these pages on staging and the primary public domain:
 | Match Detail | `/clubs/tres-palapas/matches/<id>` | Public-safe match fields. |
 | Ratings Explainer | `/how-ratings-work` | Product copy accuracy. |
 | FAQ | `/faq` | Public support accuracy. |
-| Support | `/support` and `/contact` | Email link routes to `joe@juprleagues.com`. |
-| Data Corrections | `/data-corrections` | Checklist language and support handoff. |
+| Support | `/support` and `/contact` | Email link routes to `joe@juprleagues.com`; blank form renders without creating a request. |
+| Data Corrections | `/data-corrections` | Instructions and blank staff-review intake render; no ratings, match, player, or tournament mutation occurs. |
+| Profile Privacy | `/profile-privacy` | Instructions, request-type selector, and blank staff-review form render; no public profile/history change occurs. |
+| Email Preferences | `/email-preferences` without a token | Expected safe state is `Preference link not found`; no preference/subscription mutation occurs. |
 | Privacy | `/privacy` | Formal first-party policy copy present; review final language. |
 | Terms | `/terms` | Formal first-party terms copy present; review final language. |
 | Fallback | unknown route | Public fallback page links back to safe routes. |
@@ -126,20 +140,29 @@ Review these pages on staging and the primary public domain:
 
 Use staging data only.
 
-- Submit a tournament registration with one event.
-- Confirm the registration page and confirmation page render without private staff fields.
-- Request an edit link and confirm the response does not reveal whether the email matched.
-- Open a valid edit link and confirm email is locked.
-- Edit selections and confirm the registration updates the existing record.
-- Open roster and board pages and confirm public entries do not expose phone or email.
-- Submit a public tournament board interest action and confirm player plus organizer email handling uses the configured staging email mode.
+At rest, Fly must report `write_wave=none`. A write review requires a separately
+approved fixture/recovery packet and a manually dispatched Fly release for exactly
+one least-privilege wave. Record that release, perform only the packet's named
+action, verify authoritative readback/audit evidence, then deploy and record a new
+`none` release. Do not enable all write flags together and do not run canonical
+`Staging Smoke` while any write wave is active.
+
+Do not infer write approval from this checklist. When a later packet explicitly
+authorizes the corresponding route, the possible checks are:
+
+- submit one disposable intake and an exact retry to prove deduplication;
+- confirm registration pages render without private staff fields before any registration write;
+- request an edit link and verify the response does not reveal whether the email matched;
+- open a valid edit link, verify email is locked, then update only the disposable registration;
+- verify roster/board projections never expose phone or email;
+- exercise partner-board notification only with approved staging recipients and the configured non-delivery email mode.
 
 ## Decisions now encoded
 
 - Privacy and Terms use formal first-party copy instead of placeholders.
 - Public support routes to `joe@juprleagues.com`.
 - Public tournament board interest actions notify both the affected player and organizer.
-- First staging smoke may use `--allow-live-unconfigured`; remove it after live-session setup is complete.
+- Local diagnostics may use `--allow-live-unconfigured` temporarily; canonical `Staging Smoke` should keep it off once the live-session route is available.
 - `pickleballclubsandwich.com` is the primary public SaaS domain; `juprleagues.com` remains a transitional alias.
 
 ## Remaining deployment tasks
@@ -147,5 +170,5 @@ Use staging data only.
 - Confirm Vercel serves both primary and transitional domains.
 - Confirm FastAPI CORS allows the primary and transitional domains plus their `www` aliases.
 - Set `NEXT_PUBLIC_JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com` for production.
-- Run smoke against staging, `pickleballclubsandwich.com`, and `juprleagues.com`.
+- Run canonical `Staging Smoke` against the final same-SHA staging candidate; use diagnostic smoke against public domains only after a separately approved production cutover.
 - Keep Streamlit available as fallback until the custom-domain smoke passes.

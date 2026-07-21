@@ -29,6 +29,24 @@ weakening those contracts.
 | Primary operator | — |
 | Witness / reviewer | — |
 
+Keep the formal table above blank until the hardening patch is deployed. The last
+deployed baseline is preserved separately so it cannot be mistaken for the next
+candidate:
+
+| Baseline field | Preserved value |
+|---|---|
+| Git SHA / PR | `e695365ce508e03a094f528ff9c1179c7f7947de` / `#1016` |
+| Vercel alias | `https://jupr-git-staging-pickleballattrespalapas1.vercel.app` |
+| Vercel deployment / immutable origin | `dpl_6zDSfrXKV4PC2M5MX3K5q4UQuvzf` / `https://jupr-84z27cfwn-pickleballattrespalapas1.vercel.app` |
+| Fly image | `registry.fly.io/juprleagues-api-staging:deployment-01KY180GGE2V9HC13E8N9VFE3Y` |
+| Final none artifact | `github-run-29795882496`; staging verifier passed |
+| Streamlit fallback | `https://juprtrespalapas.streamlit.app` |
+| Prior operator/session | authenticated staging admin; `2026-07-20 / 2026-07-21` |
+
+After the hardening patch lands, populate the formal table with the new SHA, PR,
+Vercel deployment ID/origin, Fly image, and preflight artifact as one unit. Do not
+append new-candidate evidence to the preserved baseline table.
+
 If any candidate identity changes during the session, stop and start a new book.
 Evidence from different SHAs, Fly releases, Vercel deployments, or Supabase projects
 must not be combined into one acceptance result.
@@ -42,7 +60,8 @@ Record the identity artifact in the exact form
 - [ ] Preview data isolation and preview auth isolation are both configured and active.
 - [ ] The Vercel automation bypass is available only to the test runner.
 - [ ] FastAPI holds the staging service-role key; neither Vercel nor any `NEXT_PUBLIC_*` variable does.
-- [ ] Production write flags remain off; staging enables only the workflow currently under test.
+- [ ] Production write flags remain off; staging is `write_wave=none` at rest and enables only one approved workflow while it is under test.
+- [ ] No "enable all" configuration is used; a distinct final Fly release restores `none`, `business_data_write_wave_active=false`, and every controlled write flag false.
 - [ ] Email mode is `dry_run` or `staging_redirect`, with the redirect inbox visibly identified.
 - [ ] Required migrations are applied in documented order and their private grants/RLS are verified.
 - [ ] Order-27 migration `20260719204700_tournament_operations_guard_surface.sql` and its Operations, official-publish, and email-handoff gates are integrated and verified.
@@ -66,6 +85,54 @@ the guard in SQL or the browser.
 4. Deferred manual reversible writes: recaps, subscriptions/outbox, league configuration, ladder/session state, tournament setup/registration, and social moderation. These are not generic browser-plan automation.
 5. Match/rating writes: the executable workflow automates only the route-specific Tournament Live score command, including dynamic version/fingerprint checks, a distinct idempotency key for each command, reconciliation, and `finally` restoration/readback. Uploader, Match Log, player merge, League Live, Moneyball, ladder, JUPR Live, public live, and Tournament Ops remain manual-only.
 6. Deferred manual recovery: perform authoritative route-specific GET readbacks against the exact resource IDs created or changed, record exact 2xx status and positive state projections, inspect audit/completion rows, and prove Match Log/Replay handoffs. Do not invent universal `operation_key` or `evidence_id` response fields that a route does not return.
+
+Every mutating wave uses the state transition `none -> one named wave -> none`.
+Never move directly from one active write wave to another. Record each Fly release
+before the first request, perform only the packet's named action, and restore
+`none` before any canonical public-read smoke or final evidence run.
+
+### Preserved 2026-07-20/21 intake smoke evidence
+
+The prior exploratory support-intake pass is retained as useful staging evidence,
+but it does not by itself mark any formal parity ledger row `Pass` because a
+separate witness and complete artifact bundle were not recorded.
+
+- Public `general_support` intake created exactly one disposable fixture:
+  `req_2baca74d135646e6be38`, subject
+  `STAGING SMOKE - support intake 2026-07-20`, requester
+  `PCS Staging Smoke 2026-07-20`, email
+  `pcs-staging-smoke-20260720@example.invalid`.
+- An exact repeat returned the safe deduplication state: “This request was already
+  received and remains in the staff review queue.” No second queue row appeared.
+- The `support-requests` admin wave loaded one `new` request under an authenticated
+  staging-admin session. The operator selected it, used confirmation
+  `SAVE REQUEST STATUS`, and dismissed it with note
+  `staging smoke only. no customer action. retained as test evidence.`
+- Readback showed status `dismissed`, reviewer attribution, and one
+  `update_public_support_request_admin` audit event for entity
+  `public_support_request` with before `new` and after `dismissed`.
+- GitHub run `29795882496` (job `88527006272`) restored the deployed baseline to
+  `write_wave=none` with the all-false controlled-write projection.
+
+The operator requested shorter, repeatable fixture values for subsequent intake
+and deduplication tests. The next approval packet therefore uses minimal values and
+authorizes only a data-correction create/exact retry followed by dismissal.
+
+### Fly write-wave release ledger
+
+This ledger is separate from the formal all-page parity results. A missing old
+release reference is recorded as a gap, not reconstructed or silently combined
+with the final `none` image.
+
+| Sequence | Candidate | Fly workflow run / image | Wave | Action/readback | Next state |
+|---|---|---|---|---|---|
+| Prior 1 | `e695365ce508e03a094f528ff9c1179c7f7947de` | Historical wave release ref was not retained in the session record. | `public-intake-auth` | Created `req_2baca74d135646e6be38`; exact retry deduplicated to the same queue item. | `support-requests` only after a separate dispatch |
+| Prior 2 | `e695365ce508e03a094f528ff9c1179c7f7947de` | Historical wave release ref was not retained in the session record. | `support-requests` | Dismissed the retained fixture; reviewer and one admin-audit update observed. | `none` |
+| Prior 3 | `e695365ce508e03a094f528ff9c1179c7f7947de` | GitHub run `29795882496`; `registry.fly.io/juprleagues-api-staging:deployment-01KY180GGE2V9HC13E8N9VFE3Y`; machine `01KY1821CAK5RC7GE2BWMBQYYM` | `none` | Successful identity readback; business-data write false; all controlled write flags false; email `dry_run`. | Canonical public-read smoke or a separately approved new wave |
+
+For the next candidate, create one row per dispatch with exact run URL, image ref,
+machine/release ID, selected wave, approved action, readback/audit IDs, and required
+next state. The last row must always be the final same-SHA `none` release.
 
 The manually dispatched `Parity Final Evidence` workflow is the executable suite
 manifest. Executable waves require the canonical `origin/staging` SHA, refuse every
@@ -210,10 +277,12 @@ Open only the row needed by the active wave. Every production write gate stays
 off. Evidence must identify the Fly/Vercel configuration revision and the operator
 who closed the gate after the wave. A completed row's evidence cell must be exactly
 `Verified disabled: <config evidence>`; production-enabled prose is rejected.
+The rows describe available isolated wave projections; they are not additive.
+Never open two rows together and never synthesize an "enable all" deployment.
 
 | Ledger key | Exact staging setting during its wave | Production invariant | Disable-first action | Evidence ID / config revision | Owner |
 |---|---|---|---|---|---|
-| `flag:global` | `JUPR_ENV=staging`; `JUPR_REQUIRE_API_AUDIT_LOG=1`; `JUPR_REQUIRE_WORKER_RUN_LOG=1`; `JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT=1`; `JUPR_ENABLE_NEXT_ADMIN_SHELL=1` | Production write pilot remains `0` | Set write pilot `0`; restore prior Fly release | — | — |
+| `flag:global` | At rest: `JUPR_ENV=staging`; `JUPR_STAGING_WRITE_WAVE=none`; `JUPR_REQUIRE_API_AUDIT_LOG=1`; `JUPR_REQUIRE_WORKER_RUN_LOG=1`; `JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT=0`; `JUPR_ENABLE_NEXT_ADMIN_SHELL=1`. A selected admin wave may set the pilot to `1` only for that release. | Production write pilot remains `0` | Dispatch a distinct `none` release and verify the all-false projection | — | — |
 | `flag:public-intake-auth` | `JUPR_REGISTRATION_EDIT_SECRET` and `JUPR_REGISTRATION_CONFIRMATION_SECRET` present only server-side | Secrets absent from Vercel/browser; no production test writes | Close registration/support intake at API routing layer | — | — |
 | `flag:admin-read` | `JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS=1`; `JUPR_ENABLE_NEXT_ADMIN_MATCH_CANONICAL_AUDIT=1`; `JUPR_ENABLE_NEXT_ADMIN_TOOLS=1`; `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1`; `JUPR_ENABLE_NEXT_ADMIN_REPLAY=1` | Apply/write gates remain `0` | Close the affected visibility gate | — | — |
 | `flag:communications` | `JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=1`; `JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=1`; `JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS=1` only for the redirected-email wave | Live-email gate remains `0` | Set auto-email `0`; stop worker; reconcile outbox | — | — |
@@ -309,5 +378,7 @@ pages must use either that form or exactly `N/A`.
 - [ ] Supabase security/performance advisors are reviewed after the final migration set.
 - [ ] GitHub checks and Vercel preview remain green after evidence-only edits.
 - [ ] Production flags, migration order, rollout order, rollback aliases, and on-call owner are recorded.
+- [ ] The final Fly ledger row is a same-candidate `write_wave=none` release and its `/health` evidence proves `business_data_write_wave_active=false` plus every controlled write flag false.
+- [ ] Canonical `Staging Smoke` ran only after that final `none` release; `public-web-smoke` evidence is labeled diagnostic/noncanonical.
 - [ ] The manually dispatched `complete-book` job passes the complete-book checker with the exact candidate SHA, Vercel deployment ID, immutable Vercel deployment origin, and Fly image ref, then passes identity-only live re-attestation.
 - [ ] Only then does the final evidence PR reconcile eligible matrix rows from `Partial` to `Done`.

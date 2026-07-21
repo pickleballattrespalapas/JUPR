@@ -14,6 +14,12 @@ type Props = {
 export default async function TournamentOpsWorkflowPage({ workflow, kicker, title, description }: Props) {
   const clubId = "tres_palapas";
   const { data, error } = await getAdminTournamentStatus(clubId);
+  const operationsWriteReady = Boolean(
+    data?.mutation_runtime?.service_role_ready
+    && data.mutation_runtime?.surface_flags?.operations?.enabled
+    && data.operations_runtime?.operations_mutations_enabled
+  );
+  const operationsMode = !data?.enabled ? "Disabled" : operationsWriteReady ? "Guarded writes ready" : "Read-only";
 
   return (
     <section>
@@ -21,14 +27,14 @@ export default async function TournamentOpsWorkflowPage({ workflow, kicker, titl
       <h1 style={{ marginTop: 0 }}>{title}</h1>
       <p style={{ color: "#334155", maxWidth: "860px" }}>{description}</p>
 
-      {error ? <p style={{ color: "#b91c1c" }}>Tournament Admin status is temporarily unavailable. {error}</p> : null}
+      {error ? <p style={{ color: "#b91c1c" }}>Tournament Ops status is temporarily unavailable. {error}</p> : null}
 
       {data ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
-            <article style={cardStyle}><strong>Status</strong><br />{data.enabled ? data.status : "Disabled"}</article>
+            <article style={cardStyle}><strong>Tournament Ops mode</strong><br />{operationsMode}</article>
             <article style={cardStyle}><strong>Tournaments</strong><br />{data.tournament_count ?? "—"}</article>
-            <article style={cardStyle}><strong>API</strong><br />{data.tournaments_endpoint ? "Configured" : "Guarded off"}</article>
+            <article style={cardStyle}><strong>Operations runtime</strong><br />{data.operations_runtime ? (data.operations_runtime.operations_mutations_enabled ? "Mutation gate open" : "Mutation gate closed") : "Unavailable"}</article>
           </div>
           <TournamentOpsPanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={data} workflow={workflow} />
         </>

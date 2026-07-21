@@ -14,6 +14,7 @@ type WriteResponse = { ok: boolean; submitted_count?: number; operation_key?: st
 type ScoreDraft = { score_t1: string; score_t2: string };
 type Props = { apiBase: string | null; clubId: string; status: StatusResponse | null };
 
+const EMPTY_PLAYERS: Player[] = [];
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
@@ -43,7 +44,7 @@ export default function MoneyballPanel({ apiBase, clubId, status }: Props) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const players = status?.players || [];
+  const players = status?.players || EMPTY_PLAYERS;
   const selectedCount = selectedIds.length;
   const selectedPlayerNames = useMemo(() => selectedIds.map((id) => players.find((player) => String(player.id) === id)?.name || `#${id}`), [players, selectedIds]);
   const scoreRows = useMemo(() => Object.entries(scores).filter(([, score]) => validScore(score)).map(([row_id, score]) => ({ row_id, score_t1: Number(score.score_t1), score_t2: Number(score.score_t2) })), [scores]);

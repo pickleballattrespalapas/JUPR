@@ -25,7 +25,7 @@ export default async function AdminWeeklyRecapPage({ searchParams }: PageProps) 
       {status ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
           <article style={cardStyle}><strong>Status</strong><br />{status.status.replace(/_/g, " ")}</article>
-          <article style={cardStyle}><strong>Recap data</strong><br />Sign in to load</article>
+          <article style={cardStyle}><strong>Recap data</strong><br />{status.enabled ? "Available after admin sign-in" : "Guarded off"}</article>
           <article style={cardStyle}><strong>Gate</strong><br /><code>manage_matches</code></article>
         </div>
       ) : null}
