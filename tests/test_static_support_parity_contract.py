@@ -60,3 +60,12 @@ def test_support_guardrail_migration_is_service_role_only_and_tracks_privacy_ful
     assert "revoke all on table public.public_support_requests from public, anon, authenticated" in migration
     assert "grant all privileges on table public.public_support_requests to service_role" in migration
     assert "enable row level security" in migration
+
+
+def test_admin_support_request_status_is_never_served_from_a_stale_next_cache():
+    page = _read("apps/web/app/admin/support-requests/page.tsx")
+    api = _read("apps/web/lib/adminSupportRequestsApi.ts")
+
+    assert 'export const dynamic = "force-dynamic"' in page
+    assert 'cache: "no-store"' in api
+    assert "revalidate" not in api

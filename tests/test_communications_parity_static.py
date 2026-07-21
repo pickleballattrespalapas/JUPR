@@ -52,3 +52,14 @@ def test_admin_recap_has_full_unpublished_preview_and_print_surface() -> None:
     assert "Tournaments" in preview
     assert "Looking Ahead" in preview
     assert "expected_row_version" in panel
+
+
+def test_guarded_off_communications_status_cards_do_not_prompt_for_sign_in() -> None:
+    for relative_path in (
+        "apps/web/app/admin/player-updates/page.tsx",
+        "apps/web/app/admin/weekly-recap/page.tsx",
+    ):
+        page = _read(relative_path)
+        assert "Sign in to load" not in page
+        assert "Available after admin sign-in" in page
+        assert "Guarded off" in page

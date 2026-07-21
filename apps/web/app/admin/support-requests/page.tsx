@@ -2,6 +2,8 @@ import Link from "next/link";
 import { getAdminSupportRequestsApiBaseUrl, getAdminSupportRequestsStatus } from "@/lib/adminSupportRequestsApi";
 import SupportRequestsPanel from "./SupportRequestsPanel";
 
+export const dynamic = "force-dynamic";
+
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
 export default async function AdminSupportRequestsPage() {

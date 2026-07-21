@@ -85,7 +85,7 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
-    const response = await fetch(url, { next: { revalidate: 30 } });
+    const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
     return { data: (await response.json()) as T, error: null };
   } catch (error) {

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PublicLiveMatch, PublicLiveSessionDetail } from "@/lib/api";
 
 type LiveSessionRunnerProps = {
@@ -84,9 +84,9 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
   const publicPath = `/clubs/${clubSlug}/live/${session.session_key}`;
   const editPath = `${publicPath}#edit=${encodeURIComponent(editToken)}`;
 
-  function operationStorageKey(action: string): string {
+  const operationStorageKey = useCallback((action: string): string => {
     return `jupr-live-operation:${clubSlug}:${session.session_key}:${action}`;
-  }
+  }, [clubSlug, session.session_key]);
 
   useEffect(() => {
     const storageKey = `jupr-live-edit:${clubSlug}:${initialSession.session_key}`;
@@ -111,7 +111,7 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
       }
     }
     setOperationKeys(pending);
-  }, [clubSlug, initialSession.session_key]);
+  }, [clubSlug, initialSession.session_key, operationStorageKey]);
 
   const allMatches = useMemo(() => {
     const seen = new Set<string>();

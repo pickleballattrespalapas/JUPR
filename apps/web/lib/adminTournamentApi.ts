@@ -16,6 +16,15 @@ export type AdminTournamentStatusResponse = {
     service_role_ready: boolean;
     surface_flags: Record<string, { name: string; enabled: boolean }>;
   };
+  operations_runtime?: {
+    environment: string;
+    operations_mutations_enabled: boolean;
+    official_publish_enabled: boolean;
+    email_handoff_enabled: boolean;
+    auto_player_updates_enabled: boolean;
+    email_mode: string;
+    staging_only: boolean;
+  };
   streamlit_fallback_url?: string;
   tournament_count?: number | null;
   warnings: string[];
@@ -373,7 +382,7 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
-    const response = await fetch(url, { next: { revalidate: 30 } });
+    const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
     return { data: (await response.json()) as T, error: null };
   } catch (error) {

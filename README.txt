@@ -58,32 +58,33 @@ Key docs:
 Branch model:
 
 - `rollback-feb8` = **production**
-- `Test` = **staging**
-- `professional/*` = **feature/PR branches** that merge into `Test`
+- `staging` = **canonical staging integration and deployment branch**
+- `Test` = **legacy/deprecated staging branch**; do not target it for new work
+- `agent/*`, `professional/*`, and other short-lived branches = **feature/PR branches** that merge into `staging`
 
 Workflow:
 
-1. Work on `professional/*`.
-2. Open PR into `Test`.
+1. Work on a short-lived feature branch.
+2. Open the PR explicitly into `staging` (the repository default branch is not the staging target).
 3. Validate in staging against staging Supabase.
 4. Promote to `rollback-feb8` only after staging is stable and production impact is understood.
 
 Environment model:
 
 - Production Streamlit deploys from `rollback-feb8` and uses production Supabase.
-- Test Streamlit deploys from `Test` and should use staging Supabase when validating staging/SaaS changes.
+- The legacy Test Streamlit deployment may remain available during migration, but `Test` is not the canonical staging branch.
 - FastAPI staging API uses staging Supabase.
-- Next.js staging web app talks to FastAPI staging API.
+- Next.js staging Preview deploys from `staging` and talks to the FastAPI staging API.
 - Production traffic remains on Streamlit until the SaaS path is explicitly approved for production.
 
 ## 4) Supabase data environments
 
 - **Production Supabase project** = live JUPR production data.
-- **Staging Supabase project** = non-production database for `Test` branch validation, SaaS API/web testing, migrations, workers, and auth experiments.
+- **Staging Supabase project** = non-production database for `staging` branch validation, SaaS API/web testing, migrations, workers, and auth experiments.
 
 Rules:
 
-- Never point staging API, staging web app, or Test Streamlit deployment at production Supabase by accident.
+- Never point staging API, staging web app, or a legacy Test Streamlit deployment at production Supabase by accident.
 - Never point `SUPABASE_TEST_DATABASE_URL` at production.
 - Never use production service-role keys in staging.
 - Do not copy production table data into staging unless intentionally approved and sanitized.
@@ -101,9 +102,16 @@ SUPABASE_SERVICE_ROLE_KEY=<staging service role key>
 SUPABASE_ANON_KEY=<staging anon key if needed>
 JUPR_API_BASE_URL=<staging FastAPI URL>
 NEXT_PUBLIC_JUPR_API_BASE_URL=<staging FastAPI URL if needed>
-JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1
-NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1
+JUPR_STAGING_WRITE_WAVE=none
+JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT=0
+JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0
+NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0
 ```
+
+`none` is the required steady state. A manually dispatched Fly staging deploy may
+open exactly one named, least-privilege write wave for an approved procedure. Do
+not enable all write flags together; restore `none` and verify the all-false
+controlled-write projection before running the canonical staging smoke.
 
 ## 5) SaaS guardrails
 
@@ -129,10 +137,10 @@ Non-negotiable rules:
 ## 6) Streamlit deployment
 
 - Production Streamlit deploys from `rollback-feb8`.
-- Test Streamlit deploys from `Test`.
+- Test Streamlit is a legacy/deprecated deployment path and must not define the staging candidate.
 - Secrets live in Streamlit Community Cloud.
 - Production Streamlit should use production Supabase.
-- Test Streamlit should use staging Supabase when validating staging/SaaS changes.
+- Any retained Test Streamlit validation must still use staging Supabase.
 
 ## 7) FastAPI and Next.js staging path
 
@@ -169,7 +177,8 @@ Data/environment checks:
 - `SUPABASE_URL` points to staging Supabase.
 - `SUPABASE_SERVICE_ROLE_KEY` belongs to staging.
 - `SUPABASE_TEST_DATABASE_URL` is not production.
-- `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1` only on the isolated staging API while intentionally testing the guarded admin path; keep it disabled on production API deployments.
+- `JUPR_STAGING_WRITE_WAVE=none` and every controlled write flag is false at rest.
+- Open exactly one approved Fly write wave when testing a guarded write path, then deploy `none` before final evidence.
 
 Schema checks:
 
@@ -338,7 +347,7 @@ Safety:
 
 Before making the repo private:
 
-1. Stabilize `Test` first.
+1. Stabilize `staging` first.
 2. Confirm Streamlit Community Cloud still has access after privacy change.
 3. Confirm GitHub Actions permissions/secrets are configured for a private repo.
 4. Confirm any deployment services (API/web/worker hosts) retain repository access.
@@ -374,24 +383,31 @@ The browser phase runs only the committed 56-test `public-read` parity manifest;
 it rejects skips, flakes, failures, focused tests, count drift, and retries.
 Mixed admin/auth/write suites are intentionally outside this gate. Keep
 `allow_live_unconfigured` off after the staging live-session route is available.
+The workflow is canonical only after Fly has been restored to
+`JUPR_STAGING_WRITE_WAVE=none`, every controlled write flag is false, and Vercel
+and Fly attest the same deployed candidate SHA. `make public-web-smoke` and the
+legacy `Public Web Smoke` workflow are useful diagnostics, but they are not the
+canonical acceptance gate.
 
-For the full Next/FastAPI admin test surface, run `Deploy FastAPI staging to
-Fly`. It uses `fly.staging.toml`, the GitHub `staging` environment, and staging
-Supabase credentials only. The workflow refuses the production Fly app name,
-verifies the expected Supabase project ref, enables every current admin feature
-flag with email delivery in dry-run mode, and fails unless the complete schema
-and admin status route inventory is available.
+For a reviewed Next/FastAPI write procedure, manually run `Deploy FastAPI
+staging to Fly` from the canonical `staging` ref and choose one named
+least-privilege `write_wave`. It uses `fly.staging.toml`, the GitHub `staging`
+environment, and staging Supabase credentials only. The workflow refuses the
+production Fly app and database, forces every non-selected controlled write flag
+off, keeps email delivery in dry-run mode, and emits deployment identity/readback
+evidence. Record the Fly release for the wave, complete only the approved action,
+then dispatch the workflow again with `write_wave=none` and record that release.
 
 ## 10) Production promotion readiness report
 
-Before promoting `Test` to `rollback-feb8`, generate a readiness summary:
+Before promoting `staging` to `rollback-feb8`, generate a readiness summary:
 
 ```bash
-python scripts/production_readiness_report.py --base rollback-feb8 --head Test
+python scripts/production_readiness_report.py --base rollback-feb8 --head staging
 ```
 
 Optional JSON output:
 
 ```bash
-python scripts/production_readiness_report.py --base rollback-feb8 --head Test --json
+python scripts/production_readiness_report.py --base rollback-feb8 --head staging --json
 ```

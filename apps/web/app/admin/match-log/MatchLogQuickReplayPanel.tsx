@@ -53,7 +53,10 @@ export default function MatchLogQuickReplayPanel({
   warnings = []
 }: MatchLogQuickReplayPanelProps) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
-  const replayOptions = options.length ? options : [defaultTarget || "ALL (Full System Reset)"];
+  const replayOptions = useMemo(
+    () => (options.length ? options : [defaultTarget || "ALL (Full System Reset)"]),
+    [defaultTarget, options]
+  );
   const initialTarget = useMemo(() => normalizeRecommendedTarget(recommendedTarget, defaultTarget, replayOptions), [recommendedTarget, defaultTarget, replayOptions]);
   const [targetReset, setTargetReset] = useState(initialTarget);
   const [confirmationText, setConfirmationText] = useState("");

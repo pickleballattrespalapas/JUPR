@@ -129,6 +129,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
   const operationsWriteReady = Boolean(
     status.mutation_runtime?.service_role_ready
     && status.mutation_runtime?.surface_flags?.operations?.enabled
+    && status.operations_runtime?.operations_mutations_enabled
   );
   const reviewedState = snapshot?.state_fingerprint || "";
   const selectedDraw = snapshot?.draws?.find((row) => String(row.id || "") === selectedDrawId) || null;
@@ -617,6 +618,15 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
         <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Working…" : "Load tournaments"}</button>
       </article>
 
+      {!operationsWriteReady ? (
+        <article data-testid="tournament-ops-read-only-banner" style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
+          <h2 style={{ marginTop: 0 }}>Tournament Ops is read-only</h2>
+          <p style={{ color: "#7c2d12", marginBottom: 0 }}>
+            Tournament and draw snapshots remain available. POST-backed previews and mutation controls are hidden until the service role, dedicated Tournament Ops mutation flag, and operations runtime are all enabled in staging.
+          </p>
+        </article>
+      ) : null}
+
       {tournaments.length ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Select tournament</h2>
@@ -628,7 +638,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
         </article>
       ) : null}
 
-      {snapshot && shows("draws") ? (
+      {operationsWriteReady && snapshot && shows("draws") ? (
         <article style={{ ...cardStyle, background: "#f8fafc" }}>
           <h2 style={{ marginTop: 0 }}>Create empty division draw</h2>
           <p style={{ color: "#475569" }}>This creates a DRAFT draw shell scoped to the selected registration division.</p>
@@ -657,7 +667,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
               <strong>{operationsWriteReady && reviewedState ? "Guarded staging writes ready" : "Writes remain closed"}</strong>
               <div>Reviewed state: <code>{reviewedState ? reviewedState.slice(0, 16) : "unavailable"}</code></div>
               <div>Official publish: {officialPublishReady ? "gate open" : "gate closed"} · email handoff: {snapshot.operation_runtime?.email_handoff_enabled ? "gate open" : "gate closed"} · email mode: {snapshot.operation_runtime?.email_mode || "unknown"}</div>
-              {!operationsWriteReady ? <p style={{ marginBottom: 0 }}>The FastAPI service-role and Tournament Ops mutation flag must both be enabled in staging.</p> : null}
+              {!operationsWriteReady ? <p style={{ marginBottom: 0 }}>The FastAPI service role, dedicated Tournament Ops mutation flag, and operations runtime must all be enabled in staging.</p> : null}
               {!reviewedState ? <p style={{ marginBottom: 0 }}>The authoritative state could not be fingerprinted, so mutations fail closed.</p> : null}
               <p style={{ marginBottom: 0 }}>For uncertain outcomes, preserve the exact request and operation key. <a href={snapshot.streamlit_fallback_url || status.streamlit_fallback_url || "https://juprtrespalapas.streamlit.app"} target="_blank" rel="noreferrer">Open the Streamlit fallback</a>.</p>
             </div>
@@ -671,7 +681,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
             </div>
           </article>
 
-          {shows("import") ? <>
+          {operationsWriteReady && shows("import") ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Import confirmed registrations</h2>
             <p style={{ color: "#475569" }}>Imports confirmed registration entries for the selected draw’s registration day/division. Each registration must already be linked to a JUPR player.</p>
@@ -694,7 +704,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
           </article>
           </> : null}
 
-          {shows("draws") ? <>
+          {operationsWriteReady && shows("draws") ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Team editor</h2>
             <p style={{ color: "#475569" }}>Assign players manually, then type <code>SAVE TEAMS</code>.</p>
@@ -729,7 +739,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Award podium trophies</h2><p style={{ color: "#475569" }}>Awards draw-scoped tournament badges from generated podium rows. Re-running is idempotent for existing badge context.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Type AWARD PODIUM</strong><br /><input value={awardConfirm} onChange={(event) => setAwardConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={awardPodium} disabled={guardedWriteDisabled || !selectedDrawId || awardConfirm.trim().toUpperCase() !== "AWARD PODIUM"} style={buttonStyle}>{busy ? "Awarding…" : "Award podium"}</button></div></article>
           </> : null}
 
-          {shows("results") ? (
+          {operationsWriteReady && shows("results") ? (
             <article style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
               <h2 style={{ marginTop: 0 }}>Reviewed DUPR results CSV</h2>
               <p style={{ color: "#1e3a8a" }}>Upload or paste a DUPR-style CSV, preview every player mapping and included match without writing, then commit only the exact reviewed fingerprint. The raw CSV stays out of the durable operation ledger.</p>
@@ -794,16 +804,16 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>{["1", "2", "3"].map((placement) => <label key={placement}><strong>Place {placement}</strong><br /><select value={resultsPodiumRefs[placement] || ""} onChange={(event) => { setResultsPodiumRefs((current) => ({ ...current, [placement]: event.target.value || null })); setResultsReviewDirty(true); }} style={inputStyle}><option value="">No placement</option>{resultsPreview.podium_candidates.map((teamRef) => <option key={teamRef} value={teamRef}>{teamRef}</option>)}</select></label>)}</div>
                   </div>
 
-                  <div style={{ padding: "0.9rem", border: "1px solid #93c5fd", borderRadius: "10px", background: "white" }}>
+                  {operationsWriteReady ? <div style={{ padding: "0.9rem", border: "1px solid #93c5fd", borderRadius: "10px", background: "white" }}>
                     <label><strong>Type {resultsImportMode === "REPLACE" ? "REPLACE RESULTS" : "IMPORT RESULTS"}</strong><br /><input value={resultsConfirm} onChange={(event) => setResultsConfirm(event.target.value)} style={inputStyle} /></label>
                     <p style={{ marginBottom: 0 }}><button type="button" onClick={commitResultsImport} disabled={drawCasWriteDisabled || !selectedDrawId || !resultsPreview.ok || resultsReviewDirty || resultsConfirm.trim().toUpperCase() !== (resultsImportMode === "REPLACE" ? "REPLACE RESULTS" : "IMPORT RESULTS")} style={buttonStyle}>{busy ? "Importing…" : "Commit reviewed results"}</button></p>
-                  </div>
+                  </div> : null}
                 </div>
               ) : null}
             </article>
           ) : null}
 
-          {shows("publish") ? (
+          {operationsWriteReady && shows("publish") ? (
             <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
               <h2 style={{ marginTop: 0 }}>Publish official rating matches</h2>
               <p style={{ color: "#7c2d12" }}>Creates official Match Log rows from finalized tournament games and applies the regular rating path for both doubles and singles. Optional medal-playoff bonus adds Elo only to semifinal, bronze, and gold winners. Publishing needs both tournament and match-management permissions, a separate staging gate, and a safe email mode when automatic player updates are enabled.</p>

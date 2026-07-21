@@ -5,13 +5,22 @@ This document is the durable source of truth for JUPR SaaS migration status so J
 ## Current status summary
 
 - Streamlit production is active and remains the fallback admin runtime.
-- `Test` branch is staging by policy, while recent SaaS PRs have been landing on `rollback-feb8`; reconcile branch promotion before any public cutover.
+- `staging` is the canonical staging integration/deployment branch. `Test` is legacy/deprecated and must not receive new staging PRs or evidence.
 - Staging Supabase exists and is the non-production data environment for staging validation.
 - FastAPI + Next.js are staging-first for public traffic, with closed-club production-write pilot mode now defined for staff workflows.
 - Next.js public routes now cover the read-only product spine: club home, leaderboards, league results, Badge Codex, Challenge Ladder, Weekly Recap, Match Explorer, players, player profiles, matches, match detail, JUPR Live, ratings explainer, FAQ, privacy, terms, support/contact, data-correction instructions, and public tournament registration intake.
 - Next `/admin` is now the operations migration cockpit backed by FastAPI `GET /admin/operations/status`.
 - `docs/next_streamlit_parity_matrix.md` is the control board for reaching 100% Streamlit workflow parity on Next/Vercel/FastAPI.
 - Public/staff smoke tooling exists for staging FastAPI + Vercel validation.
+- The deployed baseline is Git SHA `e695365ce508e03a094f528ff9c1179c7f7947de`
+  (PR `#1016`), Vercel deployment `dpl_6zDSfrXKV4PC2M5MX3K5q4UQuvzf`,
+  Fly image `registry.fly.io/juprleagues-api-staging:deployment-01KY180GGE2V9HC13E8N9VFE3Y`,
+  and staging Supabase project `sijpxjxvdtrehmqvirfi`. Replace this identity as a
+  unit after the hardening patch is deployed; do not mix the baseline evidence
+  with the new candidate.
+- Baseline support intake/deduplication and admin dismissal were proven in
+  staging, then Fly was restored to `write_wave=none` in successful GitHub run
+  `29795882496`; the all-false controlled-write projection is the steady state.
 - Next admin score entry remains disabled by default.
 - Production traffic has not moved to Next.js; Streamlit remains the production runtime until cutover gates are met.
 
@@ -23,16 +32,16 @@ This document is the durable source of truth for JUPR SaaS migration status so J
 | Streamlit production | Done | Streamlit remains the active fallback admin/runtime surface. | Keep available while Next admin workflows are piloted one at a time. | Medium |
 | Streamlit-to-Next parity control | In progress | `docs/next_streamlit_parity_matrix.md` inventories every `page_registry.py` page and tracks public cutover plus closed-club admin pilot gates. | Keep the matrix current with `make check-next-parity-matrix`; use `/admin` as the operations cockpit. | Medium |
 | FastAPI public/API surface | In progress | FastAPI exists under `services/api` with public club, leaderboard, league-results, badge-codex, challenge-ladder, weekly-recap, tournament-registration, player, match, match-explorer, live-session, and admin-operations status endpoints. | Deploy/verify staging API against staging Supabase and keep public/admin-status contracts sanitized. | Medium |
-| Next.js public web | In progress | Next.js app exists under `apps/web` with the public product spine plus FAQ/legal/support/static routes and tournament registration intake/confirmation routes. | Deploy Vercel staging and run `make public-web-smoke` before any public/custom-domain move; replace legal placeholders with approved copy. | Medium |
+| Next.js public web | In progress | Next.js app exists under `apps/web` with the public product spine plus FAQ/legal/support/static routes and tournament registration intake/confirmation routes; a branch Preview is deployed. | Bind the next Vercel candidate to the same SHA as Fly, run canonical `Staging Smoke` after `write_wave=none`, and obtain later legal-copy approval before any public/custom-domain move. | Medium |
 | Next.js admin operations cockpit | In progress | `/admin` renders migration mode, workflow flags, pilot gates, and Streamlit fallback from FastAPI status. | Use as the control surface for closed-club workflow pilots; next workflow target is Match Log read/correction planning. | Medium |
-| Vercel staging | In progress | `apps/web/.env.example`, deployment docs, and public smoke harness define the staging path. | Configure Vercel staging env vars and wire the deployed URL into the manual smoke workflow. | Medium |
+| Vercel staging | In progress | The `staging` branch Preview alias and immutable deployment identity are available; `/api/environment` participates in candidate attestation. | After the hardening merge, capture the replacement deployment ID and immutable origin, then run canonical `Staging Smoke` against that exact candidate. | Medium |
 | Next.js admin score entry | Blocked by default | Admin rated score entry path is disabled by feature flag and guardrails. | Re-evaluate only after Match Log correction/replay visibility exists; enable via workflow flag only for controlled staff pilots. | High |
 | Admin auth/JWT | In progress | JWT scaffolding exists for staged admin routes, but end-to-end production-grade auth/session hardening is not complete. | Complete validation hardening, session strategy, and staging E2E auth failure coverage. | High |
 | Club-scoped roles | In progress | Role assignment checks exist for the FastAPI score-entry endpoint, but broader club-scoped authorization still needs end-to-end coverage. | Enforce and test club-scoped role checks on every write path before enabling admin writes broadly. | High |
 | Public leaderboard/read models | In progress | Public leaderboard, League Results, Badge Codex, Challenge Ladder, Weekly Recap, Match Explorer, player, match, live, tournament-registration, and static/support surfaces are exposed as sanitized public routes. | Continue public parity with tournament roster and partner board after registration intake is proven in staging. | Medium |
 | Workers | In progress | Worker CLIs exist and are part of moving jobs out of Streamlit. | Validate worker reliability and club-scoped safety in staging. | Medium |
 | Email safety | Blocked (safety gate) | Email worker usage is intentionally constrained pending safe staging email configuration. | Confirm safe non-production email routing before registration confirmation/edit emails or broader worker runs. | High |
-| CI/API contract tests | In progress | `make api-test` covers API contracts; `scripts/smoke_public_web.py` covers staged public API/web/admin-status smoke checks; `make check-next-parity-matrix` guards parity drift. | Wire public smoke into GitHub Actions secrets/inputs and require parity matrix coverage before public/admin migration PRs. | Medium |
+| CI/API contract tests | In progress | API contracts, parity guards, strict browser `public-read`, deployment identity checks, and the manually dispatched `Staging Smoke` gate exist. `make public-web-smoke` remains a noncanonical diagnostic. | Require the parity/manual/manifest guards on staging PRs and manually dispatch canonical `Staging Smoke` only after the final same-SHA Fly `none` release. | Medium |
 | Migrations | In progress | `supabase/migrations/` is canonical and staging-first migration flow is defined. | Continue staging-first apply/verify discipline before production SQL changes. | Medium |
 | Observability | Not started | No fully defined cross-surface observability baseline is documented as a release gate. | Establish logs, metrics, and alerting minimums for API/web/workers. | Medium |
 | Tenant onboarding | Not started | Multi-club onboarding process is not yet standardized for SaaS rollout. | Define repeatable club onboarding checklist and config flow in staging. | Medium |

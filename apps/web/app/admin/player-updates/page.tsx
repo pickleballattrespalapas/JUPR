@@ -31,7 +31,7 @@ export default async function AdminPlayerUpdatesPage() {
           <article style={cardStyle}><strong>Email mode</strong><br />{status.email_mode || "unknown"}</article>
           <article style={cardStyle}><strong>SMTP</strong><br />{smtpConfigured ? "Configured" : "Not configured"}</article>
           <article style={cardStyle}><strong>Auto post-batch send</strong><br />{status.auto_send_enabled ? "Enabled" : "Disabled"}</article>
-          <article style={cardStyle}><strong>Subscription data</strong><br />Sign in to load</article>
+          <article style={cardStyle}><strong>Subscription data</strong><br />{status.enabled ? "Available after admin sign-in" : "Guarded off"}</article>
         </div>
       ) : null}
 
