@@ -35,11 +35,11 @@ candidate:
 
 | Baseline field | Preserved value |
 |---|---|
-| Git SHA / PR | `e695365ce508e03a094f528ff9c1179c7f7947de` / `#1016` |
+| Git SHA / PR | `9a0975f18d5d43b3f25e53872a80b04737c3a29c` / `#1018` |
 | Vercel alias | `https://jupr-git-staging-pickleballattrespalapas1.vercel.app` |
-| Vercel deployment / immutable origin | `dpl_6zDSfrXKV4PC2M5MX3K5q4UQuvzf` / `https://jupr-84z27cfwn-pickleballattrespalapas1.vercel.app` |
-| Fly image | `registry.fly.io/juprleagues-api-staging:deployment-01KY180GGE2V9HC13E8N9VFE3Y` |
-| Final none artifact | `github-run-29795882496`; staging verifier passed |
+| Vercel deployment / immutable origin | `dpl_5rQuCqdPquvfnVmLiMHstJENDycS` / `https://jupr-mvw1gcqk4-pickleballattrespalapas1.vercel.app` |
+| Fly image | `registry.fly.io/juprleagues-api-staging:deployment-01KY3V2M6M2DMR04ZEYSF9WE6V` |
+| Final none artifact | `github-run-29886383749`; all controlled writes false for Fly image `registry.fly.io/juprleagues-api-staging:deployment-01KY3V2M6M2DMR04ZEYSF9WE6V`; canonical smoke `29886777122` passed 56 checks |
 | Streamlit fallback | `https://juprtrespalapas.streamlit.app` |
 | Prior operator/session | authenticated staging admin; `2026-07-20 / 2026-07-21` |
 
@@ -94,8 +94,8 @@ before the first request, perform only the packet's named action, and restore
 ### Preserved 2026-07-20/21 intake smoke evidence
 
 The prior exploratory support-intake pass is retained as useful staging evidence,
-but it does not by itself mark any formal parity ledger row `Pass` because a
-separate witness and complete artifact bundle were not recorded.
+but it does not by itself mark any formal parity ledger row `Pass` because the
+candidate-bound artifact bundle was incomplete.
 
 - Public `general_support` intake created exactly one disposable fixture:
   `req_2baca74d135646e6be38`, subject
@@ -168,7 +168,7 @@ committed book.
 | `public-read` | `Parity Final Evidence` workflow mode `public-read`; local equivalent: `python scripts/run_parity_staging_wave.py public-read --candidate-sha <sha> --vercel-deployment-id <id> --vercel-deployment-origin <immutable-origin> --fly-image-ref <ref>` | Exact preview/API/Auth origins, deployment identities, and Vercel bypass | `Pending` | — | — |
 | `public-intake-auth` | Workflow mode `public-intake-auth`; local equivalent uses the same runner | Real staging auth account; read-only intake, registration, and partner-board readiness; no mutation confirmation | `Pending` | — | — |
 | `admin-read-export` | Workflow mode `admin-read-export`; local equivalent uses the same runner | Admin tokens, role account, and unpublished recap fixture | `Pending` | — | — |
-| `reversible-admin-writes` | Manual-only deferred procedure; no workflow mode | Exact per-page route/resource plan, captured pre-state, truthful inverse, positive write/readback/restore projections, operator and witness | `Pending` | — | — |
+| `reversible-admin-writes` | Manual-only deferred procedure; no workflow mode | Exact per-page route/resource plan, captured pre-state, truthful inverse, positive write/readback/restore projections, named operator, and a separate human witness | `Pending` | — | — |
 | `match-rating-writes` | Workflow mode `match-rating-writes` for Tournament Live only; all other cases manual-only | Tournament Live disposable game/version fixture, dynamic fingerprints, distinct idempotency keys, exact mutation confirmation, and `finally` restore/re-read | `Pending` | — | — |
 | `recovery` | Manual-only route-specific reconciliation; no workflow mode | Exact affected resource IDs, authoritative GET routes, JSON-bearing 2xx statuses, positive state/audit projections, Match Log/Replay handoff evidence, all mutation flags off | `Pending` | — | — |
 
@@ -180,7 +180,14 @@ all three evidence cells and the operator cell with these exact parseable record
 - Route/pre-state: `Verified: method=<POST|PUT|PATCH|DELETE>; path=<canonical-path>; resource=<id-or-natural-key>; prestate=<captured-baseline>`
 - Write/readback: `Verified: status=<JSON-2xx>; projection=<field=value[,field=value]>; artifact=<id-or-url>`
 - Inverse/readback: `Verified: method=<POST|PUT|PATCH|DELETE|RETAIN>; path=<canonical-path|N/A>; status=<JSON-2xx|N/A>; projection=<field=value[,field=value]>; artifact=<id-or-url>`
-- Sign-off: `operator=<identity>; witness=<different-identity>`
+- Manual-only staging sign-off: `operator=<identity>; witness=<different-identity>`
+
+The evidence runner records the candidate SHA, deployment identifiers, approved
+scope, authoritative readback, audit attribution, and restoration artifacts. The
+operator and witness do not transcribe those identifiers. Because the checker has
+no candidate-bound automation artifact for an individual manual-only row, it does
+not accept `review=automated` for that row. Automated-only wave rows may continue
+to use their verified workflow artifact without a manual-row witness.
 
 Use a canonical root-relative route with no query, fragment, encoded characters,
 or dot segments. `JSON-2xx` excludes no-content statuses 204 and 205 because the

@@ -18,6 +18,42 @@ def test_browser_does_not_own_league_live_movement_math() -> None:
     assert "The browser displays plans but never ranks players" in panel
 
 
+def test_league_selection_auto_loads_roster_without_clearing_current_view() -> None:
+    panel = PANEL.read_text(encoding="utf-8")
+    assert "selectLeague(event.target.value)" in panel
+    assert "void loadLeagueDetail(selectedLeague)" in panel
+    assert "Reload roster" in panel
+    assert ">Load roster<" not in panel
+    assert "const suggestion = await fetchRosterSuggestion(payload);" in panel
+    assert "The current league roster will remain visible until the replacement is ready." in panel
+    assert "if (loadedLeagueName) setLeagueName(loadedLeagueName);" in panel
+    assert "The previous league roster remains visible and selected." in panel
+
+
+def test_league_live_binds_session_to_selected_league_and_pauses_edits_while_busy() -> None:
+    panel = PANEL.read_text(encoding="utf-8")
+    assert "loadedSessionId === sessionId" in panel
+    assert "sessionLeagueName === leagueName" in panel
+    assert "sessionLeagueName === loadedLeagueName" in panel
+    assert "clearPersistedSessionBinding()" in panel
+    assert "requireCurrentSession(" in panel
+    assert panel.count("encodeURIComponent(loadedSessionId)") >= 7
+    assert "if (detail?.league.league_name !== sessionRow.league_name) setDetail(null);" in panel
+    assert "setRosterSuggestion(null);" in panel
+    assert "detail.league.league_name !== leagueName" in panel
+    assert 'disabled={busy || !sessionIsCurrentLeague}' in panel
+    assert "disabled={busy}" in panel
+
+
+def test_league_live_court_and_bench_controls_are_phone_responsive() -> None:
+    panel = PANEL.read_text(encoding="utf-8")
+    assert "data-responsive-court-grid" in panel
+    assert "data-responsive-bench-controls" in panel
+    assert 'minmax(min(100%, 180px), 1fr)' in panel
+    assert 'minmax(min(100%, 240px), 1fr)' in panel
+    assert 'gridTemplateColumns: "120px 180px 1fr auto"' not in panel
+
+
 def test_page_fetches_python_domain_readiness_and_fails_closed() -> None:
     page = PAGE.read_text(encoding="utf-8")
     panel = PANEL.read_text(encoding="utf-8")

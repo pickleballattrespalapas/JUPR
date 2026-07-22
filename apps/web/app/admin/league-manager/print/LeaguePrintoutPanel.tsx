@@ -31,8 +31,10 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status }: Props) 
   const [leagueName, setLeagueName] = useState("");
   const [printout, setPrintout] = useState<AdminLeaguePrintoutResponse | null>(null);
   const [weekNum, setWeekNum] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [loadingLeagues, setLoadingLeagues] = useState(false);
+  const [loadingPrintout, setLoadingPrintout] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const busy = loadingLeagues || loadingPrintout;
 
   async function requestJson<T>(path: string): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -44,39 +46,57 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status }: Props) 
   }
 
   async function loadLeagues() {
-    setBusy(true);
+    setLoadingLeagues(true);
     setMessage(null);
     try {
       const payload = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
       const names = (payload.leagues || []).map((league) => league.league_name).filter(Boolean);
       setLeagues(names);
-      if (!leagueName && names.length) setLeagueName(names[0]);
-      setMessage(`Loaded ${names.length} league(s).`);
+      const selectedLeague = names.includes(leagueName) ? leagueName : (names[0] || "");
+      setLeagueName(selectedLeague);
+      if (selectedLeague) {
+        const selectedWeek = selectedLeague === leagueName ? weekNum : "";
+        if (selectedLeague !== leagueName) setWeekNum("");
+        await loadDetail(selectedLeague, selectedWeek);
+      } else {
+        setMessage("No leagues are available.");
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load leagues.");
     } finally {
-      setBusy(false);
+      setLoadingLeagues(false);
     }
   }
 
-  async function loadDetail() {
-    if (!leagueName) {
+  async function loadDetail(selectedLeague = leagueName, selectedWeek = weekNum) {
+    if (!selectedLeague) {
       setMessage("Select a league first.");
       return;
     }
-    setBusy(true);
+    setLoadingPrintout(true);
     setMessage(null);
     try {
-      const weekQuery = weekNum ? `?week_num=${encodeURIComponent(weekNum)}` : "";
-      const payload = await requestJson<AdminLeaguePrintoutResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}/printout${weekQuery}`);
+      const weekQuery = selectedWeek ? `?week_num=${encodeURIComponent(selectedWeek)}` : "";
+      const payload = await requestJson<AdminLeaguePrintoutResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/printout${weekQuery}`);
       setPrintout(payload);
       setWeekNum(payload.selected_week == null ? "" : String(payload.selected_week));
       setMessage(`Printout loaded${payload.selected_week ? ` for Week ${payload.selected_week}` : ""}.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load league printout.");
+      const reason = error instanceof Error ? error.message : "Unable to load league printout.";
+      if (printout) {
+        setLeagueName(printout.detail.league.league_name);
+        setWeekNum(printout.selected_week == null ? "" : String(printout.selected_week));
+      }
+      setMessage(printout ? `${reason} The previous printout remains visible and selected.` : reason);
     } finally {
-      setBusy(false);
+      setLoadingPrintout(false);
     }
+  }
+
+  function selectLeague(selectedLeague: string) {
+    setLeagueName(selectedLeague);
+    setWeekNum("");
+    void loadDetail(selectedLeague, "");
   }
 
   if (!status.enabled) {
@@ -101,12 +121,13 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status }: Props) 
       <article className="no-print" style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Load printout</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>League<br /><select value={leagueName} onChange={(event) => { setLeagueName(event.target.value); setPrintout(null); setWeekNum(""); }} style={inputStyle}>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
-          <label>Scored week<br /><select value={weekNum} onChange={(event) => setWeekNum(event.target.value)} disabled={!printout?.available_weeks.length} style={inputStyle}><option value="">Latest scored week</option>{(printout?.available_weeks || []).map((week) => <option key={week} value={String(week)}>Week {week}</option>)}</select></label>
-          <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Loading…" : "Load leagues"}</button>
-          <button type="button" onClick={loadDetail} disabled={busy || !leagueName} style={buttonStyle}>{busy ? "Loading…" : "Load selected"}</button>
-          <button type="button" onClick={() => window.print()} disabled={!printout} style={buttonStyle}>Print or save PDF</button>
+          <label>League<br /><select value={leagueName} onChange={(event) => selectLeague(event.target.value)} disabled={busy} style={inputStyle}>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+          <label>Scored week<br /><select value={weekNum} onChange={(event) => setWeekNum(event.target.value)} disabled={busy || !printout?.available_weeks.length} style={inputStyle}><option value="">Latest scored week</option>{(printout?.available_weeks || []).map((week) => <option key={week} value={String(week)}>Week {week}</option>)}</select></label>
+          <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{loadingLeagues ? "Refreshing leagues…" : "Load leagues"}</button>
+          <button type="button" onClick={() => void loadDetail()} disabled={busy || !leagueName} style={buttonStyle}>{loadingPrintout ? "Loading printout…" : "Reload printout"}</button>
+          <button type="button" onClick={() => window.print()} disabled={busy || !printout} style={buttonStyle}>Print or save PDF</button>
         </div>
+        {loadingPrintout ? <p role="status" style={{ color: "#475569" }}>Loading {leagueName || "selected league"}. The current printout will remain visible until the replacement is ready.</p> : null}
         {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
 

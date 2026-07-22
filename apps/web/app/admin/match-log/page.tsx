@@ -38,6 +38,16 @@ function dateLabel(value?: string | null): string {
   return date.toISOString().replace("T", " ").slice(0, 16);
 }
 
+function stableFilterOptions(values: Array<string | null | undefined>, selected?: string | null): string[] {
+  const options = new Set(
+    values
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  );
+  if (selected?.trim()) options.add(selected.trim());
+  return Array.from(options).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+}
+
 function MatchRow({ match }: { match: AdminMatchLogMatch }) {
   return (
     <tr>
@@ -167,6 +177,14 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
 
   const selectedFilter = selectedFilterParam || data?.filters.filter || "All";
   const resolvedDuplicateGroups = data?.resolved_duplicate_groups || [];
+  const leagueOptions = stableFilterOptions(
+    data?.filter_options?.leagues || data?.matches.map((match) => match.league) || [],
+    leagueParam
+  );
+  const weekTagOptions = stableFilterOptions(
+    data?.filter_options?.week_tags || data?.matches.map((match) => match.week_tag) || [],
+    weekTagParam
+  );
   const apiBase = getAdminApiBaseUrl();
 
   return (
@@ -203,7 +221,7 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
 
       {data?.enabled ? (
         <>
-          <form style={{ ...cardStyle, marginBottom: "1rem", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+          <form data-testid="match-log-filters" style={{ ...cardStyle, marginBottom: "1rem", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
             <label>Filter<br />
               <select name="filter" defaultValue={selectedFilter} style={{ width: "100%" }}>
                 <option>All</option>
@@ -212,15 +230,26 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
               </select>
             </label>
             <label>Match ID<br /><input name="match_id" defaultValue={searchParams?.match_id || ""} style={{ width: "100%" }} /></label>
-            <label>League<br /><input name="league" defaultValue={searchParams?.league || ""} style={{ width: "100%" }} /></label>
-            <label>Week tag<br /><input name="week_tag" defaultValue={searchParams?.week_tag || ""} style={{ width: "100%" }} /></label>
+            <label>League<br />
+              <select key={`league-${leagueParam || "all"}`} name="league" defaultValue={leagueParam || ""} style={{ width: "100%" }}>
+                <option value="">All leagues</option>
+                {leagueOptions.map((league) => <option key={league} value={league}>{league}</option>)}
+              </select>
+            </label>
+            <label>Week tag<br />
+              <select key={`week-${weekTagParam || "all"}`} name="week_tag" defaultValue={weekTagParam || ""} style={{ width: "100%" }}>
+                <option value="">All weeks</option>
+                {weekTagOptions.map((weekTag) => <option key={weekTag} value={weekTag}>{weekTag}</option>)}
+              </select>
+            </label>
             <label>Start date<br /><input name="start_date" type="date" defaultValue={searchParams?.start_date || ""} style={{ width: "100%" }} /></label>
             <label>End date<br /><input name="end_date" type="date" defaultValue={searchParams?.end_date || ""} style={{ width: "100%" }} /></label>
             <label>Limit<br /><input name="limit" type="number" min="1" max="1000" defaultValue={searchParams?.limit || "250"} style={{ width: "100%" }} /></label>
-            <button type="submit" style={{ padding: "0.5rem 0.75rem", borderRadius: "8px", border: "1px solid #0f172a", background: "#0f172a", color: "white" }}>Apply</button>
+            <button type="submit" style={{ padding: "0.5rem 0.75rem", borderRadius: "8px", border: "1px solid #0f172a", background: "#0f172a", color: "white" }}>Apply filters</button>
+            <Link href="/admin/match-log" style={{ padding: "0.5rem 0.75rem", borderRadius: "8px", border: "1px solid #64748b", color: "#0f172a", textAlign: "center", textDecoration: "none" }}>Clear filters</Link>
           </form>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+          <div data-testid="match-log-summary" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Scanned</strong><br />{data.summary.scanned_matches}</article>
             <article style={cardStyle}><strong>Filtered</strong><br />{data.summary.filtered_matches ?? data.summary.returned_matches}</article>
             <article style={cardStyle}><strong>Shown</strong><br />{data.summary.returned_matches}</article>
@@ -228,6 +257,31 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
             <article style={cardStyle}><strong>Cleanup candidates</strong><br />{data.summary.duplicate_delete_count}</article>
             <article style={cardStyle}><strong>Resolved no issue</strong><br />{data.summary.resolved_duplicate_groups ?? resolvedDuplicateGroups.length}</article>
           </div>
+
+          <section data-testid="match-log-results" style={{ marginBottom: "1rem" }}>
+            <h2>Matches</h2>
+            {data.matches.length ? (
+              <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "14px", background: "white" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "900px" }}>
+                  <thead>
+                    <tr style={{ textAlign: "left", background: "#f8fafc" }}>
+                      <th style={{ padding: "0.6rem" }}>ID</th>
+                      <th style={{ padding: "0.6rem" }}>Date</th>
+                      <th style={{ padding: "0.6rem" }}>League / Week</th>
+                      <th style={{ padding: "0.6rem" }}>Type</th>
+                      <th style={{ padding: "0.6rem" }}>Team 1</th>
+                      <th style={{ padding: "0.6rem" }}>Score</th>
+                      <th style={{ padding: "0.6rem" }}>Team 2</th>
+                      <th style={{ padding: "0.6rem" }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.matches.map((match) => <MatchRow key={`${match.id}-${match.dup_key}`} match={match} />)}
+                  </tbody>
+                </table>
+              </div>
+            ) : <p style={muted}>No matches found for these filters.</p>}
+          </section>
 
           {data.warnings?.length ? (
             <article style={{ ...cardStyle, marginBottom: "1rem", background: "#fff7ed" }}>
@@ -305,28 +359,6 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
             />
           </div>
 
-          <h2>Matches</h2>
-          {data.matches.length ? (
-            <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "14px", background: "white" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "900px" }}>
-                <thead>
-                  <tr style={{ textAlign: "left", background: "#f8fafc" }}>
-                    <th style={{ padding: "0.6rem" }}>ID</th>
-                    <th style={{ padding: "0.6rem" }}>Date</th>
-                    <th style={{ padding: "0.6rem" }}>League / Week</th>
-                    <th style={{ padding: "0.6rem" }}>Type</th>
-                    <th style={{ padding: "0.6rem" }}>Team 1</th>
-                    <th style={{ padding: "0.6rem" }}>Score</th>
-                    <th style={{ padding: "0.6rem" }}>Team 2</th>
-                    <th style={{ padding: "0.6rem" }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.matches.map((match) => <MatchRow key={`${match.id}-${match.dup_key}`} match={match} />)}
-                </tbody>
-              </table>
-            </div>
-          ) : <p style={muted}>No matches found for these filters.</p>}
         </>
       ) : null}
     </section>

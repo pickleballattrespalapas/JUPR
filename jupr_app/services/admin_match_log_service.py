@@ -152,6 +152,25 @@ def _matches_filter(
     return sorted(result, key=_date_sort_key, reverse=True)
 
 
+def _filter_options(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Return stable, human-sorted filter values from the already-loaded match rows."""
+
+    leagues = {
+        _clean_text(row.get("league"), limit=120)
+        for row in rows
+        if _clean_text(row.get("league"), limit=120)
+    }
+    week_tags = {
+        _clean_text(row.get("week_tag"), limit=80)
+        for row in rows
+        if _clean_text(row.get("week_tag"), limit=80)
+    }
+    return {
+        "leagues": sorted(leagues, key=str.casefold),
+        "week_tags": sorted(week_tags, key=str.casefold),
+    }
+
+
 def _format_player(pid: int | None, names: dict[int, str]) -> dict[str, Any]:
     if pid is None:
         return {"id": None, "name": "—"}
@@ -407,6 +426,7 @@ def build_admin_match_log(
             "apply_enabled": is_admin_match_log_apply_enabled(),
             "status": "streamlit_fallback",
             "filters": filters,
+            "filter_options": {"leagues": [], "week_tags": []},
             "summary": {
                 "scanned_matches": 0,
                 "returned_matches": 0,
@@ -457,6 +477,7 @@ def build_admin_match_log(
         "apply_enabled": is_admin_match_log_apply_enabled(),
         "status": "apply_enabled" if is_admin_match_log_apply_enabled() else "planning_only",
         "filters": filters,
+        "filter_options": _filter_options(raw_rows),
         "summary": {
             "scanned_matches": len(raw_rows),
             "filtered_matches": len(filtered_rows),

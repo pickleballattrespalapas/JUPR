@@ -36,7 +36,7 @@ test("authenticated league exports render Python-authoritative leaders", async (
   await page.getByRole("button", { name: /load leagues/i }).click();
   const leagueSelect = page.getByLabel("League");
   await expect(leagueSelect.locator("option")).not.toHaveCount(0);
-  await page.getByRole("button", { name: /load selected/i }).click();
+  await expect(page.getByRole("button", { name: /reload printout/i })).toBeEnabled();
   await expect(page.locator("body")).toContainText("Weekly leaders");
   await expect(page.locator("body")).toContainText("Season leaders (Top Performers)");
   await expect(page.locator("[data-print-surface='league-night']")).toBeVisible();

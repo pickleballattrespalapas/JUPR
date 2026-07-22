@@ -159,6 +159,29 @@ def test_completion_mode_accepts_bound_all_pass_evidence(tmp_path: Path) -> None
     ) == []
 
 
+def test_completion_mode_rejects_automated_review_for_manual_only_staging_writes(
+    tmp_path: Path,
+) -> None:
+    candidate_sha = "a" * 40
+    completed = _completed_book(BOOK_PATH.read_text(encoding="utf-8"), candidate_sha)
+    completed = re.sub(
+        r"operator=operator-1; witness=reviewer-1",
+        "operator=operator-1; review=automated",
+        completed,
+    )
+    book = tmp_path / "book.md"
+    book.write_text(completed, encoding="utf-8")
+
+    errors = check_book_complete(
+        book_path=book,
+        candidate_sha=candidate_sha,
+        vercel_deployment_id=VERCEL_ID,
+        vercel_deployment_origin=VERCEL_ORIGIN,
+        fly_image_ref=FLY_IMAGE,
+    )
+    assert any("distinct human identities" in error for error in errors)
+
+
 def test_completion_mode_rejects_candidate_sha_mismatch(tmp_path: Path) -> None:
     candidate_sha = "a" * 40
     book = tmp_path / "book.md"
@@ -282,7 +305,7 @@ def test_completion_mode_rejects_unstructured_or_weak_manual_mutation_evidence(
         (
             "operator=operator-1; witness=reviewer-1",
             "operator=operator-1; witness=operator-1",
-            "distinct identities",
+            "distinct human identities",
         ),
     )
     for index, (old, new, expected_error) in enumerate(substitutions):

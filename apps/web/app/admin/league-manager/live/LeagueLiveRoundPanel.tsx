@@ -116,6 +116,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [leagues, setLeagues] = useState<string[]>([]);
   const [leagueName, setLeagueName] = useState("");
+  const [loadedLeagueName, setLoadedLeagueName] = useState("");
   const [weekTag, setWeekTag] = useState("Week 1");
   const [roundNumber, setRoundNumber] = useState("1");
   const [totalRounds, setTotalRounds] = useState("5");
@@ -125,6 +126,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [sessionRoster, setSessionRoster] = useState<LeagueLiveRosterRow[]>([]);
   const [liveSessions, setLiveSessions] = useState<LeagueLiveSession[]>([]);
   const [sessionId, setSessionId] = useState("");
+  const [loadedSessionId, setLoadedSessionId] = useState("");
+  const [sessionLeagueName, setSessionLeagueName] = useState("");
   const [sessionUpdatedAt, setSessionUpdatedAt] = useState("");
   const [sessionStatus, setSessionStatus] = useState("active");
   const [sessionNotes, setSessionNotes] = useState("");
@@ -150,6 +153,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [compensationReason, setCompensationReason] = useState("");
   const [benchOverrideIds, setBenchOverrideIds] = useState<number[]>([]);
   const [benchOverrideReason, setBenchOverrideReason] = useState("");
+  const [loadingLeagueName, setLoadingLeagueName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -167,6 +171,14 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const activeSessionRoster = useMemo(() => sessionRoster.filter((row) => row.status === "active"), [sessionRoster]);
   const allPreviewMatches = (preview?.courts || []).flatMap((court) => court.matches || []);
   const validScoreCount = allPreviewMatches.filter((match) => scoreIsValid(scores[match.row_id] || { scoreT1: "", scoreT2: "" })).length;
+  const sessionIsCurrentLeague = Boolean(
+    loadedSessionId
+    && loadedSessionId === sessionId
+    && sessionUpdatedAt
+    && sessionLeagueName
+    && sessionLeagueName === leagueName
+    && sessionLeagueName === loadedLeagueName
+  );
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -187,8 +199,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     operations: LeagueLivePublishOperation[] = []
   ) {
     setSessionId(sessionRow.id);
+    setLoadedSessionId(sessionRow.id);
+    setSessionLeagueName(sessionRow.league_name);
     setSessionUpdatedAt(sessionRow.updated_at || "");
     setLeagueName(sessionRow.league_name);
+    setLoadedLeagueName(sessionRow.league_name);
+    if (detail?.league.league_name !== sessionRow.league_name) setDetail(null);
+    setRosterSuggestion(null);
     setWeekTag(sessionRow.week_tag || "Week 1");
     setSessionStatus(sessionRow.status || "active");
     setTotalRounds(String(sessionRow.total_rounds || 1));
@@ -208,6 +225,29 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setBenchOverrideIds(((sessionRow.roster_json || []) as LeagueLiveRosterRow[]).filter((row) => row.status === "bench").map((row) => Number(row.player_id)));
   }
 
+  function clearPersistedSessionBinding() {
+    setSessionId("");
+    setLoadedSessionId("");
+    setSessionLeagueName("");
+    setSessionUpdatedAt("");
+    setSessionStatus("active");
+    setSessionNotes("");
+    setRoundHistory([]);
+    setPublishOperations([]);
+    setRatingReview(null);
+    setMovementPlan(null);
+    setMovementPlanStale(false);
+    setMovementOverrides({});
+    setCompensationReference("");
+    setCompensationReason("");
+  }
+
+  function requireCurrentSession(action: string): boolean {
+    if (sessionIsCurrentLeague) return true;
+    setMessage(`Resume a persisted session for ${loadedLeagueName || leagueName || "the selected league"} before ${action}.`);
+    return false;
+  }
+
   function rosterForWrite(): Array<Record<string, unknown>> {
     return sessionRoster.length ? sessionRoster : activeRosterPayload(detail);
   }
@@ -216,12 +256,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     if (movementPlan) setMovementPlanStale(true);
   }
 
-  async function requestRosterSuggestion(
+  async function fetchRosterSuggestion(
     leagueDetail: AdminLeagueManagerDetailResponse,
     requestedBenchIds: number[] = [],
     requestedBenchReason = ""
   ): Promise<LeagueLiveRosterSuggestion> {
-    const payload = await requestJson<LeagueLiveRosterSuggestion>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live/roster-suggestion`, {
+    return requestJson<LeagueLiveRosterSuggestion>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live/roster-suggestion`, {
       method: "POST",
       body: JSON.stringify({
         roster: activeRosterPayload(leagueDetail),
@@ -230,6 +270,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         round_number: currentRound
       })
     });
+  }
+
+  function applyRosterSuggestion(payload: LeagueLiveRosterSuggestion) {
     setRosterSuggestion(payload);
     setSessionRoster(payload.roster || []);
     setBenchOverrideIds(payload.bench_player_ids || []);
@@ -238,6 +281,15 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setScores({});
     setMovementPlan(null);
     setMovementPlanStale(false);
+  }
+
+  async function requestRosterSuggestion(
+    leagueDetail: AdminLeagueManagerDetailResponse,
+    requestedBenchIds: number[] = [],
+    requestedBenchReason = ""
+  ): Promise<LeagueLiveRosterSuggestion> {
+    const payload = await fetchRosterSuggestion(leagueDetail, requestedBenchIds, requestedBenchReason);
+    applyRosterSuggestion(payload);
     return payload;
   }
 
@@ -248,8 +300,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       const payload = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
       const names = (payload.leagues || []).map((league) => league.league_name).filter(Boolean);
       setLeagues(names);
-      if (!leagueName && names.length) setLeagueName(names[0]);
-      setMessage(`Loaded ${names.length} league(s).`);
+      const selectedLeague = names.includes(leagueName) ? leagueName : (names[0] || "");
+      setLeagueName(selectedLeague);
+      if (selectedLeague) await loadLeagueDetail(selectedLeague);
+      else setMessage("No leagues are available.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load leagues.");
     } finally {
@@ -271,27 +325,39 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  async function loadLeagueDetail() {
-    if (!leagueName) {
+  async function loadLeagueDetail(selectedLeague = leagueName) {
+    if (!selectedLeague) {
       setMessage("Select a league first.");
       return;
     }
     setBusy(true);
+    setLoadingLeagueName(selectedLeague);
     setMessage(null);
     try {
-      const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}`);
+      const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}`);
+      const suggestion = await fetchRosterSuggestion(payload);
+      if (sessionId && (sessionId !== loadedSessionId || sessionLeagueName !== selectedLeague)) clearPersistedSessionBinding();
       setDetail(payload);
-      const suggestion = await requestRosterSuggestion(payload);
+      setLoadedLeagueName(selectedLeague);
+      applyRosterSuggestion(suggestion);
       setMessage(`Python suggested ${suggestion.courts.length} court(s) and ${suggestion.bench.length} bench player(s). Review before creating the session.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load league detail.");
+      const reason = error instanceof Error ? error.message : "Unable to load league detail.";
+      if (loadedLeagueName) setLeagueName(loadedLeagueName);
+      setMessage(detail || loadedLeagueName ? `${reason} The previous league roster remains visible and selected.` : reason);
     } finally {
+      setLoadingLeagueName(null);
       setBusy(false);
     }
   }
 
+  function selectLeague(selectedLeague: string) {
+    setLeagueName(selectedLeague);
+    void loadLeagueDetail(selectedLeague);
+  }
+
   async function refreshRosterSuggestion() {
-    if (!detail) {
+    if (!detail || detail.league.league_name !== leagueName) {
       setMessage("Load a league roster before requesting another Python roster suggestion.");
       return;
     }
@@ -341,15 +407,15 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  async function loadSessionDetail() {
-    if (!sessionId) {
+  async function loadSessionDetail(selectedSessionId = sessionId) {
+    if (!selectedSessionId) {
       setMessage("Select a persisted session first.");
       return;
     }
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<LeagueLiveDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(sessionId)}`);
+      const payload = await requestJson<LeagueLiveDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(selectedSessionId)}`);
       applySession(payload.session, payload.courts || [], payload.rounds || [], payload.publish_operations || []);
       setMessage("Persisted League Live session loaded.");
     } catch (error) {
@@ -360,14 +426,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   async function saveSessionSnapshot(confirmationText: string) {
-    if (!sessionId) {
-      setMessage("Create or load a persisted session before saving a snapshot.");
-      return;
-    }
+    if (!requireCurrentSession("saving a snapshot")) return;
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(sessionId)}/snapshot`, {
+      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/snapshot`, {
         method: "PATCH",
         body: JSON.stringify({
           status: sessionStatus,
@@ -476,10 +539,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   async function previewPythonMovement() {
-    if (!sessionId || !sessionUpdatedAt) {
-      setMessage("Create or reload the persisted session before previewing Python movement.");
-      return;
-    }
+    if (!requireCurrentSession("previewing Python movement")) return;
     const matches = buildScoredMatches();
     if (!matches.length) {
       setMessage("Enter at least one valid non-tied score before previewing Python movement.");
@@ -488,7 +548,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<LeagueLiveRoundPlan>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(sessionId)}/rounds/${encodeURIComponent(String(currentRound))}/plan`, {
+      const payload = await requestJson<LeagueLiveRoundPlan>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/rounds/${encodeURIComponent(String(currentRound))}/plan`, {
         method: "POST",
         body: JSON.stringify({
           expected_updated_at: sessionUpdatedAt,
@@ -513,10 +573,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   async function submitRound(confirmationText: string) {
-    if (!sessionId) {
-      setMessage("Create or load a persisted League Live session before submitting official scores.");
-      return;
-    }
+    if (!requireCurrentSession("submitting official scores")) return;
     const matches = buildScoredMatches();
     if (!matches.length || matches.length !== allPreviewMatches.length) {
       setMessage(`Score every generated match before publishing (${matches.length} of ${allPreviewMatches.length} complete).`);
@@ -530,7 +587,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setMessage(null);
     try {
       const plannedMovement = movementPlan.movement;
-      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(sessionId)}/rounds/${encodeURIComponent(String(currentRound))}/submit`, {
+      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/rounds/${encodeURIComponent(String(currentRound))}/submit`, {
         method: "POST",
         body: JSON.stringify({
           round_label: roundLabel,
@@ -558,7 +615,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       }
       setPreview(null);
       setScores({});
-      if (sessionId) await loadSessionDetail();
+      if (loadedSessionId) await loadSessionDetail(loadedSessionId);
       setRatingReview(payload.rating_review || null);
       const movementText = plannedMovement?.applied ? ` Applied ${plannedMovement.rows.filter((row) => row.direction !== "stay").length} court movement(s) for the next round.` : " No court movement was required.";
       setMessage(`${payload.idempotent_replay ? "Reconciled" : "Published"} ${payload.published_match_ids?.length ?? matches.length} league match(es) through one durable Python operation.${movementText}`);
@@ -570,15 +627,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   async function createGuest(confirmationText: string) {
-    if (!sessionId || !sessionUpdatedAt) {
-      setMessage("Create or load a persisted session before creating a guest.");
-      return;
-    }
+    if (!requireCurrentSession("creating a guest")) return;
     setBusy(true);
     setMessage(null);
     try {
-      const idempotencyKey = `guest:${sessionId}:${guestName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60)}`;
-      const payload = await requestJson<LeagueLiveGuestResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(sessionId)}/guests`, {
+      const idempotencyKey = `guest:${loadedSessionId}:${guestName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60)}`;
+      const payload = await requestJson<LeagueLiveGuestResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/guests`, {
         method: "POST",
         body: JSON.stringify({
           guest_name: guestName,
@@ -605,15 +659,15 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   async function reconcileRound(round: number, confirmationText: string) {
-    if (!sessionId) return;
+    if (!requireCurrentSession("reconciling a round")) return;
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(sessionId)}/rounds/${encodeURIComponent(String(round))}/reconcile`, {
+      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/rounds/${encodeURIComponent(String(round))}/reconcile`, {
         method: "POST",
         body: JSON.stringify({ confirmation_text: confirmationText, source: "next_league_live_round_reconcile" })
       });
-      await loadSessionDetail();
+      await loadSessionDetail(loadedSessionId);
       setRatingReview(payload.rating_review || null);
       setMessage(`Round ${round} publish and League Live snapshot are reconciled. No match was republished.`);
     } catch (error) {
@@ -624,11 +678,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   async function verifyCompensation(round: number, confirmationText: string) {
-    if (!sessionId) return;
+    if (!requireCurrentSession("verifying compensation")) return;
     setBusy(true);
     setMessage(null);
     try {
-      await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(sessionId)}/rounds/${encodeURIComponent(String(round))}/compensate`, {
+      await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/rounds/${encodeURIComponent(String(round))}/compensate`, {
         method: "POST",
         body: JSON.stringify({
           recovery_reference: compensationReference,
@@ -639,7 +693,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       });
       setCompensationReference("");
       setCompensationReason("");
-      await loadSessionDetail();
+      await loadSessionDetail(loadedSessionId);
       setMessage(`Round ${round} recovery is recorded as compensated. No active deterministic match context remained.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to verify League Live compensation.");
@@ -649,14 +703,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   async function downloadExport(kind: "matches" | "ratings" | "roster" | "rounds") {
-    if (!sessionId) {
-      setMessage("Load a persisted session before exporting.");
-      return;
-    }
+    if (!requireCurrentSession("exporting session data")) return;
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<LeagueLiveExportResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(sessionId)}/export?kind=${encodeURIComponent(kind)}`);
+      const payload = await requestJson<LeagueLiveExportResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/export?kind=${encodeURIComponent(kind)}`);
       const blob = new Blob([payload.csv_text], { type: payload.content_type });
       const href = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
@@ -703,28 +754,29 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>1. League and persisted session</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>League<br /><select value={leagueName} onChange={(event) => setLeagueName(event.target.value)} style={inputStyle}>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
-          <label>Week<br /><input value={weekTag} onChange={(event) => setWeekTag(event.target.value)} style={inputStyle} /></label>
-          <label>Round #<br /><input value={roundNumber} onChange={(event) => { setRoundNumber(event.target.value); setRoundLabel(`Round ${event.target.value || 1}`); }} style={inputStyle} /></label>
-          <label>Total rounds<br /><input value={totalRounds} onChange={(event) => setTotalRounds(event.target.value)} style={inputStyle} /></label>
-          <label>Date<br /><input type="date" value={matchDate} onChange={(event) => setMatchDate(event.target.value)} style={inputStyle} /></label>
+          <label>League<br /><select value={leagueName} onChange={(event) => selectLeague(event.target.value)} disabled={busy} style={inputStyle}>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+          <label>Week<br /><input value={weekTag} onChange={(event) => setWeekTag(event.target.value)} disabled={busy} style={inputStyle} /></label>
+          <label>Round #<br /><input value={roundNumber} onChange={(event) => { setRoundNumber(event.target.value); setRoundLabel(`Round ${event.target.value || 1}`); }} disabled={busy} style={inputStyle} /></label>
+          <label>Total rounds<br /><input value={totalRounds} onChange={(event) => setTotalRounds(event.target.value)} disabled={busy} style={inputStyle} /></label>
+          <label>Date<br /><input type="date" value={matchDate} onChange={(event) => setMatchDate(event.target.value)} disabled={busy} style={inputStyle} /></label>
           <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Loading…" : "Load leagues"}</button>
-          <button type="button" onClick={loadLeagueDetail} disabled={busy || !leagueName} style={buttonStyle}>Load roster</button>
+          <button type="button" onClick={() => void loadLeagueDetail()} disabled={busy || !leagueName} style={buttonStyle}>{loadingLeagueName ? "Loading roster…" : "Reload roster"}</button>
         </div>
+        {loadingLeagueName ? <p role="status" style={{ color: "#475569" }}>Loading {loadingLeagueName}. The current league roster will remain visible until the replacement is ready.</p> : null}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.75rem", marginTop: "0.75rem", alignItems: "end" }}>
           <label>Existing sessions<br />
-            <select value={sessionId} onChange={(event) => setSessionId(event.target.value)} style={inputStyle}>
+            <select value={sessionId} onChange={(event) => setSessionId(event.target.value)} disabled={busy} style={inputStyle}>
               <option value="">Select session…</option>
               {liveSessions.map((row) => <option key={row.id} value={row.id}>{row.league_name} · {row.week_tag} · R{row.current_round}/{row.total_rounds} · {row.status}</option>)}
             </select>
           </label>
           <button type="button" onClick={loadSessions} disabled={busy || !accessToken} style={ghostButtonStyle}>Load sessions</button>
-          <button type="button" onClick={loadSessionDetail} disabled={busy || !sessionId} style={ghostButtonStyle}>Resume selected</button>
+          <button type="button" onClick={() => void loadSessionDetail()} disabled={busy || !sessionId} style={ghostButtonStyle}>Resume selected</button>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginTop: "0.75rem", alignItems: "end" }}>
-          <label>Session status<br /><select value={sessionStatus} onChange={(event) => setSessionStatus(event.target.value)} style={inputStyle}><option>active</option><option>paused</option><option>complete</option><option>archived</option></select></label>
-          <label>Round label<br /><input value={roundLabel} onChange={(event) => setRoundLabel(event.target.value)} style={inputStyle} /></label>
-          <label>Notes<br /><input value={sessionNotes} onChange={(event) => setSessionNotes(event.target.value)} style={inputStyle} /></label>
+          <label>Session status<br /><select value={sessionStatus} onChange={(event) => setSessionStatus(event.target.value)} disabled={busy} style={inputStyle}><option>active</option><option>paused</option><option>complete</option><option>archived</option></select></label>
+          <label>Round label<br /><input value={roundLabel} onChange={(event) => setRoundLabel(event.target.value)} disabled={busy} style={inputStyle} /></label>
+          <label>Notes<br /><input value={sessionNotes} onChange={(event) => setSessionNotes(event.target.value)} disabled={busy} style={inputStyle} /></label>
           <ConfirmAction
             triggerLabel="Create persisted session"
             title="Create this League Live session?"
@@ -746,6 +798,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
                   <input
                     type="checkbox"
                     checked={benchOverrideIds.includes(Number(row.player_id))}
+                    disabled={busy}
                     onChange={(event) => {
                       setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id)));
                       markPlanStale();
@@ -755,14 +808,14 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
                 </label>
               ))}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
-              <label>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); markPlanStale(); }} placeholder="Required when changing Python's default bench" style={inputStyle} /></label>
+            <div data-responsive-bench-controls style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
+              <label>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="Required when changing Python's default bench" style={inputStyle} /></label>
               <button type="button" onClick={refreshRosterSuggestion} disabled={busy} style={ghostButtonStyle}>Refresh Python roster suggestion</button>
             </div>
             <small style={{ color: "#64748b" }}>Roster fingerprint: {rosterSuggestion.fingerprint.slice(0, 16)}…</small>
           </section>
         ) : null}
-        {sessionId ? <p style={{ color: "#475569" }}><strong>Active persisted session:</strong> {sessionId}</p> : <p style={{ color: "#92400e" }}>Create or resume a persisted session before submitting official scores.</p>}
+        {sessionIsCurrentLeague ? <p style={{ color: "#475569" }}><strong>Active persisted session:</strong> {loadedSessionId}</p> : <p style={{ color: "#92400e" }}>Create or resume a persisted session for the selected league before submitting official scores.</p>}
         {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("missing") || message.toLowerCase().includes("type") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
 
@@ -772,22 +825,22 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         <datalist id="league-live-players">{playerOptions.map((name) => <option key={name} value={name} />)}</datalist>
         {courts.map((court, index) => (
           <div key={index} style={{ borderTop: index ? "1px solid #e2e8f0" : undefined, paddingTop: index ? "0.75rem" : 0, marginTop: index ? "0.75rem" : 0 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "120px 180px 1fr auto", gap: "0.75rem", alignItems: "start" }}>
-              <label>Court<br /><input value={court.court} onChange={(event) => updateCourt(index, { court: event.target.value })} style={inputStyle} /></label>
-              <label>Format<br /><select value={court.formatType} onChange={(event) => updateCourt(index, { formatType: event.target.value })} style={inputStyle}>{(uploaderStatus.round_robin_format_options || ["4-player"]).map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
-              <label>Players, one per line<br /><textarea value={court.playerNames} onChange={(event) => updateCourt(index, { playerNames: event.target.value })} rows={4} style={inputStyle} /></label>
-              <button type="button" onClick={() => removeCourt(index)} style={ghostButtonStyle}>Remove</button>
+            <div data-responsive-court-grid style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: "0.75rem", alignItems: "start" }}>
+              <label>Court<br /><input value={court.court} onChange={(event) => updateCourt(index, { court: event.target.value })} disabled={busy} style={inputStyle} /></label>
+              <label>Format<br /><select value={court.formatType} onChange={(event) => updateCourt(index, { formatType: event.target.value })} disabled={busy} style={inputStyle}>{(uploaderStatus.round_robin_format_options || ["4-player"]).map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
+              <label>Players, one per line<br /><textarea value={court.playerNames} onChange={(event) => updateCourt(index, { playerNames: event.target.value })} disabled={busy} rows={4} style={inputStyle} /></label>
+              <button type="button" onClick={() => removeCourt(index)} disabled={busy} style={ghostButtonStyle}>Remove</button>
             </div>
           </div>
         ))}
-        <p><button type="button" onClick={addCourt} style={ghostButtonStyle}>Add court</button> <button type="button" onClick={generatePreview} disabled={busy || !leagueName} style={buttonStyle}>Generate match slots</button></p>
+        <p><button type="button" onClick={addCourt} disabled={busy} style={ghostButtonStyle}>Add court</button> <button type="button" onClick={generatePreview} disabled={busy || !leagueName} style={buttonStyle}>Generate match slots</button></p>
         <ConfirmAction
           triggerLabel="Save session snapshot"
           title="Save this League Live snapshot?"
           description="This persists the current session status, roster, bench, courts, round, and notes."
           confirmLabel="Yes, save snapshot"
           confirmationText="SAVE SESSION"
-          disabled={busy || !sessionId || !sessionUpdatedAt}
+          disabled={busy || !sessionIsCurrentLeague}
           busy={busy}
           onConfirm={saveSessionSnapshot}
         />
@@ -805,7 +858,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         </article>
       ) : null}
 
-      {sessionId && liveDomainStatus.submit_enabled ? (
+      {sessionIsCurrentLeague && liveDomainStatus.submit_enabled ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Publish recovery and exports</h2>
           <p style={{ color: "#475569" }}>A publish operation records intent before scores, verifies every deterministic match context, then reconciles the League Live snapshot. Retry or reconcile never republishes verified matches.</p>
@@ -842,8 +895,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
               <summary>Record completed Match Log / Replay History compensation</summary>
               <p style={{ color: "#92400e" }}>Use this only after recovery removed or soft-excluded every deterministic match context and ratings replay is complete. FastAPI verifies that no active context remains.</p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-                <label>Recovery reference<br /><input value={compensationReference} onChange={(event) => setCompensationReference(event.target.value)} placeholder="Match Log / replay operation ID" style={inputStyle} /></label>
-                <label>Reason<br /><input value={compensationReason} onChange={(event) => setCompensationReason(event.target.value)} placeholder="At least 10 characters" style={inputStyle} /></label>
+                <label>Recovery reference<br /><input value={compensationReference} onChange={(event) => setCompensationReference(event.target.value)} disabled={busy} placeholder="Match Log / replay operation ID" style={inputStyle} /></label>
+                <label>Reason<br /><input value={compensationReason} onChange={(event) => setCompensationReason(event.target.value)} disabled={busy} placeholder="At least 10 characters" style={inputStyle} /></label>
                 <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>{publishOperations.filter((operation) => ["published", "reconciling", "recovery_required"].includes(operation.status)).map((operation) => <ConfirmAction
                   key={operation.id}
                   triggerLabel={`Verify R${operation.round_number}`}
@@ -852,7 +905,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
                   confirmLabel="Yes, verify compensation"
                   confirmationText="VERIFY LEAGUE COMPENSATION"
                   tone="danger"
-                  disabled={busy || !compensationReference || compensationReason.trim().length < 10}
+                  disabled={busy || !sessionIsCurrentLeague || !compensationReference || compensationReason.trim().length < 10}
                   busy={busy}
                   onConfirm={(confirmationText) => verifyCompensation(operation.round_number, confirmationText)}
                 />)}</div>
@@ -860,7 +913,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
             </details>
           ) : null}
           <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-            {(["matches", "ratings", "roster", "rounds"] as const).map((kind) => <button key={kind} type="button" onClick={() => downloadExport(kind)} disabled={busy} style={ghostButtonStyle}>Export {kind} CSV</button>)}
+            {(["matches", "ratings", "roster", "rounds"] as const).map((kind) => <button key={kind} type="button" onClick={() => downloadExport(kind)} disabled={busy || !sessionIsCurrentLeague} style={ghostButtonStyle}>Export {kind} CSV</button>)}
           </p>
         </article>
       ) : null}
@@ -884,8 +937,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
                 {(court.matches || []).map((match) => (
                   <div key={match.row_id} style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px", gap: "0.75rem", alignItems: "center", borderTop: "1px solid #f1f5f9", padding: "0.5rem 0" }}>
                     <div><strong>{match.label}</strong><br />{match.t1.map((p) => p.name).join(" / ")} vs {match.t2.map((p) => p.name).join(" / ")}</div>
-                    <input value={scores[match.row_id]?.scoreT1 || ""} onChange={(event) => { setScores((current) => ({ ...current, [match.row_id]: { ...(current[match.row_id] || { scoreT1: "", scoreT2: "" }), scoreT1: event.target.value } })); markPlanStale(); }} placeholder="Team 1" style={inputStyle} />
-                    <input value={scores[match.row_id]?.scoreT2 || ""} onChange={(event) => { setScores((current) => ({ ...current, [match.row_id]: { ...(current[match.row_id] || { scoreT1: "", scoreT2: "" }), scoreT2: event.target.value } })); markPlanStale(); }} placeholder="Team 2" style={inputStyle} />
+                    <input value={scores[match.row_id]?.scoreT1 || ""} onChange={(event) => { setScores((current) => ({ ...current, [match.row_id]: { ...(current[match.row_id] || { scoreT1: "", scoreT2: "" }), scoreT1: event.target.value } })); markPlanStale(); }} disabled={busy} placeholder="Team 1" style={inputStyle} />
+                    <input value={scores[match.row_id]?.scoreT2 || ""} onChange={(event) => { setScores((current) => ({ ...current, [match.row_id]: { ...(current[match.row_id] || { scoreT1: "", scoreT2: "" }), scoreT2: event.target.value } })); markPlanStale(); }} disabled={busy} placeholder="Team 2" style={inputStyle} />
                   </div>
                 ))}
               </section>
@@ -895,25 +948,25 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           <section style={{ padding: "0.75rem", border: "1px solid #e2e8f0", borderRadius: "12px", marginBottom: "0.75rem" }}>
             <h3 style={{ marginTop: 0 }}>Next-round roster change</h3>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>
-              <label>Action<br /><select value={rosterAction} onChange={(event) => { setRosterAction(event.target.value as "none" | "add" | "substitute"); markPlanStale(); }} style={inputStyle}><option value="none">No roster change</option><option value="add">Add player</option><option value="substitute">Substitute player</option></select></label>
-              {rosterAction !== "none" ? <label>Incoming player<br /><select value={incomingPlayerId} onChange={(event) => { setIncomingPlayerId(event.target.value); markPlanStale(); }} style={inputStyle}><option value="">Select player…</option>{incomingPlayerOptions.map((player) => <option key={String(player.id)} value={String(player.id)}>{player.name}</option>)}</select></label> : null}
-              {rosterAction === "substitute" ? <label>Replace active player<br /><select value={replacedPlayerId} onChange={(event) => { setReplacedPlayerId(event.target.value); markPlanStale(); }} style={inputStyle}><option value="">Select player…</option>{activeSessionRoster.map((player) => <option key={player.player_id} value={String(player.player_id)}>{player.player_name}</option>)}</select></label> : null}
+              <label>Action<br /><select value={rosterAction} onChange={(event) => { setRosterAction(event.target.value as "none" | "add" | "substitute"); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="none">No roster change</option><option value="add">Add player</option><option value="substitute">Substitute player</option></select></label>
+              {rosterAction !== "none" ? <label>Incoming player<br /><select value={incomingPlayerId} onChange={(event) => { setIncomingPlayerId(event.target.value); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="">Select player…</option>{incomingPlayerOptions.map((player) => <option key={String(player.id)} value={String(player.id)}>{player.name}</option>)}</select></label> : null}
+              {rosterAction === "substitute" ? <label>Replace active player<br /><select value={replacedPlayerId} onChange={(event) => { setReplacedPlayerId(event.target.value); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="">Select player…</option>{activeSessionRoster.map((player) => <option key={player.player_id} value={String(player.player_id)}>{player.player_name}</option>)}</select></label> : null}
             </div>
             {liveDomainStatus.submit_enabled ? (
               <details style={{ marginTop: "0.75rem" }}>
                 <summary>Create a guest player for this session</summary>
                 <p style={{ color: "#475569" }}>Guest creation makes a real club player record so ratings and Match Log recovery remain authoritative. Use Player Editor to retire an abandoned guest.</p>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-                  <label>Guest name<br /><input value={guestName} onChange={(event) => setGuestName(event.target.value)} style={inputStyle} /></label>
-                  <label>Starting JUPR<br /><input value={guestJupr} onChange={(event) => setGuestJupr(event.target.value)} type="number" min="1" max="7" step="0.1" style={inputStyle} /></label>
-                  <label>Operator reason<br /><input value={guestReason} onChange={(event) => setGuestReason(event.target.value)} placeholder="At least 10 characters" style={inputStyle} /></label>
+                  <label>Guest name<br /><input value={guestName} onChange={(event) => setGuestName(event.target.value)} disabled={busy} style={inputStyle} /></label>
+                  <label>Starting JUPR<br /><input value={guestJupr} onChange={(event) => setGuestJupr(event.target.value)} disabled={busy} type="number" min="1" max="7" step="0.1" style={inputStyle} /></label>
+                  <label>Operator reason<br /><input value={guestReason} onChange={(event) => setGuestReason(event.target.value)} disabled={busy} placeholder="At least 10 characters" style={inputStyle} /></label>
                   <ConfirmAction
                     triggerLabel="Create guest"
                     title="Create this guest player?"
                     description="This creates a real club player record for authoritative ratings and Match Log recovery."
                     confirmLabel="Yes, create guest"
                     confirmationText="CREATE LIVE GUEST"
-                    disabled={busy || !sessionId || !guestName.trim() || guestReason.trim().length < 10}
+                    disabled={busy || !sessionIsCurrentLeague || !guestName.trim() || guestReason.trim().length < 10}
                     busy={busy}
                     onConfirm={createGuest}
                   />
@@ -924,9 +977,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
               <details style={{ marginTop: "0.75rem" }}>
                 <summary>Review next-round bench assignments</summary>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.35rem", marginTop: "0.5rem" }}>
-                  {sessionRoster.map((row) => <label key={row.player_id}><input type="checkbox" checked={benchOverrideIds.includes(Number(row.player_id))} onChange={(event) => { setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id))); markPlanStale(); }} /> Bench {row.player_name}</label>)}
+                  {sessionRoster.map((row) => <label key={row.player_id}><input type="checkbox" checked={benchOverrideIds.includes(Number(row.player_id))} onChange={(event) => { setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id))); markPlanStale(); }} disabled={busy} /> Bench {row.player_name}</label>)}
                 </div>
-                <label style={{ display: "block", marginTop: "0.5rem" }}>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); markPlanStale(); }} placeholder="Required for a non-default bench" style={inputStyle} /></label>
+                <label style={{ display: "block", marginTop: "0.5rem" }}>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="Required for a non-default bench" style={inputStyle} /></label>
               </details>
             ) : null}
           </section>
@@ -937,13 +990,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead><tr><th align="left">Player</th><th align="right">Wins</th><th align="right">Diff</th><th align="left">From</th><th align="left">Python</th><th align="left">Final target</th></tr></thead>
-                  <tbody>{movementPlan.movement.rows.map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{row.wins}</td><td align="right">{row.differential}</td><td>Court {row.from_court}</td><td>Court {row.suggested_court}</td><td><select aria-label={`Final court for ${row.player_name}`} value={movementOverrides[row.player_id] || String(row.to_court)} onChange={(event) => { setMovementOverrides((current) => ({ ...current, [row.player_id]: event.target.value })); setMovementPlanStale(true); }} style={inputStyle}>{courts.map((court) => <option key={court.court} value={court.court}>Court {court.court}</option>)}</select></td></tr>)}</tbody>
+                  <tbody>{movementPlan.movement.rows.map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{row.wins}</td><td align="right">{row.differential}</td><td>Court {row.from_court}</td><td>Court {row.suggested_court}</td><td><select aria-label={`Final court for ${row.player_name}`} value={movementOverrides[row.player_id] || String(row.to_court)} onChange={(event) => { setMovementOverrides((current) => ({ ...current, [row.player_id]: event.target.value })); setMovementPlanStale(true); }} disabled={busy} style={inputStyle}>{courts.map((court) => <option key={court.court} value={court.court}>Court {court.court}</option>)}</select></td></tr>)}</tbody>
                 </table>
               </div>
-              <label style={{ display: "block", marginTop: "0.75rem" }}>Manual movement override reason<br /><input value={overrideReason} onChange={(event) => { setOverrideReason(event.target.value); markPlanStale(); }} placeholder="At least 10 characters when changing a Python target" style={inputStyle} /></label>
+              <label style={{ display: "block", marginTop: "0.75rem" }}>Manual movement override reason<br /><input value={overrideReason} onChange={(event) => { setOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="At least 10 characters when changing a Python target" style={inputStyle} /></label>
             </article>
           ) : null}
-          <p><button type="button" onClick={previewPythonMovement} disabled={busy || validScoreCount !== allPreviewMatches.length || !sessionId || !sessionUpdatedAt} style={ghostButtonStyle}>{busy ? "Planning…" : "Preview Python movement"}</button></p>
+          <p><button type="button" onClick={previewPythonMovement} disabled={busy || validScoreCount !== allPreviewMatches.length || !sessionIsCurrentLeague} style={ghostButtonStyle}>{busy ? "Planning…" : "Preview Python movement"}</button></p>
           <ConfirmAction
             triggerLabel="Publish complete league round"
             title="Publish this complete league round?"
@@ -951,7 +1004,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
             confirmLabel="Yes, publish round"
             confirmationText="SUBMIT LEAGUE ROUND"
             tone="danger"
-            disabled={busy || !liveDomainStatus.submit_enabled || validScoreCount !== allPreviewMatches.length || !sessionId || !movementPlan || movementPlanStale}
+            disabled={busy || !liveDomainStatus.submit_enabled || validScoreCount !== allPreviewMatches.length || !sessionIsCurrentLeague || !movementPlan || movementPlanStale}
             busy={busy}
             onConfirm={submitRound}
           />

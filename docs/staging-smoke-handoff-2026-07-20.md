@@ -152,15 +152,18 @@ and deduplication tests. Preserve that preference in all later packets.
   authenticated identity and records the run/readback. The prior dismissal was
   performed through an authenticated staging-admin session; personal identity
   belongs in private evidence, not this public repository.
-- **Witness/reviewer:** a different person who independently checks that the
-  candidate identity, approved scope, before/after state, audit evidence, and final
-  `none` restoration all match the record. They do not share the operator's login
-  or token and do not need to perform the mutation.
+- **Witness/reviewer:** a different person observes or independently reviews each
+  manual-only action and its visible result. They confirm that the action stayed
+  within the approved packet and that the expected recovery was shown. They do not
+  share the operator's login or token and do not perform deployment bookkeeping.
+- **Automated-only waves:** the candidate-bound workflow artifact remains the
+  review evidence when no manual-only action is involved.
 
-The separation is an acceptance-control requirement, not another application
-role. One person may run an exploratory smoke, but formal acceptance remains
-incomplete until a distinct witness is named. If no witness is currently
-available, keep the relevant manual-book results `Pending`; do not fabricate one.
+The operator and witness judge visible behavior; the evidence runner owns deployment
+IDs, SHAs, audit bindings, and restoration artifacts. Do not ask either person to
+transcribe those identifiers. The witness is an acceptance-control role, not
+another application role, and must never be fabricated. If a distinct witness is
+not available for a manual-only row, leave that row `Pending`.
 
 ## Stop conditions
 
