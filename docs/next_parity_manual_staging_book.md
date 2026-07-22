@@ -14,24 +14,25 @@ weakening those contracts.
 
 | Field | Recorded value |
 |---|---|
-| Application candidate Git SHA | — |
-| Final stacked PR | — |
-| Vercel preview URL | — |
-| Vercel deployment ID | — |
-| Vercel immutable deployment origin | — |
-| Fly staging image ref | — |
-| Deployment identity preflight artifact | — |
+| Application candidate Git SHA | `6c27f5de5c04b1d565ba051efb322fff2804ff10` |
+| Final stacked PR | `#1021` (`Auto-load authenticated admin selections`) |
+| Vercel preview URL | `https://jupr-git-staging-pickleballattrespalapas1.vercel.app` |
+| Vercel deployment ID | `dpl_9NtvgLv9GtRbMCUDTHcR2KezobVo` |
+| Vercel immutable deployment origin | `https://jupr-mimau97b5-pickleballattrespalapas1.vercel.app` |
+| Fly staging image ref | `registry.fly.io/juprleagues-api-staging:deployment-01KY5M69KJ1DPDFSSRQWNBBSTR` |
+| Deployment identity preflight artifact | `candidate=6c27f5de5c04b1d565ba051efb322fff2804ff10; vercel=dpl_9NtvgLv9GtRbMCUDTHcR2KezobVo; fly=registry.fly.io/juprleagues-api-staging:deployment-01KY5M69KJ1DPDFSSRQWNBBSTR; artifact=https://github.com/pickleballattrespalapas/JUPR/actions/runs/29950580803` |
 | Staging Supabase project ref | `sijpxjxvdtrehmqvirfi` |
-| Schema inventory / migration head evidence | — |
-| Streamlit fallback URL / build | — |
-| Staging role accounts exercised | — |
-| Session start / end | — |
-| Primary operator | — |
-| Witness / reviewer | — |
+| Schema inventory / migration head evidence | Targeted-only Supabase migration read `2026-07-22`: support-intake guardrails, Orders 27/28, and `baseline_worker_run_log` present; full inventory/head proof pending |
+| Streamlit fallback URL / build | `https://juprtrespalapas.streamlit.app`; build identity pending |
+| Staging role accounts exercised | Authenticated staging admin only; private account identity retained outside the public record; full role coverage pending |
+| Session start / end | `2026-07-22` / in progress |
+| Primary operator | Joe Baumann |
+| Witness / reviewer | Pending — required before manual-only write rows |
 
-Keep the formal table above blank until the hardening patch is deployed. The last
-deployed baseline is preserved separately so it cannot be mistaken for the next
-candidate:
+The formal table above now binds the deployed hardening candidate. If any
+application artifact changes, clear and rebind the candidate-specific fields
+before accepting more evidence. The last deployed baseline remains preserved
+separately so it cannot be mistaken for this candidate:
 
 | Baseline field | Preserved value |
 |---|---|
@@ -43,9 +44,9 @@ candidate:
 | Streamlit fallback | `https://juprtrespalapas.streamlit.app` |
 | Prior operator/session | authenticated staging admin; `2026-07-20 / 2026-07-21` |
 
-After the hardening patch lands, populate the formal table with the new SHA, PR,
-Vercel deployment ID/origin, Fly image, and preflight artifact as one unit. Do not
-append new-candidate evidence to the preserved baseline table.
+Keep the SHA, PR, Vercel deployment ID/origin, Fly image, and preflight artifact
+bound as one unit. Do not append current-candidate evidence to the preserved
+baseline table.
 
 If any candidate identity changes during the session, stop and start a new book.
 Evidence from different SHAs, Fly releases, Vercel deployments, or Supabase projects
@@ -53,21 +54,46 @@ must not be combined into one acceptance result.
 Record the identity artifact in the exact form
 `candidate=<sha>; vercel=<deployment-id>; fly=<image-ref>; artifact=<run-or-url>`.
 
+The initial Fly `none` release was workflow run `29950338666`, machine
+`01KY5M7NG6EJBGWXV1TV79978R`; the identity record above binds its exact image to
+the canonical Staging Smoke artifact.
+
+### Targeted UX regression observations
+
+These observations document only the narrow filter and automatic-selection checks
+requested after PRs `#1020` and `#1021`. They do not close either PR's entire
+regression surface, mark the broader manual page rows `Pass`, or replace the
+disposable write/recovery procedures later in this book.
+
+| Surface | Candidate | Observation | Result |
+|---|---|---|---|
+| Match Log filters | `60040bc04a30b387e932976dca02499bc30cc5d1` (direct ancestor) | League/week dropdown filtering reduced the 15-row staging fixture to the expected three Week 7 rows; Clear filters restored all 15. PR `#1021` did not touch Match Log. | Targeted pass; ancestor-only context |
+| League Printout | `6c27f5de5c04b1d565ba051efb322fff2804ff10` | An authenticated hard refresh populated `Spring League` and rendered the printout without using **Refresh leagues**. | Targeted pass |
+| League Live | `6c27f5de5c04b1d565ba051efb322fff2804ff10` | With `write_wave=none`, the route failed closed and exposed no live-write controls. Automatic league loading remains unobservable until the dedicated League Live gate is enabled. | Guard pass; auto-load deferred |
+| Tournament Setup | `6c27f5de5c04b1d565ba051efb322fff2804ff10` | An authenticated hard refresh selected `Staging Summer Classic` and rendered settings plus builder draft without using **Refresh list**. No save, review, or publish control was used. | Targeted pass |
+
 ## Fail-closed preflight
 
-- [ ] `/api/environment` reports `environment=staging`, `vercel_environment=preview`, the candidate SHA, exact Vercel deployment ID, staging Fly API origin, and staging Supabase origin.
-- [ ] Fly `/health` reports the same candidate SHA, exact `FLY_IMAGE_REF`, staging app name, and staging Supabase project ref.
-- [ ] Preview data isolation and preview auth isolation are both configured and active.
+- [x] `/api/environment` reports `environment=staging`, `vercel_environment=preview`, the candidate SHA, exact Vercel deployment ID, staging Fly API origin, and staging Supabase origin (canonical run `29950580803`).
+- [x] Fly `/health` reports the same candidate SHA, exact `FLY_IMAGE_REF`, staging app name, and staging Supabase project ref (deploy/verify run `29950338666`; live readback repeated after completion).
+- [x] Preview data isolation and preview auth isolation are both configured and active (deployment and canonical-smoke configuration gates passed).
 - [ ] The Vercel automation bypass is available only to the test runner.
 - [ ] FastAPI holds the staging service-role key; neither Vercel nor any `NEXT_PUBLIC_*` variable does.
 - [ ] Production write flags remain off; staging is `write_wave=none` at rest and enables only one approved workflow while it is under test.
-- [ ] No "enable all" configuration is used; a distinct final Fly release restores `none`, `business_data_write_wave_active=false`, and every controlled write flag false.
-- [ ] Email mode is `dry_run` or `staging_redirect`, with the redirect inbox visibly identified.
+- [x] No "enable all" configuration is used; Fly readback reports `none`, `business_data_write_wave_active=false`, and every controlled write flag false.
+- [x] Email mode is `dry_run`; live player-update email is disabled.
 - [ ] Required migrations are applied in documented order and their private grants/RLS are verified.
 - [ ] Order-27 migration `20260719204700_tournament_operations_guard_surface.sql` and its Operations, official-publish, and email-handoff gates are integrated and verified.
 - [ ] Disposable fixture IDs, exact resource refs, route-supported idempotency keys, and cleanup/recovery owners are recorded before any write.
 - [ ] Match Log, Replay History, audit log, provider log, and Streamlit fallback links are open before high-risk writes.
 - [ ] Public, auth, admin-read, and write waves pass their automated route-specific suites against this exact candidate.
+
+Targeted preflight evidence for the approved intake packet is narrower than the
+unchecked formal-parity items above: the remote ledger contains the support-intake
+guardrails plus Orders 27 and 28; `public_support_requests` has RLS enabled, no
+`anon`/`authenticated` DML, and service-role DML; and every controlled write gate
+is currently disabled. Full cross-surface migration, secret-placement, and
+integration acceptance remains pending.
 
 ## Stop conditions
 
