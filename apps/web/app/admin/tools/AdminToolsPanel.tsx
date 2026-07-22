@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type StatusResponse = { enabled: boolean; status: string; roles?: string[]; retention_days?: number; retention_cutoff?: string };
@@ -59,11 +60,9 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   const [targetEmail, setTargetEmail] = useState("");
   const [targetRole, setTargetRole] = useState("read_only");
   const [targetUserId, setTargetUserId] = useState("");
-  const [confirmation, setConfirmation] = useState("");
   const [workerMode, setWorkerMode] = useState("batch");
   const [workerMaxJobs, setWorkerMaxJobs] = useState("25");
   const [workerBudget, setWorkerBudget] = useState("15");
-  const [workerConfirmation, setWorkerConfirmation] = useState("");
   const [recomputeMode, setRecomputeMode] = useState("dry-run");
   const [recomputePlayerId, setRecomputePlayerId] = useState("");
   const [recomputeBadgeId, setRecomputeBadgeId] = useState("");
@@ -72,17 +71,14 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   const [recomputeSince, setRecomputeSince] = useState("");
   const [recomputeUntil, setRecomputeUntil] = useState("");
   const [recomputeStrictGlobal, setRecomputeStrictGlobal] = useState(false);
-  const [recomputeConfirmation, setRecomputeConfirmation] = useState("");
   const [lastWorkerResult, setLastWorkerResult] = useState<WorkerResponse | null>(null);
   const [tournamentBackfillPreview, setTournamentBackfillPreview] = useState<TournamentBackfillPreviewResponse | null>(null);
   const [selectedTournamentBackfillGameIds, setSelectedTournamentBackfillGameIds] = useState<string[]>([]);
-  const [tournamentBackfillConfirmation, setTournamentBackfillConfirmation] = useState("");
   const [socialSubmissionStatus, setSocialSubmissionStatus] = useState("pending");
   const [socialSubmissionQueue, setSocialSubmissionQueue] = useState<SocialSubmissionListResponse | null>(null);
   const [selectedSocialSubmissionId, setSelectedSocialSubmissionId] = useState("");
   const [socialSubmissionAction, setSocialSubmissionAction] = useState<"approve" | "reject">("approve");
   const [socialSubmissionReason, setSocialSubmissionReason] = useState("");
-  const [socialSubmissionConfirmation, setSocialSubmissionConfirmation] = useState("");
   const [roleOperationKey, setRoleOperationKey] = useState("");
   const [workerOperationKey, setWorkerOperationKey] = useState("");
   const [recomputeOperationKey, setRecomputeOperationKey] = useState("");
@@ -90,7 +86,6 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   const [socialOperationKey, setSocialOperationKey] = useState("");
   const [operationLookupKey, setOperationLookupKey] = useState("");
   const [operationLookup, setOperationLookup] = useState<GuardedOperationResponse | null>(null);
-  const [recoveryConfirmation, setRecoveryConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -126,39 +121,33 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     finally { setBusy(false); }
   }
 
-  async function saveRole(action: "upsert" | "revoke") {
-    const expected = action === "upsert" ? "SAVE ROLE" : "REVOKE ROLE";
-    if (confirmation.trim().toUpperCase() !== expected) { setMessage(`Type ${expected} to continue.`); return; }
+  async function saveRole(action: "upsert" | "revoke", confirmationText: string) {
     setBusy(true); setMessage(null);
     try {
       const key = roleOperationKey || `admin-role:${Date.now()}:${crypto.randomUUID()}`;
       if (!roleOperationKey) setRoleOperationKey(key);
       const payload = await requestJson<RoleResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/roles`, {
         method: "PATCH",
-        body: JSON.stringify({ email: targetEmail, role: targetRole, user_id: targetUserId || null, action, confirmation_text: confirmation, operation_key: key })
+        body: JSON.stringify({ email: targetEmail, role: targetRole, user_id: targetUserId || null, action, confirmation_text: confirmationText, operation_key: key })
       });
       setOverview((current) => current ? { ...current, roles: payload.roles } : current);
       setMessage(payload.audit_warning ? `Saved, but audit warning: ${payload.audit_warning}` : (action === "upsert" ? "Role assignment saved." : "Role assignment revoked."));
-      setConfirmation("");
       setRoleOperationKey("");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to update role assignment."); }
     finally { setBusy(false); }
   }
 
-  async function runQueueWorker() {
-    const expected = workerMode === "drain" ? "DRAIN BADGE QUEUE" : "PROCESS BADGE QUEUE";
-    if (workerConfirmation.trim().toUpperCase() !== expected) { setMessage(`Type ${expected} to run the badge queue worker.`); return; }
+  async function runQueueWorker(confirmationText: string) {
     setBusy(true); setMessage(null);
     try {
       const key = workerOperationKey || `badge-queue:${Date.now()}:${crypto.randomUUID()}`;
       if (!workerOperationKey) setWorkerOperationKey(key);
       const payload = await requestJson<WorkerResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/workers/badge-queue`, {
         method: "POST",
-        body: JSON.stringify({ mode: workerMode, max_jobs: Number(workerMaxJobs), time_budget_seconds: Number(workerBudget), confirmation_text: workerConfirmation, operation_key: key })
+        body: JSON.stringify({ mode: workerMode, max_jobs: Number(workerMaxJobs), time_budget_seconds: Number(workerBudget), confirmation_text: confirmationText, operation_key: key })
       });
       setLastWorkerResult(payload);
       setMessage(payload.audit_warning ? `Badge queue completed with audit warning: ${payload.audit_warning}` : "Badge queue worker completed.");
-      setWorkerConfirmation("");
       setWorkerOperationKey("");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to run badge queue worker."); }
     finally { setBusy(false); }
@@ -170,7 +159,6 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
       const payload = await requestJson<TournamentBackfillPreviewResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/backfills/tournament-matches/preview?limit=500`);
       setTournamentBackfillPreview(payload);
       setSelectedTournamentBackfillGameIds([]);
-      setTournamentBackfillConfirmation("");
       setMessage(`Tournament backfill preview found ${String(payload.summary.ready_count ?? 0)} ready and ${String(payload.summary.blocked_count ?? 0)} blocked missing match candidate(s). No rows were written.`);
     } catch (error) { setTournamentBackfillPreview(null); setMessage(error instanceof Error ? error.message : "Unable to preview missing tournament matches."); }
     finally { setBusy(false); }
@@ -183,7 +171,6 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
       setSocialSubmissionQueue(payload);
       setSelectedSocialSubmissionId("");
       setSocialSubmissionReason("");
-      setSocialSubmissionConfirmation("");
       setMessage(`Loaded ${payload.submissions.length} ${payload.status} Club Social submission(s). No rows were written.`);
     } catch (error) { setSocialSubmissionQueue(null); setMessage(error instanceof Error ? error.message : "Unable to load the Club Social review queue."); }
     finally { setBusy(false); }
@@ -193,14 +180,11 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     setSelectedSocialSubmissionId(submission.id);
     setSocialSubmissionAction(submission.status === "saved" ? "reject" : "approve");
     setSocialSubmissionReason("");
-    setSocialSubmissionConfirmation("");
   }
 
-  async function moderateSocialSubmission() {
+  async function moderateSocialSubmission(confirmationText: string) {
     const selected = socialSubmissionQueue?.submissions.find((submission) => submission.id === selectedSocialSubmissionId);
     if (!selected || !socialSubmissionQueue) { setMessage("Select and review one Club Social submission first."); return; }
-    const expectedConfirmation = socialSubmissionQueue.confirmation_text[socialSubmissionAction];
-    if (socialSubmissionConfirmation.trim().toUpperCase() !== expectedConfirmation) { setMessage(`Type ${expectedConfirmation} to moderate this submission.`); return; }
     if (socialSubmissionAction === "reject" && !socialSubmissionReason.trim()) { setMessage("Enter a rejection reason before rejecting this submission."); return; }
     setBusy(true); setMessage(null);
     try {
@@ -212,7 +196,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           action: socialSubmissionAction,
           expected_status: selected.status,
           rejection_reason: socialSubmissionReason,
-          confirmation_text: socialSubmissionConfirmation,
+          confirmation_text: confirmationText,
           operation_key: key,
           source: "next_admin_tools_social_review"
         })
@@ -220,7 +204,6 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
       setSocialSubmissionQueue((current) => current ? { ...current, submissions: current.submissions.filter((submission) => submission.id !== selected.id), summary: { ...current.summary, returned_count: Math.max(0, current.submissions.length - 1) } } : current);
       setSelectedSocialSubmissionId("");
       setSocialSubmissionReason("");
-      setSocialSubmissionConfirmation("");
       setSocialOperationKey("");
       const warning = payload.warnings.length ? ` Audit warning: ${payload.warnings.join(" ")}` : "";
       setMessage(`Submission ${payload.action === "approve" ? "approved" : "rejected"}.${warning}`);
@@ -228,10 +211,9 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     finally { setBusy(false); }
   }
 
-  async function applyTournamentMatchBackfill() {
+  async function applyTournamentMatchBackfill(confirmationText: string) {
     if (!tournamentBackfillPreview) { setMessage("Load and review a current tournament backfill preview first."); return; }
     if (!selectedTournamentBackfillGameIds.length) { setMessage("Select at least one ready tournament game to backfill."); return; }
-    if (tournamentBackfillConfirmation.trim().toUpperCase() !== tournamentBackfillPreview.confirmation_text) { setMessage(`Type ${tournamentBackfillPreview.confirmation_text} to apply the selected backfill.`); return; }
     setBusy(true); setMessage(null);
     try {
       const key = backfillOperationKey || `tournament-backfill:${Date.now()}:${crypto.randomUUID()}`;
@@ -242,22 +224,20 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           game_ids: selectedTournamentBackfillGameIds,
           preview_fingerprint: tournamentBackfillPreview.preview_fingerprint,
           preview_limit: Number(tournamentBackfillPreview.summary.candidate_limit ?? 500),
-          confirmation_text: tournamentBackfillConfirmation,
+          confirmation_text: confirmationText,
           operation_key: key,
           source: "next_admin_tools_tournament_match_backfill"
         })
       });
       setTournamentBackfillPreview(null);
       setSelectedTournamentBackfillGameIds([]);
-      setTournamentBackfillConfirmation("");
       setBackfillOperationKey("");
       setMessage(`Backfilled ${payload.inserted_count} reviewed tournament match(es). Operation ${payload.operation_id}. Reload the preview and verify Match Log before any further write.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to apply the tournament match backfill."); }
     finally { setBusy(false); }
   }
 
-  async function runBadgeRecompute() {
-    if (recomputeMode !== "dry-run" && recomputeConfirmation.trim().toUpperCase() !== "RUN BADGE RECOMPUTE") { setMessage("Type RUN BADGE RECOMPUTE to apply badge recompute changes."); return; }
+  async function runBadgeRecompute(confirmationText = "") {
     setBusy(true); setMessage(null);
     try {
       const key = recomputeMode === "dry-run" ? "" : (recomputeOperationKey || `tools-badge-recompute:${Date.now()}:${crypto.randomUUID()}`);
@@ -274,13 +254,12 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           until: recomputeUntil || null,
           allow_strict_global: recomputeStrictGlobal,
           match_limit: 50000,
-          confirmation_text: recomputeConfirmation,
+          confirmation_text: confirmationText,
           operation_key: key
         })
       });
       setLastWorkerResult(payload);
       setMessage(payload.read_only ? "Read-only badge recompute preview finished; no rows were written." : "Badge recompute finished.");
-      setRecomputeConfirmation("");
       if (recomputeMode !== "dry-run") setRecomputeOperationKey("");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to run badge recompute."); }
     finally { setBusy(false); }
@@ -297,17 +276,15 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     finally { setBusy(false); }
   }
 
-  async function recoverTournamentBackfill() {
+  async function recoverTournamentBackfill(confirmationText: string) {
     if (!operationLookup || operationLookup.workflow !== "tournament_match_backfill") { setMessage("Inspect a tournament backfill operation first."); return; }
-    if (recoveryConfirmation.trim().toUpperCase() !== "RECOVER TOURNAMENT BACKFILL") { setMessage("Type RECOVER TOURNAMENT BACKFILL to reconcile this operation."); return; }
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<GuardedOperationResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/backfills/tournament-matches/operations/${encodeURIComponent(operationLookup.operation_key)}/recover`, {
         method: "POST",
-        body: JSON.stringify({ confirmation_text: recoveryConfirmation, source: "next_admin_tools_tournament_match_backfill_recovery" })
+        body: JSON.stringify({ confirmation_text: confirmationText, source: "next_admin_tools_tournament_match_backfill_recovery" })
       });
       setOperationLookup(payload);
-      setRecoveryConfirmation("");
       setMessage("Tournament backfill rows are reconciled. Verify Replay History before further writes.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to recover tournament backfill."); }
     finally { setBusy(false); }
@@ -332,7 +309,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
       <p style={mutedTextStyle}>Every applying action has a durable operation key. If the outcome is uncertain, stop further writes, keep the exact key shown below, and inspect it here. A completed key replays its saved result; an incomplete key never runs the mutation twice.</p>
       {pendingOperationKeys.length ? <p style={warningTextStyle}><strong>Retained operation key{pendingOperationKeys.length === 1 ? "" : "s"} after an incomplete request:</strong> {pendingOperationKeys.map((key) => <code key={key} style={{ display: "block", overflowWrap: "anywhere" }}>{key}</code>)}</p> : null}
       <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
-        <label>Exact operation key<br /><input value={operationLookupKey} onChange={(event) => { setOperationLookupKey(event.target.value); setOperationLookup(null); setRecoveryConfirmation(""); }} style={inputStyle} /></label>
+        <label>Exact operation key<br /><input value={operationLookupKey} onChange={(event) => { setOperationLookupKey(event.target.value); setOperationLookup(null); }} style={inputStyle} /></label>
         <button type="button" onClick={inspectOperation} disabled={busy || !accessToken} style={ghostButtonStyle}>Inspect operation</button>
       </div>
       {operationLookup ? <div style={{ marginTop: "1rem" }}>
@@ -341,8 +318,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
         {operationLookup.workflow === "tournament_match_backfill" && operationLookup.status === "recovery_required" ? <section style={{ border: "1px solid #fecaca", background: "#fef2f2", borderRadius: "12px", padding: "1rem" }}>
           <h3 style={{ marginTop: 0 }}>Reconcile tournament backfill</h3>
           <p>Recovery only succeeds when every selected game now has exactly one official match. It does not create or delete matches.</p>
-          <label>Confirmation<br /><input value={recoveryConfirmation} onChange={(event) => setRecoveryConfirmation(event.target.value)} placeholder="RECOVER TOURNAMENT BACKFILL" style={inputStyle} /></label>
-          <p><button type="button" onClick={recoverTournamentBackfill} disabled={busy} style={buttonStyle}>Reconcile existing rows</button></p>
+          <p><ConfirmAction triggerLabel="Reconcile existing rows" title="Reconcile this tournament backfill?" description="This verifies that every selected game now has exactly one official match. It does not create or delete matches." confirmLabel="Yes, reconcile rows" confirmationText="RECOVER TOURNAMENT BACKFILL" disabled={busy} busy={busy} onConfirm={recoverTournamentBackfill} /></p>
         </section> : null}
       </div> : null}
       <p><a href="/admin/match-log">Open Match Log</a> · <a href="/admin/replay-history">Open Replay History</a> · <a href="/admin/guide">Open Admin Guide</a></p>
@@ -386,10 +362,9 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
               <details><summary>Summary JSON</summary><Pre value={selected.summary_json} /></details>
               <details><summary>Raw event JSON</summary><Pre value={selected.raw_event_json} /></details>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem", alignItems: "end", marginTop: "1rem" }}>
-                <label>Action<br /><select value={socialSubmissionAction} onChange={(event) => { setSocialSubmissionAction(event.target.value as "approve" | "reject"); setSocialSubmissionReason(""); setSocialSubmissionConfirmation(""); }} style={inputStyle}><option value="approve">approve → saved</option><option value="reject">reject → rejected</option></select></label>
+                <label>Action<br /><select value={socialSubmissionAction} onChange={(event) => { setSocialSubmissionAction(event.target.value as "approve" | "reject"); setSocialSubmissionReason(""); }} style={inputStyle}><option value="approve">approve → saved</option><option value="reject">reject → rejected</option></select></label>
                 {socialSubmissionAction === "reject" ? <label>Rejection reason<br /><input value={socialSubmissionReason} onChange={(event) => setSocialSubmissionReason(event.target.value)} maxLength={1200} style={inputStyle} /></label> : null}
-                <label>Confirmation<br /><input value={socialSubmissionConfirmation} onChange={(event) => setSocialSubmissionConfirmation(event.target.value)} placeholder={expectedConfirmation} style={inputStyle} /></label>
-                <button type="button" onClick={moderateSocialSubmission} disabled={busy || isNoOp} style={buttonStyle}>{socialSubmissionAction === "approve" ? "Approve selected submission" : "Reject selected submission"}</button>
+                <ConfirmAction triggerLabel={socialSubmissionAction === "approve" ? "Approve selected submission" : "Reject selected submission"} title={`${socialSubmissionAction === "approve" ? "Approve" : "Reject"} ${selected.name}?`} description={socialSubmissionAction === "approve" ? "This marks the reviewed Club Social submission as saved." : "This rejects the reviewed submission and records the rejection reason."} confirmLabel={socialSubmissionAction === "approve" ? "Yes, approve submission" : "Yes, reject submission"} confirmationText={expectedConfirmation} tone={socialSubmissionAction === "reject" ? "danger" : "default"} disabled={busy || isNoOp || (socialSubmissionAction === "reject" && !socialSubmissionReason.trim())} busy={busy} onConfirm={moderateSocialSubmission} />
               </div>
               {isNoOp ? <p style={{ color: "#92400e" }}>This submission is already {targetStatus}; choose the other action or reload another queue.</p> : <p style={{ color: "#991b1b" }}>Only the reviewed submission status and moderation metadata will change. Reload the queue after any stale-status warning.</p>}
             </section>;
@@ -426,9 +401,8 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
                     return <label key={gameId} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={checked} disabled={busy || (!checked && selectedTournamentBackfillGameIds.length >= applyLimit)} onChange={(event) => setSelectedTournamentBackfillGameIds((current) => event.target.checked ? [...new Set([...current, gameId])].slice(0, applyLimit) : current.filter((value) => value !== gameId))} /> <code>{gameId}</code></label>;
                   })}
                 </div>
-                <p><label>Confirmation<br /><input value={tournamentBackfillConfirmation} onChange={(event) => setTournamentBackfillConfirmation(event.target.value)} placeholder={tournamentBackfillPreview.confirmation_text} style={inputStyle} /></label></p>
                 <p style={{ color: "#991b1b" }}>After apply, verify the exact rows in Match Log. If counts or ratings disagree, stop further writes and recover through Replay History.</p>
-                <button type="button" onClick={applyTournamentMatchBackfill} disabled={busy || !selectedTournamentBackfillGameIds.length} style={buttonStyle}>Apply selected tournament matches</button>
+                <ConfirmAction triggerLabel="Apply selected tournament matches" title="Apply this tournament match backfill?" description={`This writes official matches for ${selectedTournamentBackfillGameIds.length} reviewed game(s) after rechecking the preview and duplicate state.`} confirmLabel="Yes, apply backfill" confirmationText={tournamentBackfillPreview.confirmation_text} tone="danger" disabled={busy || !selectedTournamentBackfillGameIds.length} busy={busy} onConfirm={applyTournamentMatchBackfill} />
               </div> : <p style={{ color: "#64748b" }}>No ready tournament games are available to select.</p>;
             })()}
           </div> : null}
@@ -437,13 +411,12 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           <label>Queue mode<br /><select value={workerMode} onChange={(event) => setWorkerMode(event.target.value)} style={inputStyle}><option value="batch">Batch</option><option value="drain">Drain until empty / limit</option></select></label>
           <label>Max jobs<br /><input value={workerMaxJobs} onChange={(event) => setWorkerMaxJobs(event.target.value)} style={inputStyle} /></label>
           <label>Time budget seconds<br /><input value={workerBudget} onChange={(event) => setWorkerBudget(event.target.value)} style={inputStyle} /></label>
-          <label>Confirmation<br /><input value={workerConfirmation} onChange={(event) => setWorkerConfirmation(event.target.value)} placeholder={workerMode === "drain" ? "DRAIN BADGE QUEUE" : "PROCESS BADGE QUEUE"} style={inputStyle} /></label>
-          <button type="button" onClick={runQueueWorker} disabled={busy} style={buttonStyle}>Run badge queue</button>
+          <ConfirmAction triggerLabel="Run badge queue" title={`${workerMode === "drain" ? "Drain" : "Process"} the badge queue?`} description={`This runs up to ${workerMaxJobs} queued job(s) within the ${workerBudget}-second budget.`} confirmLabel={workerMode === "drain" ? "Yes, drain queue" : "Yes, process queue"} confirmationText={workerMode === "drain" ? "DRAIN BADGE QUEUE" : "PROCESS BADGE QUEUE"} tone={workerMode === "drain" ? "danger" : "default"} disabled={busy} busy={busy} onConfirm={runQueueWorker} />
         </div>
         <hr style={{ border: 0, borderTop: "1px solid #e2e8f0", margin: "1rem 0" }} />
         <h3>Badge recompute</h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>Mode<br /><select value={recomputeMode} onChange={(event) => { setRecomputeMode(event.target.value); setRecomputeConfirmation(""); setRecomputeOperationKey(""); }} style={inputStyle}><option value="dry-run">dry-run (no writes)</option><option value="append-only">append-only</option><option value="strict">strict</option></select></label>
+          <label>Mode<br /><select value={recomputeMode} onChange={(event) => { setRecomputeMode(event.target.value); setRecomputeOperationKey(""); }} style={inputStyle}><option value="dry-run">dry-run (no writes)</option><option value="append-only">append-only</option><option value="strict">strict</option></select></label>
           <label>Player ID<br /><input value={recomputePlayerId} onChange={(event) => setRecomputePlayerId(event.target.value)} style={inputStyle} /></label>
           <label>Badge ID<br /><input value={recomputeBadgeId} onChange={(event) => setRecomputeBadgeId(event.target.value)} style={inputStyle} /></label>
           <label>League<br /><input value={recomputeLeagueId} onChange={(event) => setRecomputeLeagueId(event.target.value)} style={inputStyle} /></label>
@@ -451,12 +424,11 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           <label>Since<br /><input type="date" value={recomputeSince} onChange={(event) => setRecomputeSince(event.target.value)} style={inputStyle} /></label>
           <label>Until<br /><input type="date" value={recomputeUntil} onChange={(event) => setRecomputeUntil(event.target.value)} style={inputStyle} /></label>
           <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={recomputeStrictGlobal} onChange={(event) => setRecomputeStrictGlobal(event.target.checked)} /> Allow strict global</label>
-          <label>Confirmation {recomputeMode === "dry-run" ? "(not required)" : ""}<br /><input value={recomputeConfirmation} onChange={(event) => setRecomputeConfirmation(event.target.value)} placeholder={recomputeMode === "dry-run" ? "No confirmation for read-only preview" : "RUN BADGE RECOMPUTE"} disabled={recomputeMode === "dry-run"} style={inputStyle} /></label>
-          <button type="button" onClick={runBadgeRecompute} disabled={busy} style={ghostButtonStyle}>Run badge recompute</button>
+          {recomputeMode === "dry-run" ? <button type="button" onClick={() => void runBadgeRecompute()} disabled={busy} style={ghostButtonStyle}>Run badge recompute preview</button> : <ConfirmAction triggerLabel="Run badge recompute" title={`Run ${recomputeMode} badge recompute?`} description="This applies badge changes for the selected scope through the guarded worker." confirmLabel="Yes, run recompute" confirmationText="RUN BADGE RECOMPUTE" tone={recomputeMode === "strict" ? "danger" : "default"} disabled={busy} busy={busy} onConfirm={runBadgeRecompute} />}
         </div>
         {lastWorkerResult ? <><h3>Last worker result</h3><Pre value={lastWorkerResult} /></> : null}
       </article>
-      <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Role assignments</h2>{table(overview.roles || [], ["email", "role", "user_id", "created_at", "updated_at"])}<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", marginTop: "1rem", alignItems: "end" }}><label>Email<br /><input value={targetEmail} onChange={(event) => setTargetEmail(event.target.value)} style={inputStyle} /></label><label>Role<br /><select value={targetRole} onChange={(event) => setTargetRole(event.target.value)} style={inputStyle}>{roleOptions.map((role) => <option key={role} value={role}>{role}</option>)}</select></label><label>User ID optional<br /><input value={targetUserId} onChange={(event) => setTargetUserId(event.target.value)} style={inputStyle} /></label><label>Confirmation<br /><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="SAVE ROLE or REVOKE ROLE" style={inputStyle} /></label><button type="button" onClick={() => saveRole("upsert")} disabled={busy} style={buttonStyle}>Save role</button><button type="button" onClick={() => saveRole("revoke")} disabled={busy} style={ghostButtonStyle}>Revoke role</button></div></article>
+      <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Role assignments</h2>{table(overview.roles || [], ["email", "role", "user_id", "created_at", "updated_at"])}<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", marginTop: "1rem", alignItems: "end" }}><label>Email<br /><input value={targetEmail} onChange={(event) => setTargetEmail(event.target.value)} style={inputStyle} /></label><label>Role<br /><select value={targetRole} onChange={(event) => setTargetRole(event.target.value)} style={inputStyle}>{roleOptions.map((role) => <option key={role} value={role}>{role}</option>)}</select></label><label>User ID optional<br /><input value={targetUserId} onChange={(event) => setTargetUserId(event.target.value)} style={inputStyle} /></label><ConfirmAction triggerLabel="Save role" title={`Save ${targetRole} role for ${targetEmail || "this account"}?`} description="This creates or updates the club-scoped role assignment and records the guarded operation." confirmLabel="Yes, save role" confirmationText="SAVE ROLE" disabled={busy || !targetEmail.trim()} busy={busy} onConfirm={(confirmationText) => saveRole("upsert", confirmationText)} /><ConfirmAction triggerLabel="Revoke role" title={`Revoke the role for ${targetEmail || "this account"}?`} description="This removes the club-scoped role assignment for the selected email." confirmLabel="Yes, revoke role" confirmationText="REVOKE ROLE" tone="danger" disabled={busy || !targetEmail.trim()} busy={busy} onConfirm={(confirmationText) => saveRole("revoke", confirmationText)} /></div></article>
       <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Admin activity</h2><p style={{ color: "#475569" }}>Retention guidance: {overview.retention_days} days. Suggested cutoff: {String(overview.retention_cutoff || "").slice(0, 10)}.</p>{overview.activity_warning ? <p style={{ color: "#b91c1c" }}>{overview.activity_warning}</p> : null}{table(overview.activity || [], ["created_at", "actor_email", "actor_role", "action_type", "entity_type", "entity_id", "source_page", "flagged_for_review", "note"])}</article>
     </> : null}
   </div>;

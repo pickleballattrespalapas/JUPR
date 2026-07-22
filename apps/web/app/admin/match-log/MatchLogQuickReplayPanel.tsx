@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminReplayResultResponse } from "@/lib/adminReplayApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -19,7 +19,6 @@ type MatchLogQuickReplayPanelProps = {
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
-const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -59,14 +58,12 @@ export default function MatchLogQuickReplayPanel({
   );
   const initialTarget = useMemo(() => normalizeRecommendedTarget(recommendedTarget, defaultTarget, replayOptions), [recommendedTarget, defaultTarget, replayOptions]);
   const [targetReset, setTargetReset] = useState(initialTarget);
-  const [confirmationText, setConfirmationText] = useState("");
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(statusError || null);
   const [result, setResult] = useState<AdminReplayResultResponse | null>(null);
   const [idempotencyKey, setIdempotencyKey] = useState(requestKey);
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function onSubmit(confirmationText: string) {
     setMessage(null);
     setResult(null);
     if (!apiBase) {
@@ -96,7 +93,6 @@ export default function MatchLogQuickReplayPanel({
       if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
       setResult(payload as AdminReplayResultResponse);
       setMessage(replayMessage(payload as AdminReplayResultResponse));
-      setConfirmationText("");
       if ((payload as AdminReplayResultResponse).job_status === "succeeded") setIdempotencyKey(requestKey());
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to run replay.");
@@ -118,7 +114,7 @@ export default function MatchLogQuickReplayPanel({
   }
 
   return (
-    <form onSubmit={onSubmit} style={{ ...cardStyle, display: "grid", gap: "0.75rem" }}>
+    <article style={{ ...cardStyle, display: "grid", gap: "0.75rem" }}>
       <h2 style={{ marginTop: 0 }}>Quick Replay</h2>
       <p style={{ color: "#475569", marginTop: 0 }}>
         Streamlit parity control for running Replay History directly after Match Log edits or duplicate cleanup. Prefer a league-specific replay when appropriate; use full reset when the cleanup preview recommends ALL or when ratings may be broadly stale.
@@ -141,10 +137,16 @@ export default function MatchLogQuickReplayPanel({
           {replayOptions.map((option) => <option key={option}>{option}</option>)}
         </select>
       </label>
-      <label><strong>Type REPLAY to confirm</strong><br /><input value={confirmationText} onChange={(event) => setConfirmationText(event.target.value)} style={inputStyle} /></label>
-      <button type="submit" disabled={pending || !accessToken || confirmationText.trim().toUpperCase() !== "REPLAY"} style={buttonStyle}>
-        {pending ? "Running replay…" : "Run Quick Replay"}
-      </button>
+      <ConfirmAction
+        triggerLabel="Run Quick Replay"
+        title="Run Replay History now?"
+        description={<>This will run Replay History for <strong>{targetReset}</strong>. Ratings and derived history may be rebuilt across that scope.</>}
+        confirmLabel="Yes, run replay"
+        confirmationText="REPLAY"
+        disabled={pending || !accessToken}
+        busy={pending}
+        onConfirm={onSubmit}
+      />
       {message ? <p style={{ color: result?.ok ? "#166534" : "#b91c1c" }}>{message}</p> : null}
       {result ? (
         <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", margin: 0 }}>
@@ -161,6 +163,6 @@ export default function MatchLogQuickReplayPanel({
           {[...(warnings || []), ...(result?.warnings || [])].map((warning) => <li key={warning}>{warning}</li>)}
         </ul>
       ) : null}
-    </form>
+    </article>
   );
 }

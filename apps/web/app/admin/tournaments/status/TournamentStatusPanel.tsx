@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminTournament, AdminTournamentListResponse, AdminTournamentStatusResponse, AdminTournamentWriteResponse } from "@/lib/adminTournamentApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -14,7 +15,6 @@ type Props = {
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
-const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -37,7 +37,6 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
   const [tournaments, setTournaments] = useState<AdminTournament[]>([]);
   const [selectedTournamentId, setSelectedTournamentId] = useState("");
   const [action, setAction] = useState("archive");
-  const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const selectedTournament = tournaments.find((row) => row.id === selectedTournamentId) || null;
@@ -70,7 +69,7 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
     }
   }
 
-  async function submitAction() {
+  async function submitAction(confirmationText: string) {
     if (!selectedTournamentId) {
       setMessage("Select a tournament first.");
       return;
@@ -85,13 +84,12 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
           body: JSON.stringify({
             action,
             expected_updated_at: selectedTournament?.updated_at,
-            confirmation_text: confirm,
+            confirmation_text: confirmationText,
             source: "next_tournament_admin_status_page"
           })
         }
       );
       setTournaments((current) => current.map((row) => row.id === selectedTournamentId && payload.tournament ? { ...row, ...payload.tournament } : row));
-      setConfirm("");
       setMessage(payload.idempotent_replay ? "Tournament status response reconciled from the durable operation." : `Tournament ${payload.action || action} completed and audit-completed.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to update tournament status.");
@@ -130,7 +128,7 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
       {tournaments.length ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Status action</h2>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(160px, 220px) minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
             <label><strong>Tournament</strong><br />
               <select value={selectedTournamentId} onChange={(event) => setSelectedTournamentId(event.target.value)} style={inputStyle}>
                 <option value="">Choose a tournament…</option>
@@ -138,15 +136,12 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
               </select>
             </label>
             <label><strong>Action</strong><br />
-              <select value={action} onChange={(event) => { setAction(event.target.value); setConfirm(""); }} style={inputStyle}>
+              <select value={action} onChange={(event) => setAction(event.target.value)} style={inputStyle}>
                 <option value="archive">Archive</option>
                 <option value="unarchive">Unarchive</option>
               </select>
             </label>
-            <label><strong>Type {expectedConfirm}</strong><br />
-              <input value={confirm} onChange={(event) => setConfirm(event.target.value)} style={inputStyle} />
-            </label>
-            <button type="button" onClick={submitAction} disabled={busy || !selectedTournamentId || !selectedTournament?.updated_at || confirm.trim().toUpperCase() !== expectedConfirm} style={ghostButtonStyle}>Apply</button>
+            <ConfirmAction triggerLabel={action === "archive" ? "Archive tournament" : "Unarchive tournament"} title={`${action === "archive" ? "Archive" : "Unarchive"} this tournament?`} description={action === "archive" ? `This moves ${selectedTournament?.name || "the selected tournament"} out of active tournament views. The action is reversible.` : `This restores ${selectedTournament?.name || "the selected tournament"} to active tournament views.`} confirmLabel={action === "archive" ? "Yes, archive tournament" : "Yes, unarchive tournament"} confirmationText={expectedConfirm} tone={action === "archive" ? "danger" : "default"} disabled={!selectedTournamentId || !selectedTournament?.updated_at} busy={busy} onConfirm={submitAction} />
           </div>
           {selectedTournament ? <p style={{ color: selectedTournament.updated_at ? "#64748b" : "#b91c1c" }}>Selected: <strong>{selectedTournament.name}</strong> <StatusChip value={selectedTournament.status} />{selectedTournament.updated_at ? "" : " · missing version; reload"}</p> : null}
         </article>

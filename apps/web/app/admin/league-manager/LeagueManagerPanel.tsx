@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type {
   AdminLeagueManagerDetailResponse,
   AdminLeagueManagerLeague,
@@ -64,16 +65,12 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
   const [createDescription, setCreateDescription] = useState("");
   const [createMinGames, setCreateMinGames] = useState("6");
   const [createKFactor, setCreateKFactor] = useState("32");
-  const [createConfirm, setCreateConfirm] = useState("");
 
   const [duplicateName, setDuplicateName] = useState("");
-  const [duplicateConfirm, setDuplicateConfirm] = useState("");
-  const [lifecycleConfirm, setLifecycleConfirm] = useState("");
 
   const [rosterPlayerId, setRosterPlayerId] = useState("");
   const [rosterAction, setRosterAction] = useState<"activate" | "deactivate">("activate");
   const [rosterStartingJupr, setRosterStartingJupr] = useState("3.5");
-  const [rosterConfirm, setRosterConfirm] = useState("");
 
   const selectedRosterRow = detail?.roster?.find((row) => String(row.player_id) === rosterPlayerId) || null;
 
@@ -105,7 +102,6 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
       setRosterAction("activate");
       setRosterStartingJupr("3.5");
     }
-    setRosterConfirm("");
   }
 
   function hydrateAll(payload: AdminLeagueManagerDetailResponse) { hydrateRoster(payload); }
@@ -123,12 +119,12 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     setSelectedLeague(leagueName); setDetail(null); setMessage(null);
     if (!leagueName || !requireReady()) return;
     setSaving(true);
-    try { const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}`); setDetail(payload); hydrateAll(payload); setDuplicateName(`${leagueName} Copy`); setDuplicateConfirm(""); setLifecycleConfirm(""); }
+    try { const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}`); setDetail(payload); hydrateAll(payload); setDuplicateName(`${leagueName} Copy`); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load league detail."); }
     finally { setSaving(false); }
   }
 
-  async function createLeagueDraft() {
+  async function createLeagueDraft(confirmationText: string) {
     if (!requireReady()) return;
     const name = createName.trim();
     const minGames = Number(createMinGames);
@@ -138,47 +134,46 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     if (!Number.isInteger(kFactor) || kFactor < 1 || kFactor > 128) { setMessage("K-factor must be a whole number from 1 to 128."); return; }
     setSaving(true); setMessage(null);
     try {
-      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`, { method: "POST", body: JSON.stringify({ league_name: name, description: createDescription, min_games: minGames, k_factor: kFactor, confirmation_text: createConfirm, source: "next_league_manager_create_form" }) });
+      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`, { method: "POST", body: JSON.stringify({ league_name: name, description: createDescription, min_games: minGames, k_factor: kFactor, confirmation_text: confirmationText, source: "next_league_manager_create_form" }) });
       const listing = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
       setLeagues(listing.leagues || []);
       setSelectedLeague(payload.league?.league_name || name);
       if (payload.detail) { setDetail(payload.detail); hydrateAll(payload.detail); }
-      setDuplicateName(`${payload.league?.league_name || name} Copy`); setDuplicateConfirm("");
-      setCreateName(""); setCreateDescription(""); setCreateMinGames("6"); setCreateKFactor("32"); setCreateConfirm("");
+      setDuplicateName(`${payload.league?.league_name || name} Copy`);
+      setCreateName(""); setCreateDescription(""); setCreateMinGames("6"); setCreateKFactor("32");
       setMessage(`Created draft league ${payload.league?.league_name || name}.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to create league draft."); }
     finally { setSaving(false); }
   }
 
-  async function duplicateLeagueDraft() {
+  async function duplicateLeagueDraft(confirmationText: string) {
     if (!selectedLeague || !detail) { setMessage("Select a league before duplicating it."); return; }
     if (!requireReady()) return;
     const targetName = duplicateName.trim();
     if (!targetName) { setMessage("New draft name is required."); return; }
     setSaving(true); setMessage(null);
     try {
-      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/duplicate`, { method: "POST", body: JSON.stringify({ target_league_name: targetName, confirmation_text: duplicateConfirm, source: "next_league_manager_duplicate_form" }) });
+      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/duplicate`, { method: "POST", body: JSON.stringify({ target_league_name: targetName, confirmation_text: confirmationText, source: "next_league_manager_duplicate_form" }) });
       const listing = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
       const createdName = payload.league?.league_name || payload.league_name || targetName;
       setLeagues(listing.leagues || []);
       setSelectedLeague(createdName);
       if (payload.detail) { setDetail(payload.detail); hydrateAll(payload.detail); }
-      setDuplicateName(`${createdName} Copy`); setDuplicateConfirm("");
+      setDuplicateName(`${createdName} Copy`);
       setMessage(`Duplicated ${payload.source_league_name || selectedLeague} as draft ${createdName}. Roster and results were not copied.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to duplicate league draft."); }
     finally { setSaving(false); }
   }
 
-  async function transitionLeagueLifecycle(action: LifecycleAction) {
+  async function transitionLeagueLifecycle(action: LifecycleAction, confirmationText: string) {
     if (!selectedLeague || !detail) { setMessage("Select a league before changing its lifecycle."); return; }
     if (!requireReady()) return;
     setSaving(true); setMessage(null);
     try {
-      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/lifecycle`, { method: "POST", body: JSON.stringify({ action, confirmation_text: lifecycleConfirm, source: "next_league_manager_lifecycle_controls" }) });
+      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/lifecycle`, { method: "POST", body: JSON.stringify({ action, confirmation_text: confirmationText, source: "next_league_manager_lifecycle_controls" }) });
       const listing = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
       setLeagues(listing.leagues || []);
       if (payload.detail) { setDetail(payload.detail); hydrateAll(payload.detail); }
-      setLifecycleConfirm("");
       setMessage(`${lifecycleLabels[action]} completed: ${payload.previous_status || detail.league.status} → ${payload.new_status || payload.league?.status || "updated"}.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to change league lifecycle."); }
     finally { setSaving(false); }
@@ -208,7 +203,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     finally { setSaving(false); }
   }
 
-  async function saveRosterMembership() {
+  async function saveRosterMembership(confirmationText: string) {
     if (!selectedLeague || !rosterPlayerId) { setMessage("Select a league and player before saving roster membership."); return; }
     if (!requireReady()) return;
     if (detail?.capabilities?.roster_mutable === false) { setMessage("This league roster is read-only in its current lifecycle state."); return; }
@@ -216,7 +211,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     if (!Number.isFinite(rating) || rating < 1 || rating > 2800) { setMessage("Starting rating must be a JUPR value from 1.0-7.0 or Elo from 400-2800."); return; }
     setSaving(true); setMessage(null);
     try {
-      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/roster/${encodeURIComponent(rosterPlayerId)}`, { method: "PATCH", body: JSON.stringify({ action: rosterAction, starting_rating: rating, confirmation_text: rosterConfirm, source: "next_league_manager_roster_editor" }) });
+      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/roster/${encodeURIComponent(rosterPlayerId)}`, { method: "PATCH", body: JSON.stringify({ action: rosterAction, starting_rating: rating, confirmation_text: confirmationText, source: "next_league_manager_roster_editor" }) });
       if (payload.detail) { setDetail(payload.detail); hydrateRoster(payload.detail); } else { await loadDetail(selectedLeague); }
       setMessage(`${rosterAction === "activate" ? "Activated" : "Deactivated"} player ${payload.player_id ?? rosterPlayerId} for ${selectedLeague}.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save roster membership."); }
@@ -244,10 +239,9 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
           <label><strong>League name</strong><br /><input value={createName} onChange={(event) => setCreateName(event.target.value)} maxLength={120} style={inputStyle} /></label>
           <label><strong>Minimum games</strong><br /><input type="number" value={createMinGames} onChange={(event) => setCreateMinGames(event.target.value)} min={0} max={1000} style={inputStyle} /></label>
           <label><strong>K-factor</strong><br /><input type="number" value={createKFactor} onChange={(event) => setCreateKFactor(event.target.value)} min={1} max={128} style={inputStyle} /></label>
-          <label><strong>Type CREATE LEAGUE</strong><br /><input value={createConfirm} onChange={(event) => setCreateConfirm(event.target.value)} placeholder="CREATE LEAGUE" style={inputStyle} /></label>
         </div>
         <label><strong>Description</strong><br /><textarea value={createDescription} onChange={(event) => setCreateDescription(event.target.value)} maxLength={2000} rows={3} style={inputStyle} /></label>
-        <p><button type="button" onClick={createLeagueDraft} disabled={saving || !accessToken || !createName.trim() || createConfirm.trim().toUpperCase() !== "CREATE LEAGUE"} style={buttonStyle}>{saving ? "Working…" : "Create draft"}</button></p>
+        <p><ConfirmAction triggerLabel={saving ? "Working…" : "Create draft"} title="Create this league draft?" description={`Create ${createName.trim() || "this league"} as an inactive draft with the reviewed description and rating settings.`} confirmLabel="Yes, create draft" confirmationText="CREATE LEAGUE" disabled={!accessToken || !createName.trim()} busy={saving} onConfirm={createLeagueDraft} /></p>
       </article>
 
       <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Select league</h2><select value={selectedLeague} onChange={(event) => loadDetail(event.target.value)} style={inputStyle} disabled={!accessToken}><option value="">Choose a league</option>{leagues.map((league) => <option key={league.league_name} value={league.league_name}>{league.league_name} · {league.status}</option>)}</select>{leagues.length ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}>{leagues.map((league) => <button key={league.league_name} type="button" onClick={() => loadDetail(league.league_name)} disabled={!accessToken} style={{ ...cardStyle, textAlign: "left", cursor: "pointer" }}><strong>{league.league_name}</strong><br /><span style={{ border: "1px solid", borderRadius: "999px", padding: "0.12rem 0.45rem", fontSize: "0.78rem", ...statusChipStyle(league.status) }}>{league.status}</span></button>)}</div> : null}</article>
@@ -257,26 +251,37 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
 
         <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
           <h2 style={{ marginTop: 0 }}>League lifecycle</h2>
-          <p style={{ color: "#7c2d12" }}>Lifecycle changes are separate from settings. Only legal transitions are shown, and each action requires its exact phrase. Ending freezes the league; award calculation and badge minting remain in the Awards workflow.</p>
+          <p style={{ color: "#7c2d12" }}>Lifecycle changes are separate from settings. Only legal transitions are shown. Ending freezes the league; award calculation and badge minting remain in the Awards workflow.</p>
           {availableLifecycleActions.length ? <>
-            <label><strong>Confirmation phrase</strong><br /><input value={lifecycleConfirm} onChange={(event) => setLifecycleConfirm(event.target.value)} placeholder={availableLifecycleActions.map((action) => lifecycleConfirmations[action]).join(" or ")} style={inputStyle} /></label>
-            <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>{availableLifecycleActions.map((action) => <button key={action} type="button" onClick={() => transitionLeagueLifecycle(action)} disabled={saving || !accessToken || lifecycleConfirm.trim().toUpperCase() !== lifecycleConfirmations[action]} style={action === "end" || action === "archive" ? { ...buttonStyle, background: "#9a3412", borderColor: "#9a3412" } : buttonStyle}>{lifecycleLabels[action]} · type {lifecycleConfirmations[action]}</button>)}</p>
+            <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>{availableLifecycleActions.map((action) => <ConfirmAction key={action} triggerLabel={lifecycleLabels[action]} title={`${lifecycleLabels[action]}?`} description={`${lifecycleLabels[action]} changes ${detail.league.league_name} from its current ${detail.league.status} state. ${action === "end" ? "Ending freezes the league before its separate awards workflow." : action === "archive" ? "Archiving closes further lifecycle changes." : "Only the selected legal transition will be applied."}`} confirmLabel={`Yes, ${lifecycleLabels[action].toLowerCase()}`} confirmationText={lifecycleConfirmations[action]} tone={action === "end" || action === "archive" ? "danger" : "default"} disabled={!accessToken} busy={saving} onConfirm={(confirmationText) => transitionLeagueLifecycle(action, confirmationText)} />)}</p>
           </> : <p style={{ color: "#64748b" }}>Archived leagues have no further lifecycle actions.</p>}
         </article>
 
         <article style={{ ...cardStyle, background: "#f8fafc" }}>
           <h2 style={{ marginTop: 0 }}>Duplicate this league as a draft</h2>
           <p style={{ color: "#475569" }}>Copies the description, schedule, court, rules, awards, ratings, and event-tag configuration. It does not copy roster membership, standings, results, start/end dates, or awards already issued.</p>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(220px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
             <label><strong>New draft name</strong><br /><input value={duplicateName} onChange={(event) => setDuplicateName(event.target.value)} maxLength={120} style={inputStyle} /></label>
-            <label><strong>Type DUPLICATE LEAGUE</strong><br /><input value={duplicateConfirm} onChange={(event) => setDuplicateConfirm(event.target.value)} placeholder="DUPLICATE LEAGUE" style={inputStyle} /></label>
-            <button type="button" onClick={duplicateLeagueDraft} disabled={saving || !accessToken || !duplicateName.trim() || duplicateConfirm.trim().toUpperCase() !== "DUPLICATE LEAGUE"} style={buttonStyle}>{saving ? "Duplicating…" : "Duplicate draft"}</button>
+            <ConfirmAction triggerLabel={saving ? "Duplicating…" : "Duplicate draft"} title="Duplicate this league as a new draft?" description={`Copy ${selectedLeague} settings into ${duplicateName.trim() || "the named draft"}. Rosters, standings, results, dates, and issued awards will not be copied.`} confirmLabel="Yes, duplicate draft" confirmationText="DUPLICATE LEAGUE" disabled={!accessToken || !duplicateName.trim()} busy={saving} onConfirm={duplicateLeagueDraft} />
           </div>
         </article>
 
         <GuidedLeagueSettingsEditor detail={detail} saving={saving} canWrite={Boolean(accessToken)} onSave={saveLeagueSettings} onPreview={previewLeagueSchedule} />
 
-        <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Roster membership editor</h2><p style={{ color: "#475569" }}>Activate a player into this league with a starting JUPR/Elo seed, or deactivate an existing league row without deleting history. Reactivation preserves prior ratings and record. Type <code>SAVE ROSTER</code> before saving.</p>{!rosterMutable ? <p style={{ color: "#92400e" }}><strong>Roster is read-only after league close.</strong></p> : null}{detail.roster?.length ? <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(160px, 220px) minmax(140px, 180px) minmax(180px, 220px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Player</strong><br /><select value={rosterPlayerId} disabled={!rosterMutable} onChange={(event) => { const next = detail.roster?.find((row) => String(row.player_id) === event.target.value) || null; setRosterPlayerId(event.target.value); setRosterAction(rosterActionFor(next)); setRosterStartingJupr(startingJuprFor(next)); }} style={inputStyle}><option value="">Choose player…</option>{detail.roster.map((row) => <option key={row.player_id} value={String(row.player_id)}>{row.player_name} · {row.in_league ? "in league" : "not in league"}</option>)}</select></label><label><strong>Action</strong><br /><select value={rosterAction} disabled={!rosterMutable} onChange={(event) => setRosterAction(event.target.value as "activate" | "deactivate")} style={inputStyle}><option value="activate">Activate/add to league</option><option value="deactivate">Deactivate from league</option></select></label><label><strong>Starting JUPR/Elo</strong><br /><input value={rosterStartingJupr} onChange={(event) => setRosterStartingJupr(event.target.value)} disabled={!rosterMutable || rosterAction === "deactivate"} style={inputStyle} /></label><label><strong>Type SAVE ROSTER</strong><br /><input value={rosterConfirm} onChange={(event) => setRosterConfirm(event.target.value)} disabled={!rosterMutable} style={inputStyle} /></label><button type="button" onClick={saveRosterMembership} disabled={saving || !accessToken || !rosterMutable || !rosterPlayerId || rosterConfirm.trim().toUpperCase() !== "SAVE ROSTER"} style={buttonStyle}>{saving ? "Saving…" : "Save roster"}</button></div> : <p style={{ color: "#64748b" }}>Load a roster snapshot before editing membership.</p>}{selectedRosterRow ? <p style={{ color: "#475569" }}>Selected: <strong>{selectedRosterRow.player_name}</strong> · {selectedRosterRow.in_league ? "currently in league" : "not yet in league"} · current league JUPR {juprLabel(selectedRosterRow.rating_jupr)}</p> : null}</article>
+        <article style={{ ...cardStyle, background: "#f8fafc" }}>
+          <h2 style={{ marginTop: 0 }}>Roster membership editor</h2>
+          <p style={{ color: "#475569" }}>Activate a player into this league with a starting JUPR/Elo seed, or deactivate an existing league row without deleting history. Reactivation preserves prior ratings and record.</p>
+          {!rosterMutable ? <p style={{ color: "#92400e" }}><strong>Roster is read-only after league close.</strong></p> : null}
+          {detail.roster?.length ? (
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(160px, 220px) minmax(140px, 180px) auto", gap: "0.75rem", alignItems: "end" }}>
+              <label><strong>Player</strong><br /><select value={rosterPlayerId} disabled={!rosterMutable} onChange={(event) => { const next = detail.roster?.find((row) => String(row.player_id) === event.target.value) || null; setRosterPlayerId(event.target.value); setRosterAction(rosterActionFor(next)); setRosterStartingJupr(startingJuprFor(next)); }} style={inputStyle}><option value="">Choose player…</option>{detail.roster.map((row) => <option key={row.player_id} value={String(row.player_id)}>{row.player_name} · {row.in_league ? "in league" : "not in league"}</option>)}</select></label>
+              <label><strong>Action</strong><br /><select value={rosterAction} disabled={!rosterMutable} onChange={(event) => setRosterAction(event.target.value as "activate" | "deactivate")} style={inputStyle}><option value="activate">Activate/add to league</option><option value="deactivate">Deactivate from league</option></select></label>
+              <label><strong>Starting JUPR/Elo</strong><br /><input value={rosterStartingJupr} onChange={(event) => setRosterStartingJupr(event.target.value)} disabled={!rosterMutable || rosterAction === "deactivate"} style={inputStyle} /></label>
+              <ConfirmAction triggerLabel={saving ? "Saving…" : "Save roster"} title={`${rosterAction === "activate" ? "Activate" : "Deactivate"} this league player?`} description={`${selectedRosterRow?.player_name || "The selected player"} will be ${rosterAction === "activate" ? `activated with starting rating ${rosterStartingJupr}` : "deactivated without deleting prior league history"}.`} confirmLabel={`Yes, ${rosterAction === "activate" ? "activate player" : "deactivate player"}`} confirmationText="SAVE ROSTER" tone={rosterAction === "deactivate" ? "danger" : "default"} disabled={!accessToken || !rosterMutable || !rosterPlayerId} busy={saving} onConfirm={saveRosterMembership} />
+            </div>
+          ) : <p style={{ color: "#64748b" }}>Load a roster snapshot before editing membership.</p>}
+          {selectedRosterRow ? <p style={{ color: "#475569" }}>Selected: <strong>{selectedRosterRow.player_name}</strong> · {selectedRosterRow.in_league ? "currently in league" : "not yet in league"} · current league JUPR {juprLabel(selectedRosterRow.rating_jupr)}</p> : null}
+        </article>
 
         <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Schedule preview</h2>{detail.schedule_preview.length ? <><div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Session</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Date</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Start</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>End</th></tr></thead><tbody>{detail.schedule_preview.map((row) => <tr key={`${row.session}-${row.date}`}><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.session}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.date}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.start || "—"}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.end || "—"}</td></tr>)}</tbody></table></div>{detail.schedule_ics ? <p><button type="button" onClick={() => downloadTextFile(detail.schedule_ics_filename || "league-schedule.ics", detail.schedule_ics || "", "text/calendar;charset=utf-8")} style={ghostButtonStyle}>Download ICS calendar</button></p> : null}</> : <p style={{ color: "#64748b" }}>No schedule preview is configured for this league yet.</p>}</article>
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -91,9 +92,6 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
   const [state, setState] = useState<AwardsResponse | null>(null);
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, OverrideDraft>>({});
   const [operationKeys, setOperationKeys] = useState<Record<string, string>>({});
-  const [freezeConfirmation, setFreezeConfirmation] = useState("");
-  const [mintConfirmation, setMintConfirmation] = useState("");
-  const [archiveConfirmation, setArchiveConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -196,9 +194,6 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
       });
       hydrate(payload);
       clearKey(action);
-      if (action === "freeze") setFreezeConfirmation("");
-      if (action === "mint") setMintConfirmation("");
-      if (action === "archive") setArchiveConfirmation("");
       setMessage(
         action === "mint"
           ? `Mint verified ${payload.badge_verified_count || 0} of ${payload.badge_expected_count || 0} expected badge row(s).`
@@ -296,8 +291,17 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
         <article style={{ ...cardStyle, borderColor: "#fed7aa" }}>
           <h2 style={{ marginTop: 0 }}>2. Freeze league</h2>
           <p style={{ color: "#7c2d12" }}>Freezing marks the league ended and locks the award snapshot workflow. Match corrections must happen before this step or through Match Log and Replay History.</p>
-          <label>Confirmation<br /><input value={freezeConfirmation} onChange={(event) => setFreezeConfirmation(event.target.value)} placeholder="FREEZE LEAGUE AWARDS" style={inputStyle} /></label>
-          <button type="button" onClick={() => runAction("freeze", freezeConfirmation)} disabled={busy || !writeReady} style={{ ...buttonStyle, marginTop: "0.75rem" }}>Freeze and save</button>
+          <ConfirmAction
+            triggerLabel={busy ? "Working…" : "Freeze and save"}
+            title="Freeze this league for awards?"
+            description="This marks the league ended and freezes the awards workflow snapshot. Match corrections must use Match Log and Replay History afterward."
+            confirmLabel="Yes, freeze league"
+            confirmationText="FREEZE LEAGUE AWARDS"
+            tone="danger"
+            disabled={!writeReady}
+            busy={busy}
+            onConfirm={(confirmationText) => runAction("freeze", confirmationText)}
+          />
         </article>
       ) : null}
 
@@ -343,8 +347,16 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
           <p style={{ color: "#334155" }}>A mint is successful only after FastAPI reads back every expected <code>player_badges</code> row. Partial or unavailable writes remain <strong>mint failed</strong> and can be retried with the retained idempotency key.</p>
           {wizard.mint?.last_error ? <p style={{ color: "#b91c1c" }}>Last verified failure: {wizard.mint.last_error}</p> : null}
           <p style={{ color: "#475569" }}>Attempts: {wizard.mint?.attempt_count || 0} · Expected: {wizard.mint?.expected_count ?? "—"} · Verified: {wizard.mint?.verified_count ?? "—"}</p>
-          <label>Confirmation<br /><input value={mintConfirmation} onChange={(event) => setMintConfirmation(event.target.value)} placeholder="MINT AWARDS" style={inputStyle} /></label>
-          <button type="button" onClick={() => runAction("mint", mintConfirmation)} disabled={busy || !mintReady} style={{ ...buttonStyle, marginTop: "0.75rem", background: "#1d4ed8", borderColor: "#1d4ed8" }}>{workflowStatus === "mint_failed" || workflowStatus === "minting" ? "Retry mint and verification" : "Mint and verify"}</button>
+          <ConfirmAction
+            triggerLabel={workflowStatus === "mint_failed" || workflowStatus === "minting" ? "Retry mint and verification" : "Mint and verify"}
+            title="Mint and verify these league awards?"
+            description={`FastAPI will mint the reviewed award set and verify every expected badge row. Expected rows: ${wizard.mint?.expected_count ?? previewAwards.length}.`}
+            confirmLabel="Yes, mint and verify"
+            confirmationText="MINT AWARDS"
+            disabled={!mintReady}
+            busy={busy}
+            onConfirm={(confirmationText) => runAction("mint", confirmationText)}
+          />
         </article>
       ) : null}
 
@@ -353,10 +365,17 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
           <h2 style={{ marginTop: 0 }}>6. Archive</h2>
           <p style={{ color: "#166534" }}>Mint result: <strong>{wizard.mint?.status}</strong> · Verified {wizard.mint?.verified_count || 0} of {wizard.mint?.expected_count || 0} expected row(s).</p>
           {workflowStatus === "archived" ? <p><strong>Archived.</strong> This workflow is read-only and remains recoverable for audit review.</p> : (
-            <>
-              <label>Confirmation<br /><input value={archiveConfirmation} onChange={(event) => setArchiveConfirmation(event.target.value)} placeholder="ARCHIVE LEAGUE" style={inputStyle} /></label>
-              <button type="button" onClick={() => runAction("archive", archiveConfirmation)} disabled={busy || !writeReady} style={{ ...buttonStyle, marginTop: "0.75rem", background: "#166534", borderColor: "#166534" }}>Archive completed league</button>
-            </>
+            <ConfirmAction
+              triggerLabel="Archive completed league"
+              title="Archive this completed league?"
+              description="This closes the awards workflow as read-only while retaining its saved state and audit history."
+              confirmLabel="Yes, archive league"
+              confirmationText="ARCHIVE LEAGUE"
+              tone="danger"
+              disabled={!writeReady}
+              busy={busy}
+              onConfirm={(confirmationText) => runAction("archive", confirmationText)}
+            />
           )}
         </article>
       ) : null}

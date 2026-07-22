@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type {
   AdminTournament,
   AdminTournamentListResponse,
@@ -95,24 +96,14 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
   const [snapshot, setSnapshot] = useState<AdminTournamentOpsSnapshotResponse | null>(null);
   const [drawEventOptionId, setDrawEventOptionId] = useState("");
   const [drawName, setDrawName] = useState("");
-  const [drawConfirm, setDrawConfirm] = useState("");
   const [teamRows, setTeamRows] = useState<TeamEditorRow[]>(() => teamRowsFromTeams([], ""));
-  const [teamConfirm, setTeamConfirm] = useState("");
   const [registrationImportMode, setRegistrationImportMode] = useState("REPLACE");
-  const [registrationImportConfirm, setRegistrationImportConfirm] = useState("");
   const [bulkTeamMode, setBulkTeamMode] = useState("REPLACE");
   const [bulkTeamText, setBulkTeamText] = useState("Player 1,Player 2,Seed,Notes\n");
-  const [bulkTeamConfirm, setBulkTeamConfirm] = useState("");
-  const [gameConfirm, setGameConfirm] = useState("");
   const [scoreGameId, setScoreGameId] = useState("");
   const [scoreA, setScoreA] = useState("");
   const [scoreB, setScoreB] = useState("");
-  const [scoreConfirm, setScoreConfirm] = useState("");
   const [playoffAdvanceCount, setPlayoffAdvanceCount] = useState("4");
-  const [playoffConfirm, setPlayoffConfirm] = useState("");
-  const [podiumConfirm, setPodiumConfirm] = useState("");
-  const [awardConfirm, setAwardConfirm] = useState("");
-  const [publishConfirm, setPublishConfirm] = useState("");
   const [publishBonusElo, setPublishBonusElo] = useState("0");
   const [resultsImportMode, setResultsImportMode] = useState("REPLACE");
   const [resultsRawText, setResultsRawText] = useState("playerA1,playerB1,teamAGame1,teamBGame1\n");
@@ -121,7 +112,6 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
   const [resultsMatchReviews, setResultsMatchReviews] = useState<Record<string, { include?: boolean; stage?: string }>>({});
   const [resultsPodiumRefs, setResultsPodiumRefs] = useState<Record<string, string | null>>({});
   const [allowDuplicateMapping, setAllowDuplicateMapping] = useState(false);
-  const [resultsConfirm, setResultsConfirm] = useState("");
   const [resultsReviewDirty, setResultsReviewDirty] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -176,7 +166,6 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
 
   function resetTeamEditor(nextSnapshot: AdminTournamentOpsSnapshotResponse | null, drawId: string) {
     setTeamRows(teamRowsFromTeams(nextSnapshot?.teams || [], drawId));
-    setTeamConfirm("");
   }
 
   function resetScoreEditor(nextSnapshot: AdminTournamentOpsSnapshotResponse | null) {
@@ -184,7 +173,6 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     setScoreGameId(firstGame ? String(firstGame.id || "") : "");
     setScoreA(firstGame?.score_a == null ? "" : String(firstGame.score_a));
     setScoreB(firstGame?.score_b == null ? "" : String(firstGame.score_b));
-    setScoreConfirm("");
   }
 
   async function loadTournaments() {
@@ -220,15 +208,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
       if (!drawEventOptionId && payload.event_options?.length) setDrawEventOptionId(String(payload.event_options[0].id || ""));
       resetTeamEditor(payload, drawId);
       resetScoreEditor(payload);
-      setGameConfirm("");
-      setPlayoffConfirm("");
-      setPodiumConfirm("");
-      setAwardConfirm("");
-      setPublishConfirm("");
-      setRegistrationImportConfirm("");
-      setBulkTeamConfirm("");
       setResultsPreview(null);
-      setResultsConfirm("");
       setResultsReviewDirty(true);
       setMessage("Tournament operations snapshot loaded.");
     } catch (error) {
@@ -238,7 +218,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     }
   }
 
-  async function createDraw() {
+  async function createDraw(confirmationText: string) {
     if (!selectedTournamentId) {
       setMessage("Select a tournament before creating a draw.");
       return;
@@ -249,11 +229,10 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
       const selectedEvent = snapshot?.event_options?.find((row) => String(row.id || "") === drawEventOptionId) || null;
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws`, {
         method: "POST",
-        body: JSON.stringify({ event_option_id: drawEventOptionId || null, registration_day_id: String(selectedEvent?.registration_day_id || "") || null, name: drawName, expected_state_fingerprint: reviewedState, confirmation_text: drawConfirm, source: "next_tournament_ops_create_draw" })
+        body: JSON.stringify({ event_option_id: drawEventOptionId || null, registration_day_id: String(selectedEvent?.registration_day_id || "") || null, name: drawName, expected_state_fingerprint: reviewedState, confirmation_text: confirmationText, source: "next_tournament_ops_create_draw" })
       });
       const nextDrawId = payload.draw?.id || "";
       setSelectedDrawId(nextDrawId);
-      setDrawConfirm("");
       await loadOps(selectedTournamentId, nextDrawId);
       setMessage(`Draw created${payload.draw?.name ? `: ${payload.draw.name}` : ""}.${operationSuffix(payload)}`);
     } catch (error) {
@@ -263,7 +242,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     }
   }
 
-  async function importRegistrations() {
+  async function importRegistrations(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before importing registrations.");
       return;
@@ -273,10 +252,9 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/teams/import-registrations`, {
         method: "POST",
-        body: JSON.stringify({ import_mode: registrationImportMode, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: registrationImportConfirm, source: "next_tournament_ops_import_registrations" })
+        body: JSON.stringify({ import_mode: registrationImportMode, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_import_registrations" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
-      setRegistrationImportConfirm("");
       setMessage(`Imported ${payload.updated_count ?? payload.teams?.length ?? 0} registration team(s) with ${payload.import_mode || registrationImportMode} mode.${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to import registrations.");
@@ -285,7 +263,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     }
   }
 
-  async function importBulkTeams() {
+  async function importBulkTeams(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before importing teams.");
       return;
@@ -295,10 +273,9 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/teams/import-bulk`, {
         method: "POST",
-        body: JSON.stringify({ raw_text: bulkTeamText, import_mode: bulkTeamMode, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: bulkTeamConfirm, source: "next_tournament_ops_import_bulk_teams" })
+        body: JSON.stringify({ raw_text: bulkTeamText, import_mode: bulkTeamMode, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_import_bulk_teams" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
-      setBulkTeamConfirm("");
       setMessage(`Imported ${payload.updated_count ?? payload.teams?.length ?? 0} bulk team(s) with ${payload.import_mode || bulkTeamMode} mode.${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to import bulk teams.");
@@ -307,7 +284,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     }
   }
 
-  async function saveTeams() {
+  async function saveTeams(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before saving teams.");
       return;
@@ -328,10 +305,9 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/teams`, {
         method: "PUT",
-        body: JSON.stringify({ teams, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: teamConfirm, source: "next_tournament_ops_team_editor" })
+        body: JSON.stringify({ teams, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_team_editor" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
-      setTeamConfirm("");
       setMessage(`Saved ${payload.updated_count ?? payload.teams?.length ?? teams.length} team(s).${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to save teams.");
@@ -340,7 +316,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     }
   }
 
-  async function generateGames() {
+  async function generateGames(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before generating games.");
       return;
@@ -350,10 +326,9 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/games/round-robin`, {
         method: "POST",
-        body: JSON.stringify({ expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, confirmation_text: gameConfirm, source: "next_tournament_ops_generate_round_robin" })
+        body: JSON.stringify({ expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, confirmation_text: confirmationText, source: "next_tournament_ops_generate_round_robin" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
-      setGameConfirm("");
       setMessage(`Generated ${payload.game_count ?? payload.games?.length ?? 0} round-robin game(s).${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to generate games.");
@@ -362,7 +337,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     }
   }
 
-  async function generatePlayoffs() {
+  async function generatePlayoffs(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before generating playoffs.");
       return;
@@ -377,10 +352,9 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/games/playoffs`, {
         method: "POST",
-        body: JSON.stringify({ advance_count: advanceCount, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, expected_source_game_versions: reviewedSourceGameVersions, confirmation_text: playoffConfirm, source: "next_tournament_ops_generate_playoffs" })
+        body: JSON.stringify({ advance_count: advanceCount, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, expected_source_game_versions: reviewedSourceGameVersions, confirmation_text: confirmationText, source: "next_tournament_ops_generate_playoffs" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
-      setPlayoffConfirm("");
       setMessage(`Generated ${payload.game_count ?? payload.games?.length ?? 0} playoff game(s).${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to generate playoffs.");
@@ -389,7 +363,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     }
   }
 
-  async function saveScore() {
+  async function saveScore(confirmationText: string) {
     if (!selectedTournamentId || !scoreGameId) {
       setMessage("Select a game before saving a score.");
       return;
@@ -406,10 +380,9 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
       const selectedGame = (snapshot?.games || []).find((row) => String(row.id || "") === scoreGameId) || null;
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/games/${encodeURIComponent(scoreGameId)}/score`, {
         method: "PATCH",
-        body: JSON.stringify({ score_a: nextA, score_b: nextB, expected_state_fingerprint: reviewedState, expected_game_updated_at: String(selectedGame?.updated_at || "") || null, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: scoreConfirm, source: "next_tournament_ops_score_game" })
+        body: JSON.stringify({ score_a: nextA, score_b: nextB, expected_state_fingerprint: reviewedState, expected_game_updated_at: String(selectedGame?.updated_at || "") || null, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_score_game" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
-      setScoreConfirm("");
       setMessage(`Saved score for game ${String(payload.game?.id || scoreGameId)}.${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to save score.");
@@ -418,7 +391,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     }
   }
 
-  async function generatePodium() {
+  async function generatePodium(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before generating a podium.");
       return;
@@ -428,10 +401,9 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/podium`, {
         method: "POST",
-        body: JSON.stringify({ expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, expected_source_game_versions: reviewedSourceGameVersions, confirmation_text: podiumConfirm, source: "next_tournament_ops_generate_podium" })
+        body: JSON.stringify({ expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, expected_source_game_versions: reviewedSourceGameVersions, confirmation_text: confirmationText, source: "next_tournament_ops_generate_podium" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
-      setPodiumConfirm("");
       setMessage(`Generated ${payload.podium?.length ?? 0} ${payload.podium_source || "draw"} podium placement(s).${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to generate podium.");
@@ -440,7 +412,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     }
   }
 
-  async function awardPodium() {
+  async function awardPodium(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before awarding podium trophies.");
       return;
@@ -450,10 +422,9 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/podium/awards`, {
         method: "POST",
-        body: JSON.stringify({ expected_state_fingerprint: reviewedState, confirmation_text: awardConfirm, source: "next_tournament_ops_award_podium" })
+        body: JSON.stringify({ expected_state_fingerprint: reviewedState, confirmation_text: confirmationText, source: "next_tournament_ops_award_podium" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
-      setAwardConfirm("");
       setMessage(`Awarded ${payload.awarded_count ?? 0} new badge(s) from ${payload.candidate_count ?? 0} podium candidate(s).${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to award podium trophies.");
@@ -462,7 +433,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     }
   }
 
-  async function publishOfficialMatches() {
+  async function publishOfficialMatches(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before publishing official matches.");
       return;
@@ -477,10 +448,9 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/matches/publish`, {
         method: "POST",
-        body: JSON.stringify({ confirmation_text: publishConfirm, playoff_winner_bonus_elo: bonusElo, expected_state_fingerprint: reviewedState, source: "next_tournament_ops_publish_matches" })
+        body: JSON.stringify({ confirmation_text: confirmationText, playoff_winner_bonus_elo: bonusElo, expected_state_fingerprint: reviewedState, source: "next_tournament_ops_publish_matches" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
-      setPublishConfirm("");
       setMessage(`Published ${payload.match_count ?? 0} official rating match(es). Bonus applied to ${payload.bonus_match_count ?? 0} medal-playoff match(es) at ${payload.playoff_winner_bonus_elo ?? bonusElo} Elo per winning player.${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to publish official tournament matches.");
@@ -513,7 +483,6 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
       setResultsMatchReviews(payload.match_reviews || {});
       setResultsPodiumRefs(payload.podium_refs || {});
       setResultsReviewDirty(false);
-      setResultsConfirm("");
       setMessage(payload.ok
         ? `Reviewed ${payload.summary.matches} match(es) across ${payload.summary.teams} team(s). No data was written.`
         : `Preview found ${payload.errors.length} blocking issue(s). Resolve mappings or match review choices, then preview again.`);
@@ -524,7 +493,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     }
   }
 
-  async function commitResultsImport() {
+  async function commitResultsImport(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId || !resultsPreview) {
       setMessage("Create and review a results preview before committing.");
       return;
@@ -544,12 +513,11 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
           expected_review_fingerprint: resultsPreview.review_fingerprint,
           expected_state_fingerprint: reviewedState,
           expected_draw_updated_at: reviewedDrawUpdatedAt,
-          confirmation_text: resultsConfirm,
+          confirmation_text: confirmationText,
           source: "next_tournament_ops_results_import"
         })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
-      setResultsConfirm("");
       setResultsReviewDirty(true);
       setMessage(`Imported ${payload.game_count ?? 0} reviewed result(s), ${payload.team_count ?? 0} team(s), and ${payload.podium_count ?? 0} podium row(s).${operationSuffix(payload)}`);
     } catch (error) {
@@ -569,7 +537,6 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
       setResultsRawText(await file.text());
       setResultsPreview(null);
       setResultsReviewDirty(true);
-      setResultsConfirm("");
       setMessage(`Loaded ${file.name}. Preview it before committing.`);
     } catch {
       setMessage("Unable to read the selected results CSV.");
@@ -581,7 +548,6 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     const game = (snapshot?.games || []).find((row) => String(row.id || "") === gameId) || null;
     setScoreA(game?.score_a == null ? "" : String(game.score_a));
     setScoreB(game?.score_b == null ? "" : String(game.score_b));
-    setScoreConfirm("");
   }
 
   function updateTeamRow(index: number, patch: Partial<TeamEditorRow>) {
@@ -642,12 +608,11 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
         <article style={{ ...cardStyle, background: "#f8fafc" }}>
           <h2 style={{ marginTop: 0 }}>Create empty division draw</h2>
           <p style={{ color: "#475569" }}>This creates a DRAFT draw shell scoped to the selected registration division.</p>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) minmax(180px, 1fr) minmax(160px, 220px)", gap: "0.75rem", alignItems: "end" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) minmax(180px, 1fr)", gap: "0.75rem", alignItems: "end" }}>
             <label><strong>Registration division</strong><br /><select value={drawEventOptionId} onChange={(event) => setDrawEventOptionId(event.target.value)} style={inputStyle}><option value="">Legacy / tournament-wide draw</option>{(snapshot.event_options || []).map((row) => <option key={String(row.id)} value={String(row.id)}>{eventOptionLabel(row)}</option>)}</select></label>
             <label><strong>Draw name</strong><br /><input value={drawName} onChange={(event) => setDrawName(event.target.value)} placeholder="optional" style={inputStyle} /></label>
-            <label><strong>Type CREATE DRAW</strong><br /><input value={drawConfirm} onChange={(event) => setDrawConfirm(event.target.value)} style={inputStyle} /></label>
           </div>
-          <p><button type="button" onClick={createDraw} disabled={busy || !accessToken || !operationsWriteReady || !reviewedState || drawConfirm.trim().toUpperCase() !== "CREATE DRAW"} style={buttonStyle}>{busy ? "Creating…" : "Create draw"}</button></p>
+          <p><ConfirmAction triggerLabel="Create draw" title="Create this tournament draw?" description={`This creates a new draft draw${drawName.trim() ? ` named ${drawName.trim()}` : ""}${drawEventOptionId ? " for the selected registration division" : " for the tournament-wide legacy scope"}.`} confirmLabel="Yes, create draw" confirmationText="CREATE DRAW" disabled={!accessToken || !operationsWriteReady || !reviewedState} busy={busy} onConfirm={createDraw} /></p>
         </article>
       ) : null}
 
@@ -685,10 +650,9 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Import confirmed registrations</h2>
             <p style={{ color: "#475569" }}>Imports confirmed registration entries for the selected draw’s registration day/division. Each registration must already be linked to a JUPR player.</p>
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) minmax(200px, 260px) auto", gap: "0.75rem", alignItems: "end" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
               <label><strong>Mode</strong><br /><select value={registrationImportMode} onChange={(event) => setRegistrationImportMode(event.target.value)} style={inputStyle}><option value="REPLACE">Replace current teams</option><option value="APPEND">Append after current teams</option></select></label>
-              <label><strong>Type IMPORT REGISTRATIONS</strong><br /><input value={registrationImportConfirm} onChange={(event) => setRegistrationImportConfirm(event.target.value)} style={inputStyle} /></label>
-              <button type="button" onClick={importRegistrations} disabled={drawCasWriteDisabled || !selectedDrawId || registrationImportConfirm.trim().toUpperCase() !== "IMPORT REGISTRATIONS"} style={buttonStyle}>{busy ? "Importing…" : "Import registrations"}</button>
+              <ConfirmAction triggerLabel="Import registrations" title={`${registrationImportMode === "REPLACE" ? "Replace teams from" : "Append teams from"} confirmed registrations?`} description={registrationImportMode === "REPLACE" ? "This replaces the draw's current team list with teams built from confirmed, player-linked registrations." : "This appends teams built from confirmed, player-linked registrations after the current teams."} confirmLabel={registrationImportMode === "REPLACE" ? "Yes, replace teams" : "Yes, append teams"} confirmationText="IMPORT REGISTRATIONS" tone={registrationImportMode === "REPLACE" ? "danger" : "default"} disabled={drawCasWriteDisabled || !selectedDrawId} busy={busy} onConfirm={importRegistrations} />
             </div>
           </article>
 
@@ -696,10 +660,9 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
             <h2 style={{ marginTop: 0 }}>Bulk import teams</h2>
             <p style={{ color: "#475569" }}>Paste CSV or TSV with headers like <code>Player 1, Player 2, Seed, Notes</code>. Player names or IDs must match the club roster. Import is blocked after games exist.</p>
             <textarea value={bulkTeamText} onChange={(event) => setBulkTeamText(event.target.value)} style={{ ...inputStyle, minHeight: "8rem", fontFamily: "monospace" }} />
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
               <label><strong>Mode</strong><br /><select value={bulkTeamMode} onChange={(event) => setBulkTeamMode(event.target.value)} style={inputStyle}><option value="REPLACE">Replace current teams</option><option value="APPEND">Append after current teams</option></select></label>
-              <label><strong>Type IMPORT TEAMS</strong><br /><input value={bulkTeamConfirm} onChange={(event) => setBulkTeamConfirm(event.target.value)} style={inputStyle} /></label>
-              <button type="button" onClick={importBulkTeams} disabled={drawCasWriteDisabled || !selectedDrawId || bulkTeamConfirm.trim().toUpperCase() !== "IMPORT TEAMS"} style={buttonStyle}>{busy ? "Importing…" : "Import teams"}</button>
+              <ConfirmAction triggerLabel="Import teams" title={`${bulkTeamMode === "REPLACE" ? "Replace" : "Append"} teams from this file?`} description={bulkTeamMode === "REPLACE" ? "This replaces the draw's current teams with the reviewed CSV or TSV contents." : "This appends teams from the reviewed CSV or TSV contents after the current teams."} confirmLabel={bulkTeamMode === "REPLACE" ? "Yes, replace teams" : "Yes, append teams"} confirmationText="IMPORT TEAMS" tone={bulkTeamMode === "REPLACE" ? "danger" : "default"} disabled={drawCasWriteDisabled || !selectedDrawId} busy={busy} onConfirm={importBulkTeams} />
             </div>
           </article>
           </> : null}
@@ -707,13 +670,10 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
           {operationsWriteReady && shows("draws") ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Team editor</h2>
-            <p style={{ color: "#475569" }}>Assign players manually, then type <code>SAVE TEAMS</code>.</p>
+            <p style={{ color: "#475569" }}>Assign players manually, then review the full team list before saving.</p>
             {selectedDrawId ? (
               <>
-                <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
-                  <label><strong>Type SAVE TEAMS</strong><br /><input value={teamConfirm} onChange={(event) => setTeamConfirm(event.target.value)} style={inputStyle} /></label>
-                  <button type="button" onClick={saveTeams} disabled={drawCasWriteDisabled || teamConfirm.trim().toUpperCase() !== "SAVE TEAMS"} style={buttonStyle}>{busy ? "Saving…" : "Save teams"}</button>
-                </div>
+                <ConfirmAction triggerLabel="Save teams" title="Replace the draw's saved teams?" description="This saves the currently reviewed team rows as the authoritative team list for the selected draw." confirmLabel="Yes, save teams" confirmationText="SAVE TEAMS" tone="danger" disabled={drawCasWriteDisabled} busy={busy} onConfirm={saveTeams} />
                 <div style={{ overflowX: "auto", marginTop: "1rem" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "920px" }}>
                     <thead><tr>{["Team #", "Player 1", "Player 2", "Seed", "Notes", "Action"].map((header) => <th key={header} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>{header}</th>)}</tr></thead>
@@ -732,11 +692,11 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
             ) : <p style={{ color: "#64748b" }}>Create or select a draw before editing teams.</p>}
           </article>
 
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate round-robin games</h2><p style={{ color: "#475569" }}>After teams are saved and team numbers are contiguous, type <code>GENERATE GAMES</code>.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Type GENERATE GAMES</strong><br /><input value={gameConfirm} onChange={(event) => setGameConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={generateGames} disabled={teamSnapshotCasDisabled || !selectedDrawId || gameConfirm.trim().toUpperCase() !== "GENERATE GAMES"} style={buttonStyle}>{busy ? "Generating…" : "Generate games"}</button></div></article>
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Score game</h2><p style={{ color: "#475569" }}>Select a game, enter the score, then type <code>SAVE SCORE</code>. Ties are blocked; published, awarded, or downstream-finalized draws are locked.</p>{snapshot.games.length ? <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(100px, 140px) minmax(100px, 140px) minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Game</strong><br /><select value={scoreGameId} onChange={(event) => selectScoreGame(event.target.value)} style={inputStyle}><option value="">Choose a game…</option>{snapshot.games.map((game) => <option key={String(game.id)} value={String(game.id)}>{gameLabel(game)}</option>)}</select></label><label><strong>Score A</strong><br /><input type="number" value={scoreA} onChange={(event) => setScoreA(event.target.value)} style={inputStyle} /></label><label><strong>Score B</strong><br /><input type="number" value={scoreB} onChange={(event) => setScoreB(event.target.value)} style={inputStyle} /></label><label><strong>Type SAVE SCORE</strong><br /><input value={scoreConfirm} onChange={(event) => setScoreConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={saveScore} disabled={drawCasWriteDisabled || !scoreGameId || scoreConfirm.trim().toUpperCase() !== "SAVE SCORE"} style={buttonStyle}>{busy ? "Saving…" : "Save score"}</button></div> : <p style={{ color: "#64748b" }}>Generate games before scoring.</p>}</article>
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate playoffs</h2><p style={{ color: "#475569" }}>After all round-robin games are scored, choose how many teams advance and type <code>GENERATE PLAYOFFS</code>.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 180px) minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Advance count</strong><br /><select value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} style={inputStyle}><option value="4">4 teams</option><option value="5">5 teams</option><option value="6">6 teams</option></select></label><label><strong>Type GENERATE PLAYOFFS</strong><br /><input value={playoffConfirm} onChange={(event) => setPlayoffConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={generatePlayoffs} disabled={gameSnapshotCasDisabled || !selectedDrawId || playoffConfirm.trim().toUpperCase() !== "GENERATE PLAYOFFS"} style={buttonStyle}>{busy ? "Generating…" : "Generate playoffs"}</button></div></article>
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate podium</h2><p style={{ color: "#475569" }}>Creates draw-scoped podium rows from finalized playoffs, or from completed round-robin standings when no playoffs exist.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Type GENERATE PODIUM</strong><br /><input value={podiumConfirm} onChange={(event) => setPodiumConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={generatePodium} disabled={gameSnapshotCasDisabled || !selectedDrawId || podiumConfirm.trim().toUpperCase() !== "GENERATE PODIUM"} style={buttonStyle}>{busy ? "Generating…" : "Generate podium"}</button></div></article>
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Award podium trophies</h2><p style={{ color: "#475569" }}>Awards draw-scoped tournament badges from generated podium rows. Re-running is idempotent for existing badge context.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Type AWARD PODIUM</strong><br /><input value={awardConfirm} onChange={(event) => setAwardConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={awardPodium} disabled={guardedWriteDisabled || !selectedDrawId || awardConfirm.trim().toUpperCase() !== "AWARD PODIUM"} style={buttonStyle}>{busy ? "Awarding…" : "Award podium"}</button></div></article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate round-robin games</h2><p style={{ color: "#475569" }}>Generate the schedule only after teams are saved and team numbers are contiguous.</p><ConfirmAction triggerLabel="Generate games" title="Generate round-robin games?" description="This creates the schedule from the currently reviewed teams and draw version." confirmLabel="Yes, generate games" confirmationText="GENERATE GAMES" disabled={teamSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generateGames} /></article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Score game</h2><p style={{ color: "#475569" }}>Select a game and enter the score. Ties are blocked; published, awarded, or downstream-finalized draws are locked.</p>{snapshot.games.length ? <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(100px, 140px) minmax(100px, 140px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Game</strong><br /><select value={scoreGameId} onChange={(event) => selectScoreGame(event.target.value)} style={inputStyle}><option value="">Choose a game…</option>{snapshot.games.map((game) => <option key={String(game.id)} value={String(game.id)}>{gameLabel(game)}</option>)}</select></label><label><strong>Score A</strong><br /><input type="number" value={scoreA} onChange={(event) => setScoreA(event.target.value)} style={inputStyle} /></label><label><strong>Score B</strong><br /><input type="number" value={scoreB} onChange={(event) => setScoreB(event.target.value)} style={inputStyle} /></label><ConfirmAction triggerLabel="Save score" title="Save this game score?" description={`This records ${scoreA || "0"}–${scoreB || "0"} for the selected game.`} confirmLabel="Yes, save score" confirmationText="SAVE SCORE" disabled={drawCasWriteDisabled || !scoreGameId} busy={busy} onConfirm={saveScore} /></div> : <p style={{ color: "#64748b" }}>Generate games before scoring.</p>}</article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate playoffs</h2><p style={{ color: "#475569" }}>After all round-robin games are scored, choose how many teams advance.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 180px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Advance count</strong><br /><select value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} style={inputStyle}><option value="4">4 teams</option><option value="5">5 teams</option><option value="6">6 teams</option></select></label><ConfirmAction triggerLabel="Generate playoffs" title="Generate the playoff bracket?" description={`This advances ${playoffAdvanceCount} teams from the reviewed round-robin results into the playoff bracket.`} confirmLabel="Yes, generate playoffs" confirmationText="GENERATE PLAYOFFS" disabled={gameSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generatePlayoffs} /></div></article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate podium</h2><p style={{ color: "#475569" }}>Creates draw-scoped podium rows from finalized playoffs, or from completed round-robin standings when no playoffs exist.</p><ConfirmAction triggerLabel="Generate podium" title="Generate podium placements?" description="This calculates and stores podium rows from the currently reviewed final results." confirmLabel="Yes, generate podium" confirmationText="GENERATE PODIUM" disabled={gameSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generatePodium} /></article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Award podium trophies</h2><p style={{ color: "#475569" }}>Awards draw-scoped tournament badges from generated podium rows. Re-running is idempotent for existing badge context.</p><ConfirmAction triggerLabel="Award podium" title="Award the generated podium trophies?" description="This mints draw-scoped tournament badges for the verified podium placements." confirmLabel="Yes, award podium" confirmationText="AWARD PODIUM" disabled={guardedWriteDisabled || !selectedDrawId} busy={busy} onConfirm={awardPodium} /></article>
           </> : null}
 
           {operationsWriteReady && shows("results") ? (
@@ -744,10 +704,10 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
               <h2 style={{ marginTop: 0 }}>Reviewed DUPR results CSV</h2>
               <p style={{ color: "#1e3a8a" }}>Upload or paste a DUPR-style CSV, preview every player mapping and included match without writing, then commit only the exact reviewed fingerprint. The raw CSV stays out of the durable operation ledger.</p>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) minmax(240px, 1fr)", gap: "0.75rem", alignItems: "end" }}>
-                <label><strong>Import mode</strong><br /><select value={resultsImportMode} onChange={(event) => { setResultsImportMode(event.target.value); setResultsPreview(null); setResultsReviewDirty(true); setResultsConfirm(""); }} style={inputStyle}><option value="REPLACE">Replace draw results</option><option value="APPEND">Append imported results</option></select></label>
+                <label><strong>Import mode</strong><br /><select value={resultsImportMode} onChange={(event) => { setResultsImportMode(event.target.value); setResultsPreview(null); setResultsReviewDirty(true); }} style={inputStyle}><option value="REPLACE">Replace draw results</option><option value="APPEND">Append imported results</option></select></label>
                 <label><strong>CSV file (1 MB maximum)</strong><br /><input type="file" accept=".csv,text/csv" onChange={(event) => void loadResultsFile(event.target.files?.[0] || null)} style={inputStyle} /></label>
               </div>
-              <label style={{ display: "block", marginTop: "0.75rem" }}><strong>CSV contents</strong><br /><textarea value={resultsRawText} onChange={(event) => { setResultsRawText(event.target.value); setResultsPreview(null); setResultsReviewDirty(true); setResultsConfirm(""); }} style={{ ...inputStyle, minHeight: "10rem", fontFamily: "monospace" }} /></label>
+              <label style={{ display: "block", marginTop: "0.75rem" }}><strong>CSV contents</strong><br /><textarea value={resultsRawText} onChange={(event) => { setResultsRawText(event.target.value); setResultsPreview(null); setResultsReviewDirty(true); }} style={{ ...inputStyle, minHeight: "10rem", fontFamily: "monospace" }} /></label>
               <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
                 <button type="button" onClick={previewResultsImport} disabled={busy || !accessToken || !selectedDrawId || !resultsRawText.trim()} style={ghostButtonStyle}>{busy ? "Reviewing…" : resultsPreview ? "Re-preview exact choices" : "Preview without writing"}</button>
                 <label style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}><input type="checkbox" checked={allowDuplicateMapping} onChange={(event) => { setAllowDuplicateMapping(event.target.checked); setResultsReviewDirty(true); }} />Explicitly allow duplicate player mappings</label>
@@ -805,8 +765,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
                   </div>
 
                   {operationsWriteReady ? <div style={{ padding: "0.9rem", border: "1px solid #93c5fd", borderRadius: "10px", background: "white" }}>
-                    <label><strong>Type {resultsImportMode === "REPLACE" ? "REPLACE RESULTS" : "IMPORT RESULTS"}</strong><br /><input value={resultsConfirm} onChange={(event) => setResultsConfirm(event.target.value)} style={inputStyle} /></label>
-                    <p style={{ marginBottom: 0 }}><button type="button" onClick={commitResultsImport} disabled={drawCasWriteDisabled || !selectedDrawId || !resultsPreview.ok || resultsReviewDirty || resultsConfirm.trim().toUpperCase() !== (resultsImportMode === "REPLACE" ? "REPLACE RESULTS" : "IMPORT RESULTS")} style={buttonStyle}>{busy ? "Importing…" : "Commit reviewed results"}</button></p>
+                    <ConfirmAction triggerLabel="Commit reviewed results" title={`${resultsImportMode === "REPLACE" ? "Replace" : "Import"} the draw results?`} description={<>{resultsImportMode === "REPLACE" ? "This replaces the draw's teams, games, and podium with the exact reviewed CSV fingerprint." : "This appends the exact reviewed CSV results to the selected draw."}{resultsPreview.summary.create_players ? ` It also creates ${resultsPreview.summary.create_players} permanent player record${resultsPreview.summary.create_players === 1 ? "" : "s"} from the reviewed mappings.` : " It creates no new player records."}</>} confirmLabel={resultsImportMode === "REPLACE" ? "Yes, replace results" : "Yes, import results"} confirmationText={resultsImportMode === "REPLACE" ? "REPLACE RESULTS" : "IMPORT RESULTS"} tone={resultsImportMode === "REPLACE" ? "danger" : "default"} disabled={drawCasWriteDisabled || !selectedDrawId || !resultsPreview.ok || resultsReviewDirty} busy={busy} onConfirm={commitResultsImport} />
                   </div> : null}
                 </div>
               ) : null}
@@ -818,10 +777,9 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
               <h2 style={{ marginTop: 0 }}>Publish official rating matches</h2>
               <p style={{ color: "#7c2d12" }}>Creates official Match Log rows from finalized tournament games and applies the regular rating path for both doubles and singles. Optional medal-playoff bonus adds Elo only to semifinal, bronze, and gold winners. Publishing needs both tournament and match-management permissions, a separate staging gate, and a safe email mode when automatic player updates are enabled.</p>
               {!officialPublishReady ? <p style={{ color: "#b91c1c", fontWeight: 700 }}>Official publish is gated off in this environment.</p> : null}
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
                 <label><strong>Winner bonus Elo</strong><br /><input type="number" min="0" step="0.5" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} style={inputStyle} /><small style={{ color: "#7c2d12" }}>4 Elo = +0.01 JUPR.</small></label>
-                <label><strong>Type PUBLISH MATCHES</strong><br /><input value={publishConfirm} onChange={(event) => setPublishConfirm(event.target.value)} style={inputStyle} /></label>
-                <button type="button" onClick={publishOfficialMatches} disabled={guardedWriteDisabled || !officialPublishReady || !selectedDrawId || publishConfirm.trim().toUpperCase() !== "PUBLISH MATCHES"} style={buttonStyle}>{busy ? "Publishing…" : "Publish official matches"}</button>
+                <ConfirmAction triggerLabel="Publish official matches" title="Publish these tournament games as official rated matches?" description={`This terminal write creates Match Log rows from every finalized game and applies a ${publishBonusElo || "0"}-Elo medal-playoff bonus to eligible winners.`} confirmLabel="Yes, publish official matches" confirmationText="PUBLISH MATCHES" tone="danger" disabled={guardedWriteDisabled || !officialPublishReady || !selectedDrawId} busy={busy} onConfirm={publishOfficialMatches} />
               </div>
             </article>
           ) : null}

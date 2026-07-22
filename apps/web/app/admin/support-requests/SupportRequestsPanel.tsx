@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminSupportRequest, AdminSupportRequestsListResponse, AdminSupportRequestsStatus, AdminSupportRequestUpdateResponse } from "@/lib/adminSupportRequestsApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -9,7 +10,6 @@ type Props = { apiBase: string | null; clubId: string; status: AdminSupportReque
 type RequestEdit = {
   status: string;
   adminNote: string;
-  confirm: string;
   identityStatus: string;
   fulfillmentStatus: string;
   resolutionAction: string;
@@ -81,7 +81,6 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
   const [edit, setEdit] = useState<RequestEdit>({
     status: "in_review",
     adminNote: "",
-    confirm: "",
     identityStatus: "pending",
     fulfillmentStatus: "pending",
     resolutionAction: "none",
@@ -127,7 +126,6 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
     setEdit({
       status: request.status === "new" ? "in_review" : request.status,
       adminNote: request.admin_note || "",
-      confirm: "",
       identityStatus: request.identity_status || "pending",
       fulfillmentStatus: request.fulfillment_status || "pending",
       resolutionAction: request.resolution_action || "none",
@@ -136,7 +134,7 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
     setMessage(null);
   }
 
-  async function saveStatus() {
+  async function saveStatus(confirmationText: string) {
     if (!selected) {
       setMessage("Select a request before saving.");
       return;
@@ -154,7 +152,7 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
           fulfillment_status: selected.request_type === "profile_privacy" ? edit.fulfillmentStatus : undefined,
           resolution_action: selected.request_type === "profile_privacy" ? edit.resolutionAction : undefined,
           resolution_evidence: selected.request_type === "profile_privacy" ? edit.resolutionEvidence : undefined,
-          confirmation_text: edit.confirm,
+          confirmation_text: confirmationText,
           source: "next_admin_support_requests"
         })
       });
@@ -163,7 +161,6 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
       setEdit({
         status: payload.request.status,
         adminNote: payload.request.admin_note || "",
-        confirm: "",
         identityStatus: payload.request.identity_status || "pending",
         fulfillmentStatus: payload.request.fulfillment_status || "pending",
         resolutionAction: payload.request.resolution_action || "none",
@@ -213,7 +210,6 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
           <p style={{ color: "#475569" }}>Use this panel only to track review state. Apply actual corrections through Match Log, Player Editor, Tournament Admin, or Replay History.</p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
             <label>Status<br /><select value={edit.status} onChange={(event) => setEdit((current) => ({ ...current, status: event.target.value }))} style={inputStyle}>{STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option.replace(/_/g, " ")}</option>)}</select></label>
-            <label>Confirmation<br /><input value={edit.confirm} onChange={(event) => setEdit((current) => ({ ...current, confirm: event.target.value }))} placeholder="SAVE REQUEST STATUS" style={inputStyle} /></label>
           </div>
           {selected.request_type === "profile_privacy" ? (
             <div style={{ ...cardStyle, marginTop: "0.75rem", background: "#f8fafc" }}>
@@ -228,7 +224,19 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
             </div>
           ) : null}
           <label>Admin note<br /><textarea value={edit.adminNote} onChange={(event) => setEdit((current) => ({ ...current, adminNote: event.target.value }))} rows={4} style={inputStyle} /></label>
-          <button type="button" onClick={saveStatus} disabled={busy} style={{ ...buttonStyle, marginTop: "0.75rem" }}>{busy ? "Saving…" : "Save request status"}</button>
+          <div style={{ marginTop: "0.75rem" }}>
+            <ConfirmAction
+              triggerLabel="Save request status"
+              title={edit.status === "dismissed" ? "Dismiss this request?" : "Save this request status?"}
+              description={<>This will change <strong>{selected.subject || "the selected request"}</strong> from {selected.status.replace(/_/g, " ")} to {edit.status.replace(/_/g, " ")} and record your admin note.{selected.request_type === "profile_privacy" ? " It also saves the selected identity, fulfillment, resolution, and non-sensitive evidence fields." : ""}</>}
+              confirmLabel={edit.status === "dismissed" ? "Yes, dismiss request" : "Yes, save status"}
+              confirmationText="SAVE REQUEST STATUS"
+              tone={edit.status === "dismissed" ? "danger" : "default"}
+              disabled={busy}
+              busy={busy}
+              onConfirm={saveStatus}
+            />
+          </div>
         </article>
       ) : null}
 

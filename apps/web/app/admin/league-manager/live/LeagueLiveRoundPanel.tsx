@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminLeagueLiveStatusResponse, AdminLeagueManagerDetailResponse, AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
 import type { AdminMatchUploaderRoundRobinCourt, AdminMatchUploaderRoundRobinPreview, AdminMatchUploaderStatusResponse } from "@/lib/adminMatchUploaderApi";
 import type { PublicPlayer } from "@/lib/api";
@@ -127,8 +128,6 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [sessionUpdatedAt, setSessionUpdatedAt] = useState("");
   const [sessionStatus, setSessionStatus] = useState("active");
   const [sessionNotes, setSessionNotes] = useState("");
-  const [createConfirm, setCreateConfirm] = useState("");
-  const [saveConfirm, setSaveConfirm] = useState("");
   const [roundHistory, setRoundHistory] = useState<LeagueLiveRound[]>([]);
   const [publishOperations, setPublishOperations] = useState<LeagueLivePublishOperation[]>([]);
   const [ratingReview, setRatingReview] = useState<LeagueLiveRatingReview | null>(null);
@@ -147,14 +146,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [guestName, setGuestName] = useState("");
   const [guestJupr, setGuestJupr] = useState("3.5");
   const [guestReason, setGuestReason] = useState("");
-  const [guestConfirm, setGuestConfirm] = useState("");
-  const [reconcileConfirm, setReconcileConfirm] = useState("");
   const [compensationReference, setCompensationReference] = useState("");
   const [compensationReason, setCompensationReason] = useState("");
-  const [compensationConfirm, setCompensationConfirm] = useState("");
   const [benchOverrideIds, setBenchOverrideIds] = useState<number[]>([]);
   const [benchOverrideReason, setBenchOverrideReason] = useState("");
-  const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -312,7 +307,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  async function createSession() {
+  async function createSession(confirmationText: string) {
     if (!leagueName) {
       setMessage("Select a league before creating a persisted session.");
       return;
@@ -332,12 +327,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           bench_player_ids: benchOverrideIds,
           bench_override_reason: benchOverrideReason || null,
           notes: sessionNotes,
-          confirmation_text: createConfirm,
+          confirmation_text: confirmationText,
           source: "next_league_live_session_create"
         })
       });
       applySession(payload.session, payload.courts || [], []);
-      setCreateConfirm("");
       await loadSessions();
       setMessage("Persisted League Live session created. You can now resume it later from this page.");
     } catch (error) {
@@ -365,7 +359,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  async function saveSessionSnapshot() {
+  async function saveSessionSnapshot(confirmationText: string) {
     if (!sessionId) {
       setMessage("Create or load a persisted session before saving a snapshot.");
       return;
@@ -386,12 +380,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           bench_override_reason: benchOverrideReason || null,
           notes: sessionNotes,
           expected_updated_at: sessionUpdatedAt,
-          confirmation_text: saveConfirm,
+          confirmation_text: confirmationText,
           source: "next_league_live_session_snapshot"
         })
       });
       applySession(payload.session, payload.courts || [], roundHistory);
-      setSaveConfirm("");
       setMessage("League Live session snapshot saved.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to save session snapshot.");
@@ -519,13 +512,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  async function submitRound() {
+  async function submitRound(confirmationText: string) {
     if (!sessionId) {
       setMessage("Create or load a persisted League Live session before submitting official scores.");
-      return;
-    }
-    if (confirmation.trim().toUpperCase() !== "SUBMIT LEAGUE ROUND") {
-      setMessage("Type SUBMIT LEAGUE ROUND to publish these scored league matches.");
       return;
     }
     const matches = buildScoredMatches();
@@ -558,7 +547,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           expected_operation_key: movementPlan.operation_key,
           idempotency_key: movementPlan.operation_key,
           courts: courtsToPayload(courts, currentRound),
-          confirmation_text: confirmation,
+          confirmation_text: confirmationText,
           source: "next_league_live_round_submit"
         })
       });
@@ -567,7 +556,6 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         setRoundNumber(String(payload.session.current_round || currentRound));
         setRoundLabel(`Round ${payload.session.current_round || currentRound}`);
       }
-      setConfirmation("");
       setPreview(null);
       setScores({});
       if (sessionId) await loadSessionDetail();
@@ -581,7 +569,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  async function createGuest() {
+  async function createGuest(confirmationText: string) {
     if (!sessionId || !sessionUpdatedAt) {
       setMessage("Create or load a persisted session before creating a guest.");
       return;
@@ -598,7 +586,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           reason: guestReason,
           expected_updated_at: sessionUpdatedAt,
           idempotency_key: idempotencyKey,
-          confirmation_text: guestConfirm,
+          confirmation_text: confirmationText,
           source: "next_league_live_guest_create"
         })
       });
@@ -607,7 +595,6 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       setIncomingPlayerId(String(guest.id));
       setGuestName("");
       setGuestReason("");
-      setGuestConfirm("");
       markPlanStale();
       setMessage(`${payload.idempotent_replay ? "Recovered" : "Created"} guest ${guest.name}. Select add or substitute, then preview Python movement again.`);
     } catch (error) {
@@ -617,16 +604,15 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  async function reconcileRound(round: number) {
+  async function reconcileRound(round: number, confirmationText: string) {
     if (!sessionId) return;
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(sessionId)}/rounds/${encodeURIComponent(String(round))}/reconcile`, {
         method: "POST",
-        body: JSON.stringify({ confirmation_text: reconcileConfirm, source: "next_league_live_round_reconcile" })
+        body: JSON.stringify({ confirmation_text: confirmationText, source: "next_league_live_round_reconcile" })
       });
-      setReconcileConfirm("");
       await loadSessionDetail();
       setRatingReview(payload.rating_review || null);
       setMessage(`Round ${round} publish and League Live snapshot are reconciled. No match was republished.`);
@@ -637,7 +623,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  async function verifyCompensation(round: number) {
+  async function verifyCompensation(round: number, confirmationText: string) {
     if (!sessionId) return;
     setBusy(true);
     setMessage(null);
@@ -647,13 +633,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         body: JSON.stringify({
           recovery_reference: compensationReference,
           reason: compensationReason,
-          confirmation_text: compensationConfirm,
+          confirmation_text: confirmationText,
           source: "next_league_live_round_compensate"
         })
       });
       setCompensationReference("");
       setCompensationReason("");
-      setCompensationConfirm("");
       await loadSessionDetail();
       setMessage(`Round ${round} recovery is recorded as compensated. No active deterministic match context remained.`);
     } catch (error) {
@@ -740,8 +725,16 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           <label>Session status<br /><select value={sessionStatus} onChange={(event) => setSessionStatus(event.target.value)} style={inputStyle}><option>active</option><option>paused</option><option>complete</option><option>archived</option></select></label>
           <label>Round label<br /><input value={roundLabel} onChange={(event) => setRoundLabel(event.target.value)} style={inputStyle} /></label>
           <label>Notes<br /><input value={sessionNotes} onChange={(event) => setSessionNotes(event.target.value)} style={inputStyle} /></label>
-          <label>Create confirmation<br /><input value={createConfirm} onChange={(event) => setCreateConfirm(event.target.value)} placeholder="CREATE LIVE SESSION" style={inputStyle} /></label>
-          <button type="button" onClick={createSession} disabled={busy || !leagueName} style={buttonStyle}>Create persisted session</button>
+          <ConfirmAction
+            triggerLabel="Create persisted session"
+            title="Create this League Live session?"
+            description="This saves the current league, roster, bench, court, and round settings as a resumable session."
+            confirmLabel="Yes, create session"
+            confirmationText="CREATE LIVE SESSION"
+            disabled={busy || !leagueName}
+            busy={busy}
+            onConfirm={createSession}
+          />
         </div>
         {rosterSuggestion ? (
           <section style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #dbeafe", borderRadius: "12px", background: "#eff6ff" }}>
@@ -788,10 +781,16 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           </div>
         ))}
         <p><button type="button" onClick={addCourt} style={ghostButtonStyle}>Add court</button> <button type="button" onClick={generatePreview} disabled={busy || !leagueName} style={buttonStyle}>Generate match slots</button></p>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0.75rem", alignItems: "end" }}>
-          <label>Save snapshot confirmation<br /><input value={saveConfirm} onChange={(event) => setSaveConfirm(event.target.value)} placeholder="SAVE SESSION" style={inputStyle} /></label>
-          <button type="button" onClick={saveSessionSnapshot} disabled={busy || !sessionId || !sessionUpdatedAt} style={ghostButtonStyle}>Save session snapshot</button>
-        </div>
+        <ConfirmAction
+          triggerLabel="Save session snapshot"
+          title="Save this League Live snapshot?"
+          description="This persists the current session status, roster, bench, courts, round, and notes."
+          confirmLabel="Yes, save snapshot"
+          confirmationText="SAVE SESSION"
+          disabled={busy || !sessionId || !sessionUpdatedAt}
+          busy={busy}
+          onConfirm={saveSessionSnapshot}
+        />
       </article>
 
       {roundHistory.length ? (
@@ -824,9 +823,18 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
             </div>
           ) : <p>No publish operations recorded for this session.</p>}
           {publishOperations.some((operation) => operation.status !== "completed") ? (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
-              <label>Reconcile confirmation<br /><input value={reconcileConfirm} onChange={(event) => setReconcileConfirm(event.target.value)} placeholder="RECONCILE LEAGUE ROUND" style={inputStyle} /></label>
-              <div>{publishOperations.filter((operation) => operation.status !== "completed").map((operation) => <button key={operation.id} type="button" onClick={() => reconcileRound(operation.round_number)} disabled={busy} style={{ ...ghostButtonStyle, marginLeft: "0.4rem" }}>Reconcile R{operation.round_number}</button>)}</div>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
+              {publishOperations.filter((operation) => operation.status !== "completed").map((operation) => <ConfirmAction
+                key={operation.id}
+                triggerLabel={`Reconcile R${operation.round_number}`}
+                title={`Reconcile League Live round ${operation.round_number}?`}
+                description="This checks the durable publish record and reconciles the session snapshot without republishing verified matches."
+                confirmLabel="Yes, reconcile round"
+                confirmationText="RECONCILE LEAGUE ROUND"
+                disabled={busy}
+                busy={busy}
+                onConfirm={(confirmationText) => reconcileRound(operation.round_number, confirmationText)}
+              />)}
             </div>
           ) : null}
           {publishOperations.some((operation) => ["published", "reconciling", "recovery_required"].includes(operation.status)) ? (
@@ -836,8 +844,18 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
                 <label>Recovery reference<br /><input value={compensationReference} onChange={(event) => setCompensationReference(event.target.value)} placeholder="Match Log / replay operation ID" style={inputStyle} /></label>
                 <label>Reason<br /><input value={compensationReason} onChange={(event) => setCompensationReason(event.target.value)} placeholder="At least 10 characters" style={inputStyle} /></label>
-                <label>Confirmation<br /><input value={compensationConfirm} onChange={(event) => setCompensationConfirm(event.target.value)} placeholder="VERIFY LEAGUE COMPENSATION" style={inputStyle} /></label>
-                <div>{publishOperations.filter((operation) => ["published", "reconciling", "recovery_required"].includes(operation.status)).map((operation) => <button key={operation.id} type="button" onClick={() => verifyCompensation(operation.round_number)} disabled={busy} style={{ ...ghostButtonStyle, marginLeft: "0.4rem" }}>Verify R{operation.round_number}</button>)}</div>
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>{publishOperations.filter((operation) => ["published", "reconciling", "recovery_required"].includes(operation.status)).map((operation) => <ConfirmAction
+                  key={operation.id}
+                  triggerLabel={`Verify R${operation.round_number}`}
+                  title={`Verify compensation for round ${operation.round_number}?`}
+                  description="Use this only after every deterministic match context was removed or excluded and ratings replay completed."
+                  confirmLabel="Yes, verify compensation"
+                  confirmationText="VERIFY LEAGUE COMPENSATION"
+                  tone="danger"
+                  disabled={busy || !compensationReference || compensationReason.trim().length < 10}
+                  busy={busy}
+                  onConfirm={(confirmationText) => verifyCompensation(operation.round_number, confirmationText)}
+                />)}</div>
               </div>
             </details>
           ) : null}
@@ -889,8 +907,16 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
                   <label>Guest name<br /><input value={guestName} onChange={(event) => setGuestName(event.target.value)} style={inputStyle} /></label>
                   <label>Starting JUPR<br /><input value={guestJupr} onChange={(event) => setGuestJupr(event.target.value)} type="number" min="1" max="7" step="0.1" style={inputStyle} /></label>
                   <label>Operator reason<br /><input value={guestReason} onChange={(event) => setGuestReason(event.target.value)} placeholder="At least 10 characters" style={inputStyle} /></label>
-                  <label>Confirmation<br /><input value={guestConfirm} onChange={(event) => setGuestConfirm(event.target.value)} placeholder="CREATE LIVE GUEST" style={inputStyle} /></label>
-                  <button type="button" onClick={createGuest} disabled={busy || !sessionId} style={ghostButtonStyle}>Create guest</button>
+                  <ConfirmAction
+                    triggerLabel="Create guest"
+                    title="Create this guest player?"
+                    description="This creates a real club player record for authoritative ratings and Match Log recovery."
+                    confirmLabel="Yes, create guest"
+                    confirmationText="CREATE LIVE GUEST"
+                    disabled={busy || !sessionId || !guestName.trim() || guestReason.trim().length < 10}
+                    busy={busy}
+                    onConfirm={createGuest}
+                  />
                 </div>
               </details>
             ) : null}
@@ -918,8 +944,17 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
             </article>
           ) : null}
           <p><button type="button" onClick={previewPythonMovement} disabled={busy || validScoreCount !== allPreviewMatches.length || !sessionId || !sessionUpdatedAt} style={ghostButtonStyle}>{busy ? "Planning…" : "Preview Python movement"}</button></p>
-          <label>Confirmation<br /><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="SUBMIT LEAGUE ROUND" style={inputStyle} /></label>
-          <button type="button" onClick={submitRound} disabled={busy || !liveDomainStatus.submit_enabled || validScoreCount !== allPreviewMatches.length || !sessionId || !movementPlan || movementPlanStale} style={{ ...buttonStyle, marginTop: "0.75rem" }}>{busy ? "Publishing…" : "Publish complete league round"}</button>
+          <ConfirmAction
+            triggerLabel="Publish complete league round"
+            title="Publish this complete league round?"
+            description="This publishes every scored match as official, recalculates ratings and movement, and advances the persisted session."
+            confirmLabel="Yes, publish round"
+            confirmationText="SUBMIT LEAGUE ROUND"
+            tone="danger"
+            disabled={busy || !liveDomainStatus.submit_enabled || validScoreCount !== allPreviewMatches.length || !sessionId || !movementPlan || movementPlanStale}
+            busy={busy}
+            onConfirm={submitRound}
+          />
         </article>
       ) : null}
     </div>

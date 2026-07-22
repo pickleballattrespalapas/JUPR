@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type {
   AdminLeagueManagerDetailResponse,
   AdminLeagueManagerSchedulePreviewResponse,
@@ -263,7 +264,6 @@ function SchedulePreview({ preview }: { preview: AdminLeagueManagerSchedulePrevi
 
 export function GuidedLeagueSettingsEditor({ detail, saving, canWrite, onSave, onPreview }: Props) {
   const [form, setForm] = useState<FormState>(() => formFromDetail(detail));
-  const [confirmation, setConfirmation] = useState("");
   const [localMessage, setLocalMessage] = useState<string | null>(null);
   const [preview, setPreview] = useState<AdminLeagueManagerSchedulePreviewResponse | null>(() => previewFromDetail(detail));
   const status = detail.league.status;
@@ -272,7 +272,6 @@ export function GuidedLeagueSettingsEditor({ detail, saving, canWrite, onSave, o
 
   useEffect(() => {
     setForm(formFromDetail(detail));
-    setConfirmation("");
     setLocalMessage(null);
     setPreview(previewFromDetail(detail));
   }, [detail]);
@@ -305,12 +304,11 @@ export function GuidedLeagueSettingsEditor({ detail, saving, canWrite, onSave, o
     }
   }
 
-  async function saveSettings() {
+  async function saveSettings(confirmationText: string) {
     setLocalMessage(null);
     try {
       const patch = isDraft ? buildDraftPatch(form, detail) : { description: form.description };
-      const saved = await onSave(patch, confirmation);
-      if (saved) setConfirmation("");
+      await onSave(patch, confirmationText);
     } catch (error) {
       setLocalMessage(error instanceof Error ? error.message : "Unable to validate league settings.");
     }
@@ -319,7 +317,6 @@ export function GuidedLeagueSettingsEditor({ detail, saving, canWrite, onSave, o
   function resetForm() {
     setForm(formFromDetail(detail));
     setPreview(previewFromDetail(detail));
-    setConfirmation("");
     setLocalMessage(null);
   }
 
@@ -342,7 +339,7 @@ export function GuidedLeagueSettingsEditor({ detail, saving, canWrite, onSave, o
       <details style={detailsStyle}><summary style={{ cursor: "pointer", fontWeight: 800 }}>Awards &amp; trophies</summary><div style={{ ...gridStyle, marginTop: "0.75rem" }}><label><strong>Default award depth</strong><br /><select value={form.awardDepth} onChange={(event) => updateField("awardDepth", event.target.value as "1" | "3")} style={inputStyle}><option value="1">Top 1</option><option value="3">Top 3</option></select></label></div><div style={{ display: "grid", gap: "0.75rem", marginTop: "0.75rem" }}>{awardDefinitions.map(({ key, label }) => { const category = form.awardCategories[key]; return <fieldset key={key} style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.75rem" }}><legend style={{ fontWeight: 800 }}>{label}</legend><div style={gridStyle}><label><input type="checkbox" checked={category.enabled} onChange={(event) => updateAwardCategory(key, { enabled: event.target.checked })} /> Enabled</label><label><strong>Minimum games</strong><br /><input type="number" min={0} max={1000} value={category.minGames} onChange={(event) => updateAwardCategory(key, { minGames: event.target.value })} style={inputStyle} /></label><label><strong>Award depth</strong><br /><select value={category.depth} onChange={(event) => updateAwardCategory(key, { depth: event.target.value as "1" | "3" })} style={inputStyle}><option value="1">Top 1</option><option value="3">Top 3</option></select></label></div></fieldset>; })}</div></details>
     </div> : null}
 
-    {!isClosed ? <div style={{ ...gridStyle, marginTop: "0.9rem" }}><label><strong>Type SAVE LEAGUE</strong><br /><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="SAVE LEAGUE" style={inputStyle} /></label><p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", margin: 0 }}><button type="button" onClick={saveSettings} disabled={saving || !canWrite || confirmation.trim().toUpperCase() !== "SAVE LEAGUE"} style={buttonStyle}>{saving ? "Saving…" : isDraft ? "Save structured draft" : "Save description"}</button><button type="button" onClick={resetForm} disabled={saving} style={ghostButtonStyle}>Reset loaded values</button></p></div> : null}
+    {!isClosed ? <div style={{ ...gridStyle, marginTop: "0.9rem" }}><ConfirmAction triggerLabel={saving ? "Saving…" : isDraft ? "Save structured draft" : "Save description"} title={isDraft ? "Save this structured league draft?" : "Save this league description?"} description={isDraft ? "This saves the reviewed overview, schedule, court, competition, rating, and award settings for this draft." : "This updates the description for the selected active league."} confirmLabel={isDraft ? "Yes, save draft" : "Yes, save description"} confirmationText="SAVE LEAGUE" disabled={!canWrite} busy={saving} onConfirm={saveSettings} /><p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", margin: 0 }}><button type="button" onClick={resetForm} disabled={saving} style={ghostButtonStyle}>Reset loaded values</button></p></div> : null}
     {localMessage ? <p style={{ color: localMessage.toLowerCase().includes("previewed") ? "#166534" : "#b91c1c" }}>{localMessage}</p> : null}
   </article>;
 }

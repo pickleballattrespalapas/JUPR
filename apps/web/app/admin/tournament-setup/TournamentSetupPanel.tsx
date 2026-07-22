@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type StatusResponse = { enabled: boolean; status: string; tournament_count?: number | null; warnings?: string[]; confirmation_text?: Record<string, string> };
@@ -36,9 +37,6 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
   const [daysJson, setDaysJson] = useState("[]");
   const [eventsJson, setEventsJson] = useState("[]");
   const [familiesJson, setFamiliesJson] = useState("[]");
-  const [settingsConfirm, setSettingsConfirm] = useState("");
-  const [draftConfirm, setDraftConfirm] = useState("");
-  const [publishConfirm, setPublishConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<WriteResponse | null>(null);
@@ -86,38 +84,35 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
     finally { setBusy(false); }
   }
 
-  async function saveSettings() {
-    if (settingsConfirm.trim().toUpperCase() !== "SAVE SETUP") { setMessage("Type SAVE SETUP to save registration settings."); return; }
+  async function saveSettings(confirmationText: string) {
     setBusy(true); setMessage(null);
     try {
-      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/settings`, { method: "PATCH", body: JSON.stringify({ ...settings, expected_state_fingerprint: detail?.state_fingerprint, confirmation_text: settingsConfirm }) });
-      setLastResult(payload); setSettingsConfirm(""); await loadDetail(selectedId); setMessage(payload.idempotent_replay ? "Settings response reconciled from the durable operation." : "Tournament setup settings saved.");
+      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/settings`, { method: "PATCH", body: JSON.stringify({ ...settings, expected_state_fingerprint: detail?.state_fingerprint, confirmation_text: confirmationText }) });
+      setLastResult(payload); await loadDetail(selectedId); setMessage(payload.idempotent_replay ? "Settings response reconciled from the durable operation." : "Tournament setup settings saved.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save settings."); }
     finally { setBusy(false); }
   }
 
-  async function saveDraft() {
-    if (draftConfirm.trim().toUpperCase() !== "SAVE SETUP DRAFT") { setMessage("Type SAVE SETUP DRAFT to save the builder draft."); return; }
+  async function saveDraft(confirmationText: string) {
     setBusy(true); setMessage(null);
     try {
       const days = parseArrayJson(daysJson, "Days");
       const events = parseArrayJson(eventsJson, "Event options");
       const eventFamilies = parseArrayJson(familiesJson, "Event families");
-      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/draft`, { method: "PUT", body: JSON.stringify({ days, event_families: eventFamilies, event_options: events, expected_state_fingerprint: detail?.state_fingerprint, confirmation_text: draftConfirm }) });
-      setLastResult(payload); setDraftConfirm(""); await loadDetail(selectedId); setMessage(payload.idempotent_replay ? "Draft response reconciled from the durable operation." : "Tournament setup draft saved.");
+      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/draft`, { method: "PUT", body: JSON.stringify({ days, event_families: eventFamilies, event_options: events, expected_state_fingerprint: detail?.state_fingerprint, confirmation_text: confirmationText }) });
+      setLastResult(payload); await loadDetail(selectedId); setMessage(payload.idempotent_replay ? "Draft response reconciled from the durable operation." : "Tournament setup draft saved.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save draft."); }
     finally { setBusy(false); }
   }
 
-  async function publishSetup() {
-    if (publishConfirm.trim().toUpperCase() !== "PUBLISH SETUP") { setMessage("Type PUBLISH SETUP to publish registration days and event options."); return; }
+  async function publishSetup(confirmationText: string) {
     setBusy(true); setMessage(null);
     try {
       const days = parseArrayJson(daysJson, "Days");
       const events = parseArrayJson(eventsJson, "Event options");
       if (!impactReview || reviewedDraftSignature !== draftSignature(days, events)) throw new Error("Review publish impact for the current draft before publishing.");
-      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/publish`, { method: "POST", body: JSON.stringify({ days, event_options: events, expected_state_fingerprint: detail?.state_fingerprint, reviewed_impact_fingerprint: impactReview.impact_fingerprint, confirmation_text: publishConfirm }) });
-      setLastResult(payload); setPublishConfirm(""); setMessage(payload.idempotent_replay ? "Publish response reconciled without republishing." : "Tournament setup published.");
+      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/publish`, { method: "POST", body: JSON.stringify({ days, event_options: events, expected_state_fingerprint: detail?.state_fingerprint, reviewed_impact_fingerprint: impactReview.impact_fingerprint, confirmation_text: confirmationText }) });
+      setLastResult(payload); setMessage(payload.idempotent_replay ? "Publish response reconciled without republishing." : "Tournament setup published.");
       await loadDetail(selectedId);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to publish setup."); }
     finally { setBusy(false); }
@@ -151,6 +146,9 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
   if (!status?.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Tournament Setup is disabled</h2><p>{status?.warnings?.[0] || "Enable JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS on FastAPI."}</p></article>;
   const impact = (impactReview?.publish_impact || detail?.publish_impact) as Record<string, unknown> | null | undefined;
   const summary = (impact?.summary || {}) as Record<string, unknown>;
+  const settingsConfirmation = status.confirmation_text?.settings || "SAVE SETUP";
+  const draftConfirmation = status.confirmation_text?.draft || "SAVE SETUP DRAFT";
+  const publishConfirmation = status.confirmation_text?.publish || "PUBLISH SETUP";
   return <div style={{ display: "grid", gap: "1rem" }}>
     <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Admin session</h2><p style={{ color: "#475569" }}>{adminSessionLabel(session)}</p>{sessionLoading ? <p>Checking session…</p> : null}{sessionMessage ? <p>{sessionMessage}</p> : null}</article>
     <article style={cardStyle}>
@@ -176,8 +174,7 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
         </div>
         <label>Rules markdown<br /><textarea value={safeString(settings.rules_markdown)} onChange={(e) => setSettings((s) => ({ ...s, rules_markdown: e.target.value }))} rows={4} style={inputStyle} /></label>
         <label>Refund / operations policy markdown<br /><textarea value={safeString(settings.refund_policy_markdown)} onChange={(e) => setSettings((s) => ({ ...s, refund_policy_markdown: e.target.value }))} rows={3} style={inputStyle} /></label>
-        <label>Confirmation<br /><input value={settingsConfirm} onChange={(e) => setSettingsConfirm(e.target.value)} placeholder="SAVE SETUP" style={inputStyle} /></label>
-        <p><button type="button" onClick={saveSettings} disabled={busy} style={buttonStyle}>Save settings</button></p>
+        <p><ConfirmAction triggerLabel="Save settings" title="Save tournament registration settings?" description="This updates the selected tournament's registration status, dates, rules, and public registration options." confirmLabel="Yes, save settings" confirmationText={settingsConfirmation} busy={busy} onConfirm={saveSettings} /></p>
       </article>
 
       <article style={cardStyle}>
@@ -187,8 +184,7 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
         <label>Days JSON<br /><textarea value={daysJson} onChange={(e) => { setDaysJson(e.target.value); setImpactReview(null); setReviewedDraftSignature(""); }} rows={8} style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }} /></label>
         <label>Event families JSON<br /><textarea value={familiesJson} onChange={(e) => { setFamiliesJson(e.target.value); setImpactReview(null); setReviewedDraftSignature(""); }} rows={5} style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }} /></label>
         <label>Event options / divisions JSON<br /><textarea value={eventsJson} onChange={(e) => { setEventsJson(e.target.value); setImpactReview(null); setReviewedDraftSignature(""); }} rows={14} style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }} /></label>
-        <label>Draft confirmation<br /><input value={draftConfirm} onChange={(e) => setDraftConfirm(e.target.value)} placeholder="SAVE SETUP DRAFT" style={inputStyle} /></label>
-        <p><button type="button" onClick={saveDraft} disabled={busy} style={buttonStyle}>Save draft</button></p>
+        <p><ConfirmAction triggerLabel="Save draft" title="Save this tournament setup draft?" description="This stores the current days, event families, and event options as the builder draft without publishing them." confirmLabel="Yes, save draft" confirmationText={draftConfirmation} busy={busy} onConfirm={saveDraft} /></p>
       </article>
 
       <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
@@ -201,8 +197,7 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
         {detail.publish_impact_warning ? <p style={{ color: "#b91c1c" }}>{detail.publish_impact_warning}</p> : null}
         {impact?.blocked && Array.isArray(impact.blocked) && impact.blocked.length ? <pre style={{ whiteSpace: "pre-wrap", color: "#b91c1c" }}>{JSON.stringify(impact.blocked, null, 2)}</pre> : null}
         {impact?.warnings && Array.isArray(impact.warnings) && impact.warnings.length ? <pre style={{ whiteSpace: "pre-wrap", color: "#92400e" }}>{JSON.stringify(impact.warnings, null, 2)}</pre> : null}
-        <label>Publish confirmation<br /><input value={publishConfirm} onChange={(e) => setPublishConfirm(e.target.value)} placeholder="PUBLISH SETUP" style={inputStyle} /></label>
-        <p><button type="button" onClick={publishSetup} disabled={busy || !impactReview || publishConfirm.trim().toUpperCase() !== "PUBLISH SETUP"} style={buttonStyle}>Publish setup</button></p>
+        <p><ConfirmAction triggerLabel="Publish setup" title="Publish this tournament setup?" description="This applies the reviewed registration days and event options to the live tournament setup. Review the impact summary before continuing." confirmLabel="Yes, publish setup" confirmationText={publishConfirmation} tone="danger" disabled={!impactReview} busy={busy} onConfirm={publishSetup} /></p>
       </article>
     </> : null}
     {lastResult ? <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Last result</h2><pre style={{ whiteSpace: "pre-wrap", background: "#0f172a", color: "white", padding: "1rem", borderRadius: "12px", overflowX: "auto" }}>{JSON.stringify(lastResult, null, 2)}</pre></article> : null}

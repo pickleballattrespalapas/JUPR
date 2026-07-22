@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import type { FormEvent } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminReplayResultResponse } from "@/lib/adminReplayApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -16,7 +16,6 @@ type ReplayHistoryFormProps = {
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
-const buttonStyle = { padding: "0.65rem 1rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -36,14 +35,12 @@ function requestKey(): string {
 export default function ReplayHistoryForm({ apiBase, clubId, enabled, options, defaultTarget }: ReplayHistoryFormProps) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [targetReset, setTargetReset] = useState(defaultTarget || options[0] || "ALL (Full System Reset)");
-  const [confirmationText, setConfirmationText] = useState("");
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [result, setResult] = useState<AdminReplayResultResponse | null>(null);
   const [idempotencyKey, setIdempotencyKey] = useState(requestKey);
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function onSubmit(confirmationText: string) {
     setMessage(null);
     setResult(null);
     if (!apiBase) {
@@ -93,7 +90,7 @@ export default function ReplayHistoryForm({ apiBase, clubId, enabled, options, d
   }
 
   return (
-    <form onSubmit={onSubmit} style={{ ...cardStyle, display: "grid", gap: "0.75rem" }}>
+    <article style={{ ...cardStyle, display: "grid", gap: "0.75rem" }}>
       <h2 style={{ marginTop: 0 }}>Run replay</h2>
       <p style={{ color: "#475569", marginTop: 0 }}>
         Replay runs on FastAPI through the Python replay domain function. Full reset updates overall player stats; league replay rebuilds league-specific ratings and snapshots for that league.
@@ -111,10 +108,16 @@ export default function ReplayHistoryForm({ apiBase, clubId, enabled, options, d
           {options.map((option) => <option key={option}>{option}</option>)}
         </select>
       </label>
-      <label><strong>Type REPLAY to confirm</strong><br /><input value={confirmationText} onChange={(event) => setConfirmationText(event.target.value)} style={inputStyle} /></label>
-      <button type="submit" disabled={pending || !accessToken || confirmationText.trim().toUpperCase() !== "REPLAY"} style={buttonStyle}>
-        {pending ? "Running replay…" : "Run replay"}
-      </button>
+      <ConfirmAction
+        triggerLabel="Run replay"
+        title="Run Replay History now?"
+        description={<>This will run Replay History for <strong>{targetReset}</strong>. Ratings and derived history may be rebuilt across that scope.</>}
+        confirmLabel="Yes, run replay"
+        confirmationText="REPLAY"
+        disabled={pending || !accessToken}
+        busy={pending}
+        onConfirm={onSubmit}
+      />
       {message ? <p style={{ color: result?.ok ? "#166534" : "#b91c1c" }}>{message}</p> : null}
       {result ? (
         <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", margin: 0 }}>
@@ -131,6 +134,6 @@ export default function ReplayHistoryForm({ apiBase, clubId, enabled, options, d
           {result.warnings.map((warning) => <li key={warning}>{warning}</li>)}
         </ul>
       ) : null}
-    </form>
+    </article>
   );
 }
