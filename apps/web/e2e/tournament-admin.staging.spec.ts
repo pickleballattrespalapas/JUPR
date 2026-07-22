@@ -42,7 +42,7 @@ test.describe("order-26 Tournament Admin staging evidence", () => {
     await page.getByRole("button", { name: "Load list" }).click();
     const selector = page.getByLabel("Tournament");
     await selector.selectOption(tournamentId);
-    await page.getByRole("button", { name: "Load setup" }).click();
+    await expect(page.getByRole("button", { name: "Reload setup" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "4. Publish setup" })).toBeVisible();
     await page.getByRole("button", { name: "Review publish impact (dry run)" }).click();
     await expect(page.getByRole("status")).toContainText("No rows were written");
@@ -91,4 +91,3 @@ test.describe("order-26 Tournament Admin staging evidence", () => {
     expect((await response.json()).detail).toMatch(/already imported into a draw|Tournament Ops/i);
   });
 });
-

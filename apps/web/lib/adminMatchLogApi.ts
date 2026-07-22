@@ -97,6 +97,10 @@ export type AdminMatchLogResponse = {
     end_date?: string | null;
     limit: number;
   };
+  filter_options?: {
+    leagues: string[];
+    week_tags: string[];
+  };
   summary: {
     scanned_matches: number;
     filtered_matches?: number | null;

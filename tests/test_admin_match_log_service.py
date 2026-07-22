@@ -301,6 +301,10 @@ def test_admin_match_log_duplicate_scan(monkeypatch) -> None:
     original = next(match for match in payload["matches"] if match["id"] == 1)
     assert original["notes"] == "operator correction context"
     assert payload["summary"]["scanned_matches"] == 3
+    assert payload["filter_options"] == {
+        "leagues": ["Open", "POPUP"],
+        "week_tags": ["Event", "Week 1"],
+    }
     assert all(match["id"] != 99 for match in payload["matches"])
     assert payload["warnings"] == []
 
@@ -312,7 +316,31 @@ def test_admin_match_log_filters_popup(monkeypatch) -> None:
 
     assert payload["summary"]["returned_matches"] == 1
     assert payload["matches"][0]["match_type"] == "PopUp"
+    assert payload["filter_options"] == {
+        "leagues": ["Open", "POPUP"],
+        "week_tags": ["Event", "Week 1"],
+    }
     assert payload["duplicate_groups"] == []
+
+
+def test_admin_match_log_filter_options_remain_stable_after_value_filters(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+
+    payload = build_admin_match_log(
+        fake_supabase(),
+        club_id="club",
+        league="Open",
+        week_tag="Week 1",
+        limit=20,
+    )
+
+    assert payload["filters"]["league"] == "Open"
+    assert payload["filters"]["week_tag"] == "Week 1"
+    assert {match["league"] for match in payload["matches"]} == {"Open"}
+    assert payload["filter_options"] == {
+        "leagues": ["Open", "POPUP"],
+        "week_tags": ["Event", "Week 1"],
+    }
 
 
 def test_admin_match_log_minimal_fallback_still_excludes_soft_deleted_rows(monkeypatch) -> None:

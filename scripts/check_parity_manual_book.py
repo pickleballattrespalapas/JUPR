@@ -332,6 +332,8 @@ def _manual_recovery_record(value: str) -> tuple[str, str, str, str, str] | None
 
 
 def _manual_operators(value: str) -> tuple[str, str] | None:
+    """Require distinct human identities for a manual-only staging mutation."""
+
     match = re.fullmatch(
         r"operator=([A-Za-z0-9][A-Za-z0-9_.:@-]{2,199});\s*"
         r"witness=([A-Za-z0-9][A-Za-z0-9_.:@-]{2,199})",
@@ -635,8 +637,9 @@ def check_book_complete(
             )
         if _manual_operators(match.group("operator")) is None:
             errors.append(
-                f"Deferred manual mutation {surface} operator/witness must use distinct identities: "
-                "`operator=<identity>; witness=<identity>`."
+                f"Deferred manual mutation {surface} operator/witness must use "
+                "distinct human identities: `operator=<identity>; "
+                "witness=<different-identity>`."
             )
 
     for match in FIXTURE_ROW_RE.finditer(text):
