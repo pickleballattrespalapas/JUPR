@@ -18,15 +18,15 @@ handoff. After the hardening patch deploys, record the replacement values:
 | Field | Required value |
 |---|---|
 | Canonical branch/ref | `staging` |
-| Candidate SHA | `<final deployed 40-character SHA>` |
-| Vercel deployment ID | `<deployment ID for that SHA>` |
-| Vercel immutable origin | `<immutable origin for that deployment>` |
+| Candidate SHA | `6c27f5de5c04b1d565ba051efb322fff2804ff10` |
+| Vercel deployment ID | `dpl_9NtvgLv9GtRbMCUDTHcR2KezobVo` |
+| Vercel immutable origin | `https://jupr-mimau97b5-pickleballattrespalapas1.vercel.app` |
 | Fly API | `https://juprleagues-api-staging.fly.dev` |
-| Fly image for each dispatch | `<record separately for A, B, and final none>` |
+| Fly image for each dispatch | Initial `none`: `registry.fly.io/juprleagues-api-staging:deployment-01KY5M69KJ1DPDFSSRQWNBBSTR` (run `29950338666`, machine `01KY5M7NG6EJBGWXV1TV79978R`); record A, B, and final `none` separately |
 | Supabase project ref | `sijpxjxvdtrehmqvirfi` |
 | Email mode | `dry_run` |
-| Operator | `<person performing the action>` |
-| Witness | `<different person reviewing evidence, if formal acceptance>` |
+| Operator | Joe Baumann |
+| Witness | Pending — record the distinct witness identity with the witnessed action |
 
 Before A, verify Vercel `/api/environment` and Fly `/health` attest the same final
 SHA and isolated staging origins. Begin from `write_wave=none`; never dispatch a
@@ -37,6 +37,25 @@ fixture fingerprint/request from the preceding 24 hours. The intake service
 deduplicates identical fingerprints across that window even when the prior row is
 dismissed. If a match exists, stop and wait for the window to expire; do not vary
 the fixture, delete retained evidence, or claim the first submit is a new row.
+
+### Recorded final-candidate preflight — 2026-07-22
+
+- Vercel deployment `dpl_9NtvgLv9GtRbMCUDTHcR2KezobVo` is `READY`, is sourced
+  from `staging`, and reports candidate SHA
+  `6c27f5de5c04b1d565ba051efb322fff2804ff10`.
+- Fly deploy/verify run `29950338666` succeeded. Live `/health` reported the same
+  SHA, `write_wave=none`, `business_data_write_wave_active=false`, email
+  `dry_run`, and every controlled write flag false.
+- Canonical Staging Smoke run `29950580803` passed public checks, exact
+  read-only deployment identity attestation, and strict browser smoke.
+- The remote migration ledger includes `public_support_intake_guardrails`.
+  `public.public_support_requests` has RLS enabled; `anon` and `authenticated`
+  have no DML, while `service_role` has the required DML privileges.
+- The prior exact short fixture is retained as dismissed request
+  `req_4055accc54b34ab6977d`, created `2026-07-21T14:47:51Z`. At the prestate
+  read on `2026-07-22`, it was more than 28 hours old and therefore outside the
+  24-hour deduplication window. No matching fixture exists inside the active
+  window, so batch A may use the approved values without alteration.
 
 ## Short repeatable fixture
 
