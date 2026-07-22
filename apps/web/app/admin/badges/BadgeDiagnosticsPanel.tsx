@@ -9,6 +9,7 @@ import type {
   AdminBadgeOptionsResponse,
   AdminBadgePlayerOption
 } from "@/lib/adminBadgeDiagnosticsApi";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminBadgeDiagnosticsStatusResponse };
@@ -62,14 +63,11 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
   const [includeNonLive, setIncludeNonLive] = useState(false);
   const [includeRevoked, setIncludeRevoked] = useState(false);
   const [recomputeMode, setRecomputeMode] = useState("dry-run");
-  const [recomputeConfirm, setRecomputeConfirm] = useState("");
   const [playerBadgeId, setPlayerBadgeId] = useState("");
   const [revokeReason, setRevokeReason] = useState("");
-  const [revokeConfirm, setRevokeConfirm] = useState("");
   const [badgeStateTarget, setBadgeStateTarget] = useState<"live" | "frozen" | "deprecated">("frozen");
   const [badgeStateReason, setBadgeStateReason] = useState("");
   const [badgeStateForce, setBadgeStateForce] = useState(false);
-  const [badgeStateConfirm, setBadgeStateConfirm] = useState("");
   const [recomputeOperationKey, setRecomputeOperationKey] = useState("");
   const [revokeOperationKey, setRevokeOperationKey] = useState("");
   const [stateOperationKey, setStateOperationKey] = useState("");
@@ -144,8 +142,7 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
     finally { setBusy(false); }
   }
 
-  async function runRecompute() {
-    if (recomputeMode !== "dry-run" && recomputeConfirm.trim().toUpperCase() !== "RECOMPUTE BADGES") { setMessage("Type RECOMPUTE BADGES to run an applying badge recompute."); return; }
+  async function runRecompute(confirmationText = "") {
     setBusy(true); setMessage(null);
     try {
       const key = recomputeMode === "dry-run" ? "" : (recomputeOperationKey || `badge-recompute:${Date.now()}:${crypto.randomUUID()}`);
@@ -163,19 +160,18 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           include_non_live: includeNonLive,
           match_limit: Number(matchLimit || 5000),
           revoke_reason: revokeReason || null,
-          confirmation_text: recomputeConfirm,
+          confirmation_text: confirmationText,
           operation_key: key
         })
       });
-      setRepairResult(payload); setRecomputeConfirm("");
+      setRepairResult(payload);
       if (recomputeMode !== "dry-run") setRecomputeOperationKey("");
       setMessage(payload.read_only ? "Read-only badge recompute preview complete; no rows were written." : `Badge recompute ${payload.recompute_mode || recomputeMode} complete.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to run badge recompute."); }
     finally { setBusy(false); }
   }
 
-  async function revokeBadge() {
-    if (revokeConfirm.trim().toUpperCase() !== "REVOKE BADGE") { setMessage("Type REVOKE BADGE to revoke badge rows."); return; }
+  async function revokeBadge(confirmationText: string) {
     setBusy(true); setMessage(null);
     try {
       const key = revokeOperationKey || `badge-revoke:${Date.now()}:${crypto.randomUUID()}`;
@@ -188,19 +184,17 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           badge_id: badgeId || null,
           context_id: contextId || null,
           revoke_reason: revokeReason || null,
-          confirmation_text: revokeConfirm,
+          confirmation_text: confirmationText,
           operation_key: key
         })
       });
-      setRepairResult(payload); setRevokeConfirm(""); setRevokeOperationKey(""); setMessage(`Revoked ${payload.revoked_count || 0} badge row(s).`);
+      setRepairResult(payload); setRevokeOperationKey(""); setMessage(`Revoked ${payload.revoked_count || 0} badge row(s).`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to revoke badge row."); }
     finally { setBusy(false); }
   }
 
-  async function updateBadgeState() {
-    const expectedConfirmation = status.confirmation_text?.state || "UPDATE BADGE STATE";
+  async function updateBadgeState(confirmationText: string) {
     if (!selectedBadge || !selectedBadge.definition_found) { setMessage("Choose a badge definition loaded from the staging badges table."); return; }
-    if (badgeStateConfirm.trim().toUpperCase() !== expectedConfirmation) { setMessage(`Type ${expectedConfirmation} to update badge state.`); return; }
     if (!badgeStateReason.trim()) { setMessage("Enter a reason for the badge state change."); return; }
     if (selectedBadge.state === badgeStateTarget) { setMessage(`Badge state is already ${badgeStateTarget}.`); return; }
     setBusy(true); setMessage(null);
@@ -214,7 +208,7 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           target_state: badgeStateTarget,
           reason: badgeStateReason,
           force: badgeStateForce,
-          confirmation_text: badgeStateConfirm,
+          confirmation_text: confirmationText,
           operation_key: key,
           source: "next_badge_definition_state"
         })
@@ -222,7 +216,6 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
       setBadges((current) => current.map((badge) => badge.badge_id === payload.badge.badge_id ? { ...badge, ...payload.badge, definition_found: true } : badge));
       setBadgeStateReason("");
       setBadgeStateForce(false);
-      setBadgeStateConfirm("");
       setStateOperationKey("");
       setMessage(payload.audit_warning ? `Badge state updated with audit warning: ${payload.audit_warning}` : `Badge state updated to ${payload.badge.state}.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to update badge definition state."); }
@@ -314,11 +307,20 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           <p><strong>{selectedBadge.name}</strong> · <code>{selectedBadge.badge_id}</code><br />Current state: <strong>{selectedBadge.state || "live"}</strong>{selectedBadge.state_changed_at ? ` · changed ${selectedBadge.state_changed_at}` : ""}</p>
           {selectedBadge.state_change_reason ? <p><strong>Previous reason:</strong> {selectedBadge.state_change_reason}</p> : null}
           {!selectedBadge.definition_found ? <p style={{ color: "#92400e" }}>This badge exists in the code registry but not in the staging <code>badges</code> table, so its state cannot be changed here.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-            <label>Target state<br /><select value={badgeStateTarget} onChange={(event) => { setBadgeStateTarget(event.target.value as "live" | "frozen" | "deprecated"); setBadgeStateConfirm(""); }} style={inputStyle}><option value="live">live</option><option value="frozen">frozen</option><option value="deprecated">deprecated</option></select></label>
+            <label>Target state<br /><select value={badgeStateTarget} onChange={(event) => setBadgeStateTarget(event.target.value as "live" | "frozen" | "deprecated")} style={inputStyle}><option value="live">live</option><option value="frozen">frozen</option><option value="deprecated">deprecated</option></select></label>
             <label>Reason<br /><input value={badgeStateReason} onChange={(event) => setBadgeStateReason(event.target.value)} maxLength={500} style={inputStyle} /></label>
-            <label>Confirmation<br /><input value={badgeStateConfirm} onChange={(event) => setBadgeStateConfirm(event.target.value)} placeholder={status.confirmation_text?.state || "UPDATE BADGE STATE"} style={inputStyle} /></label>
-            <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={badgeStateForce} onChange={(event) => { setBadgeStateForce(event.target.checked); setBadgeStateConfirm(""); }} /> Force nonstandard transition</label>
-            <button type="button" onClick={updateBadgeState} disabled={busy || selectedBadge.state === badgeStateTarget} style={buttonStyle}>Update badge state</button>
+            <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={badgeStateForce} onChange={(event) => setBadgeStateForce(event.target.checked)} /> Force nonstandard transition</label>
+            <ConfirmAction
+              triggerLabel="Update badge state"
+              title={`Update ${selectedBadge.name} to ${badgeStateTarget}?`}
+              description={badgeStateForce ? "This uses a forced nonstandard transition. The reason and current-state lock will be recorded." : "This changes whether the selected badge definition can award new badges."}
+              confirmLabel="Yes, update badge state"
+              confirmationText={status.confirmation_text?.state || "UPDATE BADGE STATE"}
+              tone={badgeStateTarget === "deprecated" || badgeStateForce ? "danger" : "default"}
+              disabled={busy || !badgeStateReason.trim() || selectedBadge.state === badgeStateTarget}
+              busy={busy}
+              onConfirm={updateBadgeState}
+            />
           </div>}
           {badgeStateForce ? <p style={{ color: "#991b1b" }}>Force override permits a transition outside the normal lifecycle. Re-review the badge, target state, and reason before confirming.</p> : null}
         </>}
@@ -328,16 +330,34 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
         <h2 style={{ marginTop: 0 }}>5. Badge Repair / Recompute</h2>
         <p style={{ color: "#9a3412" }}>Super-admin repair controls for staging validation. Dry-run previews do not mutate badges; append-only and strict modes write through the Python badge recompute path. Revoke marks matched badge rows as revoked.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>Recompute mode<br /><select value={recomputeMode} onChange={(event) => { setRecomputeMode(event.target.value); setRecomputeConfirm(""); setRecomputeOperationKey(""); }} style={inputStyle}><option value="dry-run">dry-run</option><option value="append-only">append-only</option><option value="strict">strict</option></select></label>
-          <label>Recompute confirmation<br /><input value={recomputeConfirm} onChange={(event) => setRecomputeConfirm(event.target.value)} placeholder={recomputeMode === "dry-run" ? "Not required for no-write preview" : "RECOMPUTE BADGES"} disabled={recomputeMode === "dry-run"} style={inputStyle} /></label>
-          <button type="button" onClick={runRecompute} disabled={busy} style={buttonStyle}>Run recompute</button>
+          <label>Recompute mode<br /><select value={recomputeMode} onChange={(event) => { setRecomputeMode(event.target.value); setRecomputeOperationKey(""); }} style={inputStyle}><option value="dry-run">dry-run</option><option value="append-only">append-only</option><option value="strict">strict</option></select></label>
+          {recomputeMode === "dry-run" ? <button type="button" onClick={() => void runRecompute()} disabled={busy} style={buttonStyle}>Run recompute preview</button> : <ConfirmAction
+            triggerLabel="Run applying recompute"
+            title={`Run ${recomputeMode} badge recompute?`}
+            description="This applies badge changes for the selected scope through the guarded recompute service."
+            confirmLabel="Yes, recompute badges"
+            confirmationText="RECOMPUTE BADGES"
+            tone={recomputeMode === "strict" ? "danger" : "default"}
+            disabled={busy}
+            busy={busy}
+            onConfirm={runRecompute}
+          />}
         </div>
         {recomputeOperationKey || revokeOperationKey || stateOperationKey ? <div style={{ color: "#92400e" }}><p><strong>Uncertain-operation guard:</strong> do not change inputs or retry with a new key. Inspect Badge Audit and operation status first.</p>{[recomputeOperationKey, revokeOperationKey, stateOperationKey].filter(Boolean).map((key) => <code key={key} style={{ display: "block", overflowWrap: "anywhere" }}>{key}</code>)}</div> : null}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end", marginTop: "1rem" }}>
           <label>Player badge row ID optional<br /><input value={playerBadgeId} onChange={(event) => setPlayerBadgeId(event.target.value)} placeholder="Use exact row id when known" style={inputStyle} /></label>
           <label>Revoke reason<br /><input value={revokeReason} onChange={(event) => setRevokeReason(event.target.value)} placeholder="Required for operator clarity" style={inputStyle} /></label>
-          <label>Revoke confirmation<br /><input value={revokeConfirm} onChange={(event) => setRevokeConfirm(event.target.value)} placeholder="REVOKE BADGE" style={inputStyle} /></label>
-          <button type="button" onClick={revokeBadge} disabled={busy} style={ghostButtonStyle}>Revoke matched badge row(s)</button>
+          <ConfirmAction
+            triggerLabel="Revoke matched badge row(s)"
+            title="Revoke the matched badge rows?"
+            description="This marks the selected badge rows as revoked and records the guarded operation."
+            confirmLabel="Yes, revoke badges"
+            confirmationText="REVOKE BADGE"
+            tone="danger"
+            disabled={busy || !revokeReason.trim()}
+            busy={busy}
+            onConfirm={revokeBadge}
+          />
         </div>
         {repairResult ? <pre style={{ whiteSpace: "pre-wrap", background: "#0f172a", color: "white", padding: "1rem", borderRadius: "12px", overflowX: "auto" }}>{JSON.stringify(repairResult, null, 2)}</pre> : null}
       </article>

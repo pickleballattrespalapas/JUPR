@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminMatchLogMatch } from "@/lib/adminMatchLogApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -62,7 +63,6 @@ export default function MatchLogBulkExcludePanel({ apiBase, clubId, enabled, mat
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [note, setNote] = useState("");
-  const [confirmationText, setConfirmationText] = useState("");
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [result, setResult] = useState<ExcludeResult | null>(null);
@@ -74,7 +74,7 @@ export default function MatchLogBulkExcludePanel({ apiBase, clubId, enabled, mat
     setSelectedIds((current) => current.includes(matchId) ? current.filter((id) => id !== matchId) : [...current, matchId].sort((a, b) => a - b));
   }
 
-  async function submitExclude() {
+  async function submitExclude(confirmationText: string) {
     setMessage(null);
     setResult(null);
     if (!apiBase) {
@@ -110,7 +110,6 @@ export default function MatchLogBulkExcludePanel({ apiBase, clubId, enabled, mat
       setResult(typed);
       setMessage(resultSummary(typed));
       setSelectedIds([]);
-      setConfirmationText("");
       router.refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to exclude selected matches.");
@@ -183,11 +182,18 @@ export default function MatchLogBulkExcludePanel({ apiBase, clubId, enabled, mat
         <button type="button" onClick={() => setSelectedIds([])} disabled={pending || !selectedIds.length} style={secondaryButtonStyle}>Clear selection</button>
       </p>
       <label><strong>Delete/exclude note</strong><br /><input value={note} onChange={(event) => setNote(event.target.value)} style={inputStyle} placeholder="Why these rated matches are being excluded" /></label>
-      <label><strong>Type DELETE to confirm exclusion and Replay ALL</strong><br /><input value={confirmationText} onChange={(event) => setConfirmationText(event.target.value)} style={inputStyle} /></label>
       <p>
-        <button type="button" onClick={submitExclude} disabled={pending || !accessToken || !selectedIds.length || confirmationText.trim().toUpperCase() !== "DELETE"} style={buttonStyle}>
-          {pending ? "Excluding and replaying…" : `Exclude ${selectedIds.length || "selected"} rated match(es)`}
-        </button>
+        <ConfirmAction
+          triggerLabel={`Exclude ${selectedIds.length || "selected"} rated match(es)`}
+          title={`Exclude ${selectedIds.length || "the selected"} rated match(es)?`}
+          description={<>This will soft-exclude the selected rated matches, write an audit record, recompute player activity, and run Replay ALL. This changes official rating history.</>}
+          confirmLabel="Yes, exclude and replay"
+          confirmationText="DELETE"
+          tone="danger"
+          disabled={pending || !accessToken || !selectedIds.length}
+          busy={pending}
+          onConfirm={submitExclude}
+        />
       </p>
       {message ? <p style={{ color: result?.ok && !result?.replay_error ? "#166534" : "#b91c1c" }}>{message}</p> : null}
       {result?.warning ? <p style={{ color: "#92400e" }}>{result.warning}</p> : null}

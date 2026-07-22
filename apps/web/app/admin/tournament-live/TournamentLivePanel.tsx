@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type {
   AdminTournament,
   AdminTournamentDraw,
@@ -165,15 +166,8 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
   const [scoreGameId, setScoreGameId] = useState("");
   const [scoreA, setScoreA] = useState("");
   const [scoreB, setScoreB] = useState("");
-  const [scoreConfirm, setScoreConfirm] = useState("");
-  const [roundRobinConfirm, setRoundRobinConfirm] = useState("");
   const [playoffAdvanceCount, setPlayoffAdvanceCount] = useState("4");
-  const [playoffConfirm, setPlayoffConfirm] = useState("");
-  const [podiumConfirm, setPodiumConfirm] = useState("");
-  const [awardConfirm, setAwardConfirm] = useState("");
-  const [publishConfirm, setPublishConfirm] = useState("");
   const [publishBonusElo, setPublishBonusElo] = useState("0");
-  const [reconcileConfirm, setReconcileConfirm] = useState("");
   const [pendingCommand, setPendingCommand] = useState<PendingCommand | null>(null);
   const [lastResult, setLastResult] = useState<AdminTournamentWriteResponse | null>(null);
   const [busy, setBusy] = useState(false);
@@ -213,15 +207,6 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
     setScoreGameId(target ? String(target.id || "") : "");
     setScoreA(target?.score_a == null ? "" : String(target.score_a));
     setScoreB(target?.score_b == null ? "" : String(target.score_b));
-    setScoreConfirm("");
-  }
-
-  function resetCommandConfirmations() {
-    setRoundRobinConfirm("");
-    setPlayoffConfirm("");
-    setPodiumConfirm("");
-    setAwardConfirm("");
-    setPublishConfirm("");
   }
 
   async function fetchBoard(tournamentId: string, drawId: string): Promise<AdminTournamentLiveSnapshotResponse> {
@@ -286,8 +271,6 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
     setNotice(null);
     try {
       await fetchBoard(selectedTournamentId, selectedDrawId);
-      resetCommandConfirmations();
-      setReconcileConfirm("");
       setNotice({ tone: "success", text: "Authoritative draw state loaded from FastAPI." });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to load Tournament Live board." });
@@ -374,10 +357,6 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
       setNotice({ tone: "error", text: `Python preflight blocks this command: ${readiness.blockers.join(" ")}` });
       return;
     }
-    if (confirmationText.trim() !== CONFIRMATIONS[command]) {
-      setNotice({ tone: "error", text: `Type ${CONFIRMATIONS[command]} exactly.` });
-      return;
-    }
     const reviewedDraw = snapshot.draws.find((draw) => String(draw.id || "") === selectedDrawId);
     if (!reviewedDraw?.updated_at) {
       setNotice({ tone: "error", text: "The draw has no reviewed version. Reload before submitting a command." });
@@ -431,7 +410,7 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
     void executePending(pending, false);
   }
 
-  function saveScore() {
+  function saveScore(confirmationText: string) {
     if (!selectedGame) {
       setNotice({ tone: "error", text: "Select a game before saving a score." });
       return;
@@ -442,26 +421,21 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
       setNotice({ tone: "error", text: "Enter two non-tied, non-negative whole-number scores." });
       return;
     }
-    submitCommand("save_score", scoreConfirm, { game_id: String(selectedGame.id || ""), score_a: a, score_b: b });
+    submitCommand("save_score", confirmationText, { game_id: String(selectedGame.id || ""), score_a: a, score_b: b });
   }
 
-  async function reconcileOperation(operation: AdminTournamentLiveOperation) {
+  async function reconcileOperation(operation: AdminTournamentLiveOperation, confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) return;
-    if (reconcileConfirm.trim() !== "RECONCILE TOURNAMENT LIVE") {
-      setNotice({ tone: "error", text: "Type RECONCILE TOURNAMENT LIVE exactly." });
-      return;
-    }
     setBusy(true);
     setNotice(null);
     try {
       const result = await requestJson<AdminTournamentWriteResponse>(
         `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/operations/${encodeURIComponent(operation.operation_key)}/reconcile`,
-        { method: "POST", body: JSON.stringify({ confirmation_text: reconcileConfirm }) }
+        { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText }) }
       );
       setLastResult(result);
       if (pendingCommand?.body.idempotency_key === operation.client_idempotency_key) persistPending(null);
       await fetchBoard(selectedTournamentId, selectedDrawId);
-      setReconcileConfirm("");
       setNotice({
         tone: "success",
         text: result.recovery_disposition === "not_applied"
@@ -619,13 +593,11 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
             <article className={styles.recoveryCard}>
               <h2>Recovery required before another draw write</h2>
               <p>Reconciliation is read/verify/audit only: FastAPI will not repeat the domain mutation. Ambiguous partial publishing remains locked.</p>
-              <label htmlFor="tournament-live-reconcile">Type RECONCILE TOURNAMENT LIVE</label>
-              <input id="tournament-live-reconcile" className={styles.input} value={reconcileConfirm} onChange={(event) => setReconcileConfirm(event.target.value)} autoComplete="off" />
               <div className={styles.operationList}>
                 {activeOperations.map((operation) => (
                   <div key={operation.operation_key} className={styles.operationRow}>
                     <div><OperationChip status={operation.status} /> <strong>{operation.command?.replace(/_/g, " ") || operation.action}</strong><br /><code>{compactKey(operation.operation_key)}</code>{operation.error_text ? <p className={styles.errorText}>{operation.error_text}</p> : null}</div>
-                    <button type="button" className={styles.primaryButton} onClick={() => void reconcileOperation(operation)} disabled={busy || reconcileConfirm.trim() !== "RECONCILE TOURNAMENT LIVE"}>Reconcile operation</button>
+                    <ConfirmAction triggerLabel="Reconcile operation" title="Reconcile this interrupted Tournament Live operation?" description="FastAPI will verify authoritative evidence and close or complete the recovery audit without repeating the domain mutation." confirmLabel="Yes, reconcile operation" confirmationText="RECONCILE TOURNAMENT LIVE" busy={busy} onConfirm={(confirmationText) => reconcileOperation(operation, confirmationText)} />
                   </div>
                 ))}
               </div>
@@ -646,7 +618,6 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
                       setScoreGameId(event.target.value);
                       setScoreA(game?.score_a == null ? "" : String(game.score_a));
                       setScoreB(game?.score_b == null ? "" : String(game.score_b));
-                      setScoreConfirm("");
                     }}
                     className={styles.input}
                   >
@@ -657,8 +628,7 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
                 <div><span className={styles.labelText}>Team B</span><strong>{teamLabel(teamsById.get(String(selectedGame?.team_b_id || "")), snapshot)}</strong></div>
                 <label htmlFor="score-a">Score A<input id="score-a" value={scoreA} onChange={(event) => setScoreA(event.target.value)} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
                 <label htmlFor="score-b">Score B<input id="score-b" value={scoreB} onChange={(event) => setScoreB(event.target.value)} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
-                <label htmlFor="score-confirm">Type SAVE SCORE<input id="score-confirm" value={scoreConfirm} onChange={(event) => setScoreConfirm(event.target.value)} className={styles.input} autoComplete="off" /></label>
-                <button type="button" className={styles.primaryButton} onClick={saveScore} disabled={busy || !scoreReadiness.ready || scoreConfirm.trim() !== "SAVE SCORE"}>Save score</button>
+                <ConfirmAction triggerLabel="Save score" title="Save this game score?" description={`This records ${scoreA || "0"}–${scoreB || "0"} for ${selectedGame ? gameLabel(selectedGame) : "the selected game"}.`} confirmLabel="Yes, save score" confirmationText={scoreReadiness.confirmation || CONFIRMATIONS.save_score} disabled={!scoreReadiness.ready} busy={busy} onConfirm={saveScore} />
               </div>
             )}
           </article>
@@ -670,8 +640,7 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
                 <h3 id="live-round-robin-heading">Round robin</h3>
                 <p>Generate the Python schedule once, after teams are final.</p>
                 <CommandBlockers readiness={rrReadiness} />
-                <label htmlFor="rr-confirm">Type GENERATE GAMES<input id="rr-confirm" value={roundRobinConfirm} onChange={(event) => setRoundRobinConfirm(event.target.value)} className={styles.input} autoComplete="off" /></label>
-                <button type="button" className={styles.secondaryButton} disabled={busy || !rrReadiness.ready || roundRobinConfirm.trim() !== "GENERATE GAMES"} onClick={() => submitCommand("generate_round_robin", roundRobinConfirm)}>Generate games</button>
+                <ConfirmAction triggerLabel="Generate games" title="Generate round-robin games?" description="This creates the Python schedule from the currently reviewed teams and draw version." confirmLabel="Yes, generate games" confirmationText={rrReadiness.confirmation || CONFIRMATIONS.generate_round_robin} disabled={!rrReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("generate_round_robin", confirmationText)} />
               </section>
 
               <section className={styles.commandCard} aria-labelledby="live-playoffs-heading">
@@ -679,20 +648,17 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
                 <p>Seed a Python bracket only after every round-robin result is final.</p>
                 <CommandBlockers readiness={playoffReadiness} />
                 <label htmlFor="advance-count">Advance count<input id="advance-count" value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} type="number" min={4} max={6} step={1} className={styles.input} /></label>
-                <label htmlFor="playoff-confirm">Type GENERATE PLAYOFFS<input id="playoff-confirm" value={playoffConfirm} onChange={(event) => setPlayoffConfirm(event.target.value)} className={styles.input} autoComplete="off" /></label>
-                <button type="button" className={styles.secondaryButton} disabled={busy || !playoffReadiness.ready || playoffConfirm.trim() !== "GENERATE PLAYOFFS"} onClick={() => submitCommand("generate_playoffs", playoffConfirm, { advance_count: Number(playoffAdvanceCount) })}>Generate playoffs</button>
+                <ConfirmAction triggerLabel="Generate playoffs" title="Generate the playoff bracket?" description={`This seeds a playoff bracket for the top ${playoffAdvanceCount} teams from the completed round robin.`} confirmLabel="Yes, generate playoffs" confirmationText={playoffReadiness.confirmation || CONFIRMATIONS.generate_playoffs} disabled={!playoffReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("generate_playoffs", confirmationText, { advance_count: Number(playoffAdvanceCount) })} />
               </section>
 
               <section className={styles.commandCard} aria-labelledby="live-podium-heading">
                 <h3 id="live-podium-heading">Podium</h3>
                 <p>Create immutable draw placements, then mint the expected linked-player awards.</p>
                 <CommandBlockers readiness={podiumReadiness} />
-                <label htmlFor="podium-confirm">Type GENERATE PODIUM<input id="podium-confirm" value={podiumConfirm} onChange={(event) => setPodiumConfirm(event.target.value)} className={styles.input} autoComplete="off" /></label>
-                <button type="button" className={styles.secondaryButton} disabled={busy || !podiumReadiness.ready || podiumConfirm.trim() !== "GENERATE PODIUM"} onClick={() => submitCommand("generate_podium", podiumConfirm)}>Generate podium</button>
+                <ConfirmAction triggerLabel="Generate podium" title="Generate immutable podium placements?" description="This calculates and stores the draw placements from the reviewed final game results." confirmLabel="Yes, generate podium" confirmationText={podiumReadiness.confirmation || CONFIRMATIONS.generate_podium} disabled={!podiumReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("generate_podium", confirmationText)} />
                 <hr />
                 <CommandBlockers readiness={awardReadiness} />
-                <label htmlFor="award-confirm">Type AWARD PODIUM<input id="award-confirm" value={awardConfirm} onChange={(event) => setAwardConfirm(event.target.value)} className={styles.input} autoComplete="off" /></label>
-                <button type="button" className={styles.secondaryButton} disabled={busy || !awardReadiness.ready || awardConfirm.trim() !== "AWARD PODIUM"} onClick={() => submitCommand("award_podium", awardConfirm)}>Award podium</button>
+                <ConfirmAction triggerLabel="Award podium" title="Award the verified podium?" description="This mints the expected tournament awards for linked players after the podium has been verified." confirmLabel="Yes, award podium" confirmationText={awardReadiness.confirmation || CONFIRMATIONS.award_podium} disabled={!awardReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("award_podium", confirmationText)} />
               </section>
 
               <section className={styles.dangerCard} aria-labelledby="live-publish-heading">
@@ -700,8 +666,7 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
                 <p>Terminal rated write: every game, podium award, and existing official link must verify first.</p>
                 <CommandBlockers readiness={publishReadiness} />
                 <label htmlFor="winner-bonus">Playoff winner bonus Elo<input id="winner-bonus" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} type="number" min={0} max={40} step={1} className={styles.input} /></label>
-                <label htmlFor="publish-confirm">Type PUBLISH MATCHES<input id="publish-confirm" value={publishConfirm} onChange={(event) => setPublishConfirm(event.target.value)} className={styles.input} autoComplete="off" /></label>
-                <button type="button" className={styles.dangerButton} disabled={busy || !publishReadiness.ready || publishConfirm.trim() !== "PUBLISH MATCHES"} onClick={() => submitCommand("publish_official_matches", publishConfirm, { playoff_winner_bonus_elo: Number(publishBonusElo) })}>Publish official matches</button>
+                <ConfirmAction triggerLabel="Publish official matches" title="Publish these matches as official rated results?" description={`This terminal write publishes every verified game and applies a ${publishBonusElo || "0"}-Elo playoff-winner bonus. Use Match Log and Replay History for later corrections.`} confirmLabel="Yes, publish official matches" confirmationText={publishReadiness.confirmation || CONFIRMATIONS.publish_official_matches} tone="danger" disabled={!publishReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("publish_official_matches", confirmationText, { playoff_winner_bonus_elo: Number(publishBonusElo) })} />
               </section>
             </div>
           </article>

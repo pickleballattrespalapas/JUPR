@@ -15,7 +15,7 @@ The browser receives public-safe status and state. `SUPABASE_SERVICE_ROLE_KEY` s
 
 ## Staging gates
 
-All mutations require `JUPR_ENV=staging`, FastAPI's service role, authenticated club membership, the action's role permission, typed confirmation, current reviewed state, and required audit intent/completion.
+All mutations require `JUPR_ENV=staging`, FastAPI's service role, authenticated club membership, the action's role permission, an explicit Yes/No confirmation dialog that supplies the action-specific internal confirmation value, current reviewed state, and required audit intent/completion.
 
 - `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS=1`: Tournament Admin visibility.
 - `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OPERATIONS_MUTATIONS=1`: Order-27 operations mutations.

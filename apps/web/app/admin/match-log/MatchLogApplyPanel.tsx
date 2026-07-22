@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminDuplicateDeletePreview, AdminDuplicateGroup, AdminMatchEditOperation, AdminMatchLogMatch, AdminMatchLogPlayer, AdminMatchLogWriteResult } from "@/lib/adminMatchLogApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -253,16 +254,12 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
   const [rosterPlayers, setRosterPlayers] = useState<AdminMatchLogPlayer[]>([]);
   const [rosterMessage, setRosterMessage] = useState<string | null>(null);
   const [correctionNote, setCorrectionNote] = useState("");
-  const [applyConfirm, setApplyConfirm] = useState("");
-  const [cleanupConfirm, setCleanupConfirm] = useState("");
   const [noIssueReason, setNoIssueReason] = useState("");
-  const [noIssueConfirm, setNoIssueConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [result, setResult] = useState<AdminMatchLogWriteResult | null>(null);
   const [idempotencyKey, setIdempotencyKey] = useState(requestKey);
   const [recoveryOperationId, setRecoveryOperationId] = useState<string | null>(() => recentOperations.find((operation) => operation.status === "recovery_required")?.id || null);
-  const [recoveryConfirm, setRecoveryConfirm] = useState("");
   const [bulkIds, setBulkIds] = useState<string[]>([]);
   const [bulkLeague, setBulkLeague] = useState("");
   const [bulkWeekMode, setBulkWeekMode] = useState<"unchanged" | "set" | "clear">("unchanged");
@@ -401,7 +398,7 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
     }
   }
 
-  async function submitGuidedPatches() {
+  async function submitGuidedPatches(confirmationText: string) {
     setBusy(true);
     setMessage(null);
     setResult(null);
@@ -409,7 +406,7 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
       if (!stagedPatches.length) throw new Error("Stage at least one match edit first.");
       const payload = await callApi(`/admin/clubs/${encodeURIComponent(clubId)}/match-log/edits`, "PATCH", {
         patches: stagedPatches,
-        confirmation_text: applyConfirm,
+        confirmation_text: confirmationText,
         correction_note: correctionNote,
         source: "next_match_log_guided_editor",
         idempotency_key: idempotencyKey,
@@ -419,7 +416,6 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
       setMessage(resultSummary(payload));
       if (payload.ok) {
         setStagedPatches([]);
-        setApplyConfirm("");
         setRecoveryOperationId(null);
         setIdempotencyKey(requestKey());
       }
@@ -432,19 +428,18 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
     }
   }
 
-  async function recoverMandatoryReplay() {
+  async function recoverMandatoryReplay(confirmationText: string) {
     if (!recoveryOperationId) return;
     setBusy(true);
     setMessage(null);
     try {
       const payload = await callApi(`/admin/clubs/${encodeURIComponent(clubId)}/match-log/edits/${encodeURIComponent(recoveryOperationId)}/recover`, "POST", {
-        confirmation_text: recoveryConfirm,
+        confirmation_text: confirmationText,
         source: "next_match_log_recovery"
       });
       setResult(payload);
       setMessage(`Recovery completed for operation ${recoveryOperationId}.`);
       setRecoveryOperationId(null);
-      setRecoveryConfirm("");
       setStagedPatches([]);
       setIdempotencyKey(requestKey());
       router.refresh();
@@ -455,7 +450,7 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
     }
   }
 
-  async function cleanupDuplicates() {
+  async function cleanupDuplicates(confirmationText: string) {
     const deleteIds = duplicatePreview?.delete_ids ?? [];
     setBusy(true);
     setMessage(null);
@@ -464,7 +459,7 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
       if (!deleteIds.length) throw new Error("No duplicate cleanup IDs are available in the current preview.");
       const payload = await callApi(`/admin/clubs/${encodeURIComponent(clubId)}/match-log/duplicates/cleanup`, "POST", {
         delete_ids: deleteIds,
-        confirmation_text: cleanupConfirm,
+        confirmation_text: confirmationText,
         source: "next_match_log_duplicate_cleanup_panel"
       });
       setResult(payload);
@@ -477,7 +472,7 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
     }
   }
 
-  async function resolveNoIssue(group: AdminDuplicateGroup) {
+  async function resolveNoIssue(group: AdminDuplicateGroup, confirmationText: string) {
     setBusy(true);
     setMessage(null);
     setResult(null);
@@ -486,12 +481,11 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
         match_ids: group.ids,
         dup_key: group.dup_key,
         reason: noIssueReason,
-        confirmation_text: noIssueConfirm,
+        confirmation_text: confirmationText,
         source: "next_match_log_duplicate_no_issue_panel"
       });
       setResult(payload);
       setMessage(resultSummary(payload));
-      setNoIssueConfirm("");
       setNoIssueReason("");
       router.refresh();
     } catch (error) {
@@ -618,11 +612,17 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
           </>
         ) : <p style={{ color: "#475569" }}>No edits staged yet.</p>}
         <label><strong>Correction note</strong><br /><input value={correctionNote} onChange={(event) => setCorrectionNote(event.target.value)} style={inputStyle} /></label>
-        <label><strong>Type APPLY to confirm edits</strong><br /><input value={applyConfirm} onChange={(event) => setApplyConfirm(event.target.value)} style={inputStyle} /></label>
         <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-          <button type="button" onClick={submitGuidedPatches} disabled={busy || !accessToken || Boolean(recoveryOperationId) || applyConfirm.trim().toUpperCase() !== "APPLY" || !stagedPatches.length} style={buttonStyle}>
-            {busy ? "Working…" : "Apply staged edits"}
-          </button>
+          <ConfirmAction
+            triggerLabel="Apply staged edits"
+            title={`Apply ${stagedPatches.length || "the staged"} match edit(s)?`}
+            description={scope.ratings ? "This will apply the exact staged edits and must complete a durable Replay ALL job before it can report success." : "This will apply the exact staged metadata edits and write an audit record."}
+            confirmLabel="Yes, apply staged edits"
+            confirmationText="APPLY"
+            disabled={busy || !accessToken || Boolean(recoveryOperationId) || !stagedPatches.length}
+            busy={busy}
+            onConfirm={submitGuidedPatches}
+          />
           <button type="button" onClick={() => setStagedPatches([])} disabled={busy || !stagedPatches.length} style={secondaryButtonStyle}>Clear staged edits</button>
         </p>
       </div>
@@ -631,8 +631,18 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
         <div role="alert" data-testid="match-edit-recovery" style={{ border: "2px solid #dc2626", borderRadius: "12px", padding: "0.85rem", marginTop: "1rem", background: "#fef2f2" }}>
           <h4 style={{ marginTop: 0 }}>Mandatory replay recovery required</h4>
           <p>Edits were committed in one database transaction, but replay did not finish. Do not start another correction until operation <code>{recoveryOperationId}</code> is recovered.</p>
-          <label><strong>Type RECOVER to retry the same durable replay job</strong><br /><input value={recoveryConfirm} onChange={(event) => setRecoveryConfirm(event.target.value)} style={inputStyle} /></label>
-          <p><button type="button" onClick={recoverMandatoryReplay} disabled={busy || recoveryConfirm.trim().toUpperCase() !== "RECOVER"} style={buttonStyle}>{busy ? "Recovering…" : "Complete mandatory replay"}</button></p>
+          <p>
+            <ConfirmAction
+              triggerLabel="Complete mandatory replay"
+              title="Retry this mandatory replay?"
+              description={<>This retries the same durable replay job for operation <code>{recoveryOperationId}</code>. Do not start another correction until it completes.</>}
+              confirmLabel="Yes, retry replay"
+              confirmationText="RECOVER"
+              disabled={busy}
+              busy={busy}
+              onConfirm={recoverMandatoryReplay}
+            />
+          </p>
         </div>
       ) : null}
 
@@ -663,19 +673,20 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
       {duplicateGroups.length ? (
         <div style={{ display: "grid", gap: "0.75rem" }}>
           <label><strong>Reason for no-issue resolution</strong><br /><input value={noIssueReason} onChange={(event) => setNoIssueReason(event.target.value)} style={inputStyle} /></label>
-          <label><strong>Type NO ISSUE to confirm false-positive resolution</strong><br /><input value={noIssueConfirm} onChange={(event) => setNoIssueConfirm(event.target.value)} style={inputStyle} /></label>
           {duplicateGroups.map((group) => (
             <div key={group.dup_key} style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.75rem", background: "#f8fafc" }}>
               <p style={{ marginTop: 0 }}><strong>{groupLabel(group)}</strong></p>
               <p style={{ color: "#475569" }}>Cleanup candidates: {group.delete_ids.map((id) => `#${id}`).join(", ") || "none"}</p>
-              <button
-                type="button"
-                onClick={() => resolveNoIssue(group)}
-                disabled={busy || !accessToken || noIssueConfirm.trim().toUpperCase() !== "NO ISSUE" || !noIssueReason.trim()}
-                style={buttonStyle}
-              >
-                {busy ? "Working…" : "Mark this group no issue"}
-              </button>
+              <ConfirmAction
+                triggerLabel="Mark this group no issue"
+                title="Mark this duplicate group as no issue?"
+                description={<>This will resolve match IDs {group.ids.join(", ")} as a legitimate repeated matchup using the reason entered above.</>}
+                confirmLabel="Yes, mark no issue"
+                confirmationText="NO ISSUE"
+                disabled={busy || !accessToken || !noIssueReason.trim()}
+                busy={busy}
+                onConfirm={(confirmationText) => resolveNoIssue(group, confirmationText)}
+              />
             </div>
           ))}
         </div>
@@ -689,11 +700,18 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
       <p style={{ color: "#475569" }}>
         Current preview would remove {duplicatePreview?.delete_count ?? 0} duplicate row(s): {(duplicatePreview?.delete_ids ?? []).join(", ") || "none"}.
       </p>
-      <label><strong>Type DELETE to confirm duplicate cleanup</strong><br /><input value={cleanupConfirm} onChange={(event) => setCleanupConfirm(event.target.value)} style={inputStyle} /></label>
       <p>
-        <button type="button" onClick={cleanupDuplicates} disabled={busy || !accessToken || cleanupConfirm.trim().toUpperCase() !== "DELETE" || !(duplicatePreview?.delete_ids?.length)} style={buttonStyle}>
-          {busy ? "Working…" : "Clean duplicate rows from preview"}
-        </button>
+        <ConfirmAction
+          triggerLabel="Clean duplicate rows from preview"
+          title={`Delete ${duplicatePreview?.delete_count ?? 0} duplicate row(s)?`}
+          description={<>This will delete the exact duplicate row IDs from the current preview: {(duplicatePreview?.delete_ids ?? []).join(", ") || "none"}. Recovery may require Replay History.</>}
+          confirmLabel="Yes, delete duplicate rows"
+          confirmationText="DELETE"
+          tone="danger"
+          disabled={busy || !accessToken || !(duplicatePreview?.delete_ids?.length)}
+          busy={busy}
+          onConfirm={cleanupDuplicates}
+        />
       </p>
 
       {message ? <p style={{ color: result?.ok ? "#166534" : "#b91c1c" }}>{message}</p> : null}

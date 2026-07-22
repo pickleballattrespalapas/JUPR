@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type {
   AdminTournament,
   AdminTournamentDetailResponse,
@@ -23,7 +24,6 @@ type RegistrationEdit = {
   registrationStatus: string;
   paymentStatus: string;
   notes: string;
-  confirm: string;
 };
 
 type SelectionEdit = {
@@ -31,10 +31,9 @@ type SelectionEdit = {
   partnerMode: string;
   partnerNote: string;
   expectedUpdatedAt: string;
-  confirm: string;
 };
 
-type TournamentEdit = { name: string; startDate: string; endDate: string; confirm: string };
+type TournamentEdit = { name: string; startDate: string; endDate: string };
 
 const REGISTRATION_STATUS_OPTIONS = ["confirmed", "waitlist", "cancelled"];
 const PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "refunded"];
@@ -94,8 +93,7 @@ function editStateFromRegistration(row: AdminTournamentRegistration | null): Reg
   return {
     registrationStatus: row?.registration_status || "confirmed",
     paymentStatus: row?.payment_status || "unpaid",
-    notes: row?.notes || "",
-    confirm: ""
+    notes: row?.notes || ""
   };
 }
 
@@ -104,13 +102,12 @@ function editStateFromSelection(row: AdminTournamentSelection | null): Selection
     eventOptionId: row?.event_option_id || "",
     partnerMode: row?.partner_mode || "NONE",
     partnerNote: row?.partner_note || "",
-    expectedUpdatedAt: row?.updated_at || "",
-    confirm: ""
+    expectedUpdatedAt: row?.updated_at || ""
   };
 }
 
 function editStateFromTournament(row: AdminTournament | null): TournamentEdit {
-  return { name: row?.name || "", startDate: row?.start_date || "", endDate: row?.end_date || "", confirm: "" };
+  return { name: row?.name || "", startDate: row?.start_date || "", endDate: row?.end_date || "" };
 }
 
 export default function TournamentAdminPanel({ apiBase, clubId, status }: Props) {
@@ -183,13 +180,13 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
     }
   }
 
-  async function saveTournamentEdit() {
+  async function saveTournamentEdit(confirmationText: string) {
     if (!detail?.tournament.updated_at) { setMessage("Reload: this tournament is missing its write version."); return; }
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(
         `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(detail.tournament.id)}`,
-        { method: "PATCH", body: JSON.stringify({ name: tournamentEdit.name, start_date: tournamentEdit.startDate || null, end_date: tournamentEdit.endDate || null, expected_updated_at: detail.tournament.updated_at, confirmation_text: tournamentEdit.confirm, source: "next_tournament_admin_tournament_editor" }) }
+        { method: "PATCH", body: JSON.stringify({ name: tournamentEdit.name, start_date: tournamentEdit.startDate || null, end_date: tournamentEdit.endDate || null, expected_updated_at: detail.tournament.updated_at, confirmation_text: confirmationText, source: "next_tournament_admin_tournament_editor" }) }
       );
       const refreshed = await refreshDetail(detail.tournament.id); setDetail(refreshed); setTournamentEdit(editStateFromTournament(refreshed.tournament));
       setMessage(payload.idempotent_replay ? "Tournament response reconciled from the durable operation." : "Tournament details saved and audit-completed.");
@@ -218,7 +215,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
     setMessage(null);
   }
 
-  async function saveRegistrationEdit() {
+  async function saveRegistrationEdit(confirmationText: string) {
     if (!detail || !selectedRegistration) {
       setMessage("Select a registration before saving.");
       return;
@@ -239,7 +236,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
             payment_status: registrationEdit.paymentStatus,
             notes: registrationEdit.notes,
             expected_updated_at: selectedRegistration.updated_at,
-            confirmation_text: registrationEdit.confirm,
+            confirmation_text: confirmationText,
             source: "next_tournament_admin_registration_editor"
           })
         }
@@ -260,7 +257,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
     }
   }
 
-  async function saveSelectionEdit() {
+  async function saveSelectionEdit(confirmationText: string) {
     if (!detail || !selectedSelection) {
       setMessage("Select an event entry before saving.");
       return;
@@ -281,7 +278,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
             partner_mode: selectionEdit.partnerMode,
             partner_note: selectionEdit.partnerNote,
             expected_updated_at: selectionEdit.expectedUpdatedAt,
-            confirmation_text: selectionEdit.confirm,
+            confirmation_text: confirmationText,
             source: "next_tournament_admin_selection_editor"
           })
         }
@@ -328,7 +325,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Tournament Admin session</h2>
         <p style={{ color: "#475569" }}>
-          This workflow loads tournament setup, registration summaries, event options, and registrants through FastAPI. Registration and event-entry edits are guarded by role checks, audit logging, and explicit confirmation text.
+          This workflow loads tournament setup, registration summaries, event options, and registrants through FastAPI. Registration and event-entry edits are guarded by role checks, audit logging, and an action-specific confirmation dialog.
         </p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
@@ -384,21 +381,20 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
 
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Edit tournament shell</h2>
-            <p style={{ color: "#475569" }}>Name and date edits use the loaded tournament version. Type <code>SAVE TOURNAMENT</code>; a stale response reloads authoritative data before another attempt.</p>
+            <p style={{ color: "#475569" }}>Name and date edits use the loaded tournament version; a stale response reloads authoritative data before another attempt.</p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
               <label><strong>Name</strong><br /><input value={tournamentEdit.name} onChange={(event) => setTournamentEdit((current) => ({ ...current, name: event.target.value }))} style={inputStyle} /></label>
               <label><strong>Start date</strong><br /><input type="date" value={dateLabel(tournamentEdit.startDate) === "—" ? "" : dateLabel(tournamentEdit.startDate)} onChange={(event) => setTournamentEdit((current) => ({ ...current, startDate: event.target.value }))} style={inputStyle} /></label>
               <label><strong>End date</strong><br /><input type="date" value={dateLabel(tournamentEdit.endDate) === "—" ? "" : dateLabel(tournamentEdit.endDate)} onChange={(event) => setTournamentEdit((current) => ({ ...current, endDate: event.target.value }))} style={inputStyle} /></label>
-              <label><strong>Type SAVE TOURNAMENT</strong><br /><input value={tournamentEdit.confirm} onChange={(event) => setTournamentEdit((current) => ({ ...current, confirm: event.target.value }))} style={inputStyle} /></label>
             </div>
-            <p><button type="button" onClick={saveTournamentEdit} disabled={busy || !detail.tournament.updated_at || tournamentEdit.confirm.trim().toUpperCase() !== "SAVE TOURNAMENT"} style={buttonStyle}>Save tournament</button></p>
+            <p><ConfirmAction triggerLabel="Save tournament" title="Save tournament details?" description={`This updates the name and dates for ${detail.tournament.name}. The loaded version must still be current.`} confirmLabel="Yes, save tournament" confirmationText="SAVE TOURNAMENT" disabled={!detail.tournament.updated_at} busy={busy} onConfirm={saveTournamentEdit} /></p>
           </article>
 
           {selectedRegistration ? (
             <article style={{ ...cardStyle, background: "#f8fafc" }}>
               <h2 style={{ marginTop: 0 }}>Edit registration</h2>
               <p style={{ color: "#475569" }}>
-                Editing <strong>{selectedRegistration.display_name}</strong>. Status/payment changes are audit-flagged. Type <code>SAVE REGISTRATION</code> to confirm.
+                Editing <strong>{selectedRegistration.display_name}</strong>. Status and payment changes are audit-flagged.
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
                 <label><strong>Registration status</strong><br />
@@ -411,15 +407,12 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
                     {PAYMENT_STATUS_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
                   </select>
                 </label>
-                <label><strong>Type SAVE REGISTRATION</strong><br />
-                  <input value={registrationEdit.confirm} onChange={(event) => setRegistrationEdit((current) => ({ ...current, confirm: event.target.value }))} style={inputStyle} />
-                </label>
               </div>
               <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Admin notes</strong><br />
                 <textarea value={registrationEdit.notes} onChange={(event) => setRegistrationEdit((current) => ({ ...current, notes: event.target.value }))} rows={3} style={inputStyle} />
               </label>
               <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                <button type="button" onClick={saveRegistrationEdit} disabled={busy || !accessToken || !selectedRegistration.updated_at || registrationEdit.confirm.trim().toUpperCase() !== "SAVE REGISTRATION"} style={buttonStyle}>{busy ? "Saving…" : "Save registration"}</button>
+                <ConfirmAction triggerLabel="Save registration" title="Save this registration update?" description={`This changes ${selectedRegistration.display_name}'s registration to ${registrationEdit.registrationStatus} with payment status ${registrationEdit.paymentStatus}, and replaces the saved admin notes with the current notes field.`} confirmLabel="Yes, save registration" confirmationText="SAVE REGISTRATION" tone={registrationEdit.registrationStatus === "cancelled" || registrationEdit.paymentStatus === "refunded" ? "danger" : "default"} disabled={!accessToken || !selectedRegistration.updated_at} busy={busy} onConfirm={saveRegistrationEdit} />
                 <button type="button" onClick={() => selectedRegistration ? setRegistrationEdit(editStateFromRegistration(selectedRegistration)) : undefined} disabled={busy} style={ghostButtonStyle}>Reset fields</button>
               </p>
             </article>
@@ -429,7 +422,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
             <article style={{ ...cardStyle, background: "#f8fafc" }}>
               <h2 style={{ marginTop: 0 }}>Edit event entry / partner</h2>
               <p style={{ color: "#475569" }}>
-                Move the selected registration entry to another division or update its partner-board mode and note. Linked partner identity is read-only here. Type <code>SAVE SELECTION</code> to confirm. Entries already imported into a draw cannot be moved.
+                Move the selected registration entry to another division or update its partner-board mode and note. Linked partner identity is read-only here. Entries already imported into a draw cannot be moved.
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
                 <label><strong>Event entry</strong><br />
@@ -449,9 +442,6 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
                     {(selectedSelection?.partner_mode === "HAS_PARTNER" ? ["HAS_PARTNER", ...EDITABLE_PARTNER_MODE_OPTIONS] : EDITABLE_PARTNER_MODE_OPTIONS).map((value) => <option key={value} value={value}>{value}</option>)}
                   </select>
                 </label>
-                <label><strong>Type SAVE SELECTION</strong><br />
-                  <input value={selectionEdit.confirm} onChange={(event) => setSelectionEdit((current) => ({ ...current, confirm: event.target.value }))} style={inputStyle} />
-                </label>
                 <div><strong>Partner name</strong><br /><span>{selectedSelection?.partner_name || "—"}</span></div>
                 <div><strong>Partner email</strong><br /><span>{selectedSelection?.partner_email || "—"}</span></div>
                 <div><strong>Partner phone</strong><br /><span>{selectedSelection?.partner_phone || "—"}</span></div>
@@ -461,7 +451,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
               </label>
               {!selectionEdit.expectedUpdatedAt ? <p style={{ color: "#b91c1c" }}>This entry is missing a version timestamp. Reload the tournament before attempting to save.</p> : null}
               <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                <button type="button" onClick={saveSelectionEdit} disabled={busy || !accessToken || !selectedSelection || !selectionEdit.expectedUpdatedAt || selectionEdit.confirm.trim().toUpperCase() !== "SAVE SELECTION"} style={buttonStyle}>{busy ? "Saving…" : "Save event entry"}</button>
+                <ConfirmAction triggerLabel="Save event entry" title="Save this event-entry update?" description="This changes the selected division or partner-board details for this tournament registration." confirmLabel="Yes, save event entry" confirmationText="SAVE SELECTION" disabled={!accessToken || !selectedSelection || !selectionEdit.expectedUpdatedAt} busy={busy} onConfirm={saveSelectionEdit} />
                 <button type="button" onClick={() => selectedSelection ? setSelectionEdit(editStateFromSelection(selectedSelection)) : undefined} disabled={busy} style={ghostButtonStyle}>Reset fields</button>
               </p>
             </article>

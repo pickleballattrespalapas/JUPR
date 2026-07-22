@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminSocialMatchLogResponse, AdminSocialMatchLogRow, AdminMatchLogWriteResult } from "@/lib/adminMatchLogApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -161,7 +162,6 @@ export default function MatchLogSocialPanel({ apiBase, clubId, enabled }: MatchL
   const [rows, setRows] = useState<AdminSocialMatchLogRow[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [edit, setEdit] = useState<SocialEditState>(() => editFromRow(null));
-  const [deleteConfirm, setDeleteConfirm] = useState("");
   const [loadingRows, setLoadingRows] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loadFeedback, setLoadFeedback] = useState<Feedback | null>(null);
@@ -240,7 +240,6 @@ export default function MatchLogSocialPanel({ apiBase, clubId, enabled }: MatchL
       setRows([]);
       setSelectedId("");
       setEdit(editFromRow(null));
-      setDeleteConfirm("");
       setWarnings([]);
       setLoadFeedback(null);
       setMutationFeedback(null);
@@ -257,7 +256,6 @@ export default function MatchLogSocialPanel({ apiBase, clubId, enabled }: MatchL
     const row = rows.find((item) => rowId(item) === nextId) || null;
     setSelectedId(nextId);
     setEdit(editFromRow(row));
-    setDeleteConfirm("");
     setMutationFeedback(null);
     setResult(null);
   }
@@ -313,7 +311,7 @@ export default function MatchLogSocialPanel({ apiBase, clubId, enabled }: MatchL
     }
   }
 
-  async function deleteRow() {
+  async function deleteRow(confirmationText: string) {
     if (!selectedRow) return;
     const mutationAccessToken = accessTokenRef.current;
     const mutationContextKey = contextKeyRef.current;
@@ -326,13 +324,12 @@ export default function MatchLogSocialPanel({ apiBase, clubId, enabled }: MatchL
       const response = await fetch(apiUrl(apiBase, `/admin/clubs/${encodeURIComponent(clubId)}/match-log/social/delete`), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${mutationAccessToken}` },
-        body: JSON.stringify({ social_match_ids: [rowId(selectedRow)], confirmation_text: deleteConfirm, source: "next_match_log_social_editor" })
+        body: JSON.stringify({ social_match_ids: [rowId(selectedRow)], confirmation_text: confirmationText, source: "next_match_log_social_editor" })
       });
       const payload = await response.json().catch(() => null) as AdminMatchLogWriteResult | { detail?: unknown } | null;
       if (!response.ok) throw new Error(String((payload as { detail?: unknown } | null)?.detail || `API error (${response.status})`));
       const writeResult = payload as AdminMatchLogWriteResult;
       if (mutationContextKey !== contextKeyRef.current || !enabledRef.current) return;
-      setDeleteConfirm("");
       await loadRows({ announce: false });
       if (mutationContextKey !== contextKeyRef.current || !enabledRef.current) return;
       setResult(writeResult);
@@ -410,8 +407,19 @@ export default function MatchLogSocialPanel({ apiBase, clubId, enabled }: MatchL
           <hr style={{ border: 0, borderTop: "1px solid #e2e8f0", margin: "0.5rem 0" }} />
           <h3>Delete Club Social row</h3>
           <p style={{ color: "#475569" }}>This deletes the selected unrated Club Social row only. It does not replay or change rated history.</p>
-          <label><strong>Type DELETE to confirm social row deletion</strong><br /><input value={deleteConfirm} onChange={(event) => setDeleteConfirm(event.target.value)} style={inputStyle} /></label>
-          <p><button type="button" onClick={deleteRow} disabled={busy || !accessToken || !selectedRow || deleteConfirm.trim().toUpperCase() !== "DELETE"} style={buttonStyle}>{busy ? "Working…" : "Delete selected Club Social row"}</button></p>
+          <p>
+            <ConfirmAction
+              triggerLabel="Delete selected Club Social row"
+              title="Delete this Club Social row?"
+              description={<>This permanently deletes the selected unrated Club Social row. Rated match history is not changed.</>}
+              confirmLabel="Yes, delete row"
+              confirmationText="DELETE"
+              tone="danger"
+              disabled={busy || !accessToken || !selectedRow}
+              busy={busy}
+              onConfirm={deleteRow}
+            />
+          </p>
         </div>
       ) : <p style={{ color: "#475569" }}>{loadingRows ? "Loading Club Social rows…" : "No Club Social rows loaded."}</p>}
       {rows.length ? (

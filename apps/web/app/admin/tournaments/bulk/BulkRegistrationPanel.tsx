@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminTournament, AdminTournamentDetailResponse, AdminTournamentListResponse, AdminTournamentStatusResponse, AdminTournamentWriteResponse } from "@/lib/adminTournamentApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -43,7 +44,6 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
   const [registrationStatus, setRegistrationStatus] = useState("");
   const [paymentStatus, setPaymentStatus] = useState("");
   const [appendNote, setAppendNote] = useState("");
-  const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -97,7 +97,7 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
     setSelectedIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
   }
 
-  async function saveBulkUpdate() {
+  async function saveBulkUpdate(confirmationText: string) {
     if (!detail) {
       setMessage("Select a tournament first.");
       return;
@@ -124,7 +124,7 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
             append_note: appendNote,
             expected_state_fingerprint: detail.state_fingerprint,
             expected_versions: Object.fromEntries(detail.registrations.filter((row) => selectedIds.includes(row.id)).map((row) => [row.id, row.updated_at || ""])),
-            confirmation_text: confirm,
+            confirmation_text: confirmationText,
             source: "next_tournament_admin_bulk_registration_editor"
           })
         }
@@ -132,7 +132,6 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
       const refreshed = await requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(detail.tournament.id)}`);
       setDetail(refreshed);
       setSelectedIds([]);
-      setConfirm("");
       setMessage(payload.idempotent_replay ? "Bulk response reconciled from the durable operation." : `Updated ${payload.updated_count ?? payload.registration_ids?.length ?? 0} registration(s).`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to update registrations.");
@@ -154,7 +153,7 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Bulk registration actions</h2>
-        <p style={{ color: "#475569" }}>Apply a status/payment change or append an admin note to selected registrations. Type <code>BULK UPDATE REGISTRATIONS</code> to confirm.</p>
+        <p style={{ color: "#475569" }}>Apply a status/payment change or append an admin note to selected registrations.</p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to send guarded bulk registration updates." : sessionLoading ? "Checking admin session…" : "Sign in before loading tournaments."}</p>
@@ -194,15 +193,12 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
                   {PAYMENT_STATUS_OPTIONS.map((value) => <option key={value || "no-change"} value={value}>{value || "No change"}</option>)}
                 </select>
               </label>
-              <label><strong>Type BULK UPDATE REGISTRATIONS</strong><br />
-                <input value={confirm} onChange={(event) => setConfirm(event.target.value)} style={inputStyle} />
-              </label>
             </div>
             <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Append admin note</strong><br />
               <textarea value={appendNote} onChange={(event) => setAppendNote(event.target.value)} rows={3} style={inputStyle} />
             </label>
             <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              <button type="button" onClick={saveBulkUpdate} disabled={busy || !selectedIds.length || !detail.state_fingerprint || detail.registrations.filter((row) => selectedIds.includes(row.id)).some((row) => !row.updated_at) || confirm.trim().toUpperCase() !== "BULK UPDATE REGISTRATIONS"} style={buttonStyle}>{busy ? "Saving…" : "Apply bulk update"}</button>
+              <ConfirmAction triggerLabel="Apply bulk update" title="Update the selected registrations?" description={`This applies the chosen status, payment, or note changes to ${selectedIds.length} selected registration${selectedIds.length === 1 ? "" : "s"}.`} confirmLabel="Yes, update registrations" confirmationText="BULK UPDATE REGISTRATIONS" tone={registrationStatus === "cancelled" || paymentStatus === "refunded" ? "danger" : "default"} disabled={!selectedIds.length || !detail.state_fingerprint || detail.registrations.filter((row) => selectedIds.includes(row.id)).some((row) => !row.updated_at)} busy={busy} onConfirm={saveBulkUpdate} />
               <button type="button" onClick={() => setSelectedIds(detail.registrations.map((row) => row.id))} disabled={busy} style={ghostButtonStyle}>Select all loaded</button>
               <button type="button" onClick={() => setSelectedIds([])} disabled={busy} style={ghostButtonStyle}>Clear selection</button>
             </p>

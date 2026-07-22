@@ -164,8 +164,10 @@ at the dismissal boundary and ask the operator to perform it.
    `Test`, and email `test@x.invalid` before changing state.
 3. Set status to `dismissed`.
 4. Use the short admin note `test only`.
-5. Type the exact confirmation `SAVE REQUEST STATUS`.
-6. Save once. The UI sends:
+5. Click **Save request status**, review the confirmation dialog, and choose
+   **Yes, dismiss request**. The UI supplies the internal confirmation value
+   `SAVE REQUEST STATUS`; the operator does not type it.
+6. Confirm once. The UI sends:
 
 ```text
 PATCH /admin/clubs/tres_palapas/support-requests/<request-id>

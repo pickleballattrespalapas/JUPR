@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type StatusResponse = { enabled: boolean; status: string; confirmation_text?: string; write_environment?: string; recovery_routes?: Record<string, string> };
@@ -56,7 +57,6 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
   const [limit, setLimit] = useState("1200");
   const [report, setReport] = useState<AuditReport | null>(null);
   const [matchIds, setMatchIds] = useState("");
-  const [confirmation, setConfirmation] = useState("");
   const [previewFingerprint, setPreviewFingerprint] = useState("");
   const [operationKey, setOperationKey] = useState("");
   const [operationLookupKey, setOperationLookupKey] = useState("");
@@ -103,12 +103,11 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
     finally { setBusy(false); }
   }
 
-  async function normalize(dryRun: boolean) {
+  async function normalize(dryRun: boolean, confirmationText = "") {
     if (!playerId) { setMessage("Select a player first."); return; }
     const ids = matchIds.split(/[\s,]+/).map((value) => Number(value.trim())).filter((value) => Number.isInteger(value) && value > 0);
     if (!dryRun && !ids.length) { setMessage("Select the exact IDs from the current dry run before applying."); return; }
     if (!dryRun && !previewFingerprint) { setMessage("Run and review a current dry run before applying."); return; }
-    if (!dryRun && confirmation.trim().toUpperCase() !== "APPLY NORMALIZE") { setMessage("Type APPLY NORMALIZE to apply canonical normalization updates."); return; }
     setBusy(true); setMessage(null);
     try {
       const key = dryRun ? "" : (operationKey || `canonical:${Date.now()}:${crypto.randomUUID()}`);
@@ -119,7 +118,7 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
           player_id: Number(playerId),
           match_ids: ids,
           dry_run: dryRun,
-          confirmation_text: confirmation,
+          confirmation_text: confirmationText,
           preview_fingerprint: dryRun ? "" : previewFingerprint,
           operation_key: key,
           source: dryRun ? "next_match_canonical_audit_dry_run" : "next_match_canonical_audit_apply"
@@ -134,12 +133,10 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
         setPreviewFingerprint(fingerprint);
         setMatchIds(proposedIds.join(", "));
         setOperationKey("");
-        setConfirmation("");
         setMessage(`Read-only dry run prepared ${proposedIds.length} exact match ID(s). Review every patch before applying.`);
       } else {
         setPreviewFingerprint("");
         setOperationKey("");
-        setConfirmation("");
         setMessage(`Atomic normalization updated ${payload.updated_count ?? ids.length} match(es) and verified readback. Re-run the audit.`);
       }
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to normalize rows."); }
@@ -176,7 +173,7 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
         <p style={{ color: "#475569" }}>Run this for one player at a time. Applying normalization is explicit and audit-flagged.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
           <button type="button" onClick={loadOptions} disabled={busy || !accessToken} style={ghostButtonStyle}>Load players/leagues</button>
-          <label>Player<br /><select value={playerId} onChange={(event) => { setPlayerId(event.target.value); setPreviewFingerprint(""); setMatchIds(""); setConfirmation(""); }} style={inputStyle}>{(options?.players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} · #{player.player_id}</option>)}</select></label>
+          <label>Player<br /><select value={playerId} onChange={(event) => { setPlayerId(event.target.value); setPreviewFingerprint(""); setMatchIds(""); }} style={inputStyle}>{(options?.players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} · #{player.player_id}</option>)}</select></label>
           <label>League<br /><select value={leagueId} onChange={(event) => setLeagueId(event.target.value)} style={inputStyle}><option value="">All leagues</option>{(options?.leagues || []).map((league) => <option key={league} value={league}>{league}</option>)}</select></label>
           <label>Limit<br /><input value={limit} onChange={(event) => setLimit(event.target.value)} style={inputStyle} /></label>
           <button type="button" onClick={runAudit} disabled={busy || !playerId} style={buttonStyle}>Run audit</button>
@@ -202,11 +199,19 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>3. Normalize legacy rows</h2>
         <p style={{ color: "#475569" }}>Run a read-only dry run first. Apply is bound to its fingerprint and exact proposed IDs, runs atomically through FastAPI/Supabase, and cannot silently replay after an uncertain response.</p>
-        <label>Match IDs<br /><textarea value={matchIds} onChange={(event) => { setMatchIds(event.target.value); setPreviewFingerprint(""); setConfirmation(""); }} rows={3} style={inputStyle} /></label>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
-          <label>Apply confirmation<br /><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="APPLY NORMALIZE" style={inputStyle} /></label>
+        <label>Match IDs<br /><textarea value={matchIds} onChange={(event) => { setMatchIds(event.target.value); setPreviewFingerprint(""); }} rows={3} style={inputStyle} /></label>
+        <div style={{ display: "flex", gap: "0.75rem", alignItems: "end", flexWrap: "wrap", marginTop: "0.75rem" }}>
           <button type="button" onClick={() => normalize(true)} disabled={busy || !playerId} style={ghostButtonStyle}>Dry run normalize</button>
-          <button type="button" onClick={() => normalize(false)} disabled={busy || !playerId || !previewFingerprint || !matchIds.trim()} style={buttonStyle}>Apply exact reviewed plan</button>
+          <ConfirmAction
+            triggerLabel="Apply exact reviewed plan"
+            title="Apply this canonical normalization plan?"
+            description={<>This will update the exact reviewed match IDs bound to preview fingerprint <code>{previewFingerprint || "not available"}</code>. Stop if the preview is stale or the IDs are not exact.</>}
+            confirmLabel="Yes, apply reviewed plan"
+            confirmationText="APPLY NORMALIZE"
+            disabled={busy || !playerId || !previewFingerprint || !matchIds.trim()}
+            busy={busy}
+            onConfirm={(confirmationText) => normalize(false, confirmationText)}
+          />
         </div>
         {previewFingerprint ? <p><strong>Current preview fingerprint:</strong> <code>{previewFingerprint}</code></p> : null}
         {operationKey ? <p style={{ color: "#92400e" }}><strong>Retry guard:</strong> keep operation key <code>{operationKey}</code>. If the response is uncertain, inspect status before retrying.</p> : null}

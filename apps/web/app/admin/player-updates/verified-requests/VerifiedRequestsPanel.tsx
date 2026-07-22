@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type RequestRow = {
@@ -22,7 +23,6 @@ type Props = { apiBase: string | null; clubId: string; status: StatusResponse | 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
-const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -46,7 +46,6 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const [confirmations, setConfirmations] = useState<Record<string, string>>({});
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("Missing JUPR API base URL.");
@@ -73,13 +72,13 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
     }
   }
 
-  async function applyAction(row: RequestRow, action: string) {
+  async function applyAction(row: RequestRow, action: string, confirmationText: string) {
     setBusy(true);
     setMessage(null);
     try {
       await requestJson(`/admin/clubs/${encodeURIComponent(clubId)}/verified-updates/requests/${encodeURIComponent(row.id)}`, {
         method: "PATCH",
-        body: JSON.stringify({ action, admin_note: notes[row.id] || "", confirmation_text: confirmations[row.id] || "", source: "next_verified_updates_request_review" })
+        body: JSON.stringify({ action, admin_note: notes[row.id] || "", confirmation_text: confirmationText, source: "next_verified_updates_request_review" })
       });
       setMessage(`${action} saved for ${row.player_name}.`);
       await loadRows();
@@ -117,11 +116,39 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
           <p style={{ color: "#475569" }}>#{row.player_id} · {row.email_masked || "email hidden"} · {row.request_status} · {row.created_at ? String(row.created_at).slice(0, 10) : "—"}</p>
           {row.request_note ? <p><strong>Requester note:</strong> {row.request_note}</p> : null}
           <label>Admin note<br /><textarea value={notes[row.id] ?? row.admin_note ?? ""} onChange={(event) => setNotes((current) => ({ ...current, [row.id]: event.target.value }))} rows={3} style={inputStyle} /></label>
-          <label>Confirmation<br /><input value={confirmations[row.id] || ""} onChange={(event) => setConfirmations((current) => ({ ...current, [row.id]: event.target.value }))} placeholder="SAVE VERIFIED REQUEST" style={inputStyle} /></label>
           <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-            <button type="button" onClick={() => applyAction(row, "approve")} disabled={busy} style={buttonStyle}>Approve</button>
-            <button type="button" onClick={() => applyAction(row, "reject")} disabled={busy} style={ghostButtonStyle}>Reject</button>
-            <button type="button" onClick={() => applyAction(row, "unsubscribe")} disabled={busy} style={ghostButtonStyle}>Unsubscribe</button>
+            <ConfirmAction
+              triggerLabel="Approve"
+              title="Approve this verified update request?"
+              description={<>This will approve the verified update request for <strong>{row.player_name}</strong> and record your admin note.</>}
+              confirmLabel="Yes, approve request"
+              confirmationText="SAVE VERIFIED REQUEST"
+              disabled={busy}
+              busy={busy}
+              onConfirm={(confirmationText) => applyAction(row, "approve", confirmationText)}
+            />
+            <ConfirmAction
+              triggerLabel="Reject"
+              title="Reject this verified update request?"
+              description={<>This will reject the verified update request for <strong>{row.player_name}</strong> and record your admin note.</>}
+              confirmLabel="Yes, reject request"
+              confirmationText="SAVE VERIFIED REQUEST"
+              tone="danger"
+              disabled={busy}
+              busy={busy}
+              onConfirm={(confirmationText) => applyAction(row, "reject", confirmationText)}
+            />
+            <ConfirmAction
+              triggerLabel="Unsubscribe"
+              title="Unsubscribe this player from verified updates?"
+              description={<>This will unsubscribe <strong>{row.player_name}</strong> from verified update requests and record your admin note.</>}
+              confirmLabel="Yes, unsubscribe"
+              confirmationText="SAVE VERIFIED REQUEST"
+              tone="danger"
+              disabled={busy}
+              busy={busy}
+              onConfirm={(confirmationText) => applyAction(row, "unsubscribe", confirmationText)}
+            />
           </p>
         </article>
       ))}

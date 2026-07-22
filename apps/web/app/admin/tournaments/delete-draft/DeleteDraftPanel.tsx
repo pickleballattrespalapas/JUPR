@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminTournament, AdminTournamentListResponse, AdminTournamentStatusResponse, AdminTournamentWriteResponse } from "@/lib/adminTournamentApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -13,7 +14,6 @@ type Props = {
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
-const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #991b1b", background: "#991b1b", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "white", color: "#0f172a", fontWeight: 800 };
 
 function apiUrl(apiBase: string, path: string): string {
@@ -29,7 +29,6 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [tournaments, setTournaments] = useState<AdminTournament[]>([]);
   const [selectedTournamentId, setSelectedTournamentId] = useState("");
-  const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const selectedTournament = tournaments.find((row) => row.id === selectedTournamentId) || null;
@@ -60,7 +59,7 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
-  async function deleteDraft() {
+  async function deleteDraft(confirmationText: string) {
     if (!selectedTournamentId) {
       setMessage("Select a draft tournament first.");
       return;
@@ -70,11 +69,10 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(
         `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/delete-draft`,
-        { method: "POST", body: JSON.stringify({ expected_updated_at: selectedTournament?.updated_at, confirmation_text: confirm, source: "next_tournament_admin_delete_draft_page" }) }
+        { method: "POST", body: JSON.stringify({ expected_updated_at: selectedTournament?.updated_at, confirmation_text: confirmationText, source: "next_tournament_admin_delete_draft_page" }) }
       );
       setTournaments((current) => current.filter((row) => row.id !== selectedTournamentId));
       setSelectedTournamentId("");
-      setConfirm("");
       setMessage(`Deleted draft ${payload.tournament_id}. Usage summary: ${usageText(payload.usage_summary)}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to delete draft tournament.");
@@ -96,7 +94,7 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={{ ...cardStyle, borderColor: "#fecaca", background: "#fff7ed" }}>
         <h2 style={{ marginTop: 0 }}>Delete empty draft tournament</h2>
-        <p style={{ color: "#7c2d12" }}>This only succeeds for DRAFT tournament shells with no registrations, selections, draws, teams, games, or podium rows. Type <code>DELETE DRAFT</code> to confirm.</p>
+        <p style={{ color: "#7c2d12" }}>This only succeeds for DRAFT tournament shells with no registrations, selections, draws, teams, games, or podium rows.</p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to send guarded draft deletion requests." : sessionLoading ? "Checking admin session…" : "Sign in before loading draft tournaments."}</p>
@@ -109,17 +107,14 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
       {tournaments.length ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Confirm deletion</h2>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
             <label><strong>Draft tournament</strong><br />
               <select value={selectedTournamentId} onChange={(event) => setSelectedTournamentId(event.target.value)} style={inputStyle}>
                 <option value="">Choose a draft…</option>
                 {tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name}</option>)}
               </select>
             </label>
-            <label><strong>Type DELETE DRAFT</strong><br />
-              <input value={confirm} onChange={(event) => setConfirm(event.target.value)} style={inputStyle} />
-            </label>
-            <button type="button" onClick={deleteDraft} disabled={busy || !selectedTournamentId || !selectedTournament?.updated_at || confirm.trim().toUpperCase() !== "DELETE DRAFT"} style={buttonStyle}>Delete draft</button>
+            <ConfirmAction triggerLabel="Delete draft" title="Delete this draft tournament?" description={`This permanently deletes ${selectedTournament?.name || "the selected draft"}. It can proceed only if no registrations, selections, draws, teams, games, or podium rows exist.`} confirmLabel="Yes, delete draft" confirmationText="DELETE DRAFT" tone="danger" disabled={!selectedTournamentId || !selectedTournament?.updated_at} busy={busy} onConfirm={deleteDraft} />
           </div>
           {selectedTournament ? <p style={{ color: "#64748b" }}>Selected: <strong>{selectedTournament.name}</strong> ({selectedTournament.id})</p> : null}
         </article>

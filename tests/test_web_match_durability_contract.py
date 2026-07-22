@@ -17,7 +17,8 @@ def test_match_log_closes_notes_bulk_and_recovery_gaps() -> None:
     assert "idempotency_key" in source
     assert "replay_target" in source
     assert "Mandatory replay recovery required" in source
-    assert "Type RECOVER" in source
+    assert 'confirmationText="RECOVER"' in source
+    assert 'title="Retry this mandatory replay?"' in source
     assert "cannot be cleared. Choose a replacement player instead." in source
 
 
