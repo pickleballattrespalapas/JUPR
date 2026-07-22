@@ -182,8 +182,6 @@ def update_admin_support_request(
         raise SupportRequestConflictError("This request changed after it was loaded. Refresh before saving.")
 
     clean_note = _clean_text(admin_note, limit=1200)
-    if clean_status in {"resolved", "dismissed"} and not clean_note:
-        raise ValueError("An admin note is required before resolving or dismissing a request.")
 
     current_identity = _clean_text(before.get("identity_status") or "not_required", limit=40).lower()
     current_fulfillment = _clean_text(before.get("fulfillment_status") or "not_required", limit=40).lower()
