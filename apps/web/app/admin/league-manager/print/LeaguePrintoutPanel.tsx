@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse, AdminLeaguePrintoutResponse } from "@/lib/adminLeagueManagerApi";
+import { useAuthenticatedAutoLoad } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };
@@ -99,6 +100,8 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status }: Props) 
     void loadDetail(selectedLeague, "");
   }
 
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadLeagues);
+
   if (!status.enabled) {
     return (
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
@@ -121,9 +124,9 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status }: Props) 
       <article className="no-print" style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Load printout</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>League<br /><select value={leagueName} onChange={(event) => selectLeague(event.target.value)} disabled={busy} style={inputStyle}>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+          <label>League<br /><select value={leagueName} onChange={(event) => selectLeague(event.target.value)} disabled={busy || !accessToken} aria-busy={loadingLeagues} style={inputStyle}><option value="" disabled>{loadingLeagues ? "Loading leagues…" : "Choose a league"}</option>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
           <label>Scored week<br /><select value={weekNum} onChange={(event) => setWeekNum(event.target.value)} disabled={busy || !printout?.available_weeks.length} style={inputStyle}><option value="">Latest scored week</option>{(printout?.available_weeks || []).map((week) => <option key={week} value={String(week)}>Week {week}</option>)}</select></label>
-          <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{loadingLeagues ? "Refreshing leagues…" : "Load leagues"}</button>
+          <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{loadingLeagues ? "Refreshing leagues…" : "Refresh leagues"}</button>
           <button type="button" onClick={() => void loadDetail()} disabled={busy || !leagueName} style={buttonStyle}>{loadingPrintout ? "Loading printout…" : "Reload printout"}</button>
           <button type="button" onClick={() => window.print()} disabled={busy || !printout} style={buttonStyle}>Print or save PDF</button>
         </div>
