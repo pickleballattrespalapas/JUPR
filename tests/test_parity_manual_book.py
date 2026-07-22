@@ -75,7 +75,14 @@ def _completed_book(text: str, candidate_sha: str) -> str:
         "Witness / reviewer": "reviewer-1",
     }
     for field, value in candidate_values.items():
-        text = text.replace(f"| {field} | — |", f"| {field} | {value} |")
+        text, replacements = re.subn(
+            rf"^\|\s*{re.escape(field)}\s*\|[^|]*\|$",
+            f"| {field} | {value} |",
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        assert replacements == 1
     text = text.replace("- [ ]", "- [x]")
     text = text.replace(
         "UNRESOLVED — uniquely versioned canonical Tournament Ops operation-ledger migration required",
