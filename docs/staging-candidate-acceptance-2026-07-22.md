@@ -91,8 +91,12 @@ witness does not need staging secrets and must not perform a second mutation.
 
 | Role | Identity | Decision | UTC time | Evidence/comment |
 |---|---|---|---|---|
-| Operator | Authenticated staging actor `baumannjoe@yahoo.com`; confirm preferred display name at sign-off | Pending | — | — |
-| Witness | Pending — record a distinct name and review identity | Pending | — | — |
+| Operator | Joe Baumann; GitHub `pickleballattrespalapas`; authenticated staging actor `baumannjoe@yahoo.com` | Accepted | `2026-07-22T15:50:12Z` | PR `#1019` comment `5048336382` |
+| Witness | Not required for this limited staging public-read acceptance | N/A | — | A distinct witness remains required for the formal complete-book process or any later scope that explicitly requires separation of duties. |
+
+This operator-only decision accepts the staging public-read scope above. It does not
+complete the formal parity book, transfer the parent-candidate write evidence to the
+final SHA, or approve legal copy, email delivery, custom domains, or production.
 
 Operator acceptance statement:
 
