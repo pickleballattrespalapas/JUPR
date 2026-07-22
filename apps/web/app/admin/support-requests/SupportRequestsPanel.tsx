@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminSupportRequest, AdminSupportRequestsListResponse, AdminSupportRequestsStatus, AdminSupportRequestUpdateResponse } from "@/lib/adminSupportRequestsApi";
+import { useAuthenticatedAutoLoad } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminSupportRequestsStatus };
@@ -146,7 +147,7 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
         method: "PATCH",
         body: JSON.stringify({
           status: edit.status,
-          admin_note: edit.adminNote,
+          admin_note: edit.adminNote.trim() || null,
           expected_updated_at: selected.updated_at,
           identity_status: selected.request_type === "profile_privacy" ? edit.identityStatus : undefined,
           fulfillment_status: selected.request_type === "profile_privacy" ? edit.fulfillmentStatus : undefined,
@@ -174,6 +175,8 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
     }
   }
 
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadRequests);
+
   if (!status.enabled) {
     return (
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
@@ -198,7 +201,7 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
           <label>Status<br /><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} style={inputStyle}><option value="">all statuses</option>{STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option.replace(/_/g, " ")}</option>)}</select></label>
           <label>Type<br /><select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} style={inputStyle}>{TYPE_OPTIONS.map((option) => <option key={option || "all"} value={option}>{typeLabel(option)}</option>)}</select></label>
         </div>
-        <button type="button" onClick={loadRequests} disabled={busy || !accessToken} style={{ ...buttonStyle, marginTop: "0.75rem" }}>{busy ? "Loading…" : "Load requests"}</button>
+        <button type="button" onClick={loadRequests} disabled={busy || !accessToken} style={{ ...buttonStyle, marginTop: "0.75rem" }}>{busy ? "Refreshing…" : "Refresh requests"}</button>
         {summary ? <p style={{ color: "#475569" }}>Loaded {summary.total} · statuses {JSON.stringify(summary.by_status)} · types {JSON.stringify(summary.by_type)}</p> : null}
       </article>
 
@@ -223,12 +226,12 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
               <label>Fulfillment evidence<br /><textarea value={edit.resolutionEvidence} onChange={(event) => setEdit((current) => ({ ...current, resolutionEvidence: event.target.value }))} rows={3} placeholder="Identity method, authorized workflow used, and public projections checked; do not paste identity documents." style={inputStyle} /></label>
             </div>
           ) : null}
-          <label>Admin note<br /><textarea value={edit.adminNote} onChange={(event) => setEdit((current) => ({ ...current, adminNote: event.target.value }))} rows={4} style={inputStyle} /></label>
+          <label>Admin note (optional)<br /><textarea value={edit.adminNote} onChange={(event) => setEdit((current) => ({ ...current, adminNote: event.target.value }))} rows={4} style={inputStyle} /></label>
           <div style={{ marginTop: "0.75rem" }}>
             <ConfirmAction
               triggerLabel="Save request status"
               title={edit.status === "dismissed" ? "Dismiss this request?" : "Save this request status?"}
-              description={<>This will change <strong>{selected.subject || "the selected request"}</strong> from {selected.status.replace(/_/g, " ")} to {edit.status.replace(/_/g, " ")} and record your admin note.{selected.request_type === "profile_privacy" ? " It also saves the selected identity, fulfillment, resolution, and non-sensitive evidence fields." : ""}</>}
+              description={<>This will change <strong>{selected.subject || "the selected request"}</strong> from {selected.status.replace(/_/g, " ")} to {edit.status.replace(/_/g, " ")}.{edit.adminNote.trim() ? " It will also record the optional admin note." : ""}{selected.request_type === "profile_privacy" ? " It also saves the selected identity, fulfillment, resolution, and non-sensitive evidence fields." : ""}</>}
               confirmLabel={edit.status === "dismissed" ? "Yes, dismiss request" : "Yes, save status"}
               confirmationText="SAVE REQUEST STATUS"
               tone={edit.status === "dismissed" ? "danger" : "default"}
