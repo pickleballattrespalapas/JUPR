@@ -27,7 +27,10 @@ weakening those contracts.
 | Staging role accounts exercised | Authenticated staging admin only; private account identity retained outside the public record; full role coverage pending |
 | Session start / end | `2026-07-22` / in progress |
 | Primary operator | Joe Baumann |
-| Witness / reviewer | Pending — required before manual-only write rows |
+| Witness / reviewer | Pending |
+
+Record the distinct witness identity with the first witnessed manual-only write;
+do not infer or publish it before that action occurs.
 
 The formal table above now binds the deployed hardening candidate. If any
 application artifact changes, clear and rebind the candidate-specific fields
