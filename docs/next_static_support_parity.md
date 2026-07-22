@@ -36,7 +36,8 @@ only to the service role through FastAPI.
 The review queue records identity verification, fulfillment progress, approved
 resolution action, and non-sensitive fulfillment evidence. A profile-privacy item
 cannot be resolved until identity is `verified`, fulfillment is `completed`, an
-action is recorded, and evidence plus an admin note exist. The update is
+action is recorded and non-sensitive fulfillment evidence exists. An admin note
+is optional context rather than a terminal-state requirement. The update is
 compare-and-swap guarded by `expected_updated_at` and audit-attributed. This queue
 does not itself mutate public player data.
 
@@ -44,4 +45,3 @@ Manual staging acceptance must verify identity using an approved off-platform
 method, apply the action through the authorized player workflow, inspect player,
 leaderboard, match, roster, badge, recap, and live projections, and only then
 resolve the queue item. Do not upload identity documents into the evidence field.
-

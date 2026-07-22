@@ -110,6 +110,36 @@ def test_admin_support_request_update_contract(monkeypatch):
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
 
 
+def test_admin_support_request_terminal_status_allows_optional_note(monkeypatch):
+    for target_status in ("resolved", "dismissed"):
+        tables = _tables()
+        supabase = FakeSupabase(tables)
+        _install(monkeypatch, supabase)
+
+        response = TestClient(app).patch(
+            "/admin/clubs/club/support-requests/req_1",
+            headers={"Authorization": "Bearer local"},
+            json={
+                "status": target_status,
+                "admin_note": "  ",
+                "expected_updated_at": "2026-01-01T00:00:00Z",
+                "confirmation_text": "SAVE REQUEST STATUS",
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["request"]["status"] == target_status
+        assert payload["request"]["admin_note"] == ""
+        assert payload["request"]["reviewed_by"] == "admin@example.com"
+        assert payload["request"]["reviewed_at"]
+        assert tables["public_support_requests"][0]["admin_note"] is None
+        assert tables["admin_activity_log"][0]["action_type"] == "update_public_support_request_admin"
+        assert tables["admin_activity_log"][0]["entity_id"] == "req_1"
+        assert tables["admin_activity_log"][0]["before_json"]["status"] == "new"
+        assert tables["admin_activity_log"][0]["after_json"]["request"]["status"] == target_status
+
+
 def test_admin_support_request_update_requires_confirmation(monkeypatch):
     supabase = FakeSupabase(_tables())
     _install(monkeypatch, supabase)
@@ -156,7 +186,6 @@ def test_privacy_request_resolves_with_completed_sop_evidence(monkeypatch):
         headers={"Authorization": "Bearer local"},
         json={
             "status": "resolved",
-            "admin_note": "Alias applied and public projections checked.",
             "expected_updated_at": "2026-01-02T00:00:00Z",
             "identity_status": "verified",
             "fulfillment_status": "completed",
@@ -171,6 +200,7 @@ def test_privacy_request_resolves_with_completed_sop_evidence(monkeypatch):
     assert row["identity_status"] == "verified"
     assert row["fulfillment_status"] == "completed"
     assert row["resolution_action"] == "alias"
+    assert row["admin_note"] is None
 
 
 def test_admin_support_request_rejects_stale_update(monkeypatch):
