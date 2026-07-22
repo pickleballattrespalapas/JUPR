@@ -39,8 +39,9 @@ test.describe("order-26 Tournament Admin staging evidence", () => {
   test("authenticated setup impact review is a no-write dry run", async ({ page }) => {
     test.skip(!adminToken || !tournamentId, "Admin bearer token and disposable tournament fixture are required.");
     await page.goto("/admin/tournament-setup", { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: "Load list" }).click();
     const selector = page.getByLabel("Tournament");
+    await expect(selector).not.toHaveValue("");
+    await expect(page.getByRole("button", { name: "Refresh list" })).toBeVisible();
     await selector.selectOption(tournamentId);
     await expect(page.getByRole("button", { name: "Reload setup" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "4. Publish setup" })).toBeVisible();

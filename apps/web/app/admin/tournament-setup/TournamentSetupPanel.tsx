@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { useAuthenticatedAutoLoad } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type StatusResponse = { enabled: boolean; status: string; tournament_count?: number | null; warnings?: string[]; confirmation_text?: Record<string, string> };
@@ -95,6 +96,8 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
     if (id) void loadDetail(id);
   }
 
+  useAuthenticatedAutoLoad(status?.enabled ? accessToken : "", loadTournaments);
+
   async function saveSettings(confirmationText: string) {
     if (!detail || loadedDetailId !== selectedId) { setMessage("Reload the selected tournament before saving settings."); return; }
     setBusy(true); setMessage(null);
@@ -174,8 +177,8 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
     <article style={cardStyle} aria-busy={Boolean(detailLoadingId)}>
       <h2 style={{ marginTop: 0 }}>1. Select tournament</h2>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-        <label>Tournament<br /><select value={selectedId} onChange={(event) => selectTournament(event.target.value)} disabled={busy || !accessToken} style={inputStyle}>{tournaments.map((row) => <option key={row.id} value={row.id}>{row.name || row.id} · {row.status || "status"} · {row.registration_status || "registration"}</option>)}</select></label>
-        <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={ghostButtonStyle}>Load list</button>
+        <label>Tournament<br /><select value={selectedId} onChange={(event) => selectTournament(event.target.value)} disabled={busy || !accessToken} aria-busy={busy && !tournaments.length} style={inputStyle}><option value="" disabled>{busy && !tournaments.length ? "Loading tournaments…" : "Choose a tournament"}</option>{tournaments.map((row) => <option key={row.id} value={row.id}>{row.name || row.id} · {row.status || "status"} · {row.registration_status || "registration"}</option>)}</select></label>
+        <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={ghostButtonStyle}>Refresh list</button>
         <button type="button" onClick={() => loadDetail()} disabled={busy || !selectedId} style={buttonStyle}>{detailLoadingId ? "Loading setup…" : "Reload setup"}</button>
       </div>
       {detail ? <p style={{ color: detailIsCurrent ? "#475569" : "#92400e" }}>{detailIsCurrent ? `Loaded setup: ${loadedTournament?.name || loadedDetailId}` : "Showing the previously loaded setup until the selected tournament is ready. Editing and write actions are paused."}</p> : null}

@@ -5,6 +5,7 @@ import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminLeagueLiveStatusResponse, AdminLeagueManagerDetailResponse, AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
 import type { AdminMatchUploaderRoundRobinCourt, AdminMatchUploaderRoundRobinPreview, AdminMatchUploaderStatusResponse } from "@/lib/adminMatchUploaderApi";
 import type { PublicPlayer } from "@/lib/api";
+import { useAuthenticatedAutoLoad } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
@@ -355,6 +356,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setLeagueName(selectedLeague);
     void loadLeagueDetail(selectedLeague);
   }
+
+  useAuthenticatedAutoLoad(
+    leagueStatus.enabled && uploaderStatus.enabled && liveDomainStatus.enabled ? accessToken : "",
+    loadLeagues
+  );
 
   async function refreshRosterSuggestion() {
     if (!detail || detail.league.league_name !== leagueName) {
@@ -754,12 +760,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>1. League and persisted session</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>League<br /><select value={leagueName} onChange={(event) => selectLeague(event.target.value)} disabled={busy} style={inputStyle}>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+          <label>League<br /><select value={leagueName} onChange={(event) => selectLeague(event.target.value)} disabled={busy || !accessToken} aria-busy={busy && !leagues.length} style={inputStyle}><option value="" disabled>{busy && !leagues.length ? "Loading leagues…" : "Choose a league"}</option>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
           <label>Week<br /><input value={weekTag} onChange={(event) => setWeekTag(event.target.value)} disabled={busy} style={inputStyle} /></label>
           <label>Round #<br /><input value={roundNumber} onChange={(event) => { setRoundNumber(event.target.value); setRoundLabel(`Round ${event.target.value || 1}`); }} disabled={busy} style={inputStyle} /></label>
           <label>Total rounds<br /><input value={totalRounds} onChange={(event) => setTotalRounds(event.target.value)} disabled={busy} style={inputStyle} /></label>
           <label>Date<br /><input type="date" value={matchDate} onChange={(event) => setMatchDate(event.target.value)} disabled={busy} style={inputStyle} /></label>
-          <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Loading…" : "Load leagues"}</button>
+          <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh leagues"}</button>
           <button type="button" onClick={() => void loadLeagueDetail()} disabled={busy || !leagueName} style={buttonStyle}>{loadingLeagueName ? "Loading roster…" : "Reload roster"}</button>
         </div>
         {loadingLeagueName ? <p role="status" style={{ color: "#475569" }}>Loading {loadingLeagueName}. The current league roster will remain visible until the replacement is ready.</p> : null}

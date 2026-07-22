@@ -20,6 +20,9 @@ def test_league_printout_renders_true_leaders_and_print_contract() -> None:
     assert "/printout" in panel
     assert "selectLeague(event.target.value)" in panel
     assert 'void loadDetail(selectedLeague, "")' in panel
+    assert "useAuthenticatedAutoLoad(status.enabled ? accessToken : \"\", loadLeagues)" in panel
+    assert "Refresh leagues" in panel
+    assert ">Load leagues<" not in panel
     assert "Reload printout" in panel
     assert "Load selected" not in panel
     assert 'disabled={busy || !printout}' in panel

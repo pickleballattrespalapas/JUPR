@@ -12,6 +12,9 @@ def test_tournament_setup_selection_auto_loads_and_retains_manual_reload() -> No
     assert "if (id) void loadDetail(id);" in source
     assert "if (nextId) await loadDetail(nextId);" in source
     assert "onChange={(event) => selectTournament(event.target.value)}" in source
+    assert "useAuthenticatedAutoLoad(status?.enabled ? accessToken : \"\", loadTournaments)" in source
+    assert ">Refresh list</button>" in source
+    assert ">Load list</button>" not in source
     assert '"Reload setup"' in source
     assert ">Load setup</button>" not in source
 

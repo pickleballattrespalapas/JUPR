@@ -22,6 +22,9 @@ def test_league_selection_auto_loads_roster_without_clearing_current_view() -> N
     panel = PANEL.read_text(encoding="utf-8")
     assert "selectLeague(event.target.value)" in panel
     assert "void loadLeagueDetail(selectedLeague)" in panel
+    assert "useAuthenticatedAutoLoad(" in panel
+    assert "Refresh leagues" in panel
+    assert ">Load leagues<" not in panel
     assert "Reload roster" in panel
     assert ">Load roster<" not in panel
     assert "const suggestion = await fetchRosterSuggestion(payload);" in panel
