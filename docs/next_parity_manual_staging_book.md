@@ -14,18 +14,18 @@ weakening those contracts.
 
 | Field | Recorded value |
 |---|---|
-| Application candidate Git SHA | `6c27f5de5c04b1d565ba051efb322fff2804ff10` |
-| Final stacked PR | `#1021` (`Auto-load authenticated admin selections`) |
+| Application candidate Git SHA | `eab384545c493f145af383c8e26d8bf97686ab21` |
+| Final stacked PR | `#1023` (`Streamline support request review`) |
 | Vercel preview URL | `https://jupr-git-staging-pickleballattrespalapas1.vercel.app` |
-| Vercel deployment ID | `dpl_9NtvgLv9GtRbMCUDTHcR2KezobVo` |
-| Vercel immutable deployment origin | `https://jupr-mimau97b5-pickleballattrespalapas1.vercel.app` |
-| Fly staging image ref | `registry.fly.io/juprleagues-api-staging:deployment-01KY5M69KJ1DPDFSSRQWNBBSTR` |
-| Deployment identity preflight artifact | `candidate=6c27f5de5c04b1d565ba051efb322fff2804ff10; vercel=dpl_9NtvgLv9GtRbMCUDTHcR2KezobVo; fly=registry.fly.io/juprleagues-api-staging:deployment-01KY5M69KJ1DPDFSSRQWNBBSTR; artifact=https://github.com/pickleballattrespalapas/JUPR/actions/runs/29950580803` |
+| Vercel deployment ID | `dpl_FTmDVFSdftMmAj4sMwAHrvQpVYLE` |
+| Vercel immutable deployment origin | `https://jupr-bifdisfdg-pickleballattrespalapas1.vercel.app` |
+| Fly staging image ref | `registry.fly.io/juprleagues-api-staging:deployment-01KY5SVX80SHEZMN7GX37NASRP` |
+| Deployment identity preflight artifact | `candidate=eab384545c493f145af383c8e26d8bf97686ab21; vercel=dpl_FTmDVFSdftMmAj4sMwAHrvQpVYLE; fly=registry.fly.io/juprleagues-api-staging:deployment-01KY5SVX80SHEZMN7GX37NASRP; artifact=https://github.com/pickleballattrespalapas/JUPR/actions/runs/29957623653` |
 | Staging Supabase project ref | `sijpxjxvdtrehmqvirfi` |
 | Schema inventory / migration head evidence | Targeted-only Supabase migration read `2026-07-22`: support-intake guardrails, Orders 27/28, and `baseline_worker_run_log` present; full inventory/head proof pending |
 | Streamlit fallback URL / build | `https://juprtrespalapas.streamlit.app`; build identity pending |
 | Staging role accounts exercised | Authenticated staging admin only; private account identity retained outside the public record; full role coverage pending |
-| Session start / end | `2026-07-22` / in progress |
+| Session start / end | `2026-07-22` / `2026-07-22` |
 | Primary operator | Joe Baumann |
 | Witness / reviewer | Pending |
 
@@ -57,9 +57,14 @@ must not be combined into one acceptance result.
 Record the identity artifact in the exact form
 `candidate=<sha>; vercel=<deployment-id>; fly=<image-ref>; artifact=<run-or-url>`.
 
-The initial Fly `none` release was workflow run `29950338666`, machine
-`01KY5M7NG6EJBGWXV1TV79978R`; the identity record above binds its exact image to
-the canonical Staging Smoke artifact.
+The initial exact-candidate Fly `none` release was workflow run `29955849970`,
+image `registry.fly.io/juprleagues-api-staging:deployment-01KY5RQNAW9QHTHRHNSW6NG8VA`,
+and machine version `01KY5RS9HHMJ8C2AV7AG5EH5PZ`. The final resting `none`
+release is workflow run `29957218074`, image
+`registry.fly.io/juprleagues-api-staging:deployment-01KY5SVX80SHEZMN7GX37NASRP`,
+and machine version `01KY5SXBQDWYKHBGFTQATZSVW3`. Canonical Staging Smoke run
+`29957623653` bound the final release to the Vercel deployment above and passed
+all 56 strict public-read browser tests.
 
 ### Targeted UX regression observations
 
@@ -71,14 +76,15 @@ disposable write/recovery procedures later in this book.
 | Surface | Candidate | Observation | Result |
 |---|---|---|---|
 | Match Log filters | `60040bc04a30b387e932976dca02499bc30cc5d1` (direct ancestor) | League/week dropdown filtering reduced the 15-row staging fixture to the expected three Week 7 rows; Clear filters restored all 15. PR `#1021` did not touch Match Log. | Targeted pass; ancestor-only context |
-| League Printout | `6c27f5de5c04b1d565ba051efb322fff2804ff10` | An authenticated hard refresh populated `Spring League` and rendered the printout without using **Refresh leagues**. | Targeted pass |
-| League Live | `6c27f5de5c04b1d565ba051efb322fff2804ff10` | With `write_wave=none`, the route failed closed and exposed no live-write controls. Automatic league loading remains unobservable until the dedicated League Live gate is enabled. | Guard pass; auto-load deferred |
-| Tournament Setup | `6c27f5de5c04b1d565ba051efb322fff2804ff10` | An authenticated hard refresh selected `Staging Summer Classic` and rendered settings plus builder draft without using **Refresh list**. No save, review, or publish control was used. | Targeted pass |
+| League Printout | `6c27f5de5c04b1d565ba051efb322fff2804ff10` (direct ancestor) | An authenticated hard refresh populated `Spring League` and rendered the printout without using **Refresh leagues**. | Targeted pass; ancestor-only context |
+| League Live | `6c27f5de5c04b1d565ba051efb322fff2804ff10` (direct ancestor) | With `write_wave=none`, the route failed closed and exposed no live-write controls. Automatic league loading remains unobservable until the dedicated League Live gate is enabled. | Guard pass; auto-load deferred |
+| Tournament Setup | `6c27f5de5c04b1d565ba051efb322fff2804ff10` (direct ancestor) | An authenticated hard refresh selected `Staging Summer Classic` and rendered settings plus builder draft without using **Refresh list**. No save, review, or publish control was used. | Targeted pass; ancestor-only context |
+| Support request queue | `eab384545c493f145af383c8e26d8bf97686ab21` | An authenticated hard refresh automatically loaded the disposable `ux` request. The operator selected it, chose `dismissed`, left the optional admin note blank, and accepted the **Yes, dismiss request** dialog. Supabase readback recorded SQL `NULL` for both request and audit notes, reviewer attribution, and exactly one audit event (`6`). | Targeted pass; exact candidate |
 
 ## Fail-closed preflight
 
-- [x] `/api/environment` reports `environment=staging`, `vercel_environment=preview`, the candidate SHA, exact Vercel deployment ID, staging Fly API origin, and staging Supabase origin (canonical run `29950580803`).
-- [x] Fly `/health` reports the same candidate SHA, exact `FLY_IMAGE_REF`, staging app name, and staging Supabase project ref (deploy/verify run `29950338666`; live readback repeated after completion).
+- [x] `/api/environment` reports `environment=staging`, `vercel_environment=preview`, the candidate SHA, exact Vercel deployment ID, staging Fly API origin, and staging Supabase origin (canonical run `29957623653`).
+- [x] Fly `/health` reports the same candidate SHA, exact `FLY_IMAGE_REF`, staging app name, and staging Supabase project ref (final restore run `29957218074`; canonical identity re-attestation run `29957623653`).
 - [x] Preview data isolation and preview auth isolation are both configured and active (deployment and canonical-smoke configuration gates passed).
 - [ ] The Vercel automation bypass is available only to the test runner.
 - [ ] FastAPI holds the staging service-role key; neither Vercel nor any `NEXT_PUBLIC_*` variable does.
@@ -147,6 +153,49 @@ The operator requested shorter, repeatable fixture values for subsequent intake
 and deduplication tests. The next approval packet therefore uses minimal values and
 authorizes only a data-correction create/exact retry followed by dismissal.
 
+### 2026-07-22 bounded candidate evidence
+
+The data-correction create/retry and the final support-queue dismissal were not
+performed against the same application artifact. They are therefore recorded as
+two deliberately separate evidence bundles and do not close a formal manual parity
+row.
+
+- **A — ancestor-only intake/deduplication.** Candidate
+  `6c27f5de5c04b1d565ba051efb322fff2804ff10`, Fly run `29952977995`, image
+  `registry.fly.io/juprleagues-api-staging:deployment-01KY5PBDKQNYJ777ZE94JA33RE`,
+  machine version `01KY5PD43W85H4D7G0TCTR0XTC`. The first browser submit created
+  `req_0eae0a691fe94e72b88e`; the exact retry returned the existing-queue message,
+  and readback showed exactly one row for fingerprint
+  `414153a37567f07bc5a1be6aedf4ce00197bda52c3e230a856a869699229eab7`
+  with deduplication key suffix `:20260722`. Run `29953685135` restored `none`
+  on image
+  `registry.fly.io/juprleagues-api-staging:deployment-01KY5PY423HPAHZXFRDAREPD0E`,
+  machine version `01KY5PZE4YC3S79ZD7CW7REZSY`. This is useful direct-ancestor
+  evidence only; it is not an exact-final-candidate pass.
+- **B — exact-final-candidate support UX/dismissal.** Candidate
+  `eab384545c493f145af383c8e26d8bf97686ab21`, support-only Fly run
+  `29956323772`, image
+  `registry.fly.io/juprleagues-api-staging:deployment-01KY5S453MDYZZSKXKV9MZEYY8`,
+  machine version `01KY5S55879ZZRXR0RK7TEFEKA`. A disposable staging fixture
+  `req_staging_ux_20260722_2048` was seeded with source
+  `staging_support_queue_fixture` in state `new` with no reviewer or admin note.
+  The authenticated queue auto-loaded it after a hard refresh. Joe selected it,
+  chose `dismissed`, left the optional admin note blank, and accepted the Yes/No
+  dialog. Authoritative readback showed `dismissed`, SQL `NULL` for `admin_note`,
+  authenticated staging-super-admin attribution, reviewed at
+  `2026-07-22T20:55:01.736928+00:00`, and updated at
+  `2026-07-22T20:55:01.781893+00:00`. Exactly one audit event (`6`) recorded
+  `update_public_support_request_admin`, before `new`, after `dismissed`, source
+  `next_admin_support_requests`, a null audit note, and
+  `flagged_for_review=true`.
+- **Final restoration and smoke.** Fly run `29957218074` restored the same final
+  SHA to `write_wave=none` on image
+  `registry.fly.io/juprleagues-api-staging:deployment-01KY5SVX80SHEZMN7GX37NASRP`,
+  machine version `01KY5SXBQDWYKHBGFTQATZSVW3`. Health reported business-data
+  writes false, every controlled flag false, and email `dry_run`. Canonical
+  Staging Smoke run `29957623653` then passed exact Vercel/Fly identity, public
+  checks, and all 56 strict browser tests.
+
 ### Fly write-wave release ledger
 
 This ledger is separate from the formal all-page parity results. A missing old
@@ -158,6 +207,11 @@ with the final `none` image.
 | Prior 1 | `e695365ce508e03a094f528ff9c1179c7f7947de` | Historical wave release ref was not retained in the session record. | `public-intake-auth` | Created `req_2baca74d135646e6be38`; exact retry deduplicated to the same queue item. | `support-requests` only after a separate dispatch |
 | Prior 2 | `e695365ce508e03a094f528ff9c1179c7f7947de` | Historical wave release ref was not retained in the session record. | `support-requests` | Dismissed the retained fixture; reviewer and one admin-audit update observed. | `none` |
 | Prior 3 | `e695365ce508e03a094f528ff9c1179c7f7947de` | GitHub run `29795882496`; `registry.fly.io/juprleagues-api-staging:deployment-01KY180GGE2V9HC13E8N9VFE3Y`; machine `01KY1821CAK5RC7GE2BWMBQYYM` | `none` | Successful identity readback; business-data write false; all controlled write flags false; email `dry_run`. | Canonical public-read smoke or a separately approved new wave |
+| A1 | `6c27f5de5c04b1d565ba051efb322fff2804ff10` (direct ancestor) | GitHub run `29952977995`; `registry.fly.io/juprleagues-api-staging:deployment-01KY5PBDKQNYJ777ZE94JA33RE`; machine version `01KY5PD43W85H4D7G0TCTR0XTC` | `public-intake-auth` | Created `req_0eae0a691fe94e72b88e`; exact retry deduplicated; exactly one row. | `none` |
+| A2 | `6c27f5de5c04b1d565ba051efb322fff2804ff10` (direct ancestor) | GitHub run `29953685135`; `registry.fly.io/juprleagues-api-staging:deployment-01KY5PY423HPAHZXFRDAREPD0E`; machine version `01KY5PZE4YC3S79ZD7CW7REZSY` | `none` | Successful all-false restoration readback. | Exact-final-candidate deployment |
+| B0 | `eab384545c493f145af383c8e26d8bf97686ab21` | GitHub run `29955849970`; `registry.fly.io/juprleagues-api-staging:deployment-01KY5RQNAW9QHTHRHNSW6NG8VA`; machine version `01KY5RS9HHMJ8C2AV7AG5EH5PZ` | `none` | Exact-candidate baseline; business-data writes false; every controlled flag false; email `dry_run`. | `support-requests` only after separate approval and dispatch |
+| B1 | `eab384545c493f145af383c8e26d8bf97686ab21` | GitHub run `29956323772`; `registry.fly.io/juprleagues-api-staging:deployment-01KY5S453MDYZZSKXKV9MZEYY8`; machine version `01KY5S55879ZZRXR0RK7TEFEKA` | `support-requests` | Dismissed `req_staging_ux_20260722_2048` with a blank optional admin note; exactly one audit event (`6`). Only the support gate and required admin-write pilot were true. | `none` |
+| B2 | `eab384545c493f145af383c8e26d8bf97686ab21` | GitHub run `29957218074`; `registry.fly.io/juprleagues-api-staging:deployment-01KY5SVX80SHEZMN7GX37NASRP`; machine version `01KY5SXBQDWYKHBGFTQATZSVW3` | `none` | Successful all-false restoration; canonical run `29957623653` passed identity, public checks, and 56 strict browser tests. | Resting state; no additional write wave approved by this record |
 
 For the next candidate, create one row per dispatch with exact run URL, image ref,
 machine/release ID, selected wave, approved action, readback/audit IDs, and required
