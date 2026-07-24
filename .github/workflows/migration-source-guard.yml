@@ -23,11 +23,13 @@ jobs:
 
       - name: Check migration source policy
         run: |
-          if git show-ref --verify --quiet refs/remotes/origin/Test; then
-            python scripts/check_migration_sources.py --base-ref origin/Test
-          else
-            python scripts/check_migration_sources.py --base-ref Test
+          set -euo pipefail
+          base_branch="${GITHUB_BASE_REF:-staging}"
+          if ! git show-ref --verify --quiet "refs/remotes/origin/$base_branch"; then
+            echo "::error title=Missing migration guard base::origin/$base_branch was not fetched."
+            exit 2
           fi
+          python scripts/check_migration_sources.py --base-ref "origin/$base_branch"
 
       - name: Check supabase migration version prefixes
         run: python scripts/check_supabase_migration_versions.py

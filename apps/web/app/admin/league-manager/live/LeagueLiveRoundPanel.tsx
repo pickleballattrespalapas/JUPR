@@ -5,7 +5,7 @@ import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminLeagueLiveStatusResponse, AdminLeagueManagerDetailResponse, AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
 import type { AdminMatchUploaderRoundRobinCourt, AdminMatchUploaderRoundRobinPreview, AdminMatchUploaderStatusResponse } from "@/lib/adminMatchUploaderApi";
 import type { PublicPlayer } from "@/lib/api";
-import { useAuthenticatedAutoLoad } from "@/lib/useAuthenticatedAutoLoad";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
@@ -157,6 +157,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [loadingLeagueName, setLoadingLeagueName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const leagueListRequest = useLatestRequestGuard(accessToken, clearProtectedLiveWorkspace);
+  const leagueDetailRequest = useLatestRequestGuard(accessToken);
+  const sessionListRequest = useLatestRequestGuard(accessToken);
+  const sessionDetailRequest = useLatestRequestGuard(accessToken);
+  const actionRequest = useLatestRequestGuard(accessToken);
 
   const currentRound = Math.max(1, Number(roundNumber) || 1);
   const safeTotalRounds = Math.max(currentRound, Number(totalRounds) || currentRound);
@@ -205,7 +210,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setSessionUpdatedAt(sessionRow.updated_at || "");
     setLeagueName(sessionRow.league_name);
     setLoadedLeagueName(sessionRow.league_name);
-    if (detail?.league.league_name !== sessionRow.league_name) setDetail(null);
+    setDetail(null);
     setRosterSuggestion(null);
     setWeekTag(sessionRow.week_tag || "Week 1");
     setSessionStatus(sessionRow.status || "active");
@@ -226,21 +231,60 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setBenchOverrideIds(((sessionRow.roster_json || []) as LeagueLiveRosterRow[]).filter((row) => row.status === "bench").map((row) => Number(row.player_id)));
   }
 
-  function clearPersistedSessionBinding() {
-    setSessionId("");
+  function clearRoundDerivedState() {
+    setDetail(null);
+    setLoadedLeagueName("");
+    setSessionRoster([]);
+    setRosterSuggestion(null);
+    setCourts([{ court: "1", formatType: "4-player", playerNames: "" }]);
+    setPreview(null);
+    setScores({});
+    setMovementPlan(null);
+    setMovementPlanStale(false);
+    setMovementOverrides({});
+    setOverrideReason("");
+    setRatingReview(null);
+    setBenchOverrideIds([]);
+    setBenchOverrideReason("");
+    setRosterAction("none");
+    setIncomingPlayerId("");
+    setReplacedPlayerId("");
+    setGuestPlayers([]);
+    setGuestName("");
+    setGuestJupr("3.5");
+    setGuestReason("");
+  }
+
+  function clearPersistedSessionBinding(selectedSessionId = "") {
+    setSessionId(selectedSessionId);
     setLoadedSessionId("");
     setSessionLeagueName("");
     setSessionUpdatedAt("");
+    setWeekTag("Week 1");
+    setRoundNumber("1");
+    setTotalRounds("5");
+    setRoundLabel("Round 1");
+    setMatchDate(todayIso());
     setSessionStatus("active");
     setSessionNotes("");
     setRoundHistory([]);
     setPublishOperations([]);
-    setRatingReview(null);
-    setMovementPlan(null);
-    setMovementPlanStale(false);
-    setMovementOverrides({});
     setCompensationReference("");
     setCompensationReason("");
+    clearRoundDerivedState();
+  }
+
+  function clearProtectedLiveWorkspace() {
+    leagueDetailRequest.invalidate();
+    sessionListRequest.invalidate();
+    sessionDetailRequest.invalidate();
+    setLeagues([]);
+    setLeagueName("");
+    setLiveSessions([]);
+    setLoadingLeagueName(null);
+    setBusy(false);
+    setMessage(null);
+    clearPersistedSessionBinding();
   }
 
   function requireCurrentSession(action: string): boolean {
@@ -284,49 +328,73 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setMovementPlanStale(false);
   }
 
-  async function requestRosterSuggestion(
-    leagueDetail: AdminLeagueManagerDetailResponse,
-    requestedBenchIds: number[] = [],
-    requestedBenchReason = ""
-  ): Promise<LeagueLiveRosterSuggestion> {
-    const payload = await fetchRosterSuggestion(leagueDetail, requestedBenchIds, requestedBenchReason);
-    applyRosterSuggestion(payload);
-    return payload;
-  }
-
   async function loadLeagues() {
+    const generation = leagueListRequest.begin();
+    const selectedLeagueBeforeRefresh = leagueName;
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
+      if (!leagueListRequest.isCurrent(generation)) return;
       const names = (payload.leagues || []).map((league) => league.league_name).filter(Boolean);
       setLeagues(names);
-      const selectedLeague = names.includes(leagueName) ? leagueName : (names[0] || "");
+      const selectedLeague = names.includes(selectedLeagueBeforeRefresh) ? selectedLeagueBeforeRefresh : (names[0] || "");
       setLeagueName(selectedLeague);
       if (selectedLeague) await loadLeagueDetail(selectedLeague);
-      else setMessage("No leagues are available.");
+      else {
+        clearPersistedSessionBinding();
+        setMessage("No leagues are available.");
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load leagues.");
+      if (leagueListRequest.isCurrent(generation)) {
+        setLeagues([]);
+        setLeagueName("");
+        clearPersistedSessionBinding();
+        setMessage(error instanceof Error ? error.message : "Unable to load leagues.");
+      }
     } finally {
-      setBusy(false);
+      if (leagueListRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function loadSessions() {
+    const generation = sessionListRequest.begin();
+    const selectedSessionBeforeRefresh = sessionId;
+    if (selectedSessionBeforeRefresh) {
+      sessionDetailRequest.invalidate();
+      clearPersistedSessionBinding(selectedSessionBeforeRefresh);
+    }
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<LeagueLiveListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions?limit=100`);
-      setLiveSessions(payload.sessions || []);
-      setMessage(`Loaded ${payload.count ?? payload.sessions?.length ?? 0} persisted live session(s).`);
+      if (!sessionListRequest.isCurrent(generation)) return;
+      const nextSessions = payload.sessions || [];
+      setLiveSessions(nextSessions);
+      if (selectedSessionBeforeRefresh && nextSessions.some((row) => row.id === selectedSessionBeforeRefresh)) {
+        await loadSessionDetail(selectedSessionBeforeRefresh);
+      } else if (selectedSessionBeforeRefresh) {
+        clearPersistedSessionBinding();
+        setMessage("The previously selected live session is no longer available.");
+      } else {
+        setMessage(nextSessions.length ? `Loaded ${payload.count ?? nextSessions.length} persisted live session(s).` : "No persisted live sessions are available.");
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load live sessions.");
+      if (sessionListRequest.isCurrent(generation)) {
+        setLiveSessions([]);
+        if (selectedSessionBeforeRefresh) clearPersistedSessionBinding(selectedSessionBeforeRefresh);
+        setMessage(error instanceof Error ? error.message : "Unable to load live sessions.");
+      }
     } finally {
-      setBusy(false);
+      if (sessionListRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function loadLeagueDetail(selectedLeague = leagueName) {
+    const generation = leagueDetailRequest.begin();
+    sessionDetailRequest.invalidate();
+    setLeagueName(selectedLeague);
+    clearPersistedSessionBinding();
     if (!selectedLeague) {
       setMessage("Select a league first.");
       return;
@@ -336,19 +404,24 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setMessage(null);
     try {
       const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}`);
+      if (!leagueDetailRequest.isCurrent(generation)) return;
       const suggestion = await fetchRosterSuggestion(payload);
-      if (sessionId && (sessionId !== loadedSessionId || sessionLeagueName !== selectedLeague)) clearPersistedSessionBinding();
+      if (!leagueDetailRequest.isCurrent(generation)) return;
       setDetail(payload);
       setLoadedLeagueName(selectedLeague);
       applyRosterSuggestion(suggestion);
       setMessage(`Python suggested ${suggestion.courts.length} court(s) and ${suggestion.bench.length} bench player(s). Review before creating the session.`);
     } catch (error) {
-      const reason = error instanceof Error ? error.message : "Unable to load league detail.";
-      if (loadedLeagueName) setLeagueName(loadedLeagueName);
-      setMessage(detail || loadedLeagueName ? `${reason} The previous league roster remains visible and selected.` : reason);
+      if (leagueDetailRequest.isCurrent(generation)) {
+        clearPersistedSessionBinding();
+        setLeagueName(selectedLeague);
+        setMessage(error instanceof Error ? error.message : "Unable to load league detail.");
+      }
     } finally {
-      setLoadingLeagueName(null);
-      setBusy(false);
+      if (leagueDetailRequest.isCurrent(generation)) {
+        setLoadingLeagueName(null);
+        setBusy(false);
+      }
     }
   }
 
@@ -357,9 +430,14 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     void loadLeagueDetail(selectedLeague);
   }
 
+  async function loadInitialWorkspace() {
+    await loadLeagues();
+    await loadSessions();
+  }
+
   useAuthenticatedAutoLoad(
     leagueStatus.enabled && uploaderStatus.enabled && liveDomainStatus.enabled ? accessToken : "",
-    loadLeagues
+    loadInitialWorkspace
   );
 
   async function refreshRosterSuggestion() {
@@ -367,23 +445,27 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       setMessage("Load a league roster before requesting another Python roster suggestion.");
       return;
     }
+    const generation = leagueDetailRequest.begin();
     setBusy(true);
     setMessage(null);
     try {
-      const suggestion = await requestRosterSuggestion(detail, benchOverrideIds, benchOverrideReason);
+      const suggestion = await fetchRosterSuggestion(detail, benchOverrideIds, benchOverrideReason);
+      if (!leagueDetailRequest.isCurrent(generation)) return;
+      applyRosterSuggestion(suggestion);
       setMessage(`Python refreshed ${suggestion.courts.length} court(s); ${suggestion.bench.length} player(s) are benched.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to refresh the Python roster suggestion.");
+      if (leagueDetailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to refresh the Python roster suggestion.");
     } finally {
-      setBusy(false);
+      if (leagueDetailRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function createSession(confirmationText: string) {
-    if (!leagueName) {
-      setMessage("Select a league before creating a persisted session.");
+    if (!leagueName || !detail || loadedLeagueName !== leagueName || !rosterSuggestion || !sessionRoster.length) {
+      setMessage("Load the selected league roster and Python court suggestion before creating a persisted session.");
       return;
     }
+    const generation = actionRequest.begin();
     setBusy(true);
     setMessage(null);
     try {
@@ -403,17 +485,23 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           source: "next_league_live_session_create"
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       applySession(payload.session, payload.courts || [], []);
+      if (!actionRequest.isCurrent(generation)) return;
       await loadSessions();
+      if (!actionRequest.isCurrent(generation)) return;
       setMessage("Persisted League Live session created. You can now resume it later from this page.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to create persisted session.");
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to create persisted session.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function loadSessionDetail(selectedSessionId = sessionId) {
+    const generation = sessionDetailRequest.begin();
+    leagueDetailRequest.invalidate();
+    clearPersistedSessionBinding(selectedSessionId);
     if (!selectedSessionId) {
       setMessage("Select a persisted session first.");
       return;
@@ -422,21 +510,32 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setMessage(null);
     try {
       const payload = await requestJson<LeagueLiveDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(selectedSessionId)}`);
+      if (!sessionDetailRequest.isCurrent(generation)) return;
       applySession(payload.session, payload.courts || [], payload.rounds || [], payload.publish_operations || []);
       setMessage("Persisted League Live session loaded.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load persisted session.");
+      if (sessionDetailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load persisted session.");
     } finally {
-      setBusy(false);
+      if (sessionDetailRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  function selectSession(selectedSessionId: string) {
+    if (selectedSessionId) void loadSessionDetail(selectedSessionId);
+    else {
+      sessionDetailRequest.invalidate();
+      clearPersistedSessionBinding();
     }
   }
 
   async function saveSessionSnapshot(confirmationText: string) {
     if (!requireCurrentSession("saving a snapshot")) return;
+    const generation = actionRequest.begin();
+    const requestedSessionId = loadedSessionId;
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/snapshot`, {
+      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/snapshot`, {
         method: "PATCH",
         body: JSON.stringify({
           status: sessionStatus,
@@ -453,12 +552,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           source: "next_league_live_session_snapshot"
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       applySession(payload.session, payload.courts || [], roundHistory);
       setMessage("League Live session snapshot saved.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save session snapshot.");
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save session snapshot.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -484,6 +584,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   async function generatePreview() {
+    const generation = actionRequest.begin();
     setBusy(true);
     setMessage(null);
     try {
@@ -492,6 +593,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         method: "POST",
         body: JSON.stringify({ courts: courtPayload, schedule_mode: "full", source: "next_league_manager_live_preview" })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setPreview(payload);
       const nextScores: Record<string, ScoreDraft> = {};
       for (const match of (payload.courts || []).flatMap((court) => court.matches || [])) nextScores[match.row_id] = { scoreT1: "", scoreT2: "" };
@@ -502,9 +604,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       if (payload.missing_players?.length) setMessage(`Missing players: ${payload.missing_players.join(", ")}`);
       else setMessage(`Generated ${payload.match_count || 0} match slot(s). Save the session snapshot before leaving this page.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to generate round preview.");
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to generate round preview.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -551,10 +653,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       setMessage("Enter at least one valid non-tied score before previewing Python movement.");
       return;
     }
+    const generation = actionRequest.begin();
+    const requestedSessionId = loadedSessionId;
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<LeagueLiveRoundPlan>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/rounds/${encodeURIComponent(String(currentRound))}/plan`, {
+      const payload = await requestJson<LeagueLiveRoundPlan>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/rounds/${encodeURIComponent(String(currentRound))}/plan`, {
         method: "POST",
         body: JSON.stringify({
           expected_updated_at: sessionUpdatedAt,
@@ -567,14 +671,17 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           bench_override_reason: benchOverrideReason || null
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setMovementPlan(payload);
       setMovementPlanStale(false);
       setMessage(`Python-authoritative plan ${payload.operation_key.slice(0, 12)}… is ready for Round ${payload.next_round}.`);
     } catch (error) {
-      setMovementPlanStale(true);
-      setMessage(error instanceof Error ? error.message : "Unable to preview Python court movement.");
+      if (actionRequest.isCurrent(generation)) {
+        setMovementPlanStale(true);
+        setMessage(error instanceof Error ? error.message : "Unable to preview Python court movement.");
+      }
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -589,11 +696,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       setMessage("Preview the current Python movement plan before submitting. Any score, roster, bench, or override change makes the previous plan stale.");
       return;
     }
+    const generation = actionRequest.begin();
+    const requestedSessionId = loadedSessionId;
     setBusy(true);
     setMessage(null);
     try {
       const plannedMovement = movementPlan.movement;
-      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/rounds/${encodeURIComponent(String(currentRound))}/submit`, {
+      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/rounds/${encodeURIComponent(String(currentRound))}/submit`, {
         method: "POST",
         body: JSON.stringify({
           round_label: roundLabel,
@@ -614,6 +723,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           source: "next_league_live_round_submit"
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       if (payload.session) {
         applySession(payload.session, payload.courts || [], payload.rounds || [...roundHistory, ...(payload.round ? [payload.round] : [])]);
         setRoundNumber(String(payload.session.current_round || currentRound));
@@ -621,24 +731,29 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       }
       setPreview(null);
       setScores({});
-      if (loadedSessionId) await loadSessionDetail(loadedSessionId);
+      if (requestedSessionId) {
+        await loadSessionDetail(requestedSessionId);
+        if (!actionRequest.isCurrent(generation)) return;
+      }
       setRatingReview(payload.rating_review || null);
       const movementText = plannedMovement?.applied ? ` Applied ${plannedMovement.rows.filter((row) => row.direction !== "stay").length} court movement(s) for the next round.` : " No court movement was required.";
       setMessage(`${payload.idempotent_replay ? "Reconciled" : "Published"} ${payload.published_match_ids?.length ?? matches.length} league match(es) through one durable Python operation.${movementText}`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to submit league round.");
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to submit league round.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function createGuest(confirmationText: string) {
     if (!requireCurrentSession("creating a guest")) return;
+    const generation = actionRequest.begin();
+    const requestedSessionId = loadedSessionId;
     setBusy(true);
     setMessage(null);
     try {
-      const idempotencyKey = `guest:${loadedSessionId}:${guestName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60)}`;
-      const payload = await requestJson<LeagueLiveGuestResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/guests`, {
+      const idempotencyKey = `guest:${requestedSessionId}:${guestName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60)}`;
+      const payload = await requestJson<LeagueLiveGuestResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/guests`, {
         method: "POST",
         body: JSON.stringify({
           guest_name: guestName,
@@ -650,6 +765,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           source: "next_league_live_guest_create"
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       const guest = { id: Number(payload.player.id), name: payload.player.name, rating: payload.player.rating };
       setGuestPlayers((current) => current.some((row) => row.id === guest.id) ? current : [...current, guest]);
       setIncomingPlayerId(String(guest.id));
@@ -658,37 +774,43 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       markPlanStale();
       setMessage(`${payload.idempotent_replay ? "Recovered" : "Created"} guest ${guest.name}. Select add or substitute, then preview Python movement again.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to create League Live guest.");
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to create League Live guest.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function reconcileRound(round: number, confirmationText: string) {
     if (!requireCurrentSession("reconciling a round")) return;
+    const generation = actionRequest.begin();
+    const requestedSessionId = loadedSessionId;
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/rounds/${encodeURIComponent(String(round))}/reconcile`, {
+      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/rounds/${encodeURIComponent(String(round))}/reconcile`, {
         method: "POST",
         body: JSON.stringify({ confirmation_text: confirmationText, source: "next_league_live_round_reconcile" })
       });
-      await loadSessionDetail(loadedSessionId);
+      if (!actionRequest.isCurrent(generation)) return;
+      await loadSessionDetail(requestedSessionId);
+      if (!actionRequest.isCurrent(generation)) return;
       setRatingReview(payload.rating_review || null);
       setMessage(`Round ${round} publish and League Live snapshot are reconciled. No match was republished.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to reconcile League Live round.");
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to reconcile League Live round.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function verifyCompensation(round: number, confirmationText: string) {
     if (!requireCurrentSession("verifying compensation")) return;
+    const generation = actionRequest.begin();
+    const requestedSessionId = loadedSessionId;
     setBusy(true);
     setMessage(null);
     try {
-      await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/rounds/${encodeURIComponent(String(round))}/compensate`, {
+      await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/rounds/${encodeURIComponent(String(round))}/compensate`, {
         method: "POST",
         body: JSON.stringify({
           recovery_reference: compensationReference,
@@ -697,23 +819,28 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           source: "next_league_live_round_compensate"
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setCompensationReference("");
       setCompensationReason("");
-      await loadSessionDetail(loadedSessionId);
+      await loadSessionDetail(requestedSessionId);
+      if (!actionRequest.isCurrent(generation)) return;
       setMessage(`Round ${round} recovery is recorded as compensated. No active deterministic match context remained.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to verify League Live compensation.");
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to verify League Live compensation.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function downloadExport(kind: "matches" | "ratings" | "roster" | "rounds") {
     if (!requireCurrentSession("exporting session data")) return;
+    const generation = actionRequest.begin();
+    const requestedSessionId = loadedSessionId;
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<LeagueLiveExportResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(loadedSessionId)}/export?kind=${encodeURIComponent(kind)}`);
+      const payload = await requestJson<LeagueLiveExportResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/export?kind=${encodeURIComponent(kind)}`);
+      if (!actionRequest.isCurrent(generation)) return;
       const blob = new Blob([payload.csv_text], { type: payload.content_type });
       const href = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
@@ -723,9 +850,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       URL.revokeObjectURL(href);
       setMessage(`Exported ${payload.row_count} ${kind} row(s).`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : `Unable to export ${kind}.`);
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : `Unable to export ${kind}.`);
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -768,16 +895,16 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh leagues"}</button>
           <button type="button" onClick={() => void loadLeagueDetail()} disabled={busy || !leagueName} style={buttonStyle}>{loadingLeagueName ? "Loading roster…" : "Reload roster"}</button>
         </div>
-        {loadingLeagueName ? <p role="status" style={{ color: "#475569" }}>Loading {loadingLeagueName}. The current league roster will remain visible until the replacement is ready.</p> : null}
+        {loadingLeagueName ? <p role="status" style={{ color: "#475569" }}>Loading {loadingLeagueName}. Session writes remain unavailable until the replacement roster is ready.</p> : null}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.75rem", marginTop: "0.75rem", alignItems: "end" }}>
           <label>Existing sessions<br />
-            <select value={sessionId} onChange={(event) => setSessionId(event.target.value)} disabled={busy} style={inputStyle}>
+            <select value={sessionId} onChange={(event) => selectSession(event.target.value)} disabled={busy} style={inputStyle}>
               <option value="">Select session…</option>
               {liveSessions.map((row) => <option key={row.id} value={row.id}>{row.league_name} · {row.week_tag} · R{row.current_round}/{row.total_rounds} · {row.status}</option>)}
             </select>
           </label>
-          <button type="button" onClick={loadSessions} disabled={busy || !accessToken} style={ghostButtonStyle}>Load sessions</button>
-          <button type="button" onClick={() => void loadSessionDetail()} disabled={busy || !sessionId} style={ghostButtonStyle}>Resume selected</button>
+          <button type="button" onClick={loadSessions} disabled={busy || !accessToken} style={ghostButtonStyle}>Refresh sessions</button>
+          <button type="button" onClick={() => void loadSessionDetail()} disabled={busy || !sessionId} style={ghostButtonStyle}>Retry selected session</button>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginTop: "0.75rem", alignItems: "end" }}>
           <label>Session status<br /><select value={sessionStatus} onChange={(event) => setSessionStatus(event.target.value)} disabled={busy} style={inputStyle}><option>active</option><option>paused</option><option>complete</option><option>archived</option></select></label>
@@ -789,7 +916,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
             description="This saves the current league, roster, bench, court, and round settings as a resumable session."
             confirmLabel="Yes, create session"
             confirmationText="CREATE LIVE SESSION"
-            disabled={busy || !leagueName}
+            disabled={busy || !leagueName || !detail || loadedLeagueName !== leagueName || !rosterSuggestion || !sessionRoster.length}
             busy={busy}
             onConfirm={createSession}
           />

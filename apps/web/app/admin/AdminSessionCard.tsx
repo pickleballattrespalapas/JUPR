@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { getAdminAuthConfig, restoreAuthorizedAdminSession, signOutAdminSession } from "@/lib/adminAuthClient";
+import { adminSessionStorageEventIsRelevant, getAdminAuthConfig, restoreAuthorizedAdminSession, signOutAdminSession } from "@/lib/adminAuthClient";
 import type { AdminSession } from "@/lib/adminAuthClient";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -28,12 +28,15 @@ export default function AdminSessionCard() {
           setMessage(error instanceof Error ? error.message : "Unable to verify admin session.");
         });
     };
+    const handleStorage = (event: StorageEvent) => {
+      if (adminSessionStorageEventIsRelevant(event.key)) load();
+    };
     load();
     window.addEventListener("jupr-admin-session-change", load);
-    window.addEventListener("storage", load);
+    window.addEventListener("storage", handleStorage);
     return () => {
       window.removeEventListener("jupr-admin-session-change", load);
-      window.removeEventListener("storage", load);
+      window.removeEventListener("storage", handleStorage);
     };
   }, []);
 

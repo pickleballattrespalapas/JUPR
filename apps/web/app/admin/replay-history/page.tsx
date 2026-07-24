@@ -25,9 +25,19 @@ export default async function AdminReplayHistoryPage() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Status</strong><br />{data.status.replace(/_/g, " ")}</article>
             <article style={cardStyle}><strong>Options</strong><br />{data.options.length}</article>
-            <article style={cardStyle}><strong>Confirmation</strong><br />{data.confirmation_text}</article>
-            <article style={cardStyle}><strong>Endpoint</strong><br />{data.apply_endpoint || "Disabled"}</article>
           </div>
+          <details style={{ ...cardStyle, marginBottom: "1rem" }}>
+            <summary style={{ cursor: "pointer", fontWeight: 800 }}>Advanced API safeguards</summary>
+            <p style={{ color: "#475569" }}>
+              The Yes/No confirmation dialog supplies the API safeguard internally. Operators do not need to type it.
+            </p>
+            <dl style={{ marginBottom: 0 }}>
+              <dt><strong>Internal confirmation</strong></dt>
+              <dd style={{ marginBottom: "0.5rem" }}>{data.confirmation_text}</dd>
+              <dt><strong>Apply endpoint</strong></dt>
+              <dd>{data.apply_endpoint || "Disabled"}</dd>
+            </dl>
+          </details>
 
           {data.warnings?.length ? (
             <article style={{ ...cardStyle, background: "#fff7ed", marginBottom: "1rem" }}>

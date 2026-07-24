@@ -10,6 +10,7 @@ import type {
   AdminBadgePlayerOption
 } from "@/lib/adminBadgeDiagnosticsApi";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminBadgeDiagnosticsStatusResponse };
@@ -78,6 +79,9 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
   const [repairResult, setRepairResult] = useState<RepairResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const optionsRequest = useLatestRequestGuard(accessToken, clearProtectedBadgeState);
+  const reportRequest = useLatestRequestGuard(accessToken);
+  const actionRequest = useLatestRequestGuard(accessToken);
 
   const selectedPlayerName = useMemo(() => players.find((player) => String(player.id) === String(playerId))?.name || "", [players, playerId]);
   const selectedBadge = useMemo(() => badges.find((badge) => String(badge.badge_id) === String(badgeId)), [badges, badgeId]);
@@ -99,33 +103,50 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
     return payload as T;
   }
 
+  function clearProtectedBadgeState() {
+    reportRequest.invalidate();
+    setBusy(false); setMessage(null);
+    setPlayers([]); setBadges([]); setPlayerId(""); setBadgeId("");
+    setRecomputeOperationKey(""); setRevokeOperationKey(""); setStateOperationKey(""); setOperationLookupKey("");
+    setDebugReport(null); setAuditReport(null); setRepairResult(null); setOperationLookup(null);
+  }
+
   async function loadOptions() {
+    const generation = optionsRequest.begin();
+    reportRequest.invalidate();
     setBusy(true); setMessage(null);
+    setDebugReport(null); setAuditReport(null); setRepairResult(null);
     try {
       const payload = await requestJson<AdminBadgeOptionsResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/badges/options`);
-      setPlayers(payload.players || []);
-      setBadges(payload.badges || []);
-      if (!playerId && payload.players?.length) setPlayerId(String(payload.players[0].id));
-      if (!badgeId && payload.badges?.length) setBadgeId(payload.badges[0].badge_id);
+      if (!optionsRequest.isCurrent(generation)) return;
+      const nextPlayers = payload.players || [];
+      const nextBadges = payload.badges || [];
+      setPlayers(nextPlayers);
+      setBadges(nextBadges);
+      setPlayerId(nextPlayers.some((row) => String(row.id) === playerId) ? playerId : String(nextPlayers[0]?.id || ""));
+      setBadgeId(nextBadges.some((row) => row.badge_id === badgeId) ? badgeId : String(nextBadges[0]?.badge_id || ""));
       setMessage(`Loaded ${payload.player_count} player option(s) and ${payload.badge_count} badge option(s).`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load badge diagnostic options."); }
-    finally { setBusy(false); }
+    } catch (error) { if (optionsRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load badge diagnostic options."); }
+    finally { if (optionsRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function runDebug() {
     if (!playerId || !badgeId) { setMessage("Choose a player and badge before running Badge Debug."); return; }
+    const generation = reportRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const params = new URLSearchParams({ player_id: String(playerId), badge_id: badgeId, match_limit: String(matchLimit || 5000) });
       if (leagueId.trim()) params.set("league_id", leagueId.trim());
       const payload = await requestJson<AdminBadgeDebugResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/badges/debug?${params.toString()}`);
+      if (!reportRequest.isCurrent(generation)) return;
       setDebugReport(payload.report || {});
       setMessage(`Badge Debug complete for ${selectedPlayerName || playerId} / ${selectedBadgeName}.`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to run Badge Debug."); }
-    finally { setBusy(false); }
+    } catch (error) { if (reportRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to run Badge Debug."); }
+    finally { if (reportRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function runAudit() {
+    const generation = reportRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const params = new URLSearchParams({ match_limit: String(matchLimit || 5000), include_non_live: String(includeNonLive), include_revoked: String(includeRevoked) });
@@ -136,13 +157,15 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
       if (since) params.set("since", since);
       if (until) params.set("until", until);
       const payload = await requestJson<AdminBadgeAuditResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/badges/audit?${params.toString()}`);
+      if (!reportRequest.isCurrent(generation)) return;
       setAuditReport(payload.report || {});
       setMessage("Badge Audit complete.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to run Badge Audit."); }
-    finally { setBusy(false); }
+    } catch (error) { if (reportRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to run Badge Audit."); }
+    finally { if (reportRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function runRecompute(confirmationText = "") {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const key = recomputeMode === "dry-run" ? "" : (recomputeOperationKey || `badge-recompute:${Date.now()}:${crypto.randomUUID()}`);
@@ -164,14 +187,19 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           operation_key: key
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setRepairResult(payload);
       if (recomputeMode !== "dry-run") setRecomputeOperationKey("");
       setMessage(payload.read_only ? "Read-only badge recompute preview complete; no rows were written." : `Badge recompute ${payload.recompute_mode || recomputeMode} complete.`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to run badge recompute."); }
-    finally { setBusy(false); }
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to run badge recompute.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function revokeBadge(confirmationText: string) {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const key = revokeOperationKey || `badge-revoke:${Date.now()}:${crypto.randomUUID()}`;
@@ -188,15 +216,20 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           operation_key: key
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setRepairResult(payload); setRevokeOperationKey(""); setMessage(`Revoked ${payload.revoked_count || 0} badge row(s).`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to revoke badge row."); }
-    finally { setBusy(false); }
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to revoke badge row.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function updateBadgeState(confirmationText: string) {
     if (!selectedBadge || !selectedBadge.definition_found) { setMessage("Choose a badge definition loaded from the staging badges table."); return; }
     if (!badgeStateReason.trim()) { setMessage("Enter a reason for the badge state change."); return; }
     if (selectedBadge.state === badgeStateTarget) { setMessage(`Badge state is already ${badgeStateTarget}.`); return; }
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const key = stateOperationKey || `badge-state:${Date.now()}:${crypto.randomUUID()}`;
@@ -213,25 +246,36 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           source: "next_badge_definition_state"
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setBadges((current) => current.map((badge) => badge.badge_id === payload.badge.badge_id ? { ...badge, ...payload.badge, definition_found: true } : badge));
       setBadgeStateReason("");
       setBadgeStateForce(false);
       setStateOperationKey("");
       setMessage(payload.audit_warning ? `Badge state updated with audit warning: ${payload.audit_warning}` : `Badge state updated to ${payload.badge.state}.`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to update badge definition state."); }
-    finally { setBusy(false); }
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to update badge definition state.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function inspectBadgeOperation() {
     if (!operationLookupKey.trim()) { setMessage("Enter the exact badge operation key first."); return; }
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<BadgeOperationResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/badges/operations/${encodeURIComponent(operationLookupKey.trim())}`);
+      if (!actionRequest.isCurrent(generation)) return;
       setOperationLookup(payload);
       setMessage(`Badge operation ${payload.operation_key} is ${payload.status}.`);
-    } catch (error) { setOperationLookup(null); setMessage(error instanceof Error ? error.message : "Unable to inspect badge operation."); }
-    finally { setBusy(false); }
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) { setOperationLookup(null); setMessage(error instanceof Error ? error.message : "Unable to inspect badge operation."); }
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
+
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadOptions);
 
   if (!status.enabled) {
     return (
@@ -260,7 +304,7 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           <label>League<br /><input value={leagueId} onChange={(event) => setLeagueId(event.target.value)} placeholder="Optional" style={inputStyle} /></label>
           <label>Context ID<br /><input value={contextId} onChange={(event) => setContextId(event.target.value)} placeholder="Optional exact badge context" style={inputStyle} /></label>
           <label>Match limit<br /><input value={matchLimit} onChange={(event) => setMatchLimit(event.target.value)} style={inputStyle} /></label>
-          <button type="button" onClick={loadOptions} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Working…" : "Load options"}</button>
+          <button type="button" onClick={loadOptions} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh options"}</button>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}>
           <label>Since<br /><input type="date" value={since} onChange={(event) => setSince(event.target.value)} style={inputStyle} /></label>
@@ -303,7 +347,7 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
       <article style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
         <h2 style={{ marginTop: 0 }}>4. Badge Definition State</h2>
         <p style={{ color: "#475569" }}>Control whether the selected badge definition can continue awarding. Normal transitions are <code>live → frozen → deprecated</code>. This staging-only definition change requires <code>run_replay</code>, a reason, current-state locking, durable retry key, strict audit intent, and an exact confirmation.</p>
-        {!selectedBadge ? <p style={{ color: "#64748b" }}>Load options and select a badge first.</p> : <>
+        {!selectedBadge ? <p style={{ color: "#64748b" }}>{busy ? "Loading badge options…" : "Select a badge to manage its state."}</p> : <>
           <p><strong>{selectedBadge.name}</strong> · <code>{selectedBadge.badge_id}</code><br />Current state: <strong>{selectedBadge.state || "live"}</strong>{selectedBadge.state_changed_at ? ` · changed ${selectedBadge.state_changed_at}` : ""}</p>
           {selectedBadge.state_change_reason ? <p><strong>Previous reason:</strong> {selectedBadge.state_change_reason}</p> : null}
           {!selectedBadge.definition_found ? <p style={{ color: "#92400e" }}>This badge exists in the code registry but not in the staging <code>badges</code> table, so its state cannot be changed here.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem", alignItems: "end" }}>

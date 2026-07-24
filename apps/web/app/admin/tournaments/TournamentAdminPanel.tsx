@@ -12,6 +12,7 @@ import type {
   AdminTournamentStatusResponse,
   AdminTournamentWriteResponse
 } from "@/lib/adminTournamentApi";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
@@ -123,6 +124,9 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
   const [tournamentEdit, setTournamentEdit] = useState<TournamentEdit>(() => editStateFromTournament(null));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const listRequest = useLatestRequestGuard(accessToken, clearProtectedTournamentState);
+  const detailRequest = useLatestRequestGuard(accessToken);
+  const actionRequest = useLatestRequestGuard(accessToken);
   const selectedRegistration = detail?.registrations.find((row) => row.id === selectedRegistrationId) || null;
   const registrationSelections = (detail?.selections || []).filter((row) => row.registration_id === selectedRegistrationId);
   const selectedSelection = registrationSelections.find((row) => row.id === selectedSelectionId) || null;
@@ -143,7 +147,22 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
     return requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`);
   }
 
+  function clearProtectedTournamentState() {
+    detailRequest.invalidate();
+    setBusy(false); setMessage(null);
+    setTournaments([]); setSelectedId(""); setDetail(null);
+    setSelectedRegistrationId(""); setSelectedSelectionId("");
+    setRegistrationEdit(editStateFromRegistration(null));
+    setSelectionEdit(editStateFromSelection(null));
+    setTournamentEdit(editStateFromTournament(null));
+  }
+
   async function loadTournaments() {
+    const selectedBeforeRefresh = selectedId;
+    const selectedRegistrationBeforeRefresh = selectedRegistrationId;
+    const selectedSelectionBeforeRefresh = selectedSelectionId;
+    const generation = listRequest.begin();
+    detailRequest.invalidate();
     setBusy(true);
     setMessage(null);
     setDetail(null);
@@ -152,16 +171,22 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
     try {
       const suffix = includeArchived ? "?include_archived=true" : "";
       const payload = await requestJson<AdminTournamentListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments${suffix}`);
-      setTournaments(payload.tournaments || []);
-      setMessage(`Loaded ${payload.count ?? payload.tournaments?.length ?? 0} tournament(s).`);
+      if (!listRequest.isCurrent(generation)) return;
+      const nextTournaments = payload.tournaments || [];
+      const selectionStillAvailable = Boolean(selectedBeforeRefresh && nextTournaments.some((row) => row.id === selectedBeforeRefresh));
+      setTournaments(nextTournaments);
+      setMessage(nextTournaments.length ? `Loaded ${payload.count ?? nextTournaments.length} tournament(s).` : "No tournaments match this view.");
+      if (selectionStillAvailable) await loadDetail(selectedBeforeRefresh, selectedRegistrationBeforeRefresh, selectedSelectionBeforeRefresh);
+      else setSelectedId("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
+      if (listRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
     } finally {
-      setBusy(false);
+      if (listRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function loadDetail(tournamentId: string) {
+  async function loadDetail(tournamentId: string, preferredRegistrationId = "", preferredSelectionId = "") {
+    const generation = detailRequest.begin();
     setSelectedId(tournamentId);
     setDetail(null);
     setMessage(null);
@@ -171,32 +196,55 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
     setBusy(true);
     try {
       const payload = await refreshDetail(tournamentId);
+      if (!detailRequest.isCurrent(generation)) return;
       setDetail(payload);
       setTournamentEdit(editStateFromTournament(payload.tournament));
+      const nextRegistration = payload.registrations.find((row) => row.id === preferredRegistrationId) || null;
+      const availableSelections = nextRegistration
+        ? payload.selections.filter((row) => row.registration_id === nextRegistration.id)
+        : [];
+      const nextSelection = availableSelections.find((row) => row.id === preferredSelectionId) || availableSelections[0] || null;
+      setSelectedRegistrationId(nextRegistration?.id || "");
+      setRegistrationEdit(editStateFromRegistration(nextRegistration));
+      setSelectedSelectionId(nextSelection?.id || "");
+      setSelectionEdit(editStateFromSelection(nextSelection));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load tournament detail.");
+      if (detailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load tournament detail.");
     } finally {
-      setBusy(false);
+      if (detailRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function saveTournamentEdit(confirmationText: string) {
     if (!detail?.tournament.updated_at) { setMessage("Reload: this tournament is missing its write version."); return; }
+    const generation = actionRequest.begin();
+    const tournamentId = detail.tournament.id;
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(detail.tournament.id)}`,
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`,
         { method: "PATCH", body: JSON.stringify({ name: tournamentEdit.name, start_date: tournamentEdit.startDate || null, end_date: tournamentEdit.endDate || null, expected_updated_at: detail.tournament.updated_at, confirmation_text: confirmationText, source: "next_tournament_admin_tournament_editor" }) }
       );
-      const refreshed = await refreshDetail(detail.tournament.id); setDetail(refreshed); setTournamentEdit(editStateFromTournament(refreshed.tournament));
+      if (!actionRequest.isCurrent(generation)) return;
+      const refreshed = await refreshDetail(tournamentId);
+      if (!actionRequest.isCurrent(generation)) return;
+      setDetail(refreshed); setTournamentEdit(editStateFromTournament(refreshed.tournament));
       setMessage(payload.idempotent_replay ? "Tournament response reconciled from the durable operation." : "Tournament details saved and audit-completed.");
     } catch (error) {
+      if (!actionRequest.isCurrent(generation)) return;
       if (error instanceof ApiRequestError && error.status === 409) {
         if (isRecoveryConflict(error)) { setMessage(`${error.message} Keep these reviewed values and retry only this identical request to reconcile, or use the Streamlit fallback.`); }
-        else try { const refreshed = await refreshDetail(detail.tournament.id); setDetail(refreshed); setTournamentEdit(editStateFromTournament(refreshed.tournament)); setMessage("Tournament data changed. The authoritative values were reloaded; review before submitting a new request."); }
-        catch (refreshError) { setMessage(refreshError instanceof Error ? refreshError.message : "Unable to recover tournament state."); }
+        else try {
+          const refreshed = await refreshDetail(tournamentId);
+          if (!actionRequest.isCurrent(generation)) return;
+          setDetail(refreshed); setTournamentEdit(editStateFromTournament(refreshed.tournament)); setMessage("Tournament data changed. The authoritative values were reloaded; review before submitting a new request.");
+        } catch (refreshError) {
+          if (actionRequest.isCurrent(generation)) setMessage(refreshError instanceof Error ? refreshError.message : "Unable to recover tournament state.");
+        }
       } else setMessage(error instanceof Error ? error.message : "Unable to save tournament details.");
-    } finally { setBusy(false); }
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   function selectRegistration(row: AdminTournamentRegistration) {
@@ -224,11 +272,15 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
       setMessage("Reload: this registration is missing its write version.");
       return;
     }
+    const generation = actionRequest.begin();
+    const tournamentId = detail.tournament.id;
+    const registrationId = selectedRegistration.id;
+    const requestedRegistration = selectedRegistration;
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(detail.tournament.id)}/registrations/${encodeURIComponent(selectedRegistration.id)}`,
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/registrations/${encodeURIComponent(registrationId)}`,
         {
           method: "PATCH",
           body: JSON.stringify({
@@ -241,19 +293,28 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
           })
         }
       );
-      const refreshed = await refreshDetail(detail.tournament.id);
+      if (!actionRequest.isCurrent(generation)) return;
+      const refreshed = await refreshDetail(tournamentId);
+      if (!actionRequest.isCurrent(generation)) return;
       setDetail(refreshed);
-      setSelectedRegistrationId(payload.registration?.id || selectedRegistration.id);
-      setRegistrationEdit(editStateFromRegistration(payload.registration || selectedRegistration));
+      setSelectedRegistrationId(payload.registration?.id || registrationId);
+      setRegistrationEdit(editStateFromRegistration(payload.registration || requestedRegistration));
       setMessage(payload.idempotent_replay ? "Registration response reconciled from the durable operation." : "Registration saved and audit-completed.");
     } catch (error) {
+      if (!actionRequest.isCurrent(generation)) return;
       if (error instanceof ApiRequestError && error.status === 409) {
         if (isRecoveryConflict(error)) { setMessage(`${error.message} Keep these reviewed values and retry only this identical request to reconcile, or use the Streamlit fallback.`); }
-        else try { const refreshed = await refreshDetail(detail.tournament.id); const latest = refreshed.registrations.find((row) => row.id === selectedRegistration.id) || null; setDetail(refreshed); setRegistrationEdit(editStateFromRegistration(latest)); setMessage("Registration data changed. The authoritative row was reloaded; review before submitting a new request."); }
-        catch (refreshError) { setMessage(refreshError instanceof Error ? refreshError.message : "Unable to recover registration state."); }
+        else try {
+          const refreshed = await refreshDetail(tournamentId);
+          if (!actionRequest.isCurrent(generation)) return;
+          const latest = refreshed.registrations.find((row) => row.id === registrationId) || null;
+          setDetail(refreshed); setRegistrationEdit(editStateFromRegistration(latest)); setMessage("Registration data changed. The authoritative row was reloaded; review before submitting a new request.");
+        } catch (refreshError) {
+          if (actionRequest.isCurrent(generation)) setMessage(refreshError instanceof Error ? refreshError.message : "Unable to recover registration state.");
+        }
       } else setMessage(error instanceof Error ? error.message : "Unable to save registration.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -266,11 +327,15 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
       setMessage("Unable to save: this event entry has no version timestamp. Reload the tournament and try again.");
       return;
     }
+    const generation = actionRequest.begin();
+    const tournamentId = detail.tournament.id;
+    const selectionId = selectedSelection.id;
+    const requestedSelection = selectedSelection;
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(detail.tournament.id)}/selections/${encodeURIComponent(selectedSelection.id)}`,
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/selections/${encodeURIComponent(selectionId)}`,
         {
           method: "PATCH",
           body: JSON.stringify({
@@ -283,33 +348,41 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
           })
         }
       );
-      const refreshed = await refreshDetail(detail.tournament.id);
+      if (!actionRequest.isCurrent(generation)) return;
+      const refreshed = await refreshDetail(tournamentId);
+      if (!actionRequest.isCurrent(generation)) return;
       setDetail(refreshed);
-      setSelectedSelectionId(payload.selection?.id || selectedSelection.id);
-      setSelectionEdit(editStateFromSelection(payload.selection || selectedSelection));
+      setSelectedSelectionId(payload.selection?.id || selectionId);
+      setSelectionEdit(editStateFromSelection(payload.selection || requestedSelection));
       setMessage(payload.idempotent_replay ? "Event-entry response reconciled from the durable operation." : "Event entry saved and audit-completed.");
     } catch (error) {
+      if (!actionRequest.isCurrent(generation)) return;
       if (error instanceof ApiRequestError && error.status === 409) {
         if (isRecoveryConflict(error)) {
           setMessage(`${error.message} Keep these reviewed values and retry only this identical request to reconcile, or use the Streamlit fallback.`);
         } else try {
-          const refreshed = await refreshDetail(detail.tournament.id);
-          const latestSelection = refreshed.selections.find((row) => row.id === selectedSelection.id) || null;
+          const refreshed = await refreshDetail(tournamentId);
+          if (!actionRequest.isCurrent(generation)) return;
+          const latestSelection = refreshed.selections.find((row) => row.id === selectionId) || null;
           setDetail(refreshed);
           setSelectedSelectionId(latestSelection?.id || "");
           setSelectionEdit(editStateFromSelection(latestSelection));
           setMessage("Unable to save: this event entry changed after you loaded it. The latest values were reloaded; review them before saving again.");
         } catch (refreshError) {
-          setSelectionEdit((current) => ({ ...current, expectedUpdatedAt: "" }));
-          setMessage(refreshError instanceof Error ? `Unable to reload the changed event entry: ${refreshError.message}` : "Unable to reload the changed event entry.");
+          if (actionRequest.isCurrent(generation)) {
+            setSelectionEdit((current) => ({ ...current, expectedUpdatedAt: "" }));
+            setMessage(refreshError instanceof Error ? `Unable to reload the changed event entry: ${refreshError.message}` : "Unable to reload the changed event entry.");
+          }
         }
       } else {
         setMessage(error instanceof Error ? error.message : "Unable to save event entry.");
       }
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
+
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadTournaments, includeArchived ? "archived" : "active");
 
   if (!status.enabled) {
     return (
@@ -336,17 +409,17 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
           {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
         </div>
         <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.75rem" }}>
-          <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />
+          <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} disabled={busy} />
           Include archived tournaments
         </label>
-        <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Working…" : "Load tournaments"}</button>
+        <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh tournaments"}</button>
         {status.warnings?.length ? <ul style={{ color: "#92400e" }}>{status.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
       </article>
 
       {tournaments.length ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Tournaments</h2>
-          <select value={selectedId} onChange={(event) => loadDetail(event.target.value)} style={inputStyle}>
+          <select value={selectedId} onChange={(event) => loadDetail(event.target.value)} disabled={busy} style={inputStyle}>
             <option value="">Choose a tournament…</option>
             {tournaments.map((tournament) => (
               <option key={tournament.id} value={tournament.id}>{tournament.name} · {tournament.status} · {tournament.registration_count ?? 0} registrations</option>
@@ -354,7 +427,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
           </select>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}>
             {tournaments.map((tournament) => (
-              <button key={tournament.id} type="button" onClick={() => loadDetail(tournament.id)} style={{ ...cardStyle, textAlign: "left", cursor: "pointer" }}>
+              <button key={tournament.id} type="button" onClick={() => loadDetail(tournament.id)} disabled={busy} style={{ ...cardStyle, textAlign: "left", cursor: "pointer" }}>
                 <strong>{tournament.name}</strong><br />
                 <StatusChip value={tournament.status} /> <StatusChip value={tournament.registration_status || "registration n/a"} />
                 <p style={{ color: "#64748b", margin: "0.45rem 0 0" }}>{dateLabel(tournament.start_date)} – {dateLabel(tournament.end_date)}</p>
@@ -363,7 +436,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
             ))}
           </div>
         </article>
-      ) : null}
+      ) : <article style={cardStyle}><p style={{ color: "#64748b" }}>{busy ? "Loading tournaments…" : "No tournaments match this view."}</p></article>}
 
       {detail ? (
         <>

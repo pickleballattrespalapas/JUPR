@@ -2,8 +2,17 @@
 
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import { useAuthenticatedAutoLoad } from "@/lib/useAuthenticatedAutoLoad";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import { TournamentSetupBuilder } from "./TournamentSetupBuilder";
+import {
+  configurationPayload,
+  draftSignature,
+  publishConfigurationPayload,
+  validateSetupConfiguration,
+  wrapBuilderRows,
+  type SetupConfiguration
+} from "./tournamentSetupBuilder";
 
 type StatusResponse = { enabled: boolean; status: string; tournament_count?: number | null; warnings?: string[]; confirmation_text?: Record<string, string> };
 type TournamentRow = { id: string; name?: string; status?: string; start_date?: string | null; end_date?: string | null; registration_status?: string | null; registration_slug?: string | null; day_count?: number; event_option_count?: number; registration_count?: number };
@@ -21,13 +30,17 @@ const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a"
 
 function apiUrl(apiBase: string, path: string): string { return `${apiBase.replace(/\/$/, "")}${path}`; }
 function safeString(value: unknown): string { return value == null ? "" : String(value); }
-function pretty(value: unknown): string { return JSON.stringify(value ?? [], null, 2); }
-function parseArrayJson(raw: string, label: string): Array<Record<string, unknown>> {
-  const parsed = JSON.parse(raw || "[]") as unknown;
-  if (!Array.isArray(parsed)) throw new Error(`${label} must be a JSON array.`);
-  return parsed.map((row) => (row && typeof row === "object" ? row as Record<string, unknown> : {}));
+function readableImpactItem(value: unknown): string {
+  if (value == null) return "No detail supplied.";
+  if (typeof value !== "object") return String(value);
+  const record = value as Record<string, unknown>;
+  for (const key of ["message", "detail", "reason", "warning", "name"]) {
+    if (record[key] != null && String(record[key]).trim()) return String(record[key]);
+  }
+  return "See advanced impact diagnostics for the complete API detail.";
 }
-function draftSignature(days: Array<Record<string, unknown>>, events: Array<Record<string, unknown>>): string { return JSON.stringify({ days, events }); }
+
+const emptyConfiguration: SetupConfiguration = { days: [], eventFamilies: [], eventOptions: [] };
 
 export default function TournamentSetupPanel({ apiBase, clubId, status }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
@@ -37,14 +50,35 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
   const [detailLoadingId, setDetailLoadingId] = useState("");
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [settings, setSettings] = useState<Record<string, unknown>>({});
-  const [daysJson, setDaysJson] = useState("[]");
-  const [eventsJson, setEventsJson] = useState("[]");
-  const [familiesJson, setFamiliesJson] = useState("[]");
+  const [configuration, setConfiguration] = useState<SetupConfiguration>(emptyConfiguration);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<WriteResponse | null>(null);
   const [impactReview, setImpactReview] = useState<ImpactResponse | null>(null);
   const [reviewedDraftSignature, setReviewedDraftSignature] = useState("");
+
+  function clearDetailState() {
+    setLoadedDetailId("");
+    setDetailLoadingId("");
+    setDetail(null);
+    setSettings({});
+    setConfiguration(emptyConfiguration);
+    setLastResult(null);
+    setImpactReview(null);
+    setReviewedDraftSignature("");
+  }
+
+  function resetWorkspace() {
+    setTournaments([]);
+    setSelectedId("");
+    clearDetailState();
+    setBusy(false);
+    setMessage(null);
+  }
+
+  const listRequest = useLatestRequestGuard(accessToken, resetWorkspace);
+  const detailRequest = useLatestRequestGuard(accessToken);
+  const operationRequest = useLatestRequestGuard(accessToken);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("Missing JUPR API base URL.");
@@ -63,35 +97,77 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
     const days = Array.isArray(draft.days) ? draft.days : payload.days || [];
     const events = Array.isArray(draft.event_options) ? draft.event_options : (Array.isArray(draft.divisions) ? draft.divisions : payload.event_options || []);
     const families = Array.isArray(draft.event_families) ? draft.event_families : [];
-    setDetail(payload); setSettings(payload.settings || {}); setDaysJson(pretty(days)); setEventsJson(pretty(events)); setFamiliesJson(pretty(families)); setImpactReview(null); setReviewedDraftSignature("");
+    setDetail(payload);
+    setSettings(payload.settings || {});
+    setConfiguration({
+      days: wrapBuilderRows(days, "day"),
+      eventFamilies: wrapBuilderRows(families, "family"),
+      eventOptions: wrapBuilderRows(events, "division")
+    });
+    setImpactReview(null);
+    setReviewedDraftSignature("");
   }
 
   async function loadTournaments() {
+    const generation = listRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<{ ok: boolean; tournaments: TournamentRow[]; count: number }>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments?include_archived=true`);
+      if (!listRequest.isCurrent(generation)) return;
       const rows = payload.tournaments || [];
       const nextId = rows.some((row) => row.id === selectedId) ? selectedId : rows[0]?.id || "";
       setTournaments(rows);
       setSelectedId(nextId);
-      if (nextId) await loadDetail(nextId);
-      else setMessage(`Loaded ${payload.count || 0} tournament setup row(s).`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load tournaments."); }
-    finally { setBusy(false); }
+      if (nextId) {
+        const preserveCurrentEdits = nextId === selectedId && nextId === loadedDetailId && Boolean(detail);
+        if (preserveCurrentEdits) {
+          setMessage("Tournament list refreshed. Unsaved setup edits were preserved.");
+        } else {
+          if (nextId !== loadedDetailId) clearDetailState();
+          await loadDetail(nextId);
+        }
+      } else {
+        detailRequest.invalidate();
+        clearDetailState();
+        setMessage("No tournaments are available for setup.");
+      }
+    } catch (error) {
+      if (listRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
+    } finally {
+      if (listRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function loadDetail(id = selectedId): Promise<boolean> {
-    if (!id) { setMessage("Choose a tournament first."); return false; }
+    if (!id) {
+      detailRequest.invalidate();
+      clearDetailState();
+      setMessage("Choose a tournament first.");
+      return false;
+    }
+    const generation = detailRequest.begin();
+    clearDetailState();
     setBusy(true); setDetailLoadingId(id);
-    setMessage(detail ? "Loading the selected tournament setup. The current setup remains visible until its replacement is ready." : "Loading the selected tournament setup…");
+    setMessage("Loading the selected tournament setup…");
     try {
       const payload = await requestJson<DetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(id)}`);
+      if (!detailRequest.isCurrent(generation)) return false;
       hydrateFromDetail(payload); setLoadedDetailId(id); setMessage("Loaded the selected tournament setup."); return true;
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load tournament setup detail."); return false; }
-    finally { setDetailLoadingId(""); setBusy(false); }
+    } catch (error) {
+      if (detailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load tournament setup detail.");
+      return false;
+    } finally {
+      if (detailRequest.isCurrent(generation)) {
+        setDetailLoadingId("");
+        setBusy(false);
+      }
+    }
   }
 
   function selectTournament(id: string) {
+    detailRequest.invalidate();
+    operationRequest.invalidate();
+    clearDetailState();
     setSelectedId(id);
     if (id) void loadDetail(id);
   }
@@ -100,68 +176,105 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
 
   async function saveSettings(confirmationText: string) {
     if (!detail || loadedDetailId !== selectedId) { setMessage("Reload the selected tournament before saving settings."); return; }
+    const generation = operationRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/settings`, { method: "PATCH", body: JSON.stringify({ ...settings, expected_state_fingerprint: detail?.state_fingerprint, confirmation_text: confirmationText }) });
-      setLastResult(payload);
+      if (!operationRequest.isCurrent(generation)) return;
       const reloaded = await loadDetail(selectedId);
-      if (reloaded) setMessage(payload.idempotent_replay ? "Settings response reconciled from the durable operation." : "Tournament setup settings saved.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save settings."); }
-    finally { setBusy(false); }
+      if (operationRequest.isCurrent(generation)) {
+        setLastResult(payload);
+        if (reloaded) setMessage(payload.idempotent_replay ? "Settings response reconciled from the durable operation." : "Tournament setup settings saved.");
+      }
+    } catch (error) {
+      if (operationRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save settings.");
+    } finally {
+      if (operationRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function saveDraft(confirmationText: string) {
     if (!detail || loadedDetailId !== selectedId) { setMessage("Reload the selected tournament before saving its draft."); return; }
+    const generation = operationRequest.begin();
     setBusy(true); setMessage(null);
     try {
-      const days = parseArrayJson(daysJson, "Days");
-      const events = parseArrayJson(eventsJson, "Event options");
-      const eventFamilies = parseArrayJson(familiesJson, "Event families");
-      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/draft`, { method: "PUT", body: JSON.stringify({ days, event_families: eventFamilies, event_options: events, expected_state_fingerprint: detail?.state_fingerprint, confirmation_text: confirmationText }) });
-      setLastResult(payload);
+      const draft = configurationPayload(configuration);
+      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/draft`, { method: "PUT", body: JSON.stringify({ ...draft, expected_state_fingerprint: detail?.state_fingerprint, confirmation_text: confirmationText }) });
+      if (!operationRequest.isCurrent(generation)) return;
       const reloaded = await loadDetail(selectedId);
-      if (reloaded) setMessage(payload.idempotent_replay ? "Draft response reconciled from the durable operation." : "Tournament setup draft saved.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save draft."); }
-    finally { setBusy(false); }
+      if (operationRequest.isCurrent(generation)) {
+        setLastResult(payload);
+        if (reloaded) setMessage(payload.idempotent_replay ? "Draft response reconciled from the durable operation." : "Tournament setup draft saved.");
+      }
+    } catch (error) {
+      if (operationRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save draft.");
+    } finally {
+      if (operationRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function publishSetup(confirmationText: string) {
     if (!detail || loadedDetailId !== selectedId) { setMessage("Reload the selected tournament before publishing its setup."); return; }
+    const generation = operationRequest.begin();
     setBusy(true); setMessage(null);
     try {
-      const days = parseArrayJson(daysJson, "Days");
-      const events = parseArrayJson(eventsJson, "Event options");
-      if (!impactReview || reviewedDraftSignature !== draftSignature(days, events)) throw new Error("Review publish impact for the current draft before publishing.");
-      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/publish`, { method: "POST", body: JSON.stringify({ days, event_options: events, expected_state_fingerprint: detail?.state_fingerprint, reviewed_impact_fingerprint: impactReview.impact_fingerprint, confirmation_text: confirmationText }) });
-      setLastResult(payload); setMessage(payload.idempotent_replay ? "Publish response reconciled without republishing." : "Tournament setup published.");
-      await loadDetail(selectedId);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to publish setup."); }
-    finally { setBusy(false); }
+      const draft = publishConfigurationPayload(configuration);
+      if (!impactReview || reviewedDraftSignature !== draftSignature(configuration)) throw new Error("Review publish impact for the current draft before publishing.");
+      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/publish`, { method: "POST", body: JSON.stringify({ days: draft.days, event_options: draft.event_options, expected_state_fingerprint: detail?.state_fingerprint, reviewed_impact_fingerprint: impactReview.impact_fingerprint, confirmation_text: confirmationText }) });
+      if (!operationRequest.isCurrent(generation)) return;
+      const reloaded = await loadDetail(selectedId);
+      if (operationRequest.isCurrent(generation)) {
+        setLastResult(payload);
+        if (reloaded) setMessage(payload.idempotent_replay ? "Publish response reconciled without republishing." : "Tournament setup published.");
+      }
+    } catch (error) {
+      if (operationRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to publish setup.");
+    } finally {
+      if (operationRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   function seedFromPublished() {
     if (!detail) return;
-    setDaysJson(pretty(detail.days || [])); setEventsJson(pretty(detail.event_options || [])); setFamiliesJson("[]"); setImpactReview(null); setReviewedDraftSignature("");
+    setConfiguration({
+      days: wrapBuilderRows(detail.days || [], "day"),
+      eventFamilies: [],
+      eventOptions: wrapBuilderRows(detail.event_options || [], "division")
+    });
+    setImpactReview(null); setReviewedDraftSignature("");
     setMessage("Seeded draft from published registration configuration.");
   }
 
   function seedStandardEvents() {
     const template = detail?.templates?.find((row) => row.key === "standard_doubles_singles");
     if (!template) { setMessage("The Python setup template is unavailable. Reload before continuing."); return; }
-    setDaysJson(pretty(template.days)); setEventsJson(pretty(template.event_options)); setFamiliesJson(pretty(template.event_families)); setImpactReview(null); setReviewedDraftSignature("");
+    setConfiguration({
+      days: wrapBuilderRows(template.days, "day"),
+      eventFamilies: wrapBuilderRows(template.event_families, "family"),
+      eventOptions: wrapBuilderRows(template.event_options, "division")
+    });
+    setImpactReview(null); setReviewedDraftSignature("");
     setMessage(`Applied Python template: ${template.label}.`);
   }
 
   async function reviewImpact() {
     if (!detail || loadedDetailId !== selectedId) { setMessage("Reload the selected tournament before reviewing publish impact."); return; }
+    const generation = operationRequest.begin();
     setBusy(true); setMessage(null);
     try {
-      const days = parseArrayJson(daysJson, "Days");
-      const events = parseArrayJson(eventsJson, "Event options");
-      const payload = await requestJson<ImpactResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/impact`, { method: "POST", body: JSON.stringify({ days, event_options: events, expected_state_fingerprint: detail.state_fingerprint }) });
-      setImpactReview(payload); setReviewedDraftSignature(draftSignature(days, events)); setMessage("Publish impact reviewed by FastAPI. No rows were written.");
-    } catch (error) { setImpactReview(null); setReviewedDraftSignature(""); setMessage(error instanceof Error ? error.message : "Unable to review publish impact."); }
-    finally { setBusy(false); }
+      const draft = publishConfigurationPayload(configuration);
+      const payload = await requestJson<ImpactResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/impact`, { method: "POST", body: JSON.stringify({ days: draft.days, event_options: draft.event_options, expected_state_fingerprint: detail.state_fingerprint }) });
+      if (!operationRequest.isCurrent(generation)) return;
+      setImpactReview(payload); setReviewedDraftSignature(draftSignature(configuration)); setMessage("Publish impact reviewed by FastAPI. No rows were written.");
+    } catch (error) {
+      if (operationRequest.isCurrent(generation)) {
+        setImpactReview(null);
+        setReviewedDraftSignature("");
+        setMessage(error instanceof Error ? error.message : "Unable to review publish impact.");
+      }
+    } finally {
+      if (operationRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   if (!status?.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Tournament Setup is disabled</h2><p>{status?.warnings?.[0] || "Enable JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS on FastAPI."}</p></article>;
@@ -172,6 +285,10 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
   const publishConfirmation = status.confirmation_text?.publish || "PUBLISH SETUP";
   const detailIsCurrent = Boolean(detail && loadedDetailId === selectedId);
   const loadedTournament = tournaments.find((row) => row.id === loadedDetailId);
+  const builderIssues = validateSetupConfiguration(configuration);
+  const builderReady = detailIsCurrent && builderIssues.length === 0;
+  const blockedImpactItems = Array.isArray(impact?.blocked) ? impact.blocked : [];
+  const impactWarnings = Array.isArray(impact?.warnings) ? impact.warnings : [];
   return <div style={{ display: "grid", gap: "1rem" }}>
     <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Admin session</h2><p style={{ color: "#475569" }}>{adminSessionLabel(session)}</p>{sessionLoading ? <p>Checking session…</p> : null}{sessionMessage ? <p>{sessionMessage}</p> : null}</article>
     <article style={cardStyle} aria-busy={Boolean(detailLoadingId)}>
@@ -181,11 +298,11 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
         <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={ghostButtonStyle}>Refresh list</button>
         <button type="button" onClick={() => loadDetail()} disabled={busy || !selectedId} style={buttonStyle}>{detailLoadingId ? "Loading setup…" : "Reload setup"}</button>
       </div>
-      {detail ? <p style={{ color: detailIsCurrent ? "#475569" : "#92400e" }}>{detailIsCurrent ? `Loaded setup: ${loadedTournament?.name || loadedDetailId}` : "Showing the previously loaded setup until the selected tournament is ready. Editing and write actions are paused."}</p> : null}
+      {detailIsCurrent ? <p style={{ color: "#475569" }}>{`Loaded setup: ${loadedTournament?.name || loadedDetailId}`}</p> : null}
       {message ? <p role="status" style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("type") || message.toLowerCase().includes("blocked") || message.toLowerCase().includes("reload") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </article>
 
-    {detail ? <>
+    {detail && detailIsCurrent ? <>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>2. Registration settings</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
@@ -203,27 +320,58 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
 
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>3. Builder draft</h2>
-        <p style={{ color: "#475569" }}>Use the guided buttons to seed the setup, then edit days/divisions before saving or publishing. The publish step uses the guarded Python diff that preserves populated rows and blocks destructive changes.</p>
-        <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}><button type="button" onClick={seedFromPublished} disabled={!detailIsCurrent || busy} style={ghostButtonStyle}>Seed from published config</button><button type="button" onClick={seedStandardEvents} disabled={!detailIsCurrent || busy} style={ghostButtonStyle}>Generate standard divisions</button></p>
-        <label>Days JSON<br /><textarea value={daysJson} onChange={(e) => { setDaysJson(e.target.value); setImpactReview(null); setReviewedDraftSignature(""); }} disabled={!detailIsCurrent || busy} rows={8} style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }} /></label>
-        <label>Event families JSON<br /><textarea value={familiesJson} onChange={(e) => { setFamiliesJson(e.target.value); setImpactReview(null); setReviewedDraftSignature(""); }} disabled={!detailIsCurrent || busy} rows={5} style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }} /></label>
-        <label>Event options / divisions JSON<br /><textarea value={eventsJson} onChange={(e) => { setEventsJson(e.target.value); setImpactReview(null); setReviewedDraftSignature(""); }} disabled={!detailIsCurrent || busy} rows={14} style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }} /></label>
-        <p><ConfirmAction triggerLabel="Save draft" title="Save this tournament setup draft?" description="This stores the current days, event families, and event options as the builder draft without publishing them." confirmLabel="Yes, save draft" confirmationText={draftConfirmation} disabled={!detailIsCurrent} busy={busy} onConfirm={saveDraft} /></p>
+        <p style={{ color: "#475569" }}>Build the schedule with guided day, event, and division controls. The publish step uses the guarded Python diff that preserves populated rows and blocks destructive changes.</p>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+          <ConfirmAction
+            triggerLabel="Seed from published config"
+            title="Replace this local draft with the published setup?"
+            description="Unsaved builder edits will be replaced. This does not write to the server."
+            confirmLabel="Yes, replace local draft"
+            confirmationText=""
+            disabled={!detailIsCurrent}
+            busy={busy}
+            onConfirm={seedFromPublished}
+          />
+          <ConfirmAction
+            triggerLabel="Generate standard divisions"
+            title="Replace this local draft with standard divisions?"
+            description="Unsaved builder edits will be replaced with the standard doubles and singles template. This does not write to the server."
+            confirmLabel="Yes, use standard divisions"
+            confirmationText=""
+            disabled={!detailIsCurrent}
+            busy={busy}
+            onConfirm={seedStandardEvents}
+          />
+        </div>
+        <TournamentSetupBuilder
+          configuration={configuration}
+          issues={builderIssues}
+          disabled={!detailIsCurrent || busy}
+          onChange={(nextConfiguration) => {
+            setConfiguration(nextConfiguration);
+            setImpactReview(null);
+            setReviewedDraftSignature("");
+          }}
+          onNotice={setMessage}
+        />
+        <p><ConfirmAction triggerLabel="Save draft" title="Save this tournament setup draft?" description="This stores the reviewed days, event defaults, and divisions as the builder draft without publishing them." confirmLabel="Yes, save draft" confirmationText={draftConfirmation} disabled={!builderReady} busy={busy} onConfirm={saveDraft} /></p>
+        {!builderReady && detailIsCurrent ? <p style={{ color: "#92400e" }}>Resolve the builder validation messages before saving.</p> : null}
       </article>
 
       <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
         <h2 style={{ marginTop: 0 }}>4. Publish setup</h2>
-        <p><button type="button" onClick={reviewImpact} disabled={busy || !detailIsCurrent} style={ghostButtonStyle}>Review publish impact (dry run)</button></p>
-        <p style={{ color: impactReview ? "#166534" : "#92400e" }}>{impactReview ? `Reviewed ${impactReview.impact_fingerprint.slice(0, 16)}…; ${impactReview.write_count} writes.` : "Current draft has not been reviewed by FastAPI."}</p>
+        <p><button type="button" onClick={reviewImpact} disabled={busy || !builderReady} style={ghostButtonStyle}>Review publish impact (dry run)</button></p>
+        <p style={{ color: impactReview ? "#166534" : "#92400e" }}>{impactReview ? `Impact review complete; ${impactReview.write_count} writes were performed.` : "Current draft has not been reviewed by FastAPI."}</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "0.75rem" }}>
           {Object.entries(summary).map(([key, value]) => <article key={key} style={cardStyle}><strong>{key.replace(/_/g, " ")}</strong><br />{String(value)}</article>)}
         </div>
         {detail.publish_impact_warning ? <p style={{ color: "#b91c1c" }}>{detail.publish_impact_warning}</p> : null}
-        {impact?.blocked && Array.isArray(impact.blocked) && impact.blocked.length ? <pre style={{ whiteSpace: "pre-wrap", color: "#b91c1c" }}>{JSON.stringify(impact.blocked, null, 2)}</pre> : null}
-        {impact?.warnings && Array.isArray(impact.warnings) && impact.warnings.length ? <pre style={{ whiteSpace: "pre-wrap", color: "#92400e" }}>{JSON.stringify(impact.warnings, null, 2)}</pre> : null}
-        <p><ConfirmAction triggerLabel="Publish setup" title="Publish this tournament setup?" description="This applies the reviewed registration days and event options to the live tournament setup. Review the impact summary before continuing." confirmLabel="Yes, publish setup" confirmationText={publishConfirmation} tone="danger" disabled={!impactReview || !detailIsCurrent} busy={busy} onConfirm={publishSetup} /></p>
+        {blockedImpactItems.length ? <div role="alert" style={{ color: "#b91c1c" }}><strong>Blocked changes</strong><ul>{blockedImpactItems.map((item, index) => <li key={index}>{readableImpactItem(item)}</li>)}</ul></div> : null}
+        {impactWarnings.length ? <div style={{ color: "#92400e" }}><strong>Review notes</strong><ul>{impactWarnings.map((item, index) => <li key={index}>{readableImpactItem(item)}</li>)}</ul></div> : null}
+        {impactReview || blockedImpactItems.length || impactWarnings.length ? <details><summary style={{ cursor: "pointer", fontWeight: 800 }}>Advanced impact diagnostics</summary><pre style={{ whiteSpace: "pre-wrap", overflowX: "auto" }}>{JSON.stringify({ impact_fingerprint: impactReview?.impact_fingerprint, blocked: blockedImpactItems, warnings: impactWarnings }, null, 2)}</pre></details> : null}
+        <p><ConfirmAction triggerLabel="Publish setup" title="Publish this tournament setup?" description="This applies the reviewed registration days and event options to the live tournament setup. Review the impact summary before continuing." confirmLabel="Yes, publish setup" confirmationText={publishConfirmation} tone="danger" disabled={!impactReview || !builderReady} busy={busy} onConfirm={publishSetup} /></p>
       </article>
     </> : null}
-    {lastResult ? <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Last result</h2><pre style={{ whiteSpace: "pre-wrap", background: "#0f172a", color: "white", padding: "1rem", borderRadius: "12px", overflowX: "auto" }}>{JSON.stringify(lastResult, null, 2)}</pre></article> : null}
+    {lastResult ? <details style={cardStyle}><summary style={{ cursor: "pointer", fontWeight: 800 }}>Advanced: last API result</summary><pre style={{ whiteSpace: "pre-wrap", background: "#0f172a", color: "white", padding: "1rem", borderRadius: "12px", overflowX: "auto" }}>{JSON.stringify(lastResult, null, 2)}</pre></details> : null}
   </div>;
 }

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };
@@ -94,6 +95,9 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
   const [operationKeys, setOperationKeys] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const listRequest = useLatestRequestGuard(accessToken, clearProtectedAwardsState);
+  const wizardRequest = useLatestRequestGuard(accessToken);
+  const actionRequest = useLatestRequestGuard(accessToken);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -107,8 +111,8 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
     return payload as T;
   }
 
-  function leagueAwardsPath(suffix = ""): string {
-    return `/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}/awards${suffix}`;
+  function leagueAwardsPath(suffix = "", selectedLeague = leagueName): string {
+    return `/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/awards${suffix}`;
   }
 
   function hydrate(payload: AwardsResponse): void {
@@ -141,38 +145,70 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
     });
   }
 
+  function clearProtectedAwardsState() {
+    wizardRequest.invalidate();
+    actionRequest.invalidate();
+    setBusy(false); setMessage(null); setLeagues([]); setLeagueName(""); setState(null);
+    setOverrideDrafts({}); setOperationKeys({});
+  }
+
   async function loadLeagues() {
+    const selectedBeforeRefresh = leagueName;
+    const generation = listRequest.begin();
+    wizardRequest.invalidate();
+    actionRequest.invalidate();
     setBusy(true);
     setMessage(null);
+    setState(null);
+    setOverrideDrafts({});
     try {
       const payload = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
+      if (!listRequest.isCurrent(generation)) return;
       const names = (payload.leagues || []).map((league) => league.league_name).filter(Boolean);
       setLeagues(names);
-      if (!leagueName && names.length) setLeagueName(names[0]);
-      setMessage(`Loaded ${names.length} league(s). Select one, then recover its saved awards state.`);
+      if (selectedBeforeRefresh && names.includes(selectedBeforeRefresh)) {
+        await recoverWizard(selectedBeforeRefresh);
+      } else if (selectedBeforeRefresh) {
+        setLeagueName("");
+        setOperationKeys({});
+      }
+      setMessage(names.length ? `Loaded ${names.length} league(s). Select one to open its saved awards state.` : "No leagues are available for awards yet.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load leagues.");
+      if (listRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load leagues.");
     } finally {
-      setBusy(false);
+      if (listRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function recoverWizard() {
-    if (!leagueName) {
+  async function recoverWizard(selectedLeague = leagueName) {
+    const generation = wizardRequest.begin();
+    if (!selectedLeague) {
       setMessage("Select a league before recovering awards state.");
       return;
     }
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<AwardsResponse>(leagueAwardsPath());
+      const payload = await requestJson<AwardsResponse>(leagueAwardsPath("", selectedLeague));
+      if (!wizardRequest.isCurrent(generation)) return;
       hydrate(payload);
       setMessage(`Recovered revision ${payload.wizard.revision || 0}; current step is ${payload.wizard.status.replace(/_/g, " ")}.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to recover the awards workflow.");
+      if (wizardRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to recover the awards workflow.");
     } finally {
-      setBusy(false);
+      if (wizardRequest.isCurrent(generation)) setBusy(false);
     }
+  }
+
+  function selectLeague(selectedLeague: string) {
+    actionRequest.invalidate();
+    setLeagueName(selectedLeague);
+    setState(null);
+    setOverrideDrafts({});
+    setOperationKeys({});
+    setMessage(null);
+    if (selectedLeague) void recoverWizard(selectedLeague);
+    else wizardRequest.invalidate();
   }
 
   async function runAction(action: "freeze" | "preview" | "mint" | "archive", confirmationText = "") {
@@ -180,6 +216,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
       setMessage("Select a league first.");
       return;
     }
+    const generation = actionRequest.begin();
     setBusy(true);
     setMessage(null);
     const idempotencyKey = keyFor(action);
@@ -192,6 +229,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
           source: `next_league_manager_awards_${action}`
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       hydrate(payload);
       clearKey(action);
       setMessage(
@@ -200,9 +238,9 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
           : `${action[0].toUpperCase()}${action.slice(1)} saved at workflow revision ${payload.wizard.revision || 0}.`
       );
     } catch (error) {
-      setMessage(`${error instanceof Error ? error.message : `Unable to ${action} awards.`} The same operation key is retained for a safe retry; use Recover saved state first.`);
+      if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : `Unable to ${action} awards.`} The same operation key is retained for a safe retry; use Recover saved state first.`);
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -213,6 +251,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
       setMessage("Recover and persist an award preview before confirming overrides.");
       return;
     }
+    const generation = actionRequest.begin();
     setBusy(true);
     setMessage(null);
     const action = "overrides";
@@ -230,15 +269,18 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
           source: "next_league_manager_awards_overrides"
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       hydrate(payload);
       clearKey(action);
       setMessage(`Confirmed ${payload.award_count} final award row(s). Changed winners include a persisted reason.`);
     } catch (error) {
-      setMessage(`${error instanceof Error ? error.message : "Unable to save award overrides."} The operation key is retained for retry.`);
+      if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Unable to save award overrides."} The operation key is retained for retry.`);
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
+
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadLeagues);
 
   const wizard = state?.wizard;
   const workflowStatus = wizard?.status || "not_started";
@@ -271,10 +313,11 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>1. Select and recover league</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>League<br /><select value={leagueName} onChange={(event) => { setLeagueName(event.target.value); setState(null); setOverrideDrafts({}); setOperationKeys({}); }} style={inputStyle}><option value="">Select a league</option>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
-          <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Working…" : "Load leagues"}</button>
-          <button type="button" onClick={recoverWizard} disabled={busy || !leagueName} style={ghostButtonStyle}>Recover saved state</button>
+          <label>League<br /><select value={leagueName} onChange={(event) => selectLeague(event.target.value)} disabled={busy || !accessToken} style={inputStyle}><option value="">Select a league</option>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+          <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh leagues"}</button>
+          <button type="button" onClick={() => void recoverWizard()} disabled={busy || !leagueName} style={ghostButtonStyle}>Retry saved state</button>
         </div>
+        {!busy && !leagues.length ? <p style={{ color: "#64748b" }}>No leagues are available.</p> : null}
         {message ? <p role="status" style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}
         {wizard ? <p style={{ color: "#475569" }}>Saved step: <strong>{workflowStatus.replace(/_/g, " ")}</strong> · Revision <strong>{wizard.revision || 0}</strong> · League status <strong>{shortValue(state?.league?.status)}</strong></p> : null}
         {state && !writeReady ? <p style={{ color: "#92400e" }}>Writes are closed. FastAPI must have <code>JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE=1</code> and a server-only service-role key. Use Streamlit fallback until the gate is ready.</p> : null}

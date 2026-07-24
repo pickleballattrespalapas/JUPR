@@ -31,10 +31,14 @@ export type AdminSession = {
 
 export const ADMIN_PASSWORD_MIN_LENGTH = 8;
 
-const STORAGE_KEY = "jupr_admin_session_v1";
+export const ADMIN_SESSION_STORAGE_KEY = "jupr_admin_session_v1";
 const RECOVERY_SESSION_KEY = "jupr_admin_recovery_session_v1";
 const RECOVERY_PKCE_KEY = "jupr_admin_recovery_pkce_v1";
 const RECOVERY_PKCE_MAX_AGE_MS = 60 * 60 * 1000;
+
+export function adminSessionStorageEventIsRelevant(key: string | null): boolean {
+  return key === null || key === ADMIN_SESSION_STORAGE_KEY;
+}
 
 function nowMs(): number {
   return Date.now();
@@ -197,14 +201,14 @@ export function safeAdminNextPath(value: string | null | undefined, fallback = "
 
 export function loadAdminSession(): AdminSession | null {
   if (!canUseBrowserStorage()) return null;
-  const raw = window.localStorage.getItem(STORAGE_KEY);
+  const raw = window.localStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
   if (!raw) return null;
   try {
     const session = JSON.parse(raw) as AdminSession;
     if (!session?.access_token || session.recovery) throw new Error("invalid session");
     return session;
   } catch {
-    window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
     return null;
   }
 }
@@ -212,14 +216,14 @@ export function loadAdminSession(): AdminSession | null {
 export function saveAdminSession(session: AdminSession): void {
   if (!canUseBrowserStorage() || !session.access_token || session.recovery) return;
   const serialized = JSON.stringify(session);
-  if (window.localStorage.getItem(STORAGE_KEY) === serialized) return;
-  window.localStorage.setItem(STORAGE_KEY, serialized);
+  if (window.localStorage.getItem(ADMIN_SESSION_STORAGE_KEY) === serialized) return;
+  window.localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, serialized);
   window.dispatchEvent(new CustomEvent("jupr-admin-session-change"));
 }
 
 export function clearAdminSession(): void {
   if (!canUseBrowserStorage()) return;
-  window.localStorage.removeItem(STORAGE_KEY);
+  window.localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
   window.dispatchEvent(new CustomEvent("jupr-admin-session-change"));
 }
 

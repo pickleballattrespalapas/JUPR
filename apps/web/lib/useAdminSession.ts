@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { restoreAuthorizedAdminSession } from "@/lib/adminAuthClient";
+import { adminSessionStorageEventIsRelevant, restoreAuthorizedAdminSession } from "@/lib/adminAuthClient";
 import type { AdminSession } from "@/lib/adminAuthClient";
 
 type AdminSessionState = {
@@ -18,30 +18,41 @@ export function useAdminSession(): AdminSessionState {
 
   useEffect(() => {
     let cancelled = false;
+    let loadGeneration = 0;
 
     async function load() {
+      const generation = ++loadGeneration;
+      setSession(null);
       setLoading(true);
       setMessage(null);
       try {
         const authorized = await restoreAuthorizedAdminSession();
-        if (!cancelled) setSession(authorized);
+        if (!cancelled && generation === loadGeneration) setSession(authorized);
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && generation === loadGeneration) {
           setSession(null);
           setMessage(error instanceof Error ? error.message : "Unable to refresh admin session.");
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && generation === loadGeneration) setLoading(false);
       }
     }
 
-    load();
-    window.addEventListener("jupr-admin-session-change", load);
-    window.addEventListener("storage", load);
+    function handleSessionChange() {
+      void load();
+    }
+
+    function handleStorage(event: StorageEvent) {
+      if (adminSessionStorageEventIsRelevant(event.key)) void load();
+    }
+
+    void load();
+    window.addEventListener("jupr-admin-session-change", handleSessionChange);
+    window.addEventListener("storage", handleStorage);
     return () => {
       cancelled = true;
-      window.removeEventListener("jupr-admin-session-change", load);
-      window.removeEventListener("storage", load);
+      window.removeEventListener("jupr-admin-session-change", handleSessionChange);
+      window.removeEventListener("storage", handleStorage);
     };
   }, []);
 

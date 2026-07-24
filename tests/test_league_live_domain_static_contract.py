@@ -18,7 +18,7 @@ def test_browser_does_not_own_league_live_movement_math() -> None:
     assert "The browser displays plans but never ranks players" in panel
 
 
-def test_league_selection_auto_loads_roster_without_clearing_current_view() -> None:
+def test_league_selection_auto_loads_roster_without_showing_stale_detail() -> None:
     panel = PANEL.read_text(encoding="utf-8")
     assert "selectLeague(event.target.value)" in panel
     assert "void loadLeagueDetail(selectedLeague)" in panel
@@ -28,9 +28,8 @@ def test_league_selection_auto_loads_roster_without_clearing_current_view() -> N
     assert "Reload roster" in panel
     assert ">Load roster<" not in panel
     assert "const suggestion = await fetchRosterSuggestion(payload);" in panel
-    assert "The current league roster will remain visible until the replacement is ready." in panel
-    assert "if (loadedLeagueName) setLeagueName(loadedLeagueName);" in panel
-    assert "The previous league roster remains visible and selected." in panel
+    assert "clearPersistedSessionBinding();" in panel
+    assert "Session writes remain unavailable until the replacement roster is ready." in panel
 
 
 def test_league_live_binds_session_to_selected_league_and_pauses_edits_while_busy() -> None:
@@ -40,8 +39,9 @@ def test_league_live_binds_session_to_selected_league_and_pauses_edits_while_bus
     assert "sessionLeagueName === loadedLeagueName" in panel
     assert "clearPersistedSessionBinding()" in panel
     assert "requireCurrentSession(" in panel
-    assert panel.count("encodeURIComponent(loadedSessionId)") >= 7
-    assert "if (detail?.league.league_name !== sessionRow.league_name) setDetail(null);" in panel
+    assert panel.count("const requestedSessionId = loadedSessionId;") >= 7
+    assert panel.count("encodeURIComponent(requestedSessionId)") >= 7
+    assert "setDetail(null);" in panel
     assert "setRosterSuggestion(null);" in panel
     assert "detail.league.league_name !== leagueName" in panel
     assert 'disabled={busy || !sessionIsCurrentLeague}' in panel

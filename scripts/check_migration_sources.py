@@ -57,8 +57,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--base-ref",
-        default="Test",
-        help="Git base ref to compare with current HEAD (default: Test)",
+        default="origin/staging",
+        help="Git base ref to compare with current HEAD (default: origin/staging)",
     )
     parser.add_argument(
         "--warn-only",

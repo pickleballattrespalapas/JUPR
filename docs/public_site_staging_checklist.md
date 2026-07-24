@@ -55,6 +55,17 @@ https://www.juprleagues.com
 
 FastAPI CORS should allow all four public origins during the transition.
 
+Read-only snapshot on 2026-07-24:
+
+- Both apex domains returned HTTP 200.
+- Both `www` hosts returned HTTP 502 and were not assigned to the Vercel project.
+- Production FastAPI CORS preflight returned the exact requesting origin for all
+  four allowed origins.
+
+This is inventory, not cutover approval. Joe or the domain owner must add/verify
+the two `www` aliases and DNS later; no DNS or production-domain setting was
+changed during staging preparation.
+
 ## CI gates
 
 Every public web PR should pass:
@@ -69,7 +80,9 @@ The evidence-grade gate is the manually dispatched GitHub Actions workflow
 `Staging Smoke`. Run it from the final deployed `staging` SHA only after Fly has
 been restored to `write_wave=none` and `/health` reports every controlled write
 flag false. Vercel and Fly must attest the same SHA, deployment identity, staging
-Supabase/Auth origin, and immutable Vercel candidate.
+Supabase/Auth origin, and immutable Vercel candidate. The workflow rejects skips,
+flakes, or count drift across its 56-test public-read manifest and its five-test
+guided Tournament Setup browser contract.
 
 This local command is useful for diagnosis after FastAPI and Vercel are deployed,
 but it is not the canonical acceptance gate:
@@ -77,11 +90,8 @@ but it is not the canonical acceptance gate:
 ```bash
 python scripts/smoke_public_web.py \
   --api-base-url <staging FastAPI base URL> \
-  --web-base-url <staging Vercel URL> \
-  --allow-live-unconfigured
+  --web-base-url <staging Vercel URL>
 ```
-
-`--allow-live-unconfigured` is allowed for the first public draft while live-session staging migrations/grants are still being verified. Remove it once live sessions are fully configured.
 
 The legacy `Public Web Smoke` workflow is also noncanonical. A green diagnostic
 does not replace the strict browser manifest and identity binding in `Staging Smoke`.
@@ -91,13 +101,11 @@ Run the same smoke against both public domains after production deploy:
 ```bash
 python scripts/smoke_public_web.py \
   --api-base-url <public FastAPI base URL> \
-  --web-base-url https://pickleballclubsandwich.com \
-  --allow-live-unconfigured
+  --web-base-url https://pickleballclubsandwich.com
 
 python scripts/smoke_public_web.py \
   --api-base-url <public FastAPI base URL> \
-  --web-base-url https://juprleagues.com \
-  --allow-live-unconfigured
+  --web-base-url https://juprleagues.com
 ```
 
 ## Public route review
@@ -162,13 +170,19 @@ authorizes the corresponding route, the possible checks are:
 - Privacy and Terms use formal first-party copy instead of placeholders.
 - Public support routes to `joe@juprleagues.com`.
 - Public tournament board interest actions notify both the affected player and organizer.
-- Local diagnostics may use `--allow-live-unconfigured` temporarily; canonical `Staging Smoke` should keep it off once the live-session route is available.
+- Live-session routes and migrations are part of the required candidate; public
+  diagnostics and canonical Staging Smoke fail closed when they are unavailable.
 - `pickleballclubsandwich.com` is the primary public SaaS domain; `juprleagues.com` remains a transitional alias.
 
 ## Remaining deployment tasks
 
-- Confirm Vercel serves both primary and transitional domains.
-- Confirm FastAPI CORS allows the primary and transitional domains plus their `www` aliases.
+- Add and verify both `www` aliases in Vercel/DNS; the two apex domains are
+  currently served, while the `www` hosts returned HTTP 502 on 2026-07-24.
+- Reconfirm FastAPI CORS at cutover. Read-only preflight checks passed for the
+  primary and transitional domains plus both `www` aliases on 2026-07-24.
 - Set `NEXT_PUBLIC_JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com` for production.
 - Run canonical `Staging Smoke` against the final same-SHA staging candidate; use diagnostic smoke against public domains only after a separately approved production cutover.
+- Obtain legal approval for Privacy and Terms, prove password recovery and
+  unsubscribe/preferences through an approved test inbox, decide on Supabase
+  leaked-password protection, and establish minimum alerts.
 - Keep Streamlit available as fallback until the custom-domain smoke passes.

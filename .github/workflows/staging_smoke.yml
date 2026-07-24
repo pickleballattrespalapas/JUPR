@@ -240,6 +240,55 @@ jobs:
               raise SystemExit(1)
           print(f"Strict public-read browser evidence passed all {expected_tests} tests.")
 
+      - name: Run Tournament Setup guided UI contracts
+        working-directory: apps/web
+        env:
+          JUPR_EXPECTED_STAGING_AUTH_ORIGIN: ${{ secrets.STAGING_SUPABASE_URL }}
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/tournament-setup-report.json
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          npx playwright test e2e/tournament-setup.builder.staging.spec.ts \
+            --retries=0 \
+            --forbid-only \
+            --reporter=list,json
+
+      - name: Reject incomplete Tournament Setup browser evidence
+        if: always()
+        shell: python
+        env:
+          EXPECTED_TOURNAMENT_SETUP_TESTS: "5"
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.run_parity_staging_wave import report_errors
+
+          report_path = Path("apps/web/test-results/tournament-setup-report.json")
+          if not report_path.is_file():
+              print("::error title=Missing Tournament Setup evidence::Playwright did not produce the Tournament Setup JSON report.")
+              raise SystemExit(1)
+          try:
+              report = json.loads(report_path.read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError):
+              print("::error title=Invalid Tournament Setup evidence::Playwright produced an unreadable Tournament Setup JSON report.")
+              raise SystemExit(1)
+
+          errors = report_errors(report)
+          stats = report.get("stats") if isinstance(report, dict) else None
+          expected_tests = int(os.environ["EXPECTED_TOURNAMENT_SETUP_TESTS"])
+          if isinstance(stats, dict) and int(stats.get("expected", 0) or 0) != expected_tests:
+              errors.append(
+                  f"Playwright passed {int(stats.get('expected', 0) or 0)} tests; "
+                  f"the Tournament Setup manifest requires exactly {expected_tests}."
+              )
+          if errors:
+              for error in errors:
+                  print(f"::error title=Incomplete Tournament Setup evidence::{error}")
+              raise SystemExit(1)
+          print(f"Strict Tournament Setup browser evidence passed all {expected_tests} tests.")
+
       - name: Upload browser failure artifacts
         if: failure()
         uses: actions/upload-artifact@v4

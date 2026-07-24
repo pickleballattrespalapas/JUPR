@@ -47,28 +47,26 @@ The evidence runner opens at most one write wave. Every mutating batch follows:
 
 `none -> one named wave -> authoritative readback/recovery -> none`
 
-The operator-facing session is grouped into eight batches:
+The operator-facing work is grouped into three sessions:
 
-1. **Public ratings and discovery:** leaderboards, rules, league results/print,
-   match explorer, players, badges, ladder, FAQ, support, and policy display.
-2. **Admin read and export:** badge diagnostics/audit, canonical audit, Admin
-   Guide, filters, print/CSV output, and the three auto-load UX changes.
-3. **Support and identity intake:** support create/exact retry, correction,
-   privacy, verified update, preference-link guard, login, and recovery messaging.
-4. **Registration and pairing:** registration, confirmation, edit, roster,
-   partner board, and pairing lifecycle on a disposable event.
-5. **League and communications:** manager, awards, live round, weekly recap,
-   player updates, subscription/outbox, and printable top players.
-6. **Match and player recovery:** uploader, Match Log review, player editor,
-   replay/canonical readback, and exact restoration.
-7. **Ladder and live operations:** challenge ladder, Moneyball, JUPR Live admin,
-   and public live using disposable sessions only.
-8. **Tournament operations:** admin/setup, registration admin, operations, and
-   live score/non-score actions using a disposable tournament and full recovery.
+1. **Non-mutating public and admin acceptance:** public ratings/discovery,
+   policies, all admin read/filter/print/export views, authenticated automatic
+   loading, guided Tournament Setup drafting without save, diagnostics, and
+   mobile/narrow-screen checks.
+2. **Bounded write and recovery batches:** support/identity intake; registration
+   and pairing; league and communications; match/player recovery; ladder/live
+   operations; and tournament operations. Each sub-batch uses one disposable
+   fixture family and its own least-privilege wave, authoritative readback,
+   recovery, and return to `none`. A witness is required only for the manual
+   write rows named by the formal book.
+3. **Exact-candidate restoration:** remove all disposable fixtures that are
+   required to be removed, deploy a same-candidate `write_wave=none` release,
+   prove every controlled write flag false and email delivery safe, and run the
+   canonical Staging Smoke against the exact Vercel/Fly candidate.
 
-The first two batches cover the 20 non-mutating page acceptances. The last six
-group the 25 bounded write/recovery acceptances so shared fixtures are created and
-cleaned once instead of making the operator retype the same data.
+This keeps the 20 non-mutating page acceptances together, reuses fixtures inside
+the 25 write/recovery rows, and avoids asking the operator to return for isolated
+one-page checks.
 
 ## Operator prompt format
 

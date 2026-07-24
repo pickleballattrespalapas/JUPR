@@ -1,139 +1,548 @@
-name: Deploy FastAPI backend to Fly
+name: Deploy FastAPI production to Fly
 
 on:
   workflow_dispatch:
     inputs:
-      app_name:
-        description: "Fly app name"
+      candidate_sha:
+        description: "Exact accepted production candidate SHA (40 lowercase hex characters)"
         required: true
-        default: "juprleagues-api"
-      primary_region:
-        description: "Fly primary region"
+        type: string
+      confirmation:
+        description: "Production owner approval phrase: DEPLOY PRODUCTION API"
         required: true
-        default: "dfw"
-      fly_org:
-        description: "Optional Fly organization slug. Leave blank to use the token/default org."
-        required: false
-        default: ""
-      custom_domain:
-        description: "Optional custom API hostname to attach after deploy"
-        required: false
-        default: "api.juprleagues.com"
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: fly-api-deploy
+  group: jupr-production-api-deploy
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy API
+  deploy-production:
+    name: Deploy and verify exact production API candidate
     runs-on: ubuntu-latest
+    environment: production
     env:
-      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      FLY_APP_NAME: ${{ inputs.app_name }}
-      FLY_PRIMARY_REGION: ${{ inputs.primary_region }}
-      FLY_ORG: ${{ inputs.fly_org }}
-      FLY_CUSTOM_DOMAIN: ${{ inputs.custom_domain }}
+      EXPECTED_MIGRATION_HEAD: ${{ vars.PRODUCTION_MIGRATION_LEDGER_HEAD }}
+      EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.PRODUCTION_SUPABASE_PROJECT_REF }}
+      FLY_APP_NAME: juprleagues-api
+      JUPR_ENV: production
+      PRODUCTION_API_ORIGIN: https://api.juprleagues.com
+      PRODUCTION_FLY_ORIGIN: https://juprleagues-api.fly.dev
+      PRODUCTION_SOURCE_BRANCH: rollback-feb8
     steps:
-      - name: Check out repository
+      - name: Check out canonical production branch
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: rollback-feb8
 
-      - name: Set up flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@master
-
-      - name: Validate required GitHub secrets
+      - name: Verify exact production candidate provenance
         shell: bash
+        env:
+          CANDIDATE_SHA_INPUT: ${{ inputs.candidate_sha }}
+          PRODUCTION_CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
-          missing=0
-          for name in FLY_API_TOKEN SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_ANON_KEY; do
-            if [ -z "${!name:-}" ]; then
-              echo "::error title=Missing GitHub secret::$name is required for the Fly API deploy workflow."
-              missing=1
-            fi
-          done
-          exit "$missing"
-
-      - name: Apply online deployment inputs to fly.toml
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import os
-          import re
-
-          app_name = os.environ["FLY_APP_NAME"].strip()
-          primary_region = os.environ["FLY_PRIMARY_REGION"].strip()
-          if not app_name:
-              raise SystemExit("FLY_APP_NAME is required")
-          if not primary_region:
-              raise SystemExit("FLY_PRIMARY_REGION is required")
-
-          path = Path("fly.toml")
-          text = path.read_text()
-          text = re.sub(r'^app\s*=\s*"[^"]+"', f'app = "{app_name}"', text, count=1, flags=re.MULTILINE)
-          text = re.sub(
-              r'^primary_region\s*=\s*"[^"]+"',
-              f'primary_region = "{primary_region}"',
-              text,
-              count=1,
-              flags=re.MULTILINE,
-          )
-          path.write_text(text)
-          PY
-          cat fly.toml
-
-      - name: Ensure Fly app exists
-        shell: bash
-        run: |
-          set -euo pipefail
-          if flyctl status -a "$FLY_APP_NAME" >/dev/null 2>&1; then
-            echo "Fly app $FLY_APP_NAME already exists."
-          else
-            echo "Creating Fly app $FLY_APP_NAME."
-            if [ -n "${FLY_ORG:-}" ]; then
-              flyctl apps create "$FLY_APP_NAME" --org "$FLY_ORG" --yes
-            else
-              flyctl apps create "$FLY_APP_NAME" --yes
-            fi
+          if [ "$GITHUB_REF" != "refs/heads/$PRODUCTION_SOURCE_BRANCH" ]; then
+            echo "::error title=Source branch rejected::Production API deploys must run from refs/heads/$PRODUCTION_SOURCE_BRANCH."
+            exit 2
+          fi
+          if [ "$PRODUCTION_CONFIRMATION" != "DEPLOY PRODUCTION API" ]; then
+            echo "::error title=Production approval missing::The protected production approval phrase is incorrect."
+            exit 2
+          fi
+          if [[ ! "$CANDIDATE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=Candidate SHA rejected::candidate_sha must be exactly 40 lowercase hexadecimal characters."
+            exit 2
           fi
 
-      - name: Stage Fly runtime secrets
+          HEAD_SHA="$(git rev-parse HEAD)"
+          PRODUCTION_SHA="$(git rev-parse "refs/remotes/origin/$PRODUCTION_SOURCE_BRANCH")"
+          if [ "$HEAD_SHA" != "$GITHUB_SHA" ] \
+            || [ "$HEAD_SHA" != "$PRODUCTION_SHA" ] \
+            || [ "$HEAD_SHA" != "$CANDIDATE_SHA_INPUT" ]; then
+            echo "::error title=Production provenance rejected::Checked-out HEAD, GITHUB_SHA, canonical production branch, and candidate_sha must be identical."
+            exit 2
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Set up pinned flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: "0.4.49"
+
+      - name: Validate protected production inputs and config
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_SSH_TOKEN: ${{ secrets.FLY_SSH_TOKEN }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_PROD_DATABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        run: |
+          set -euo pipefail
+          python scripts/deployment_verifier.py preflight \
+            --config fly.toml \
+            --migrations-dir supabase/migrations \
+            --migration-contract config/production_migration_contract.json
+
+      - name: Require the exact existing production Fly app
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl status --app "$FLY_APP_NAME" --json > "$RUNNER_TEMP/fly-status-before.json"
+          flyctl machines list \
+            --app "$FLY_APP_NAME" \
+            --json \
+            > "$RUNNER_TEMP/fly-machines-before.json"
+          mkdir -p "$RUNNER_TEMP/production-fly-config-before"
+          (
+            cd "$RUNNER_TEMP/production-fly-config-before"
+            flyctl config save \
+              --app "$FLY_APP_NAME" \
+              --yes
+          )
+          test -s "$RUNNER_TEMP/production-fly-config-before/fly.toml"
+
+      - name: Capture exact pre-deploy rollback identity
         shell: bash
         run: |
           set -euo pipefail
-          flyctl secrets set \
-            --stage \
-            -a "$FLY_APP_NAME" \
-            SUPABASE_URL="$SUPABASE_URL" \
-            SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY" \
-            SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --max-time 20 \
+            "$PRODUCTION_FLY_ORIGIN/health" \
+            --output "$RUNNER_TEMP/production-health-before.json"
+          python scripts/deployment_verifier.py snapshot \
+            --health-json "$RUNNER_TEMP/production-health-before.json" \
+            --fly-status-json "$RUNNER_TEMP/fly-machines-before.json" \
+            --fly-config "$RUNNER_TEMP/production-fly-config-before/fly.toml" \
+            --output-json "$RUNNER_TEMP/production-rollback-snapshot.json"
 
-      - name: Validate Fly config
+      - name: Preserve pre-deploy rollback identity
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-api-rollback-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/production-rollback-snapshot.json
+            ${{ runner.temp }}/production-fly-config-before/fly.toml
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Verify production migration head before deploy
         shell: bash
-        run: flyctl config validate -a "$FLY_APP_NAME"
+        env:
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_PROD_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          command -v psql >/dev/null
+          psql "$SUPABASE_DATABASE_URL" \
+            --set=ON_ERROR_STOP=1 \
+            --no-psqlrc \
+            --tuples-only \
+            --no-align \
+            --command="select version || E'\t' || coalesce(name, '') from supabase_migrations.schema_migrations order by version" \
+            > "$RUNNER_TEMP/production-migration-ledger-before.tsv"
+          psql "$SUPABASE_DATABASE_URL" \
+            --set=ON_ERROR_STOP=1 \
+            --no-psqlrc \
+            --tuples-only \
+            --no-align \
+            --command="select json_build_object('tournament_registrations_player_id_column', exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'tournament_registrations' and column_name = 'player_id'), 'idx_tournament_registrations_player_id', to_regclass('public.idx_tournament_registrations_player_id') is not null, 'uq_tournament_registrations_tournament_player', to_regclass('public.uq_tournament_registrations_tournament_player') is not null, 'tournament_player_duplicate_groups', (select count(*) from (select tournament_id, player_id from public.tournament_registrations where player_id is not null group by tournament_id, player_id having count(*) > 1) duplicates))::text" \
+            > "$RUNNER_TEMP/production-schema-contract-before.json"
+          python scripts/deployment_verifier.py migrations \
+            --migrations-dir supabase/migrations \
+            --migration-contract config/production_migration_contract.json \
+            --remote-ledger "$RUNNER_TEMP/production-migration-ledger-before.tsv" \
+            --schema-contract-json "$RUNNER_TEMP/production-schema-contract-before.json"
 
-      - name: Deploy API to Fly
+      - name: Reject pending Fly secret deployments before mutation
         shell: bash
-        run: flyctl deploy --remote-only -a "$FLY_APP_NAME" --config fly.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl secrets list \
+            --app "$FLY_APP_NAME" \
+            --json \
+            > "$RUNNER_TEMP/fly-secrets-prechange.json"
+          python scripts/deployment_verifier.py secrets \
+            --no-pending-only \
+            --fly-secrets-json "$RUNNER_TEMP/fly-secrets-prechange.json"
 
-      - name: Attach custom API domain and show DNS setup
-        if: ${{ inputs.custom_domain != '' }}
+      - name: Establish and verify write_wave none before deploy
+        id: quiesce
+        shell: bash
+        env:
+          JUPR_FLY_DEPLOY_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          JUPR_FLY_SSH_TOKEN: ${{ secrets.FLY_SSH_TOKEN }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        run: |
+          set -euo pipefail
+          runtime_secrets=(
+            "JUPR_ENV=production"
+            "JUPR_EMAIL_MODE=dry_run"
+            "JUPR_PRODUCTION_WRITE_POLICY=read_only"
+            "JUPR_STAGING_WRITE_WAVE=none"
+            "JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com"
+            "JUPR_ALLOWED_ORIGINS=https://juprleagues.com,https://www.juprleagues.com,https://pickleballclubsandwich.com,https://www.pickleballclubsandwich.com"
+            "JUPR_REQUIRE_API_AUDIT_LOG=1"
+            "JUPR_REQUIRE_WORKER_RUN_LOG=1"
+            "JUPR_SUPABASE_JWT_MODE=jwks"
+            "JUPR_EXPECTED_MIGRATION_CONTRACT=$EXPECTED_MIGRATION_CONTRACT"
+            "JUPR_EXPECTED_MIGRATION_HEAD=$EXPECTED_MIGRATION_HEAD"
+            "JUPR_EXPECTED_MIGRATION_PROFILE=$EXPECTED_MIGRATION_PROFILE"
+            "SUPABASE_URL=$SUPABASE_URL"
+            "SUPABASE_JWKS_URL=${SUPABASE_URL%/}/auth/v1/.well-known/jwks.json"
+            "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY"
+            "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+          )
+          while IFS= read -r name; do
+            runtime_secrets+=("$name=0")
+          done < <(
+            python -c \
+              'from scripts.deployment_verifier import PRODUCTION_FEATURE_FLAGS; print("\n".join(PRODUCTION_FEATURE_FLAGS))'
+          )
+
+          # No production secret is staged. This active release establishes the
+          # complete safe runtime projection before the image can change.
+          FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl secrets set \
+            --app "$FLY_APP_NAME" \
+            "${runtime_secrets[@]}"
+
+          remote_check="python -c 'import os,sys;sys.exit(0 if os.getenv(\"JUPR_STAGING_WRITE_WAVE\") == \"none\" and os.getenv(\"JUPR_PRODUCTION_WRITE_POLICY\") == \"read_only\" else 3)'"
+          FLY_API_TOKEN="$JUPR_FLY_SSH_TOKEN" flyctl ssh console \
+            --quiet \
+            --app "$FLY_APP_NAME" \
+            --command "$remote_check"
+
+      - name: Verify required Fly secret names without values
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl secrets list \
+            --app "$FLY_APP_NAME" \
+            --json \
+            > "$RUNNER_TEMP/fly-secrets-before.json"
+          python scripts/deployment_verifier.py secrets \
+            --fly-secrets-json "$RUNNER_TEMP/fly-secrets-before.json"
+
+      - name: Validate exact production Fly config
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl config validate \
+            --app "$FLY_APP_NAME" \
+            --config fly.toml
+
+      - name: Deploy exact production API candidate
+        id: deploy
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl deploy \
+            --remote-only \
+            --app "$FLY_APP_NAME" \
+            --config fly.toml \
+            --build-arg "JUPR_DEPLOYMENT_GIT_SHA=$GITHUB_SHA"
+
+      - name: Wait for exact Fly production health
+        id: wait_health
         shell: bash
         run: |
           set -euo pipefail
-          flyctl certs add "$FLY_CUSTOM_DOMAIN" -a "$FLY_APP_NAME" || true
-          flyctl certs setup "$FLY_CUSTOM_DOMAIN" -a "$FLY_APP_NAME"
+          for attempt in $(seq 1 18); do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              --max-time 15 \
+              "$PRODUCTION_FLY_ORIGIN/health" \
+              --output "$RUNNER_TEMP/production-health.json"; then
+              exit 0
+            fi
+            echo "Production health attempt $attempt/18 failed; retrying in 10 seconds."
+            sleep 10
+          done
+          echo "::error title=Production API unhealthy::$PRODUCTION_FLY_ORIGIN/health did not become healthy."
+          exit 1
 
-      - name: Smoke test Fly hostname
+      - name: Collect deployed production identity
+        id: collect_identity
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --max-time 20 \
+            "$PRODUCTION_FLY_ORIGIN/openapi.json" \
+            --output "$RUNNER_TEMP/production-openapi.json"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --max-time 20 \
+            "$PRODUCTION_API_ORIGIN/health" \
+            --output "$RUNNER_TEMP/production-custom-domain-health.json"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --max-time 30 \
+            "$PRODUCTION_FLY_ORIGIN/clubs/tres-palapas/leaderboards?limit=1" \
+            --output "$RUNNER_TEMP/production-public-database-read.json"
+          flyctl machines list \
+            --app "$FLY_APP_NAME" \
+            --json \
+            > "$RUNNER_TEMP/fly-machines-after.json"
+          flyctl secrets list \
+            --app "$FLY_APP_NAME" \
+            --json \
+            > "$RUNNER_TEMP/fly-secrets-after.json"
+
+      - name: Verify migration head after deploy
+        id: migration_after
+        shell: bash
+        env:
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_PROD_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DATABASE_URL" \
+            --set=ON_ERROR_STOP=1 \
+            --no-psqlrc \
+            --tuples-only \
+            --no-align \
+            --command="select version || E'\t' || coalesce(name, '') from supabase_migrations.schema_migrations order by version" \
+            > "$RUNNER_TEMP/production-migration-ledger-after.tsv"
+          psql "$SUPABASE_DATABASE_URL" \
+            --set=ON_ERROR_STOP=1 \
+            --no-psqlrc \
+            --tuples-only \
+            --no-align \
+            --command="select json_build_object('tournament_registrations_player_id_column', exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'tournament_registrations' and column_name = 'player_id'), 'idx_tournament_registrations_player_id', to_regclass('public.idx_tournament_registrations_player_id') is not null, 'uq_tournament_registrations_tournament_player', to_regclass('public.uq_tournament_registrations_tournament_player') is not null, 'tournament_player_duplicate_groups', (select count(*) from (select tournament_id, player_id from public.tournament_registrations where player_id is not null group by tournament_id, player_id having count(*) > 1) duplicates))::text" \
+            > "$RUNNER_TEMP/production-schema-contract-after.json"
+          python scripts/deployment_verifier.py migrations \
+            --migrations-dir supabase/migrations \
+            --migration-contract config/production_migration_contract.json \
+            --remote-ledger "$RUNNER_TEMP/production-migration-ledger-after.tsv" \
+            --schema-contract-json "$RUNNER_TEMP/production-schema-contract-after.json"
+
+      - name: Verify exact runtime, image, environment, and write policy
+        id: runtime_verify
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsS "https://${FLY_APP_NAME}.fly.dev/health"
+          python scripts/deployment_verifier.py runtime \
+            --health-json "$RUNNER_TEMP/production-health.json" \
+            --secondary-health-json "$RUNNER_TEMP/production-custom-domain-health.json" \
+            --openapi-json "$RUNNER_TEMP/production-openapi.json" \
+            --fly-machines-json "$RUNNER_TEMP/fly-machines-after.json" \
+            --fly-secrets-json "$RUNNER_TEMP/fly-secrets-after.json"
+
+      - name: Verify production Supabase credentials with a public database read
+        id: public_read
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/deployment_verifier.py public-read \
+            --payload-json "$RUNNER_TEMP/production-public-database-read.json"
+
+      - name: Verify exact production CORS allowlist
+        id: cors_verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          headers_dir="$RUNNER_TEMP/production-cors"
+          mkdir -p "$headers_dir"
+          api_origins=(
+            "$PRODUCTION_FLY_ORIGIN"
+            "$PRODUCTION_API_ORIGIN"
+          )
+          origins=(
+            "https://juprleagues.com"
+            "https://www.juprleagues.com"
+            "https://pickleballclubsandwich.com"
+            "https://www.pickleballclubsandwich.com"
+          )
+          for api_index in "${!api_origins[@]}"; do
+            for origin_index in "${!origins[@]}"; do
+              curl \
+                --fail \
+                --silent \
+                --show-error \
+                --max-time 20 \
+                --request OPTIONS \
+                --header "Origin: ${origins[$origin_index]}" \
+                --header "Access-Control-Request-Method: GET" \
+                --dump-header "$headers_dir/$api_index-$origin_index.headers" \
+                --output /dev/null \
+                "${api_origins[$api_index]}/health"
+            done
+            curl \
+              --silent \
+              --show-error \
+              --max-time 20 \
+              --request OPTIONS \
+              --header "Origin: https://not-allowed.invalid" \
+              --header "Access-Control-Request-Method: GET" \
+              --dump-header "$headers_dir/$api_index-blocked.headers" \
+              --output /dev/null \
+              "${api_origins[$api_index]}/health"
+          done
+          python scripts/deployment_verifier.py cors \
+            --headers-dir "$headers_dir"
+
+      - name: Restore and attest final read-only production state
+        if: ${{ always() && steps.quiesce.outcome != 'skipped' }}
+        shell: bash
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          QUIESCE_OUTCOME: ${{ steps.quiesce.outcome }}
+          PROMOTION_ACCEPTED: ${{ steps.deploy.outcome == 'success' && steps.wait_health.outcome == 'success' && steps.collect_identity.outcome == 'success' && steps.migration_after.outcome == 'success' && steps.runtime_verify.outcome == 'success' && steps.public_read.outcome == 'success' && steps.cors_verify.outcome == 'success' }}
+          JUPR_FLY_DEPLOY_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          JUPR_FLY_SSH_TOKEN: ${{ secrets.FLY_SSH_TOKEN }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        run: |
+          set -euo pipefail
+
+          FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl secrets list \
+            --app "$FLY_APP_NAME" \
+            --json \
+            > "$RUNNER_TEMP/fly-secrets-final-initial.json"
+
+          # If the first active safe-bundle rollout failed, only pending names
+          # inside that exact bundle may be overwritten and retried. Unknown
+          # external pending names remain a hard stop.
+          if [ "$QUIESCE_OUTCOME" != "success" ]; then
+            python scripts/deployment_verifier.py secrets \
+              --safe-convergence-only \
+              --fly-secrets-json "$RUNNER_TEMP/fly-secrets-final-initial.json"
+            runtime_secrets=(
+              "JUPR_ENV=production"
+              "JUPR_EMAIL_MODE=dry_run"
+              "JUPR_PRODUCTION_WRITE_POLICY=read_only"
+              "JUPR_STAGING_WRITE_WAVE=none"
+              "JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com"
+              "JUPR_ALLOWED_ORIGINS=https://juprleagues.com,https://www.juprleagues.com,https://pickleballclubsandwich.com,https://www.pickleballclubsandwich.com"
+              "JUPR_REQUIRE_API_AUDIT_LOG=1"
+              "JUPR_REQUIRE_WORKER_RUN_LOG=1"
+              "JUPR_SUPABASE_JWT_MODE=jwks"
+              "JUPR_EXPECTED_MIGRATION_CONTRACT=$EXPECTED_MIGRATION_CONTRACT"
+              "JUPR_EXPECTED_MIGRATION_HEAD=$EXPECTED_MIGRATION_HEAD"
+              "JUPR_EXPECTED_MIGRATION_PROFILE=$EXPECTED_MIGRATION_PROFILE"
+              "SUPABASE_URL=$SUPABASE_URL"
+              "SUPABASE_JWKS_URL=${SUPABASE_URL%/}/auth/v1/.well-known/jwks.json"
+              "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY"
+              "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+            )
+            while IFS= read -r name; do
+              runtime_secrets+=("$name=0")
+            done < <(
+              python -c \
+                'from scripts.deployment_verifier import PRODUCTION_FEATURE_FLAGS; print("\n".join(PRODUCTION_FEATURE_FLAGS))'
+            )
+            FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl secrets set \
+              --app "$FLY_APP_NAME" \
+              "${runtime_secrets[@]}"
+          fi
+
+          FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl secrets list \
+            --app "$FLY_APP_NAME" \
+            --json \
+            > "$RUNNER_TEMP/fly-secrets-final-converged.json"
+          python scripts/deployment_verifier.py secrets \
+            --no-pending-only \
+            --fly-secrets-json "$RUNNER_TEMP/fly-secrets-final-converged.json"
+
+          if [ "$PROMOTION_ACCEPTED" != "true" ] \
+            && [ "$DEPLOY_OUTCOME" != "skipped" ]; then
+            PREDEPLOY_IMMUTABLE_IMAGE="$(
+              jq -er '.fly_immutable_image_ref' \
+                "$RUNNER_TEMP/production-rollback-snapshot.json"
+            )"
+            PREDEPLOY_CONFIG="$RUNNER_TEMP/production-fly-config-before/fly.toml"
+            EXPECTED_CONFIG_SHA="$(
+              jq -er '.fly_config_sha256' \
+                "$RUNNER_TEMP/production-rollback-snapshot.json"
+            )"
+            ACTUAL_CONFIG_SHA="$(sha256sum "$PREDEPLOY_CONFIG" | awk '{print $1}')"
+            if [[ ! "$PREDEPLOY_IMMUTABLE_IMAGE" =~ ^registry\.fly\.io/juprleagues-api@sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error title=Rollback identity rejected::The saved rollback image is not an immutable image for the exact production app."
+              exit 2
+            fi
+            if [[ ! "$EXPECTED_CONFIG_SHA" =~ ^[0-9a-f]{64}$ ]] \
+              || [ "$ACTUAL_CONFIG_SHA" != "$EXPECTED_CONFIG_SHA" ]; then
+              echo "::error title=Rollback config rejected::The saved pre-deploy Fly config does not match its snapshot fingerprint."
+              exit 2
+            fi
+            FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl deploy \
+              --app "$FLY_APP_NAME" \
+              --config "$PREDEPLOY_CONFIG" \
+              --image "$PREDEPLOY_IMMUTABLE_IMAGE"
+          fi
+
+          remote_check="python -c 'import os,sys;sys.exit(0 if os.getenv(\"JUPR_STAGING_WRITE_WAVE\") == \"none\" and os.getenv(\"JUPR_PRODUCTION_WRITE_POLICY\") == \"read_only\" else 3)'"
+          FLY_API_TOKEN="$JUPR_FLY_SSH_TOKEN" flyctl ssh console \
+            --quiet \
+            --app "$FLY_APP_NAME" \
+            --command "$remote_check"
+
+          for attempt in $(seq 1 18); do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              --max-time 15 \
+              "$PRODUCTION_FLY_ORIGIN/health" \
+              --output "$RUNNER_TEMP/production-health-final.json"; then
+              break
+            fi
+            if [ "$attempt" -eq 18 ]; then
+              echo "::error title=Final production health unavailable::Unable to attest the restored read-only runtime."
+              exit 1
+            fi
+            sleep 10
+          done
+
+          FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl machines list \
+            --app "$FLY_APP_NAME" \
+            --json \
+            > "$RUNNER_TEMP/fly-machines-final.json"
+          FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl secrets list \
+            --app "$FLY_APP_NAME" \
+            --json \
+            > "$RUNNER_TEMP/fly-secrets-final.json"
+          python scripts/deployment_verifier.py final \
+            --health-json "$RUNNER_TEMP/production-health-final.json" \
+            --fly-machines-json "$RUNNER_TEMP/fly-machines-final.json" \
+            --fly-secrets-json "$RUNNER_TEMP/fly-secrets-final.json" \
+            --rollback-snapshot-json "$RUNNER_TEMP/production-rollback-snapshot.json" \
+            --promotion-accepted "$PROMOTION_ACCEPTED"

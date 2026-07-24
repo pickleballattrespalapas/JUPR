@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type StatusResponse = { enabled: boolean; status: string; roles?: string[]; retention_days?: number; retention_cutoff?: string };
@@ -88,6 +89,34 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   const [operationLookup, setOperationLookup] = useState<GuardedOperationResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [overviewMessage, setOverviewMessage] = useState<string | null>(null);
+  const [socialQueueLoading, setSocialQueueLoading] = useState(false);
+  const [socialQueueMessage, setSocialQueueMessage] = useState<string | null>(null);
+  const overviewRequest = useLatestRequestGuard(accessToken, clearProtectedAdminToolsState);
+  const socialQueueRequest = useLatestRequestGuard(accessToken);
+  const actionRequest = useLatestRequestGuard(accessToken);
+
+  function clearProtectedAdminToolsState() {
+    socialQueueRequest.invalidate();
+    actionRequest.invalidate();
+    setOverview(null);
+    setRatingReport(null);
+    setRatingReportScopes(["OVERALL"]);
+    setLastWorkerResult(null);
+    setTournamentBackfillPreview(null);
+    setSelectedTournamentBackfillGameIds([]);
+    setSocialSubmissionQueue(null);
+    setSelectedSocialSubmissionId("");
+    setSocialSubmissionReason("");
+    setOperationLookup(null);
+    setBusy(false);
+    setOverviewLoading(false);
+    setSocialQueueLoading(false);
+    setMessage(null);
+    setOverviewMessage(null);
+    setSocialQueueMessage(null);
+  }
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("Missing JUPR API base URL.");
@@ -101,27 +130,33 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   }
 
   async function loadOverview() {
-    setBusy(true); setMessage(null);
+    const generation = overviewRequest.begin();
+    setOverviewLoading(true); setOverviewMessage(null);
+    setOverview(null);
     try {
       const payload = await requestJson<OverviewResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/overview?flagged_only=${flaggedOnly ? "true" : "false"}&limit=200`);
-      setOverview(payload); setMessage(`Loaded ${payload.roles?.length || 0} role assignment(s) and ${payload.activity?.length || 0} activity row(s).`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load Admin Tools overview."); }
-    finally { setBusy(false); }
+      if (!overviewRequest.isCurrent(generation)) return;
+      setOverview(payload); setOverviewMessage(`Loaded ${payload.roles?.length || 0} role assignment(s) and ${payload.activity?.length || 0} activity row(s).`);
+    } catch (error) { if (overviewRequest.isCurrent(generation)) setOverviewMessage(error instanceof Error ? error.message : "Unable to load Admin Tools overview."); }
+    finally { if (overviewRequest.isCurrent(generation)) setOverviewLoading(false); }
   }
 
   async function loadRatingReport() {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<RatingReportResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/reports/ratings?league=${encodeURIComponent(ratingReportScope)}`);
+      if (!actionRequest.isCurrent(generation)) return;
       setRatingReport(payload);
       setRatingReportScopes(payload.available_scopes);
       setRatingReportScope(payload.scope);
       setMessage(`Loaded ${String(payload.summary.row_count ?? payload.rows.length)} ${payload.scope} rating report row(s). No rows were written.`);
-    } catch (error) { setRatingReport(null); setMessage(error instanceof Error ? error.message : "Unable to load the rating report."); }
-    finally { setBusy(false); }
+    } catch (error) { if (actionRequest.isCurrent(generation)) { setRatingReport(null); setMessage(error instanceof Error ? error.message : "Unable to load the rating report."); } }
+    finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function saveRole(action: "upsert" | "revoke", confirmationText: string) {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const key = roleOperationKey || `admin-role:${Date.now()}:${crypto.randomUUID()}`;
@@ -130,14 +165,16 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
         method: "PATCH",
         body: JSON.stringify({ email: targetEmail, role: targetRole, user_id: targetUserId || null, action, confirmation_text: confirmationText, operation_key: key })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setOverview((current) => current ? { ...current, roles: payload.roles } : current);
       setMessage(payload.audit_warning ? `Saved, but audit warning: ${payload.audit_warning}` : (action === "upsert" ? "Role assignment saved." : "Role assignment revoked."));
       setRoleOperationKey("");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to update role assignment."); }
-    finally { setBusy(false); }
+    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to update role assignment."); }
+    finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function runQueueWorker(confirmationText: string) {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const key = workerOperationKey || `badge-queue:${Date.now()}:${crypto.randomUUID()}`;
@@ -146,34 +183,40 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
         method: "POST",
         body: JSON.stringify({ mode: workerMode, max_jobs: Number(workerMaxJobs), time_budget_seconds: Number(workerBudget), confirmation_text: confirmationText, operation_key: key })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setLastWorkerResult(payload);
       setMessage(payload.audit_warning ? `Badge queue completed with audit warning: ${payload.audit_warning}` : "Badge queue worker completed.");
       setWorkerOperationKey("");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to run badge queue worker."); }
-    finally { setBusy(false); }
+    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to run badge queue worker."); }
+    finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function loadTournamentBackfillPreview() {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<TournamentBackfillPreviewResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/backfills/tournament-matches/preview?limit=500`);
+      if (!actionRequest.isCurrent(generation)) return;
       setTournamentBackfillPreview(payload);
       setSelectedTournamentBackfillGameIds([]);
       setMessage(`Tournament backfill preview found ${String(payload.summary.ready_count ?? 0)} ready and ${String(payload.summary.blocked_count ?? 0)} blocked missing match candidate(s). No rows were written.`);
-    } catch (error) { setTournamentBackfillPreview(null); setMessage(error instanceof Error ? error.message : "Unable to preview missing tournament matches."); }
-    finally { setBusy(false); }
+    } catch (error) { if (actionRequest.isCurrent(generation)) { setTournamentBackfillPreview(null); setMessage(error instanceof Error ? error.message : "Unable to preview missing tournament matches."); } }
+    finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function loadSocialSubmissionQueue() {
-    setBusy(true); setMessage(null);
+    const generation = socialQueueRequest.begin();
+    setSocialQueueLoading(true); setSocialQueueMessage(null);
+    setSocialSubmissionQueue(null);
+    setSelectedSocialSubmissionId("");
+    setSocialSubmissionReason("");
     try {
       const payload = await requestJson<SocialSubmissionListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/social-submissions?status=${encodeURIComponent(socialSubmissionStatus)}&limit=100`);
+      if (!socialQueueRequest.isCurrent(generation)) return;
       setSocialSubmissionQueue(payload);
-      setSelectedSocialSubmissionId("");
-      setSocialSubmissionReason("");
-      setMessage(`Loaded ${payload.submissions.length} ${payload.status} Club Social submission(s). No rows were written.`);
-    } catch (error) { setSocialSubmissionQueue(null); setMessage(error instanceof Error ? error.message : "Unable to load the Club Social review queue."); }
-    finally { setBusy(false); }
+      setSocialQueueMessage(`Loaded ${payload.submissions.length} ${payload.status} Club Social submission(s). No rows were written.`);
+    } catch (error) { if (socialQueueRequest.isCurrent(generation)) setSocialQueueMessage(error instanceof Error ? error.message : "Unable to load the Club Social review queue."); }
+    finally { if (socialQueueRequest.isCurrent(generation)) setSocialQueueLoading(false); }
   }
 
   function selectSocialSubmission(submission: SocialSubmission) {
@@ -186,6 +229,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     const selected = socialSubmissionQueue?.submissions.find((submission) => submission.id === selectedSocialSubmissionId);
     if (!selected || !socialSubmissionQueue) { setMessage("Select and review one Club Social submission first."); return; }
     if (socialSubmissionAction === "reject" && !socialSubmissionReason.trim()) { setMessage("Enter a rejection reason before rejecting this submission."); return; }
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const key = socialOperationKey || `social-moderation:${Date.now()}:${crypto.randomUUID()}`;
@@ -201,19 +245,21 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           source: "next_admin_tools_social_review"
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setSocialSubmissionQueue((current) => current ? { ...current, submissions: current.submissions.filter((submission) => submission.id !== selected.id), summary: { ...current.summary, returned_count: Math.max(0, current.submissions.length - 1) } } : current);
       setSelectedSocialSubmissionId("");
       setSocialSubmissionReason("");
       setSocialOperationKey("");
       const warning = payload.warnings.length ? ` Audit warning: ${payload.warnings.join(" ")}` : "";
       setMessage(`Submission ${payload.action === "approve" ? "approved" : "rejected"}.${warning}`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to moderate the Club Social submission."); }
-    finally { setBusy(false); }
+    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to moderate the Club Social submission."); }
+    finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function applyTournamentMatchBackfill(confirmationText: string) {
     if (!tournamentBackfillPreview) { setMessage("Load and review a current tournament backfill preview first."); return; }
     if (!selectedTournamentBackfillGameIds.length) { setMessage("Select at least one ready tournament game to backfill."); return; }
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const key = backfillOperationKey || `tournament-backfill:${Date.now()}:${crypto.randomUUID()}`;
@@ -229,15 +275,17 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           source: "next_admin_tools_tournament_match_backfill"
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setTournamentBackfillPreview(null);
       setSelectedTournamentBackfillGameIds([]);
       setBackfillOperationKey("");
       setMessage(`Backfilled ${payload.inserted_count} reviewed tournament match(es). Operation ${payload.operation_id}. Reload the preview and verify Match Log before any further write.`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to apply the tournament match backfill."); }
-    finally { setBusy(false); }
+    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to apply the tournament match backfill."); }
+    finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function runBadgeRecompute(confirmationText = "") {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const key = recomputeMode === "dry-run" ? "" : (recomputeOperationKey || `tools-badge-recompute:${Date.now()}:${crypto.randomUUID()}`);
@@ -258,37 +306,53 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           operation_key: key
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setLastWorkerResult(payload);
       setMessage(payload.read_only ? "Read-only badge recompute preview finished; no rows were written." : "Badge recompute finished.");
       if (recomputeMode !== "dry-run") setRecomputeOperationKey("");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to run badge recompute."); }
-    finally { setBusy(false); }
+    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to run badge recompute."); }
+    finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function inspectOperation() {
     if (!operationLookupKey.trim()) { setMessage("Enter the exact guarded operation key first."); return; }
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<GuardedOperationResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/operations/${encodeURIComponent(operationLookupKey.trim())}`);
+      if (!actionRequest.isCurrent(generation)) return;
       setOperationLookup(payload);
       setMessage(`Operation ${payload.operation_key} is ${payload.status || "available"}.`);
-    } catch (error) { setOperationLookup(null); setMessage(error instanceof Error ? error.message : "Unable to inspect operation."); }
-    finally { setBusy(false); }
+    } catch (error) { if (actionRequest.isCurrent(generation)) { setOperationLookup(null); setMessage(error instanceof Error ? error.message : "Unable to inspect operation."); } }
+    finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function recoverTournamentBackfill(confirmationText: string) {
     if (!operationLookup || operationLookup.workflow !== "tournament_match_backfill") { setMessage("Inspect a tournament backfill operation first."); return; }
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<GuardedOperationResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/backfills/tournament-matches/operations/${encodeURIComponent(operationLookup.operation_key)}/recover`, {
         method: "POST",
         body: JSON.stringify({ confirmation_text: confirmationText, source: "next_admin_tools_tournament_match_backfill_recovery" })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setOperationLookup(payload);
       setMessage("Tournament backfill rows are reconciled. Verify Replay History before further writes.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to recover tournament backfill."); }
-    finally { setBusy(false); }
+    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to recover tournament backfill."); }
+    finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
+
+  useAuthenticatedAutoLoad(
+    status?.enabled !== false ? accessToken : "",
+    loadOverview,
+    flaggedOnly ? "flagged" : "all"
+  );
+  useAuthenticatedAutoLoad(
+    status?.enabled !== false ? accessToken : "",
+    loadSocialSubmissionQueue,
+    socialSubmissionStatus
+  );
 
   if (status && !status.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Disabled</h2><p>Set <code>JUPR_ENABLE_NEXT_ADMIN_TOOLS=1</code> on FastAPI to enable guarded Admin Tools.</p></article>;
 
@@ -300,8 +364,9 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Admin session</h2><p style={{ color: "#475569" }}>{adminSessionLabel(session)}</p>{sessionLoading ? <p>Checking session…</p> : null}{sessionMessage ? <p style={{ color: "#64748b" }}>{sessionMessage}</p> : null}</article>
     <article style={cardStyle}>
       <h2 style={{ marginTop: 0 }}>Overview</h2>
-      <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={flaggedOnly} onChange={(event) => setFlaggedOnly(event.target.checked)} /> Flagged activity only</label>
-      <p><button type="button" onClick={loadOverview} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Loading…" : "Load Admin Tools"}</button></p>
+      <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={flaggedOnly} onChange={(event) => setFlaggedOnly(event.target.checked)} disabled={busy || overviewLoading} /> Flagged activity only</label>
+      <p><button type="button" onClick={loadOverview} disabled={busy || overviewLoading || !accessToken} style={buttonStyle}>{overviewLoading ? "Refreshing…" : "Refresh overview"}</button></p>
+      {overviewMessage ? <p role="status" aria-live="polite" style={{ color: overviewMessage.toLowerCase().includes("unable") ? "#b91c1c" : "#166534" }}>{overviewMessage}</p> : null}
       {message ? <p role="status" aria-live="polite" style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("type") || message.toLowerCase().includes("blocked") || message.toLowerCase().includes("critical") || message.toLowerCase().includes("recovery") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </article>
     <article style={cardStyle}>
@@ -341,11 +406,12 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
       </article>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Club Social submission review</h2>
-        <p style={{ color: "#475569" }}>Review unrated Club Social event submissions for this club. Loading a queue is read-only. Approve or reject requires <code>manage_matches</code> permission, a current expected status, and an exact confirmation phrase.</p>
+        <p style={{ color: "#475569" }}>Review unrated Club Social event submissions for this club. Loading a queue is read-only. Approve or reject requires <code>manage_matches</code> permission, a current expected status, and a Yes/No confirmation dialog; the dialog supplies the internal API safeguard.</p>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
-          <label>Queue<br /><select value={socialSubmissionStatus} onChange={(event) => { setSocialSubmissionStatus(event.target.value); setSocialSubmissionQueue(null); setSelectedSocialSubmissionId(""); }} style={inputStyle}><option value="pending">pending</option><option value="saved">saved</option><option value="rejected">rejected</option></select></label>
-          <button type="button" onClick={loadSocialSubmissionQueue} disabled={busy} style={ghostButtonStyle}>Load review queue</button>
+          <label>Queue<br /><select value={socialSubmissionStatus} onChange={(event) => { setSocialSubmissionStatus(event.target.value); setSocialSubmissionQueue(null); setSelectedSocialSubmissionId(""); }} disabled={busy || socialQueueLoading} style={inputStyle}><option value="pending">pending</option><option value="saved">saved</option><option value="rejected">rejected</option></select></label>
+          <button type="button" onClick={loadSocialSubmissionQueue} disabled={busy || socialQueueLoading || !accessToken} style={ghostButtonStyle}>{socialQueueLoading ? "Refreshing…" : "Refresh review queue"}</button>
         </div>
+        {socialQueueMessage ? <p role="status" aria-live="polite" style={{ color: socialQueueMessage.toLowerCase().includes("unable") ? "#b91c1c" : "#166534" }}>{socialQueueMessage}</p> : null}
         {socialSubmissionQueue ? <div style={{ marginTop: "1rem" }}>
           {socialSubmissionQueue.warnings.map((warning) => <p key={warning} style={{ color: "#92400e" }}>{warning}</p>)}
           {!socialSubmissionQueue.submissions.length ? <p style={{ color: "#64748b" }}>No {socialSubmissionQueue.status} Club Social submissions found.</p> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}><thead><tr>{["name", "event", "date", "submitted by", "participants", "matches", "updated", "review"].map((heading) => <th key={heading} align="left" style={{ borderBottom: "1px solid #e2e8f0", padding: "0.4rem" }}>{heading}</th>)}</tr></thead><tbody>{socialSubmissionQueue.submissions.map((submission) => <tr key={submission.id} style={{ background: selectedSocialSubmissionId === submission.id ? "#eff6ff" : "transparent" }}><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{submission.name}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{submission.event_type}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{String(submission.event_date ?? "")}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{submission.submitted_by_name}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{String(submission.summary_json.participant_count ?? 0)}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{String(submission.summary_json.match_count ?? 0)}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{String(submission.updated_at ?? "")}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}><button type="button" onClick={() => selectSocialSubmission(submission)} disabled={busy} style={ghostButtonStyle}>Review</button></td></tr>)}</tbody></table></div>}
@@ -369,7 +435,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
               {isNoOp ? <p style={{ color: "#92400e" }}>This submission is already {targetStatus}; choose the other action or reload another queue.</p> : <p style={{ color: "#991b1b" }}>Only the reviewed submission status and moderation metadata will change. Reload the queue after any stale-status warning.</p>}
             </section>;
           })()}
-        </div> : <p style={{ color: "#64748b" }}>Choose a queue and load it to begin review.</p>}
+        </div> : <p style={{ color: "#64748b" }}>{socialQueueLoading ? "Loading review queue…" : "No review queue is available."}</p>}
       </article>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Workers and backfills</h2>

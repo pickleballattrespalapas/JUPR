@@ -5,6 +5,7 @@ import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminReplayResultResponse } from "@/lib/adminReplayApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import { useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 
 type ReplayHistoryFormProps = {
   apiBase: string | null;
@@ -39,6 +40,14 @@ export default function ReplayHistoryForm({ apiBase, clubId, enabled, options, d
   const [message, setMessage] = useState<string | null>(null);
   const [result, setResult] = useState<AdminReplayResultResponse | null>(null);
   const [idempotencyKey, setIdempotencyKey] = useState(requestKey);
+  const replayRequest = useLatestRequestGuard(accessToken, clearProtectedReplayState);
+
+  function clearProtectedReplayState() {
+    setPending(false);
+    setMessage(null);
+    setResult(null);
+    setIdempotencyKey(requestKey());
+  }
 
   async function onSubmit(confirmationText: string) {
     setMessage(null);
@@ -51,6 +60,7 @@ export default function ReplayHistoryForm({ apiBase, clubId, enabled, options, d
       setMessage("Sign in at /admin/login before running Replay History.");
       return;
     }
+    const generation = replayRequest.begin();
     setPending(true);
     try {
       const response = await fetch(apiUrl(apiBase, `/admin/clubs/${encodeURIComponent(clubId)}/replay-history`), {
@@ -67,14 +77,15 @@ export default function ReplayHistoryForm({ apiBase, clubId, enabled, options, d
         })
       });
       const payload = await response.json().catch(() => null);
+      if (!replayRequest.isCurrent(generation)) return;
       if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
       setResult(payload as AdminReplayResultResponse);
       setMessage(resultMessage(payload as AdminReplayResultResponse));
       if ((payload as AdminReplayResultResponse).job_status === "succeeded") setIdempotencyKey(requestKey());
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to run replay.");
+      if (replayRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to run replay.");
     } finally {
-      setPending(false);
+      if (replayRequest.isCurrent(generation)) setPending(false);
     }
   }
 
@@ -104,7 +115,7 @@ export default function ReplayHistoryForm({ apiBase, clubId, enabled, options, d
         {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
       </div>
       <label><strong>Replay scope</strong><br />
-        <select value={targetReset} onChange={(event) => setTargetReset(event.target.value)} style={inputStyle}>
+        <select value={targetReset} onChange={(event) => setTargetReset(event.target.value)} disabled={pending} style={inputStyle}>
           {options.map((option) => <option key={option}>{option}</option>)}
         </select>
       </label>

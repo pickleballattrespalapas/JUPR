@@ -103,5 +103,6 @@ def test_runbook_keeps_matrix_partial_and_documents_stop_conditions() -> None:
     matrix = _read("docs/next_streamlit_parity_matrix.md")
     assert "does not move the parity matrix row to" in runbook
     assert "Stop immediately" in runbook
-    assert "Partial` — automated-ready/manual-ready on the Order-28 branch" in matrix
+    assert "| `tournament_live` | 🔴 Tournament Live | Admin | `Partial` — automated-ready/manual-ready:" in matrix
+    assert "| `tournament_live` | 🔴 Tournament Live | Admin | `Done`" not in matrix
     assert "JUPR_ENABLE_STAGING_NEXT_ADMIN_TOURNAMENT_LIVE_WRITES" in runbook

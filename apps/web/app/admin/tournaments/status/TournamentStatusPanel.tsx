@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminTournament, AdminTournamentListResponse, AdminTournamentStatusResponse, AdminTournamentWriteResponse } from "@/lib/adminTournamentApi";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
@@ -39,6 +40,8 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
   const [action, setAction] = useState("archive");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const listRequest = useLatestRequestGuard(accessToken, clearProtectedStatusState);
+  const actionRequest = useLatestRequestGuard(accessToken);
   const selectedTournament = tournaments.find((row) => row.id === selectedTournamentId) || null;
   const expectedConfirm = action === "archive" ? "ARCHIVE" : "UNARCHIVE";
 
@@ -54,18 +57,29 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
     return payload as T;
   }
 
+  function clearProtectedStatusState() {
+    setBusy(false); setMessage(null); setTournaments([]); setSelectedTournamentId("");
+  }
+
   async function loadTournaments() {
+    const selectedBeforeRefresh = selectedTournamentId;
+    const generation = listRequest.begin();
     setBusy(true);
     setMessage(null);
+    setTournaments([]);
     try {
       const suffix = includeArchived ? "?include_archived=true" : "";
       const payload = await requestJson<AdminTournamentListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments${suffix}`);
-      setTournaments(payload.tournaments || []);
-      setMessage(`Loaded ${payload.count ?? payload.tournaments?.length ?? 0} tournament(s).`);
+      if (!listRequest.isCurrent(generation)) return;
+      const nextTournaments = payload.tournaments || [];
+      setTournaments(nextTournaments);
+      setSelectedTournamentId(nextTournaments.some((row) => row.id === selectedBeforeRefresh) ? selectedBeforeRefresh : "");
+      setMessage(nextTournaments.length ? `Loaded ${payload.count ?? nextTournaments.length} tournament(s).` : "No tournaments match this view.");
     } catch (error) {
+      if (!listRequest.isCurrent(generation)) return;
       setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
     } finally {
-      setBusy(false);
+      if (listRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -74,6 +88,8 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
       setMessage("Select a tournament first.");
       return;
     }
+    const generation = actionRequest.begin();
+    const requestedTournamentId = selectedTournamentId;
     setBusy(true);
     setMessage(null);
     try {
@@ -89,14 +105,17 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
           })
         }
       );
-      setTournaments((current) => current.map((row) => row.id === selectedTournamentId && payload.tournament ? { ...row, ...payload.tournament } : row));
+      if (!actionRequest.isCurrent(generation)) return;
+      setTournaments((current) => current.map((row) => row.id === requestedTournamentId && payload.tournament ? { ...row, ...payload.tournament } : row));
       setMessage(payload.idempotent_replay ? "Tournament status response reconciled from the durable operation." : `Tournament ${payload.action || action} completed and audit-completed.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update tournament status.");
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to update tournament status.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
+
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadTournaments, includeArchived ? "archived" : "active");
 
   if (!status.enabled) {
     return (
@@ -119,10 +138,10 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
           {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
         </div>
         <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.75rem" }}>
-          <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />
+          <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} disabled={busy} />
           Include archived tournaments
         </label>
-        <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Working…" : "Load tournaments"}</button>
+        <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh tournaments"}</button>
       </article>
 
       {tournaments.length ? (
@@ -130,7 +149,7 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
           <h2 style={{ marginTop: 0 }}>Status action</h2>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
             <label><strong>Tournament</strong><br />
-              <select value={selectedTournamentId} onChange={(event) => setSelectedTournamentId(event.target.value)} style={inputStyle}>
+              <select value={selectedTournamentId} onChange={(event) => setSelectedTournamentId(event.target.value)} disabled={busy} style={inputStyle}>
                 <option value="">Choose a tournament…</option>
                 {tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name} · {tournament.status}</option>)}
               </select>
@@ -145,7 +164,7 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
           </div>
           {selectedTournament ? <p style={{ color: selectedTournament.updated_at ? "#64748b" : "#b91c1c" }}>Selected: <strong>{selectedTournament.name}</strong> <StatusChip value={selectedTournament.status} />{selectedTournament.updated_at ? "" : " · missing version; reload"}</p> : null}
         </article>
-      ) : null}
+      ) : <article style={cardStyle}><p style={{ color: "#64748b" }}>{busy ? "Loading tournaments…" : "No tournaments match this view."}</p></article>}
 
       {message ? <p role="status" style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") || message.toLowerCase().includes("sign in") || message.toLowerCase().includes("reload") || message.toLowerCase().includes("changed") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </section>

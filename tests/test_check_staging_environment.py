@@ -326,6 +326,7 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
                 "ok": True,
                 "environment": "staging",
                 "git_commit_sha": sha,
+                "image_build_git_sha": sha,
                 "fly_app_name": app_name,
                 "fly_image_ref": "registry.fly.io/staging@sha256:123",
                 "web_origin": "https://jupr-git-staging-pickleballattrespalapas1.vercel.app",
@@ -413,6 +414,31 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
     )
     assert drift_rc == 1
     assert any("web_origin" in error for error in drift_summary["errors"])
+
+    def fake_image_sha_drift_get(url: str):
+        status, payload, error = fake_get(url)
+        if url.endswith("/health"):
+            payload = {**payload, "image_build_git_sha": "b" * 40}
+        return status, payload, error
+
+    monkeypatch.setattr(cse, "_http_get_json", fake_image_sha_drift_get)
+    image_drift_rc, image_drift_summary = cse.run_checks(
+        _args(
+            api_base_url="https://api.example.com",
+            require_api=True,
+            expect_full_next_admin=True,
+            write_wave="none",
+            expected_git_sha=sha,
+            expected_fly_app_name=app_name,
+            expected_web_origin="https://jupr-git-staging-pickleballattrespalapas1.vercel.app",
+            expected_supabase_project_ref=project_ref,
+        )
+    )
+    assert image_drift_rc == 1
+    assert any(
+        "image_build_git_sha" in error
+        for error in image_drift_summary["errors"]
+    )
 
     disabled_path = "/admin/clubs/tres_palapas/tournaments/setup/status"
 

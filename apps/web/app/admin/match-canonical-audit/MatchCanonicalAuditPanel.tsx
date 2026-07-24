@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type StatusResponse = { enabled: boolean; status: string; confirmation_text?: string; write_environment?: string; recovery_routes?: Record<string, string> };
@@ -64,6 +65,9 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
   const [normalizeResult, setNormalizeResult] = useState<Record<string, unknown> | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const optionsRequest = useLatestRequestGuard(accessToken, clearProtectedAuditState);
+  const auditRequest = useLatestRequestGuard(accessToken);
+  const actionRequest = useLatestRequestGuard(accessToken);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("Missing JUPR API base URL.");
@@ -76,31 +80,46 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
     return (await response.json()) as T;
   }
 
+  function clearProtectedAuditState() {
+    auditRequest.invalidate();
+    setBusy(false); setMessage(null);
+    setOptions(null); setPlayerId(""); setLeagueId(""); setReport(null); setMatchIds("");
+    setPreviewFingerprint(""); setOperationKey(""); setOperationLookupKey("");
+    setNormalizeResult(null); setOperationLookup(null);
+  }
+
   async function loadOptions() {
+    const generation = optionsRequest.begin();
+    auditRequest.invalidate();
     setBusy(true); setMessage(null);
+    setReport(null); setMatchIds(""); setPreviewFingerprint(""); setNormalizeResult(null);
     try {
       const payload = await requestJson<OptionsResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/match-canonical-audit/options`);
+      if (!optionsRequest.isCurrent(generation)) return;
       setOptions(payload);
-      if (!playerId && payload.players?.length) setPlayerId(String(payload.players[0].player_id));
+      setPlayerId(payload.players?.some((row) => String(row.player_id) === playerId) ? playerId : String(payload.players?.[0]?.player_id || ""));
+      setLeagueId(payload.leagues?.includes(leagueId) ? leagueId : "");
       setMessage(`Loaded ${payload.players?.length || 0} player option(s).`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load options."); }
-    finally { setBusy(false); }
+    } catch (error) { if (optionsRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load options."); }
+    finally { if (optionsRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function runAudit() {
     if (!playerId) { setMessage("Select a player first."); return; }
+    const generation = auditRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<AuditResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/match-canonical-audit/run`, {
         method: "POST",
         body: JSON.stringify({ player_id: Number(playerId), league_id: leagueId || null, limit: Number(limit) || 1200 })
       });
+      if (!auditRequest.isCurrent(generation)) return;
       setReport(payload.report);
       setNormalizeResult(null);
       const counts = payload.report?.counts || {};
       setMessage(`Audit complete. Only in profile: ${counts.only_in_profile ?? 0}; only in canonical: ${counts.only_in_canonical ?? 0}.`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to run audit."); }
-    finally { setBusy(false); }
+    } catch (error) { if (auditRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to run audit."); }
+    finally { if (auditRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function normalize(dryRun: boolean, confirmationText = "") {
@@ -108,6 +127,7 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
     const ids = matchIds.split(/[\s,]+/).map((value) => Number(value.trim())).filter((value) => Number.isInteger(value) && value > 0);
     if (!dryRun && !ids.length) { setMessage("Select the exact IDs from the current dry run before applying."); return; }
     if (!dryRun && !previewFingerprint) { setMessage("Run and review a current dry run before applying."); return; }
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const key = dryRun ? "" : (operationKey || `canonical:${Date.now()}:${crypto.randomUUID()}`);
@@ -124,6 +144,7 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
           source: dryRun ? "next_match_canonical_audit_dry_run" : "next_match_canonical_audit_apply"
         })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       const result: Record<string, unknown> = payload.result || (payload as unknown as Record<string, unknown>);
       setNormalizeResult(result);
       if (dryRun) {
@@ -139,20 +160,30 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
         setOperationKey("");
         setMessage(`Atomic normalization updated ${payload.updated_count ?? ids.length} match(es) and verified readback. Re-run the audit.`);
       }
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to normalize rows."); }
-    finally { setBusy(false); }
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to normalize rows.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function inspectOperation() {
     if (!operationLookupKey.trim()) { setMessage("Enter the exact canonical operation key first."); return; }
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<OperationResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/match-canonical-audit/operations/${encodeURIComponent(operationLookupKey.trim())}`);
+      if (!actionRequest.isCurrent(generation)) return;
       setOperationLookup(payload);
       setMessage(`Canonical operation ${payload.operation_key} is ${payload.status}.`);
-    } catch (error) { setOperationLookup(null); setMessage(error instanceof Error ? error.message : "Unable to inspect canonical operation."); }
-    finally { setBusy(false); }
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) { setOperationLookup(null); setMessage(error instanceof Error ? error.message : "Unable to inspect canonical operation."); }
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
+
+  useAuthenticatedAutoLoad(status?.enabled !== false ? accessToken : "", loadOptions);
 
   if (status && !status.enabled) {
     return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Disabled</h2><p>Set <code>JUPR_ENABLE_NEXT_ADMIN_MATCH_CANONICAL_AUDIT=1</code> on FastAPI to enable this guarded workflow.</p></article>;
@@ -172,7 +203,7 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
         <h2 style={{ marginTop: 0 }}>1. Scope</h2>
         <p style={{ color: "#475569" }}>Run this for one player at a time. Applying normalization is explicit and audit-flagged.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <button type="button" onClick={loadOptions} disabled={busy || !accessToken} style={ghostButtonStyle}>Load players/leagues</button>
+          <button type="button" onClick={loadOptions} disabled={busy || !accessToken} style={ghostButtonStyle}>{busy ? "Refreshing…" : "Refresh players/leagues"}</button>
           <label>Player<br /><select value={playerId} onChange={(event) => { setPlayerId(event.target.value); setPreviewFingerprint(""); setMatchIds(""); }} style={inputStyle}>{(options?.players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} · #{player.player_id}</option>)}</select></label>
           <label>League<br /><select value={leagueId} onChange={(event) => setLeagueId(event.target.value)} style={inputStyle}><option value="">All leagues</option>{(options?.leagues || []).map((league) => <option key={league} value={league}>{league}</option>)}</select></label>
           <label>Limit<br /><input value={limit} onChange={(event) => setLimit(event.target.value)} style={inputStyle} /></label>

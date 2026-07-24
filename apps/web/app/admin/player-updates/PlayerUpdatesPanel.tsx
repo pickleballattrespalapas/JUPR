@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type {
   AdminPlayerUpdatesStatusResponse,
   CommunicationsActionResponse,
@@ -11,6 +11,7 @@ import type {
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import { clubDaysAgoIso, clubTodayIso } from "@/lib/clubDate";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminPlayerUpdatesStatusResponse };
 type RowRef = { id: string; expected_row_version: number };
@@ -45,17 +46,43 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
   const [queueOperationKey, setQueueOperationKey] = useState("");
   const [sendOperationKey, setSendOperationKey] = useState("");
   const [replacementOperationKey, setReplacementOperationKey] = useState("");
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [loadedWorkspaceScope, setLoadedWorkspaceScope] = useState("");
+
+  function clearProtectedWorkspace() {
+    setWorkspace(null);
+    setLoadedWorkspaceScope("");
+    setSelectedOutbox([]);
+    setPreview(null);
+    setSelectedSubscriptionId("");
+    setReplacementEmail("");
+    setReplacementNote("");
+    setQueueOperationKey("");
+    setSendOperationKey("");
+    setReplacementOperationKey("");
+    setWorkspaceLoading(false);
+    setBusy(false);
+    setMessage(null);
+    setMessageSeverity(null);
+  }
+
+  const workspaceScope = `${accessToken}\u0000${startDate}\u0000${endDate}`;
+  const workspaceIsCurrentRange = Boolean(accessToken && workspace && loadedWorkspaceScope === workspaceScope);
+  const currentWorkspace = workspaceIsCurrentRange ? workspace : null;
+  const workspaceControlsDisabled = busy || workspaceLoading || !workspaceIsCurrentRange;
+  const workspaceRequest = useLatestRequestGuard(workspaceScope, clearProtectedWorkspace);
+  const actionRequest = useLatestRequestGuard(accessToken);
 
   const activeSubscriptions = useMemo(
-    () => (workspace?.subscriptions || []).filter((row) => row.request_status === "active"),
-    [workspace]
+    () => (currentWorkspace?.subscriptions || []).filter((row) => row.request_status === "active"),
+    [currentWorkspace]
   );
   const selectedSubscription = activeSubscriptions.find((row) => row.id === selectedSubscriptionId) || null;
   const visibleOutbox = useMemo(
-    () => (workspace?.outbox || []).filter((row) => outboxFilter === "all" || row.send_status === outboxFilter),
-    [workspace, outboxFilter]
+    () => (currentWorkspace?.outbox || []).filter((row) => outboxFilter === "all" || row.send_status === outboxFilter),
+    [currentWorkspace, outboxFilter]
   );
-  const selectedRows = (workspace?.outbox || []).filter((row) => selectedOutbox.includes(row.id));
+  const selectedRows = (currentWorkspace?.outbox || []).filter((row) => selectedOutbox.includes(row.id));
   const includesUncertainSending = selectedRows.some((row) => row.send_status === "sending");
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -75,61 +102,90 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
 
   async function loadWorkspace(silent = false) {
     if (!accessToken || !status.enabled) return;
+    const generation = workspaceRequest.begin();
+    const requestedWorkspaceScope = workspaceScope;
+    setLoadedWorkspaceScope("");
+    setPreview(null);
+    setWorkspaceLoading(true);
     if (!silent) { setBusy(true); setMessage(null); setMessageSeverity(null); }
     try {
       const query = new URLSearchParams({ start_date: startDate, end_date: endDate, limit: "1000" });
       const payload = await requestJson<CommunicationsWorkspaceResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/player-updates/workspace?${query}`);
+      if (!workspaceRequest.isCurrent(generation)) return;
       setWorkspace(payload);
+      setLoadedWorkspaceScope(requestedWorkspaceScope);
       setSelectedOutbox((current) => current.filter((id) => payload.outbox.some((row) => row.id === id)));
-      if (!selectedSubscriptionId && payload.subscriptions.some((row) => row.request_status === "active")) {
-        setSelectedSubscriptionId(payload.subscriptions.find((row) => row.request_status === "active")?.id || "");
-      }
+      const nextActiveSubscriptions = payload.subscriptions.filter((row) => row.request_status === "active");
+      setSelectedSubscriptionId((current) => (
+        nextActiveSubscriptions.some((row) => row.id === current)
+          ? current
+          : nextActiveSubscriptions[0]?.id || ""
+      ));
       if (!silent) { setMessage(`Loaded ${payload.subscriptions.length} subscriptions, ${payload.digests.length} digests, and ${payload.outbox.length} outbox rows.`); setMessageSeverity("success"); }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load communications workspace.");
-      setMessageSeverity("error");
+      if (workspaceRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to load communications workspace.");
+        setMessageSeverity("error");
+      }
     } finally {
-      if (!silent) setBusy(false);
+      if (workspaceRequest.isCurrent(generation)) {
+        setWorkspaceLoading(false);
+        if (!silent) setBusy(false);
+      }
     }
   }
 
-  useEffect(() => {
-    if (accessToken && status.enabled) void loadWorkspace(true);
-    // The operator controls date-range reloading explicitly after initial load.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, status.enabled]);
+  useAuthenticatedAutoLoad(
+    status.enabled ? accessToken : "",
+    () => loadWorkspace(true),
+    `${startDate}\u0000${endDate}`
+  );
 
   function refs(rows: CommunicationsOutboxRow[]): RowRef[] {
     return rows.map((row) => ({ id: row.id, expected_row_version: Number(row.row_version || 1) }));
   }
 
   async function runAction(path: string, body: Record<string, unknown>, success: (result: CommunicationsActionResponse) => string) {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null); setMessageSeverity(null);
     try {
       const result = await requestJson<CommunicationsActionResponse>(path, { method: "POST", body: JSON.stringify(body) });
+      if (!actionRequest.isCurrent(generation)) return;
       setMessage(success(result));
       setMessageSeverity(Number(result.errors || 0) + Number(result.stale || 0) + Number(result.uncertain || 0) > 0 ? "error" : "success");
       setSelectedOutbox([]);
       await loadWorkspace(true);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to complete communications action.");
-      setMessageSeverity("error");
-    } finally { setBusy(false); }
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to complete communications action.");
+        setMessageSeverity("error");
+      }
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function previewDigest() {
     if (!queuePlayerId) { setMessage("Enter an active player ID to preview a digest."); setMessageSeverity("error"); return; }
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null); setMessageSeverity(null);
     try {
       const payload = await requestJson<{ digest: Record<string, unknown> }>(`/admin/clubs/${encodeURIComponent(clubId)}/player-updates/digests/preview`, {
         method: "POST",
         body: JSON.stringify({ player_id: Number(queuePlayerId), start_date: startDate, end_date: endDate })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setPreview(payload.digest);
       setMessage("Preview generated without saving or queueing anything.");
       setMessageSeverity("success");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to preview digest."); setMessageSeverity("error"); }
-    finally { setBusy(false); }
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to preview digest.");
+        setMessageSeverity("error");
+      }
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function queueDigests(confirmationText: string) {
@@ -204,14 +260,15 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
       </article>
 
       <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>1. Load exact-range workspace</h2>
+        <h2 style={{ marginTop: 0 }}>1. Review exact-range workspace</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>Start date<br /><input type="date" value={startDate} onChange={(event) => { setStartDate(event.target.value); setQueueOperationKey(""); }} style={inputStyle} /></label>
-          <label>End date<br /><input type="date" value={endDate} onChange={(event) => { setEndDate(event.target.value); setQueueOperationKey(""); }} style={inputStyle} /></label>
-          <button type="button" onClick={() => loadWorkspace()} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Working…" : "Reload workspace"}</button>
+          <label>Start date<br /><input type="date" value={startDate} onChange={(event) => { setStartDate(event.target.value); setQueueOperationKey(""); }} disabled={busy || workspaceLoading} style={inputStyle} /></label>
+          <label>End date<br /><input type="date" value={endDate} onChange={(event) => { setEndDate(event.target.value); setQueueOperationKey(""); }} disabled={busy || workspaceLoading} style={inputStyle} /></label>
+          <button type="button" onClick={() => loadWorkspace()} disabled={busy || workspaceLoading || !accessToken} style={buttonStyle}>{busy || workspaceLoading ? "Refreshing…" : "Refresh workspace"}</button>
         </div>
-        {workspace ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}>
-          <div><strong>Active</strong><br />{workspace.subscription_counts.active || 0}</div><div><strong>Pending review</strong><br />{workspace.subscription_counts.pending_admin_review || 0}</div><div><strong>Digests</strong><br />{workspace.digests.length}</div><div><strong>Pending mail</strong><br />{workspace.outbox_counts.pending || 0}</div><div><strong>Sending</strong><br />{workspace.outbox_counts.sending || 0}</div><div><strong>Errors</strong><br />{workspace.outbox_counts.error || 0}</div>
+        {workspaceLoading && !currentWorkspace ? <p role="status">Loading the selected date range…</p> : null}
+        {currentWorkspace ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}>
+          <div><strong>Active</strong><br />{currentWorkspace.subscription_counts.active || 0}</div><div><strong>Pending review</strong><br />{currentWorkspace.subscription_counts.pending_admin_review || 0}</div><div><strong>Digests</strong><br />{currentWorkspace.digests.length}</div><div><strong>Pending mail</strong><br />{currentWorkspace.outbox_counts.pending || 0}</div><div><strong>Sending</strong><br />{currentWorkspace.outbox_counts.sending || 0}</div><div><strong>Errors</strong><br />{currentWorkspace.outbox_counts.error || 0}</div>
         </div> : null}
         {message ? <p role={messageSeverity === "error" ? "alert" : "status"} style={{ color: messageSeverity === "error" ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
@@ -220,45 +277,45 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
         <h2 style={{ marginTop: 0 }}>2. Preview or queue digests</h2>
         <p style={{ color: "#475569" }}>Preview is read-only. Queueing persists the digest and an idempotent outbox row; it does not send email.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>Player ID (blank queues eligible active subscriptions)<br /><input value={queuePlayerId} onChange={(event) => { setQueuePlayerId(event.target.value.replace(/\D/g, "")); setQueueOperationKey(""); }} style={inputStyle} /></label>
-          <label><input type="checkbox" checked={onlyMatches} onChange={(event) => { setOnlyMatches(event.target.checked); setQueueOperationKey(""); }} /> Only players with matches in range</label>
-          <button type="button" onClick={previewDigest} disabled={busy || !queuePlayerId} style={ghostButtonStyle}>Preview one player</button>
-          <ConfirmAction triggerLabel="Queue digests" title="Queue these player updates?" description="This persists eligible digests and idempotent outbox rows for the selected range. It does not send email." confirmLabel="Yes, queue updates" confirmationText="QUEUE PLAYER UPDATES" disabled={busy} busy={busy} onConfirm={queueDigests} />
+          <label>Player ID (blank queues eligible active subscriptions)<br /><input value={queuePlayerId} onChange={(event) => { setQueuePlayerId(event.target.value.replace(/\D/g, "")); setQueueOperationKey(""); }} disabled={workspaceControlsDisabled} style={inputStyle} /></label>
+          <label><input type="checkbox" checked={onlyMatches} onChange={(event) => { setOnlyMatches(event.target.checked); setQueueOperationKey(""); }} disabled={workspaceControlsDisabled} /> Only players with matches in range</label>
+          <button type="button" onClick={previewDigest} disabled={workspaceControlsDisabled || !queuePlayerId} style={ghostButtonStyle}>Preview one player</button>
+          <ConfirmAction triggerLabel="Queue digests" title="Queue these player updates?" description="This persists eligible digests and idempotent outbox rows for the selected range. It does not send email." confirmLabel="Yes, queue updates" confirmationText="QUEUE PLAYER UPDATES" disabled={workspaceControlsDisabled} busy={busy} onConfirm={queueDigests} />
         </div>
-        {preview ? <details open style={{ marginTop: "1rem" }}><summary><strong>Read-only digest preview</strong></summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", background: "#f8fafc", padding: "0.75rem" }}>{JSON.stringify(preview, null, 2)}</pre></details> : null}
+        {preview && workspaceIsCurrentRange ? <details open style={{ marginTop: "1rem" }}><summary><strong>Read-only digest preview</strong></summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", background: "#f8fafc", padding: "0.75rem" }}>{JSON.stringify(preview, null, 2)}</pre></details> : null}
       </article>
 
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>3. Active subscriptions and replacement history</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>Active subscription<br /><select value={selectedSubscriptionId} onChange={(event) => setSelectedSubscriptionId(event.target.value)} style={inputStyle}><option value="">Select…</option>{activeSubscriptions.map((row) => <option key={row.id} value={row.id}>{row.player_name || `Player #${row.player_id}`} · {row.email}</option>)}</select></label>
-          <label>Replacement email<br /><input type="email" required maxLength={320} value={replacementEmail} onChange={(event) => { setReplacementEmail(event.target.value); setReplacementOperationKey(""); }} style={inputStyle} /></label>
-          <label>Replacement note<br /><input value={replacementNote} onChange={(event) => { setReplacementNote(event.target.value); setReplacementOperationKey(""); }} style={inputStyle} /></label>
-          <ConfirmAction triggerLabel="Replace atomically" title="Replace this verified subscriber?" description="This creates the verified replacement and retains the prior subscription in history as unsubscribed." confirmLabel="Yes, replace subscriber" confirmationText="REPLACE VERIFIED SUBSCRIBER" disabled={busy || !selectedSubscription || !replacementEmail} busy={busy} onConfirm={replaceSubscriber} />
-          <ConfirmAction triggerLabel="Deactivate" title="Deactivate this verified subscription?" description="This unsubscribes the selected address while retaining its delivery history." confirmLabel="Yes, deactivate subscription" confirmationText="UNSUBSCRIBE VERIFIED SUBSCRIBER" tone="danger" disabled={busy || !selectedSubscription} busy={busy} onConfirm={deactivateSubscriber} />
+          <label>Active subscription<br /><select value={selectedSubscriptionId} onChange={(event) => setSelectedSubscriptionId(event.target.value)} disabled={workspaceControlsDisabled} style={inputStyle}><option value="">Select…</option>{activeSubscriptions.map((row) => <option key={row.id} value={row.id}>{row.player_name || `Player #${row.player_id}`} · {row.email}</option>)}</select></label>
+          <label>Replacement email<br /><input type="email" required maxLength={320} value={replacementEmail} onChange={(event) => { setReplacementEmail(event.target.value); setReplacementOperationKey(""); }} disabled={workspaceControlsDisabled} style={inputStyle} /></label>
+          <label>Replacement note<br /><input value={replacementNote} onChange={(event) => { setReplacementNote(event.target.value); setReplacementOperationKey(""); }} disabled={workspaceControlsDisabled} style={inputStyle} /></label>
+          <ConfirmAction triggerLabel="Replace atomically" title="Replace this verified subscriber?" description="This creates the verified replacement and retains the prior subscription in history as unsubscribed." confirmLabel="Yes, replace subscriber" confirmationText="REPLACE VERIFIED SUBSCRIBER" disabled={workspaceControlsDisabled || !selectedSubscription || !replacementEmail} busy={busy} onConfirm={replaceSubscriber} />
+          <ConfirmAction triggerLabel="Deactivate" title="Deactivate this verified subscription?" description="This unsubscribes the selected address while retaining its delivery history." confirmLabel="Yes, deactivate subscription" confirmationText="UNSUBSCRIBE VERIFIED SUBSCRIBER" tone="danger" disabled={workspaceControlsDisabled || !selectedSubscription} busy={busy} onConfirm={deactivateSubscriber} />
         </div>
-        <details style={{ marginTop: "1rem" }}><summary><strong>Subscription history ({workspace?.subscriptions.length || 0})</strong></summary><div style={{ overflowX: "auto" }}><table><thead><tr><th>Player</th><th>Email</th><th>Status</th><th>Verified</th><th>Updated</th><th>Version</th></tr></thead><tbody>{(workspace?.subscriptions || []).map((row: CommunicationsSubscription) => <tr key={row.id}><td>{row.player_name || row.player_id}</td><td>{row.email}</td><td>{row.request_status}</td><td>{row.verified_at?.slice(0, 16) || "—"}</td><td>{row.updated_at?.slice(0, 16) || "—"}</td><td>{row.row_version || 1}</td></tr>)}</tbody></table></div></details>
+        <details style={{ marginTop: "1rem" }}><summary><strong>Subscription history ({currentWorkspace?.subscriptions.length || 0})</strong></summary><div style={{ overflowX: "auto" }}><table><thead><tr><th>Player</th><th>Email</th><th>Status</th><th>Verified</th><th>Updated</th><th>Version</th></tr></thead><tbody>{(currentWorkspace?.subscriptions || []).map((row: CommunicationsSubscription) => <tr key={row.id}><td>{row.player_name || row.player_id}</td><td>{row.email}</td><td>{row.request_status}</td><td>{row.verified_at?.slice(0, 16) || "—"}</td><td>{row.updated_at?.slice(0, 16) || "—"}</td><td>{row.row_version || 1}</td></tr>)}</tbody></table></div></details>
       </article>
 
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>4. Outbox queue and immutable delivery history</h2>
         <p style={{ color: "#475569" }}>Sending claims pending rows first. A row left in <code>sending</code> has uncertain delivery and uses a stronger retry phrase to prevent accidental duplicates.</p>
-        <label>Status filter<br /><select value={outboxFilter} onChange={(event) => setOutboxFilter(event.target.value)} style={{ ...inputStyle, maxWidth: "240px" }}><option value="all">All history</option><option value="pending">Pending</option><option value="sending">Sending / uncertain</option><option value="sent">Sent</option><option value="skipped">Skipped</option><option value="error">Error</option></select></label>
+        <label>Status filter<br /><select value={outboxFilter} onChange={(event) => setOutboxFilter(event.target.value)} disabled={workspaceControlsDisabled} style={{ ...inputStyle, maxWidth: "240px" }}><option value="all">All history</option><option value="pending">Pending</option><option value="sending">Sending / uncertain</option><option value="sent">Sent</option><option value="skipped">Skipped</option><option value="error">Error</option></select></label>
         <div style={{ display: "grid", gap: "0.45rem", marginTop: "0.75rem", maxHeight: "420px", overflow: "auto" }}>
-          {visibleOutbox.map((row) => <label key={row.id} style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.65rem", background: selectedOutbox.includes(row.id) ? "#eff6ff" : "white" }}><input type="checkbox" checked={selectedOutbox.includes(row.id)} onChange={(event) => setSelectedOutbox((current) => event.target.checked ? [...new Set([...current, row.id])] : current.filter((id) => id !== row.id))} /> <strong>{rowLabel(row)}</strong><br /><span style={{ color: "#64748b", marginLeft: "1.25rem" }}>{row.email} · attempts {row.attempt_count || 0} · mode {row.delivery_mode || "—"}{row.error_text ? ` · ${row.error_text}` : ""}</span></label>)}
+          {visibleOutbox.map((row) => <label key={row.id} style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.65rem", background: selectedOutbox.includes(row.id) ? "#eff6ff" : "white" }}><input type="checkbox" checked={selectedOutbox.includes(row.id)} disabled={workspaceControlsDisabled} onChange={(event) => setSelectedOutbox((current) => event.target.checked ? [...new Set([...current, row.id])] : current.filter((id) => id !== row.id))} /> <strong>{rowLabel(row)}</strong><br /><span style={{ color: "#64748b", marginLeft: "1.25rem" }}>{row.email} · attempts {row.attempt_count || 0} · mode {row.delivery_mode || "—"}{row.error_text ? ` · ${row.error_text}` : ""}</span></label>)}
           {!visibleOutbox.length ? <p style={{ color: "#64748b" }}>No outbox rows match this filter.</p> : null}
         </div>
         <p><strong>Selected:</strong> {selectedRows.length} · pending {selectedRows.filter((row) => row.send_status === "pending").length} · retryable {selectedRows.filter((row) => row.send_status === "error" || row.send_status === "sending").length}</p>
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
-          <ConfirmAction triggerLabel="Send selected pending" title="Send the selected player updates?" description={`This attempts delivery for ${selectedRows.filter((row) => row.send_status === "pending").length} selected pending row(s).`} confirmLabel="Yes, send updates" confirmationText="SEND PLAYER UPDATES" disabled={busy || !selectedRows.some((row) => row.send_status === "pending")} busy={busy} onConfirm={sendSelected} />
-          <ConfirmAction triggerLabel="Reset selected to pending" title={includesUncertainSending ? "Retry uncertain email deliveries?" : "Retry these failed player updates?"} description={includesUncertainSending ? "Some selected rows may already have been delivered. This resets them for another attempt and can create duplicate email." : "This resets the selected failed rows to pending for another delivery attempt."} confirmLabel={includesUncertainSending ? "Yes, retry uncertain emails" : "Yes, retry updates"} confirmationText={includesUncertainSending ? "RETRY UNCERTAIN EMAILS" : "RETRY PLAYER UPDATES"} tone={includesUncertainSending ? "danger" : "default"} disabled={busy || !selectedRows.some((row) => row.send_status === "error" || row.send_status === "sending")} busy={busy} onConfirm={retrySelected} />
-          <ConfirmAction triggerLabel="Delete selected pending" title="Delete these queued player updates?" description={`This permanently deletes ${selectedRows.filter((row) => row.send_status === "pending").length} selected pending outbox row(s).`} confirmLabel="Yes, delete queued updates" confirmationText="DELETE QUEUED UPDATES" tone="danger" disabled={busy || !selectedRows.some((row) => row.send_status === "pending")} busy={busy} onConfirm={deleteSelected} />
+          <ConfirmAction triggerLabel="Send selected pending" title="Send the selected player updates?" description={`This attempts delivery for ${selectedRows.filter((row) => row.send_status === "pending").length} selected pending row(s).`} confirmLabel="Yes, send updates" confirmationText="SEND PLAYER UPDATES" disabled={workspaceControlsDisabled || !selectedRows.some((row) => row.send_status === "pending")} busy={busy} onConfirm={sendSelected} />
+          <ConfirmAction triggerLabel="Reset selected to pending" title={includesUncertainSending ? "Retry uncertain email deliveries?" : "Retry these failed player updates?"} description={includesUncertainSending ? "Some selected rows may already have been delivered. This resets them for another attempt and can create duplicate email." : "This resets the selected failed rows to pending for another delivery attempt."} confirmLabel={includesUncertainSending ? "Yes, retry uncertain emails" : "Yes, retry updates"} confirmationText={includesUncertainSending ? "RETRY UNCERTAIN EMAILS" : "RETRY PLAYER UPDATES"} tone={includesUncertainSending ? "danger" : "default"} disabled={workspaceControlsDisabled || !selectedRows.some((row) => row.send_status === "error" || row.send_status === "sending")} busy={busy} onConfirm={retrySelected} />
+          <ConfirmAction triggerLabel="Delete selected pending" title="Delete these queued player updates?" description={`This permanently deletes ${selectedRows.filter((row) => row.send_status === "pending").length} selected pending outbox row(s).`} confirmLabel="Yes, delete queued updates" confirmationText="DELETE QUEUED UPDATES" tone="danger" disabled={workspaceControlsDisabled || !selectedRows.some((row) => row.send_status === "pending")} busy={busy} onConfirm={deleteSelected} />
         </div>
       </article>
 
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Saved digest history</h2>
-        <div style={{ overflowX: "auto" }}><table><thead><tr><th>Player</th><th>Range</th><th>Updated</th><th>Version</th></tr></thead><tbody>{(workspace?.digests || []).map((row) => <tr key={row.id}><td>{row.player_name || row.player_id}</td><td>{row.week_start} → {row.week_end}</td><td>{row.updated_at?.slice(0, 16) || "—"}</td><td>{row.row_version || 1}</td></tr>)}</tbody></table></div>
+        <div style={{ overflowX: "auto" }}><table><thead><tr><th>Player</th><th>Range</th><th>Updated</th><th>Version</th></tr></thead><tbody>{(currentWorkspace?.digests || []).map((row) => <tr key={row.id}><td>{row.player_name || row.player_id}</td><td>{row.week_start} → {row.week_end}</td><td>{row.updated_at?.slice(0, 16) || "—"}</td><td>{row.row_version || 1}</td></tr>)}</tbody></table></div>
       </article>
     </section>
   );

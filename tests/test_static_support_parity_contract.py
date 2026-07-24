@@ -74,8 +74,11 @@ def test_admin_support_request_status_is_never_served_from_a_stale_next_cache():
 def test_admin_support_queue_auto_loads_and_keeps_notes_optional():
     panel = _read("apps/web/app/admin/support-requests/SupportRequestsPanel.tsx")
 
-    assert 'import { useAuthenticatedAutoLoad } from "@/lib/useAuthenticatedAutoLoad";' in panel
-    assert 'useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadRequests);' in panel
+    assert 'import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";' in panel
+    assert "useAuthenticatedAutoLoad(" in panel
+    assert 'status.enabled ? accessToken : ""' in panel
+    assert "loadRequests," in panel
+    assert "`${statusFilter}:${typeFilter}`" in panel
     assert "Refresh requests" in panel
     assert ">Load requests<" not in panel
     assert "Admin note (optional)" in panel

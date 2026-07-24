@@ -24,19 +24,29 @@ JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL=0
 
 For redirected delivery testing, use `JUPR_EMAIL_MODE=staging_redirect`, set `JUPR_STAGING_EMAIL_REDIRECT_TO` to the approved staging recipient, keep `JUPR_WEB_BASE_URL` pointed at the staging Next origin, configure SMTP secrets on Fly, and keep the live-delivery flag off. Never put the service-role key or SMTP secrets in Vercel or any `NEXT_PUBLIC_*` variable.
 
+The reconciled staging runtime was at `JUPR_EMAIL_MODE=dry_run` on 2026-07-24.
+Keep `dry_run` as the at-rest state. Do not send a real customer message. The
+redirected-delivery, password-recovery, unsubscribe, and preferences checks wait
+for Joe to name and observe an approved staging inbox; return to `dry_run` after
+that bounded session.
+
 ## Automated-ready evidence
 
 - Admin APIs require Supabase JWT authorization, club-scoped permissions, and a server-side service role.
 - Every recap/subscription/outbox write carries `expected_row_version`; stale conditional writes fail or are returned as stale without mutating the row.
 - Queue and replacement requests carry UUID operation keys. Verified subscriber replacement is one Postgres transaction and preserves the prior row as unsubscribed history.
-- Selected sends claim `pending` rows as `sending` before delivery. A crash can leave uncertain `sending` rows; retrying them requires the stronger `RETRY UNCERTAIN EMAILS` phrase.
+- Selected sends claim `pending` rows as `sending` before delivery. A crash can
+  leave uncertain `sending` rows; the retry uses an explicit Yes/No dialog that
+  supplies the stronger internal `RETRY UNCERTAIN EMAILS` API safeguard. The
+  operator never types the phrase.
 - The email worker requires a durable `worker_run_log` pre-run marker in staging; a missing log table fails closed before delivery.
 - Next live email is independently blocked by `JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL`. Use `dry_run` or `staging_redirect` for acceptance.
 - Published and unpublished recap data uses the same full preview surface. Draft print output is watermarked as operator-only.
 
 ## Deferred manual acceptance
 
-Use disposable staging rows and take screenshots/audit IDs for each step.
+Use disposable staging rows. The operator captures the requested screenshots;
+the evidence runner records audit/provider IDs.
 
 The read-only browser evidence in `apps/web/e2e/communications.staging.spec.ts` uses `STAGING_ADMIN_BEARER_TOKEN`, optional `STAGING_ADMIN_EMAIL`, and `JUPR_COMMUNICATIONS_DRAFT_WEEK_START` for a disposable unpublished recap. It intentionally performs no writes; the steps below remain deferred to the consolidated session.
 
