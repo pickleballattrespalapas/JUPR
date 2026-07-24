@@ -15,6 +15,10 @@ from jupr_app.domain.recaps.weekly_recap import (
     compute_weekly_recap,
     get_spotlight_candidates,
 )
+from jupr_app.services.staging_write_guard import (
+    require_staging_communications_mutations,
+    staging_communications_mutations_enabled,
+)
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 CONFIRM_GENERATE = "GENERATE RECAP"
@@ -375,16 +379,23 @@ def build_admin_weekly_recap_status(supabase: Any | None, *, club_id: str) -> di
     if not is_admin_weekly_recap_enabled():
         return {
             "enabled": False,
+            "mutations_enabled": False,
             "status": "guarded_off",
             "list_endpoint": None,
             "warnings": ["Next Weekly Recap Admin is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP on FastAPI."],
         }
+    mutations_enabled = staging_communications_mutations_enabled()
+    warnings = [] if mutations_enabled else [
+        "Read-only mode is active. Open the isolated communications write wave "
+        "before generating, saving, publishing, or unpublishing recaps."
+    ]
     return {
         "enabled": True,
+        "mutations_enabled": mutations_enabled,
         "status": "ready_for_weekly_recap_admin",
         "list_endpoint": "/admin/clubs/{club_id}/weekly-recap/recaps",
         "generate_endpoint": "/admin/clubs/{club_id}/weekly-recap/generate",
-        "warnings": [],
+        "warnings": warnings,
     }
 
 
@@ -436,6 +447,7 @@ def generate_admin_weekly_recap(
 ) -> dict[str, Any]:
     if not is_admin_weekly_recap_enabled():
         raise PermissionError("Next Weekly Recap Admin is disabled.")
+    require_staging_communications_mutations()
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_GENERATE:
         raise ValueError(f"Type {CONFIRM_GENERATE} to generate a weekly recap draft.")
     start_date, end_date = _date_range(week_start, week_end)
@@ -521,6 +533,7 @@ def save_admin_weekly_recap(
 ) -> dict[str, Any]:
     if not is_admin_weekly_recap_enabled():
         raise PermissionError("Next Weekly Recap Admin is disabled.")
+    require_staging_communications_mutations()
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_SAVE:
         raise ValueError(f"Type {CONFIRM_SAVE} to save the weekly recap draft.")
     before = _fetch_recap_row(supabase, club_id=str(club_id), week_start=str(week_start))
@@ -610,6 +623,7 @@ def publish_admin_weekly_recap(
 ) -> dict[str, Any]:
     if not is_admin_weekly_recap_enabled():
         raise PermissionError("Next Weekly Recap Admin is disabled.")
+    require_staging_communications_mutations()
     clean_action = _clean_text(action, limit=40).lower() or "publish"
     if clean_action not in {"publish", "unpublish"}:
         raise ValueError("action must be publish or unpublish")

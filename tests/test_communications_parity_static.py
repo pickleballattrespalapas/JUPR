@@ -41,6 +41,44 @@ def test_next_communications_ui_has_confirmation_and_uncertain_delivery_guards()
     assert "service_role" not in _read("apps/web/lib/adminPlayerUpdatesApi.ts").lower().replace("service_role_configured", "")
 
 
+def test_communications_ui_exposes_read_only_mode_and_disables_mutations() -> None:
+    player_updates = _read(
+        "apps/web/app/admin/player-updates/PlayerUpdatesPanel.tsx"
+    )
+    verified_updates = _read(
+        "apps/web/app/admin/player-updates/verified-requests/VerifiedRequestsPanel.tsx"
+    )
+    weekly_recap = _read(
+        "apps/web/app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx"
+    )
+
+    assert "mutations_enabled: boolean" in _read(
+        "apps/web/lib/adminPlayerUpdatesApi.ts"
+    )
+    assert "mutations_enabled: boolean" in _read(
+        "apps/web/lib/adminWeeklyRecapApi.ts"
+    )
+    assert (
+        "const mutationControlsDisabled = workspaceControlsDisabled || "
+        "!status.mutations_enabled"
+    ) in player_updates
+    assert "Read-only:" in player_updates
+    assert "disabled={mutationControlsDisabled}" in player_updates
+    assert "disabled={busy || !status.mutations_enabled}" in verified_updates
+    assert "Read-only:" in verified_updates
+    assert (
+        "const mutationControlsDisabled = busy || !status.mutations_enabled"
+    ) in weekly_recap
+    assert "saved recaps and unpublished previews remain available" in weekly_recap
+    assert "disabled={mutationControlsDisabled" in weekly_recap
+    assert (
+        weekly_recap.count(
+            'disabled={mutationControlsDisabled || selectedRecap.status === "published"}'
+        )
+        >= 6
+    )
+
+
 def test_admin_recap_has_full_unpublished_preview_and_print_surface() -> None:
     preview = _read("apps/web/app/admin/weekly-recap/AdminWeeklyRecapPreview.tsx")
     panel = _read("apps/web/app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx")

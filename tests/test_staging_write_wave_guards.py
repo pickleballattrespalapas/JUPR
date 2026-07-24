@@ -14,7 +14,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from jupr_app.services.staging_write_guard import (
+    COMMUNICATIONS_MUTATION_FLAG,
+    require_staging_communications_mutations,
     require_staging_match_canonical_normalize_writes,
+    staging_communications_mutations_enabled,
     staging_match_canonical_normalize_writes_enabled,
 )
 from scripts.staging_write_waves import (
@@ -215,3 +218,82 @@ def test_canonical_normalize_status_and_guard_are_staging_only(monkeypatch) -> N
     monkeypatch.setenv("JUPR_ENV", "staging")
     assert staging_match_canonical_normalize_writes_enabled() is True
     require_staging_match_canonical_normalize_writes()
+
+
+def test_communications_mutation_guard_is_local_friendly_and_staging_exact(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(COMMUNICATIONS_MUTATION_FLAG, "1")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "communications")
+
+    for environment in ("local", "test", "development", "dev"):
+        monkeypatch.setenv("JUPR_ENV", environment)
+        assert staging_communications_mutations_enabled() is True
+        require_staging_communications_mutations()
+
+    for environment in ("production", "prod", "stagin", "unknown"):
+        monkeypatch.setenv("JUPR_ENV", environment)
+        assert staging_communications_mutations_enabled() is False
+        with pytest.raises(PermissionError, match="Communications mutations"):
+            require_staging_communications_mutations()
+
+    monkeypatch.delenv("JUPR_ENV", raising=False)
+    assert staging_communications_mutations_enabled() is False
+
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "none")
+    assert staging_communications_mutations_enabled() is False
+
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "communications")
+    monkeypatch.setenv(COMMUNICATIONS_MUTATION_FLAG, "0")
+    assert staging_communications_mutations_enabled() is False
+
+    monkeypatch.setenv(COMMUNICATIONS_MUTATION_FLAG, "yes")
+    assert staging_communications_mutations_enabled() is True
+    require_staging_communications_mutations()
+
+
+def test_every_communications_route_has_an_independent_service_guard() -> None:
+    expected_routes = set(STAGING_WRITE_WAVE_ROUTES["communications"])
+    guarded_routes: set[tuple[str, str]] = set()
+
+    for source_name in (
+        "admin_player_updates_routes.py",
+        "admin_verified_updates_routes.py",
+        "admin_weekly_recap_routes.py",
+    ):
+        source_path = ROOT / "services" / "api" / source_name
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"),
+            filename=str(source_path),
+        )
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            calls = {
+                child.func.id
+                for child in ast.walk(node)
+                if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+            }
+            if not calls.intersection(
+                {
+                    "_require_communications_mutations",
+                    "require_staging_communications_mutations",
+                }
+            ):
+                continue
+            for decorator in node.decorator_list:
+                if (
+                    isinstance(decorator, ast.Call)
+                    and isinstance(decorator.func, ast.Attribute)
+                    and decorator.func.attr in UNSAFE_METHODS
+                    and decorator.args
+                ):
+                    guarded_routes.add(
+                        (
+                            decorator.func.attr.upper(),
+                            ast.literal_eval(decorator.args[0]),
+                        )
+                    )
+
+    assert guarded_routes == expected_routes

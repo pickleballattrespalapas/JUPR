@@ -8,6 +8,7 @@ LEAGUE_MANAGER_WRITE_FLAG = "JUPR_ENABLE_STAGING_NEXT_ADMIN_LEAGUE_MANAGER_WRITE
 MATCH_CANONICAL_NORMALIZE_WRITE_FLAG = (
     "JUPR_ENABLE_STAGING_NEXT_ADMIN_MATCH_CANONICAL_NORMALIZE_WRITES"
 )
+COMMUNICATIONS_MUTATION_FLAG = "JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"
 TRUTHY = {"1", "true", "yes", "y", "on"}
 NON_STAGING_WRITE_ENVIRONMENTS = {"local", "test", "development", "dev", "production"}
 
@@ -68,3 +69,26 @@ def staging_match_canonical_normalize_writes_enabled() -> bool:
     if environment != "staging":
         return False
     return os.getenv(MATCH_CANONICAL_NORMALIZE_WRITE_FLAG, "").strip().lower() in TRUTHY
+
+
+def staging_communications_mutations_enabled() -> bool:
+    """Keep staging communications reads open without opening their writes."""
+
+    environment = os.getenv("JUPR_ENV", "").strip().lower()
+    if environment in {"local", "test", "development", "dev"}:
+        return True
+    if environment != "staging":
+        return False
+    return (
+        os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip() == "communications"
+        and os.getenv(COMMUNICATIONS_MUTATION_FLAG, "").strip().lower() in TRUTHY
+    )
+
+
+def require_staging_communications_mutations() -> None:
+    if staging_communications_mutations_enabled():
+        return
+    raise PermissionError(
+        "Communications mutations are disabled. Open only the isolated staging "
+        f"communications wave with {COMMUNICATIONS_MUTATION_FLAG}=1."
+    )

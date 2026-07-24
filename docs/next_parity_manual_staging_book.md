@@ -170,6 +170,16 @@ evidence book.
 Normal pull-request CI runs only the Pending-safe structural checks and never needs
 staging credentials.
 
+GitHub lists the workflow from the repository default branch
+(`rollback-feb8`). Its checkout and provenance contract still execute the exact
+canonical `origin/staging` candidate. A dispatch from either `staging` or
+`rollback-feb8` must match that branch's current event SHA; every executable wave
+then requires `candidate_sha` to equal `origin/staging`. For authenticated read
+and Tournament Live modes, the workflow mints a fresh masked Supabase JWT from
+the staging admin credentials, validates the club-scoped permissions against
+FastAPI, and discovers only the allowlisted disposable fixtures. No expiring
+bearer token or fixture ID needs to be stored as a long-lived GitHub setting.
+
 Configure only the route-specific staging variables named by the workflow.
 Tournament Live is the sole automated mutation opt-in. Keep every other mutation
 flag off and execute the deferred cases from the page and fixture ledgers below,
@@ -185,7 +195,7 @@ committed book.
 | `preflight` | `make check-parity-final-evidence` plus production Next build and full focused Python suite | Candidate SHA and clean integrated Order-28 tree | `Pending` | — | — |
 | `public-read` | `Parity Final Evidence` workflow mode `public-read`; local equivalent: `python scripts/run_parity_staging_wave.py public-read --candidate-sha <sha> --vercel-deployment-id <id> --vercel-deployment-origin <immutable-origin> --fly-image-ref <ref>` | Exact preview/API/Auth origins, deployment identities, and Vercel bypass | `Pending` | — | — |
 | `public-intake-auth` | Workflow mode `public-intake-auth`; local equivalent uses the same runner | Real staging auth account; read-only intake, registration, and partner-board readiness; no mutation confirmation | `Pending` | — | — |
-| `admin-read-export` | Workflow mode `admin-read-export`; local equivalent uses the same runner | Admin tokens, role account, and unpublished recap fixture | `Pending` | — | — |
+| `admin-read-export` | Workflow mode `admin-read-export`; local equivalent uses the same runner | Staging admin email/password and anon key; the workflow mints a fresh masked token, validates permissions, and verifies the exact unpublished recap plus tournament/draw fixtures | `Pending` | — | — |
 | `reversible-admin-writes` | Manual-only deferred procedure; no workflow mode | Exact per-page route/resource plan, captured pre-state, truthful inverse, positive write/readback/restore projections, named operator, and a separate human witness | `Pending` | — | — |
 | `match-rating-writes` | Workflow mode `match-rating-writes` for Tournament Live only; all other cases manual-only | Tournament Live disposable game/version fixture, dynamic fingerprints, distinct idempotency keys, exact mutation confirmation, and `finally` restore/re-read | `Pending` | — | — |
 | `recovery` | Manual-only route-specific reconciliation; no workflow mode | Exact affected resource IDs, authoritative GET routes, JSON-bearing 2xx statuses, positive state/audit projections, Match Log/Replay handoff evidence, all mutation flags off | `Pending` | — | — |
@@ -310,7 +320,7 @@ Never open two rows together and never synthesize an "enable all" deployment.
 | `flag:global` | At rest: `JUPR_ENV=staging`; `JUPR_STAGING_WRITE_WAVE=none`; `JUPR_REQUIRE_API_AUDIT_LOG=1`; `JUPR_REQUIRE_WORKER_RUN_LOG=1`; `JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT=0`; `JUPR_ENABLE_NEXT_ADMIN_SHELL=1`. A selected admin wave may set the pilot to `1` only for that release. | Production write pilot remains `0` | Dispatch a distinct `none` release and verify the all-false projection | — | — |
 | `flag:public-intake-auth` | `JUPR_REGISTRATION_EDIT_SECRET` and `JUPR_REGISTRATION_CONFIRMATION_SECRET` present only server-side | Secrets absent from Vercel/browser; no production test writes | Close registration/support intake at API routing layer | — | — |
 | `flag:admin-read` | `JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS=1`; `JUPR_ENABLE_NEXT_ADMIN_MATCH_CANONICAL_AUDIT=1`; `JUPR_ENABLE_NEXT_ADMIN_TOOLS=1`; `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1`; `JUPR_ENABLE_NEXT_ADMIN_REPLAY=1` | Apply/write gates remain `0` | Close the affected visibility gate | — | — |
-| `flag:communications` | `JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=1`; `JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=1`; `JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS=1` only for the redirected-email wave | Live-email gate remains `0` | Set auto-email `0`; stop worker; reconcile outbox | — | — |
+| `flag:communications` | At rest, the read surfaces remain available with `JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=1`, `JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=1`, `JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS=0`, and `write_wave=none`. Only the isolated `communications` wave may set `JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS=1`; `JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS=1` is separate and only for the redirected-email wave. | Production read and mutation flags remain `0`; live-email gate remains `0` | Set communications mutations and auto-email to `0`; restore `write_wave=none`; stop worker; reconcile outbox | — | — |
 | `flag:match-player` | `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER=1`; `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY=1`; `JUPR_ENABLE_NEXT_ADMIN_REPLAY=1`; `JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR=1`; supporting `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1` | All production match-write gates remain `0` | Close uploader/apply/replay/editor gates; reconcile Match Log | — | — |
 | `flag:league` | `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER=1`; `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE=1`; `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN=1`; `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT=1` only in their waves | Awards/Live write gates remain `0` | Close submit, domain, awards, then manager; reconcile rounds | — | — |
 | `flag:live-ladder-admin` | Visibility gates `JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER=1`, `JUPR_ENABLE_NEXT_ADMIN_MONEYBALL=1`, `JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE=1`; open only matching `JUPR_ENABLE_STAGING_NEXT_ADMIN_CHALLENGE_LADDER_WRITES=1`, `JUPR_ENABLE_STAGING_NEXT_ADMIN_MONEYBALL_WRITES=1`, or `JUPR_ENABLE_STAGING_NEXT_ADMIN_JUPR_LIVE_WRITES=1` | All three staging-only write flags remain `0` | Close affected staging write flag; reconcile operation ledger | — | — |

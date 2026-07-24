@@ -13,6 +13,9 @@ from jupr_app.services.admin_verified_updates_service import (
     list_admin_verified_update_requests,
     update_admin_verified_update_request,
 )
+from jupr_app.services.staging_write_guard import (
+    require_staging_communications_mutations,
+)
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -86,6 +89,10 @@ def install_admin_verified_updates_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_verified_updates_enabled():
             raise HTTPException(status_code=403, detail="Next verified update requests are disabled.")
+        try:
+            require_staging_communications_mutations()
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:

@@ -3,7 +3,7 @@ import VerifiedRequestsPanel from "./VerifiedRequestsPanel";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
-type StatusResponse = { enabled: boolean; status: string; counts?: Record<string, number>; warnings?: string[] };
+type StatusResponse = { enabled: boolean; mutations_enabled: boolean; status: string; counts?: Record<string, number>; warnings?: string[] };
 
 function apiBase(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;

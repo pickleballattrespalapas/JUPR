@@ -1,9 +1,23 @@
 import { expect, test } from "@playwright/test";
 import { bootstrapStagingContext } from "./support/staging";
 
+const adminToken = String(process.env.STAGING_ADMIN_BEARER_TOKEN || "").trim();
+const adminEmail = String(process.env.STAGING_ADMIN_EMAIL || "staging-admin@example.invalid").trim();
+
 test.describe("Match Log durability staging smoke", () => {
   test.beforeEach(async ({ context }) => {
     await bootstrapStagingContext(context);
+    test.skip(!adminToken, "STAGING_ADMIN_BEARER_TOKEN is required for authenticated durability evidence.");
+    await context.addInitScript(
+      ({ token, email }) => {
+        window.localStorage.setItem("jupr_admin_session_v1", JSON.stringify({
+          access_token: token,
+          token_type: "bearer",
+          user: { email }
+        }));
+      },
+      { token: adminToken, email: adminEmail }
+    );
   });
 
   test("exposes durable edit and replay evidence without writing", async ({ page }) => {
@@ -41,6 +55,7 @@ test.describe("Match Log durability staging smoke", () => {
     await page.goto("/admin/replay-history");
     await expect(page.getByRole("heading", { name: "Replay History" })).toBeVisible();
     await expect(page.getByText(/durable replay_jobs record/i)).toBeVisible();
-    await expect(page.getByRole("button", { name: /Run Replay History/i })).toBeDisabled();
+    await expect(page.getByRole("heading", { name: "Next replay is disabled" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Run replay" })).toHaveCount(0);
   });
 });

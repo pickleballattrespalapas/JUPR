@@ -12,6 +12,10 @@ from jupr_app.domain.notifications.player_profile_update_repo import (
     mark_unsubscribed,
     reject_request,
 )
+from jupr_app.services.staging_write_guard import (
+    require_staging_communications_mutations,
+    staging_communications_mutations_enabled,
+)
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
 ACTIONS = {"approve", "reject", "unsubscribe"}
@@ -84,7 +88,7 @@ def _row_payload(row: dict[str, Any], names: dict[int, str]) -> dict[str, Any]:
 
 def build_admin_verified_updates_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
     if not is_admin_verified_updates_enabled():
-        return {"enabled": False, "status": "guarded_off", "warnings": ["Enable JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES to review verified update requests in Next."]}
+        return {"enabled": False, "mutations_enabled": False, "status": "guarded_off", "warnings": ["Enable JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES to review verified update requests in Next."]}
     counts = {"pending": 0, "active": 0}
     if supabase is not None:
         try:
@@ -93,7 +97,12 @@ def build_admin_verified_updates_status(supabase: Any | None, *, club_id: str) -
             counts = {"pending": len(pending), "active": len(active)}
         except Exception:
             pass
-    return {"enabled": True, "status": "ready_for_verified_updates_review", "counts": counts, "warnings": []}
+    mutations_enabled = staging_communications_mutations_enabled()
+    warnings = [] if mutations_enabled else [
+        "Read-only mode is active. Open the isolated communications write wave "
+        "before reviewing verified update requests."
+    ]
+    return {"enabled": True, "mutations_enabled": mutations_enabled, "status": "ready_for_verified_updates_review", "counts": counts, "warnings": warnings}
 
 
 def list_admin_verified_update_requests(supabase: Any, *, club_id: str, status: str = "pending", limit: int = 100) -> dict[str, Any]:
@@ -120,6 +129,7 @@ def update_admin_verified_update_request(
 ) -> dict[str, Any]:
     if not is_admin_verified_updates_enabled():
         raise PermissionError("Next verified update requests are disabled.")
+    require_staging_communications_mutations()
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM:
         raise ValueError(f"Type {CONFIRM} to update the verified update request.")
     clean_action = _clean_text(action, limit=40).lower()

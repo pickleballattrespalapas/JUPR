@@ -24,6 +24,9 @@ from jupr_app.services.admin_communications_service import (
     retry_outbox_rows,
     send_selected_outbox_rows,
 )
+from jupr_app.services.staging_write_guard import (
+    require_staging_communications_mutations,
+)
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -93,6 +96,13 @@ def _require_player_updates_enabled() -> None:
         raise HTTPException(status_code=403, detail="Next Player Updates Admin is disabled.")
 
 
+def _require_communications_mutations() -> None:
+    try:
+        require_staging_communications_mutations()
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 def _resolve_player_updates_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str) -> tuple[str, str]:
     user = authenticate_bearer(authorization)
     role_resolution = resolve_admin_role(
@@ -147,6 +157,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_player_updates_enabled():
             raise HTTPException(status_code=403, detail="Next Player Updates Admin is disabled.")
+        _require_communications_mutations()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_player_updates_role_or_403(
@@ -209,6 +220,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         _require_player_updates_enabled()
+        _require_communications_mutations()
         _require_service_role()
         supabase = get_supabase_client()
         _resolve_player_updates_role_or_403(
@@ -235,6 +247,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         _require_player_updates_enabled()
+        _require_communications_mutations()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_player_updates_role_or_403(
@@ -267,6 +280,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         _require_player_updates_enabled()
+        _require_communications_mutations()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_player_updates_role_or_403(
@@ -296,6 +310,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         _require_player_updates_enabled()
+        _require_communications_mutations()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_player_updates_role_or_403(
@@ -324,6 +339,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         _require_player_updates_enabled()
+        _require_communications_mutations()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_player_updates_role_or_403(
@@ -353,6 +369,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         _require_player_updates_enabled()
+        _require_communications_mutations()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_player_updates_role_or_403(
@@ -387,6 +404,7 @@ def install_admin_player_updates_routes(app, *, get_supabase_client) -> None:
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         _require_player_updates_enabled()
+        _require_communications_mutations()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_player_updates_role_or_403(

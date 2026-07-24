@@ -18,6 +18,9 @@ from jupr_app.services.admin_weekly_recap_service import (
     save_admin_weekly_recap,
     StaleWeeklyRecapStateError,
 )
+from jupr_app.services.staging_write_guard import (
+    require_staging_communications_mutations,
+)
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -93,6 +96,13 @@ def _handle_common(exc: Exception) -> None:
     raise exc
 
 
+def _require_communications_mutations() -> None:
+    try:
+        require_staging_communications_mutations()
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
     """Register guarded Weekly Recap Admin routes for the Next admin pilot."""
 
@@ -145,6 +155,7 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_weekly_recap_enabled():
             raise HTTPException(status_code=403, detail="Next Weekly Recap Admin is disabled.")
+        _require_communications_mutations()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_weekly_recap_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
@@ -173,6 +184,7 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_weekly_recap_enabled():
             raise HTTPException(status_code=403, detail="Next Weekly Recap Admin is disabled.")
+        _require_communications_mutations()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_weekly_recap_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
@@ -201,6 +213,7 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_weekly_recap_enabled():
             raise HTTPException(status_code=403, detail="Next Weekly Recap Admin is disabled.")
+        _require_communications_mutations()
         _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_weekly_recap_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)

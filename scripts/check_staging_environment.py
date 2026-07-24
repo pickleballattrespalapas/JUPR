@@ -75,7 +75,9 @@ FULL_NEXT_ADMIN_FLAGS = (
     "JUPR_ENABLE_NEXT_ADMIN_SHELL",
     "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG",
     "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER",
+    "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES",
     "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS",
+    "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
     "JUPR_ENABLE_NEXT_ADMIN_MONEYBALL",
     "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
     "JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER",
@@ -376,6 +378,13 @@ def _check_api(
     )
     status_paths = {template.format(club_id=club_id) for template in ADMIN_STATUS_PATHS}
 
+    def expected_surface_flag(flag_name: str) -> bool:
+        """Project read-surface flags separately from controlled write gates."""
+
+        if flag_name in expected_gates:
+            return expected_gates[flag_name]
+        return _truthy(os.getenv(flag_name))
+
     def require_bool(path: str, payload: Any, key: str, expected: bool) -> None:
         actual = payload.get(key) if isinstance(payload, dict) else None
         results[path][key] = actual
@@ -524,7 +533,7 @@ def _check_api(
                 }.items():
                     projected = workflows.get(workflow_key) or {}
                     actual = projected.get("enabled")
-                    expected = expected_gates[flag_name]
+                    expected = expected_surface_flag(flag_name)
                     results[path][f"workflow.{workflow_key}.enabled"] = actual
                     if actual is not expected:
                         results[path]["status"] = "error"
@@ -567,7 +576,7 @@ def _check_api(
                 f"/admin/clubs/{club_id}/tools/status": "JUPR_ENABLE_NEXT_ADMIN_TOOLS",
             }
             gate_name = status_gate_names.get(path)
-            expected_enabled = expected_gates[gate_name] if gate_name else True
+            expected_enabled = expected_surface_flag(gate_name) if gate_name else True
             if expect_full_next_admin and enabled is not expected_enabled:
                 results[path]["status"] = "error"
                 summary["errors"].append(
@@ -579,8 +588,28 @@ def _check_api(
                 require_bool(
                     path,
                     payload,
+                    "mutations_enabled",
+                    expected_gates["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"],
+                )
+                require_bool(
+                    path,
+                    payload,
                     "auto_send_enabled",
                     expected_gates["JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS"],
+                )
+            elif path == f"/admin/clubs/{club_id}/verified-updates/status":
+                require_bool(
+                    path,
+                    payload,
+                    "mutations_enabled",
+                    expected_gates["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"],
+                )
+            elif path == f"/admin/clubs/{club_id}/weekly-recap/status":
+                require_bool(
+                    path,
+                    payload,
+                    "mutations_enabled",
+                    expected_gates["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"],
                 )
             elif path == f"/admin/clubs/{club_id}/league-manager/status":
                 require_bool(
