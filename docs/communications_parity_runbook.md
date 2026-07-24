@@ -14,6 +14,8 @@ SUPABASE_URL=<staging project URL>
 SUPABASE_SERVICE_ROLE_KEY=<staging service role; FastAPI only>
 JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=1
 JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=1
+JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS=0
+JUPR_STAGING_WRITE_WAVE=none
 JUPR_REQUIRE_API_AUDIT_LOG=1
 JUPR_REQUIRE_WORKER_RUN_LOG=1
 JUPR_EMAIL_MODE=dry_run
@@ -21,6 +23,16 @@ JUPR_WEB_BASE_URL=<staging Next preview origin>
 JUPR_STAGING_EMAIL_REDIRECT_TO=<approved staging inbox>
 JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL=0
 ```
+
+The two base feature flags expose authenticated reads at rest. They do not
+authorize a mutation. Every communications POST/PATCH remains blocked by the
+staging wave middleware and an independent application guard until the exact
+`communications` wave sets
+`JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS=1`. Restore the mutation flag
+to `0` and `JUPR_STAGING_WRITE_WAVE=none` after the bounded batch.
+Reload the admin page after either deployment transition so its disabled-state
+projection reflects the active release; FastAPI remains authoritative and
+rejects a stale browser action.
 
 For redirected delivery testing, use `JUPR_EMAIL_MODE=staging_redirect`, set `JUPR_STAGING_EMAIL_REDIRECT_TO` to the approved staging recipient, keep `JUPR_WEB_BASE_URL` pointed at the staging Next origin, configure SMTP secrets on Fly, and keep the live-delivery flag off. Never put the service-role key or SMTP secrets in Vercel or any `NEXT_PUBLIC_*` variable.
 
@@ -48,7 +60,14 @@ that bounded session.
 Use disposable staging rows. The operator captures the requested screenshots;
 the evidence runner records audit/provider IDs.
 
-The read-only browser evidence in `apps/web/e2e/communications.staging.spec.ts` uses `STAGING_ADMIN_BEARER_TOKEN`, optional `STAGING_ADMIN_EMAIL`, and `JUPR_COMMUNICATIONS_DRAFT_WEEK_START` for a disposable unpublished recap. It intentionally performs no writes; the steps below remain deferred to the consolidated session.
+The read-only browser evidence in `apps/web/e2e/communications.staging.spec.ts`
+uses a fresh workflow-minted `STAGING_ADMIN_BEARER_TOKEN`, optional
+`STAGING_ADMIN_EMAIL`, and the validated disposable draft for week
+`2099-01-05`. The fixture contains only `Test` and `staging only` content and
+remains unpublished. The workflow discovers these values after authenticating;
+it does not depend on a stored bearer token or stored fixture IDs. The suite
+intentionally performs no writes; the steps below remain deferred to the
+consolidated session.
 
 1. Generate a recap, open its full unpublished preview, print/save it, change a spotlight selection, save, publish, unpublish, and compare with Streamlit.
 2. Open the same recap in two browsers. Save in the first; confirm the second receives a stale-state message and cannot overwrite it.

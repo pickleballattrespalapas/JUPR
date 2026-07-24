@@ -1,5 +1,6 @@
 from pathlib import Path
 import hashlib
+import re
 
 import scripts.run_parity_staging_wave as staging_wave
 from scripts.run_parity_staging_wave import (
@@ -329,9 +330,20 @@ def test_manifest_is_route_specific_and_generic_mutation_modes_are_absent(tmp_pa
     workflow = (root / ".github/workflows/parity-final-evidence.yml").read_text(
         encoding="utf-8"
     )
-    assert 'if [ "$GITHUB_REF" != "refs/heads/staging" ]; then' in workflow
     assert "WORKFLOW_SHA=\"$(git rev-parse HEAD)\"" in workflow
-    assert '[ "$WORKFLOW_SHA" != "$GITHUB_SHA" ] || [ "$WORKFLOW_SHA" != "$STAGING_SHA" ]' in workflow
+    assert 'refs/heads/staging)' in workflow
+    assert 'refs/heads/rollback-feb8)' in workflow
+    assert '[ "$GITHUB_SHA" != "$STAGING_SHA" ] || [ "$WORKFLOW_SHA" != "$STAGING_SHA" ]' in workflow
+    assert 'DEFAULT_SHA="$(git rev-parse refs/remotes/origin/rollback-feb8)"' in workflow
+    assert '[ "$GITHUB_SHA" != "$DEFAULT_SHA" ] || [ "$WORKFLOW_SHA" != "$STAGING_SHA" ]' in workflow
+    assert (
+        '<(git show "$GITHUB_SHA:.github/workflows/parity-final-evidence.yml")'
+        in workflow
+    )
+    assert (
+        "default-branch workflow registry must be byte-identical to canonical staging"
+        in workflow
+    )
     assert "reversible-admin-writes" not in WAVES
     assert "recovery" not in WAVES
     assert REQUIRED_REAL_SPECS["match-rating-writes"] == (
@@ -368,6 +380,31 @@ def test_manifest_is_route_specific_and_generic_mutation_modes_are_absent(tmp_pa
     assert support_invocation["grep"] == (
         "rating rules, FAQ, and policy request links are complete"
     )
+    tournament_ops_invocation = next(
+        invocation
+        for invocation in WAVES["admin-read-export"]
+        if invocation["name"] == "tournament-operations-read-only"
+    )
+    assert tournament_ops_invocation["grep"] == (
+        "route-specific operations surfaces|read-only ops snapshot|"
+        "DUPR preview is blocked while write wave is none"
+    )
+    tournament_ops_source = (
+        root / "apps/web/e2e/tournament-operations.staging.spec.ts"
+    ).read_text(encoding="utf-8")
+    tournament_ops_titles = re.findall(r'test\("([^"]+)"', tournament_ops_source)
+    selected_titles = [
+        title
+        for title in tournament_ops_titles
+        if re.search(str(tournament_ops_invocation["grep"]), title)
+    ]
+    assert selected_titles == [
+        "route-specific operations surfaces remain independently addressable",
+        "read-only ops snapshot resolves the exact staging draw",
+        "DUPR preview is blocked while write wave is none",
+    ]
+    assert "DUPR preview is authenticated and writes zero rows" not in selected_titles
+    assert "stale score CAS is refused before mutation" not in selected_titles
 
     missing_root = tmp_path / "web"
     missing_root.mkdir()
@@ -419,7 +456,7 @@ def test_remote_public_wave_waits_for_hydration_and_uses_stable_live_selectors()
     assert "bootstrapStagingContext(context)" in partner_board
 
 
-def test_manual_workflow_is_dispatch_only_exact_staging_and_least_scope() -> None:
+def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scope() -> None:
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github/workflows/parity-final-evidence.yml").read_text(
         encoding="utf-8"
@@ -433,6 +470,19 @@ def test_manual_workflow_is_dispatch_only_exact_staging_and_least_scope() -> Non
     assert "pull_request:" not in workflow
     assert "permissions:\n  contents: read" in workflow
     assert "environment: staging" in workflow
+    assert "ref: staging" in workflow
+    assert 'refs/heads/staging)' in workflow
+    assert 'refs/heads/rollback-feb8)' in workflow
+    assert (
+        'echo "parity evidence workflow must be dispatched from refs/heads/staging '
+        'or refs/heads/rollback-feb8"'
+    ) in workflow
+    assert '[ "$GITHUB_SHA" != "$STAGING_SHA" ] || [ "$WORKFLOW_SHA" != "$STAGING_SHA" ]' in workflow
+    assert '[ "$GITHUB_SHA" != "$DEFAULT_SHA" ] || [ "$WORKFLOW_SHA" != "$STAGING_SHA" ]' in workflow
+    assert (
+        '<(git show "$GITHUB_SHA:.github/workflows/parity-final-evidence.yml")'
+        in workflow
+    )
     assert "--require-complete" in workflow
     assert "--identity-only" in workflow
     assert MUTATION_CONFIRMATION in workflow
@@ -451,6 +501,43 @@ def test_manual_workflow_is_dispatch_only_exact_staging_and_least_scope() -> Non
     assert "JUPR_RUN_LIVE_LADDER_MUTATION_E2E" not in workflow
     assert "JUPR_RUN_PUBLIC_LIVE_WRITE_E2E" not in workflow
     assert "JUPR_TOURNAMENT_LIVE_ALLOW_MUTATION_E2E" in workflow
+    assert 'STAGING_SUPABASE_PROJECT_REF: "sijpxjxvdtrehmqvirfi"' in workflow
+    assert (
+        'STAGING_SUPABASE_URL: "https://sijpxjxvdtrehmqvirfi.supabase.co"'
+        in workflow
+    )
+    assert (
+        'JUPR_EXPECTED_STAGING_AUTH_ORIGIN: '
+        '"https://sijpxjxvdtrehmqvirfi.supabase.co"'
+    ) in workflow
+    assert (
+        'STAGING_API_BASE_URL: "https://juprleagues-api-staging.fly.dev"'
+        in workflow
+    )
+    assert (
+        'NEXT_PUBLIC_JUPR_API_BASE_URL: '
+        '"https://juprleagues-api-staging.fly.dev"'
+    ) in workflow
+    assert (
+        'STAGING_WEB_BASE_URL: '
+        '"https://jupr-git-staging-pickleballattrespalapas1.vercel.app"'
+    ) in workflow
+    assert "Prepare authenticated parity staging session" in workflow
+    assert (
+        "if: needs.evidence-contract.outputs.mode == 'admin-read-export' || "
+        "needs.evidence-contract.outputs.mode == 'match-rating-writes'"
+    ) in workflow
+    assert 'python scripts/prepare_parity_staging_session.py "$PARITY_MODE"' in workflow
+    assert 'test -n "$GITHUB_ENV"' in workflow
+    assert "STAGING_ADMIN_EMAIL: ${{ vars.STAGING_ADMIN_EMAIL }}" in workflow
+    assert "STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}" in workflow
+    assert "STAGING_ADMIN_BEARER_TOKEN: ${{" not in workflow
+    assert "JUPR_STAGING_ADMIN_ACCESS_TOKEN: ${{" not in workflow
+    assert (
+        "STAGING_ADMIN_PASSWORD: "
+        "${{ needs.evidence-contract.outputs.mode == 'public-intake-auth' "
+        "&& secrets.STAGING_ADMIN_PASSWORD || '' }}"
+    ) in workflow
     assert "make check-parity-final-evidence-integrated" in workflow
     assert 'playwright_env["STAGING_WEB_BASE_URL"] = attested_web_origin' in runner
     assert (

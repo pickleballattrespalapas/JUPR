@@ -70,6 +70,7 @@ def test_weekly_recap_public_status_has_no_counts_or_secret_readiness(monkeypatc
     assert "recap_count" not in payload
     assert "published_count" not in payload
     assert "service_role_configured" not in payload
+    assert payload["mutations_enabled"] is True
 
 
 def test_admin_weekly_recap_list_contract(monkeypatch):
@@ -86,6 +87,65 @@ def test_admin_weekly_recap_list_contract(monkeypatch):
     assert payload["ok"] is True
     assert payload["count"] == 1
     assert payload["recaps"][0]["week_start"] == "2026-07-06"
+
+
+def test_staging_weekly_recap_reads_stay_open_while_mutations_are_double_guarded(
+    monkeypatch,
+) -> None:
+    supabase = FakeSupabase(weekly_recap_tables())
+    _install_env(monkeypatch, supabase)
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "none")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS", "0")
+    client = TestClient(app)
+
+    status = client.get("/admin/clubs/club/weekly-recap/status")
+    recaps = client.get(
+        "/admin/clubs/club/weekly-recap/recaps",
+        headers={"Authorization": "Bearer local"},
+    )
+    denied_by_wave = client.post(
+        "/admin/clubs/club/weekly-recap/generate",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "week_start": "2026-07-06",
+            "week_end": "2026-07-12",
+            "confirmation_text": "GENERATE",
+        },
+    )
+
+    assert status.status_code == 200
+    assert status.json()["enabled"] is True
+    assert status.json()["mutations_enabled"] is False
+    assert recaps.status_code == 200
+    assert recaps.json()["count"] == 1
+    assert denied_by_wave.status_code == 403
+
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "communications")
+    denied_by_service = client.post(
+        "/admin/clubs/club/weekly-recap/generate",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "week_start": "2026-07-06",
+            "week_end": "2026-07-12",
+            "confirmation_text": "GENERATE",
+        },
+    )
+    assert denied_by_service.status_code == 403
+    assert "Communications mutations are disabled" in denied_by_service.json()["detail"]
+
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS", "1")
+    confirmation_required = client.post(
+        "/admin/clubs/club/weekly-recap/generate",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "week_start": "2026-07-06",
+            "week_end": "2026-07-12",
+            "confirmation_text": "GENERATE",
+        },
+    )
+    assert confirmation_required.status_code == 400
+    assert "GENERATE RECAP" in confirmation_required.json()["detail"]
 
 
 def test_admin_weekly_recap_generate_requires_confirmation(monkeypatch):

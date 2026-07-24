@@ -104,6 +104,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
   const writeRequest = useLatestRequestGuard(accessToken);
 
   const candidateKeys = useMemo(() => normalizeCandidateKeys(candidates), [candidates]);
+  const mutationControlsDisabled = busy || !status.mutations_enabled;
   const recapNumbers = numbersFromRecap(selectedRecap);
   const spotlightPreview = finalSpotlight(selectedRecap);
   const targetExistingRecap = recaps.find((recap) => recap.week_start === weekStart) || (selectedRecap?.week_start === weekStart ? selectedRecap : null);
@@ -329,6 +330,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
 
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
+      {!status.mutations_enabled ? <p role="status" style={{ color: "#92400e" }}><strong>Read-only:</strong> saved recaps and unpublished previews remain available, while generate, save, publish, and unpublish actions stay disabled until the isolated communications write wave is active.</p> : null}
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
         <h2 style={{ marginTop: 0 }}>Admin session</h2>
         <p style={{ color: "#475569" }}>{adminSessionLabel(session)}</p>
@@ -348,7 +350,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
             confirmLabel={targetExistingRecap ? "Yes, regenerate draft" : "Yes, generate draft"}
             confirmationText="GENERATE RECAP"
             tone={targetExistingRecap ? "danger" : "default"}
-            disabled={busy || !accessToken || targetExistingRecap?.status === "published"}
+            disabled={mutationControlsDisabled || !accessToken || targetExistingRecap?.status === "published"}
             busy={busy}
             onConfirm={generateDraft}
           />
@@ -374,7 +376,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
               {[0, 1, 2].map((idx) => (
                 <label key={idx}>Looking ahead #{idx + 1}<br />
-                  <input value={lookingAhead[idx] || ""} onChange={(event) => setLookingAhead((current) => current.map((item, itemIdx) => itemIdx === idx ? event.target.value : item))} style={inputStyle} />
+                  <input value={lookingAhead[idx] || ""} onChange={(event) => setLookingAhead((current) => current.map((item, itemIdx) => itemIdx === idx ? event.target.value : item))} disabled={mutationControlsDisabled || selectedRecap.status === "published"} style={inputStyle} />
                 </label>
               ))}
             </div>
@@ -390,14 +392,14 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
               return (
                 <section key={key} style={{ borderTop: idx ? "1px solid #e2e8f0" : undefined, paddingTop: idx ? "0.75rem" : 0, marginTop: idx ? "0.75rem" : 0 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "120px 90px 1fr", gap: "0.75rem", alignItems: "end" }}>
-                    <label><input type="checkbox" checked={edit.include} onChange={(event) => updateSpotlight(key, { include: event.target.checked })} /> Include<br /><strong>{label}</strong></label>
-                    <label>Order<br /><input value={edit.order} onChange={(event) => updateSpotlight(key, { order: event.target.value })} style={inputStyle} /></label>
-                    <label>Description<br /><input value={edit.description} onChange={(event) => updateSpotlight(key, { description: event.target.value })} style={inputStyle} /></label>
+                    <label><input type="checkbox" checked={edit.include} onChange={(event) => updateSpotlight(key, { include: event.target.checked })} disabled={mutationControlsDisabled || selectedRecap.status === "published"} /> Include<br /><strong>{label}</strong></label>
+                    <label>Order<br /><input value={edit.order} onChange={(event) => updateSpotlight(key, { order: event.target.value })} disabled={mutationControlsDisabled || selectedRecap.status === "published"} style={inputStyle} /></label>
+                    <label>Description<br /><input value={edit.description} onChange={(event) => updateSpotlight(key, { description: event.target.value })} disabled={mutationControlsDisabled || selectedRecap.status === "published"} style={inputStyle} /></label>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}>
                     {[0, 1, 2].map((slot) => (
                       <label key={slot}>Candidate {slot + 1}<br />
-                        <select value={edit.players?.[slot] || ""} onChange={(event) => updateSpotlightPlayer(key, slot, event.target.value)} style={inputStyle}>
+                        <select value={edit.players?.[slot] || ""} onChange={(event) => updateSpotlightPlayer(key, slot, event.target.value)} disabled={mutationControlsDisabled || selectedRecap.status === "published"} style={inputStyle}>
                           <option value="">None</option>
                           {options.map((candidate) => <option key={candidate.candidate_id} value={candidate.candidate_id}>{candidate.display}</option>)}
                         </select>
@@ -414,7 +416,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
                 description="This saves the current looking-ahead and spotlight edits to the selected draft."
                 confirmLabel="Yes, save edits"
                 confirmationText="SAVE RECAP"
-                disabled={busy || selectedRecap.status === "published"}
+                disabled={mutationControlsDisabled || selectedRecap.status === "published"}
                 busy={busy}
                 onConfirm={saveDraft}
               />
@@ -434,8 +436,8 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
             <h2 style={{ marginTop: 0 }}>4. Publish control</h2>
             <p style={{ color: "#475569" }}>Publishing makes this recap visible on the public Weekly Recap page. Unpublishing returns it to draft.</p>
             <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
-              <ConfirmAction triggerLabel="Publish recap" title="Publish this weekly recap?" description="This saves the current looking-ahead and spotlight edits into the final recap, then makes that result visible on the public Weekly Recap page." confirmLabel="Yes, publish recap" confirmationText="PUBLISH RECAP" disabled={busy || selectedRecap.status === "published"} busy={busy} onConfirm={(confirmationText) => publishAction("publish", confirmationText)} />
-              <ConfirmAction triggerLabel="Unpublish recap" title="Unpublish this weekly recap?" description="This removes the recap from the public page and returns it to draft status." confirmLabel="Yes, unpublish recap" confirmationText="UNPUBLISH RECAP" tone="danger" disabled={busy || selectedRecap.status !== "published"} busy={busy} onConfirm={(confirmationText) => publishAction("unpublish", confirmationText)} />
+              <ConfirmAction triggerLabel="Publish recap" title="Publish this weekly recap?" description="This saves the current looking-ahead and spotlight edits into the final recap, then makes that result visible on the public Weekly Recap page." confirmLabel="Yes, publish recap" confirmationText="PUBLISH RECAP" disabled={mutationControlsDisabled || selectedRecap.status === "published"} busy={busy} onConfirm={(confirmationText) => publishAction("publish", confirmationText)} />
+              <ConfirmAction triggerLabel="Unpublish recap" title="Unpublish this weekly recap?" description="This removes the recap from the public page and returns it to draft status." confirmLabel="Yes, unpublish recap" confirmationText="UNPUBLISH RECAP" tone="danger" disabled={mutationControlsDisabled || selectedRecap.status !== "published"} busy={busy} onConfirm={(confirmationText) => publishAction("unpublish", confirmationText)} />
             </div>
           </article>
 

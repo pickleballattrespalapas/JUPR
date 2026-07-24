@@ -28,8 +28,9 @@ test("authenticated league exports render Python-authoritative leaders", async (
   );
 
   await page.goto("/admin/top-players-printable", { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: /load previous-month top 50/i }).click();
+  await expect(page.locator("[data-print-surface='top-active-players']")).toBeVisible();
   await expect(page.locator("body")).toContainText(/previous calendar month|No eligible active players/i);
+  await expect(page.getByRole("button", { name: /refresh rankings/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /print or save pdf/i })).toBeEnabled();
 
   await page.goto("/admin/league-manager/print", { waitUntil: "domcontentloaded" });

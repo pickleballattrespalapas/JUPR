@@ -38,6 +38,9 @@ from jupr_app.services.admin_player_updates_service import (
     is_api_audit_log_required,
     send_pending_player_update_emails_for_range,
 )
+from jupr_app.services.staging_write_guard import (
+    require_staging_communications_mutations,
+)
 
 CONFIRM_QUEUE = "QUEUE PLAYER UPDATES"
 CONFIRM_SEND = "SEND PLAYER UPDATES"
@@ -307,6 +310,7 @@ def queue_player_digests(
 ) -> dict[str, Any]:
     if not is_admin_player_updates_enabled():
         raise PermissionError("Next Player Updates Admin is disabled.")
+    require_staging_communications_mutations()
     _confirm(confirmation_text, CONFIRM_QUEUE)
     op_key = _operation_key(operation_key)
     start, end = _date_window(start_date, end_date)
@@ -431,6 +435,7 @@ def send_selected_outbox_rows(
 ) -> dict[str, Any]:
     if not is_admin_player_updates_enabled():
         raise PermissionError("Next Player Updates Admin is disabled.")
+    require_staging_communications_mutations()
     _confirm(confirmation_text, CONFIRM_SEND)
     op_key = _operation_key(operation_key)
     if not items:
@@ -512,6 +517,7 @@ def retry_outbox_rows(
 ) -> dict[str, Any]:
     if not is_admin_player_updates_enabled():
         raise PermissionError("Next Player Updates Admin is disabled.")
+    require_staging_communications_mutations()
     current = {str(row.get("id") or ""): row for row in list_outbox_rows(supabase, str(club_id), limit=1000)}
     includes_uncertain = any(str(current.get(str((item or {}).get("id") or ""), {}).get("send_status") or "") == SEND_STATUS_SENDING for item in items)
     _confirm(confirmation_text, CONFIRM_RETRY_UNCERTAIN if includes_uncertain else CONFIRM_RETRY)
@@ -574,6 +580,7 @@ def delete_outbox_rows(
 ) -> dict[str, Any]:
     if not is_admin_player_updates_enabled():
         raise PermissionError("Next Player Updates Admin is disabled.")
+    require_staging_communications_mutations()
     _confirm(confirmation_text, CONFIRM_DELETE)
     reviewed_scope = {"items": items}
     _required_audit_intent(
@@ -635,6 +642,7 @@ def replace_active_subscription(
 ) -> dict[str, Any]:
     if not is_admin_player_updates_enabled():
         raise PermissionError("Next Player Updates Admin is disabled.")
+    require_staging_communications_mutations()
     _confirm(confirmation_text, CONFIRM_REPLACE)
     op_key = _operation_key(operation_key)
     validated_email = validate_email_address(new_email, field_name="new_email")
@@ -744,6 +752,7 @@ def deactivate_active_subscription(
 ) -> dict[str, Any]:
     if not is_admin_player_updates_enabled():
         raise PermissionError("Next Player Updates Admin is disabled.")
+    require_staging_communications_mutations()
     _confirm(confirmation_text, CONFIRM_DEACTIVATE)
     before = get_subscription(supabase, club_id=str(club_id), subscription_id=str(subscription_id))
     if before is None:

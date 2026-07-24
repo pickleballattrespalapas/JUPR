@@ -109,6 +109,29 @@ def _api_client(monkeypatch, supabase: FakeSupabase) -> TestClient:
     return TestClient(app)
 
 
+def _admin_api_client(monkeypatch, supabase: FakeSupabase) -> TestClient:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "local-service")
+    monkeypatch.setattr(
+        "services.api.main.create_client",
+        lambda _url, _credential: supabase,
+    )
+    monkeypatch.setattr(
+        "services.api.admin_verified_updates_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(
+            email="admin@example.com",
+            user_id="user-1",
+        ),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_verified_updates_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="club_owner"),
+    )
+    return TestClient(app)
+
+
 def test_public_verified_updates_options_and_request(monkeypatch):
     supabase = FakeSupabase()
     options = list_public_verified_update_player_options(supabase, club_id="club")
@@ -228,6 +251,67 @@ def test_admin_verified_updates_requires_confirmation(monkeypatch):
         assert "SAVE VERIFIED REQUEST" in str(exc)
     else:
         raise AssertionError("expected confirmation error")
+
+
+def test_staging_verified_updates_reads_stay_open_while_mutations_are_double_guarded(
+    monkeypatch,
+) -> None:
+    supabase = FakeSupabase()
+    created = create_public_verified_update_request(
+        supabase,
+        club_id="club",
+        player_id=1,
+        email="user@example.com",
+    )
+    client = _admin_api_client(monkeypatch, supabase)
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "none")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS", "0")
+
+    status = client.get("/admin/clubs/club/verified-updates/status")
+    requests = client.get(
+        "/admin/clubs/club/verified-updates/requests",
+        headers={"Authorization": "Bearer local"},
+    )
+    denied_by_wave = client.patch(
+        f"/admin/clubs/club/verified-updates/requests/{created['subscription_id']}",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "action": "approve",
+            "confirmation_text": "SAVE",
+        },
+    )
+
+    assert status.status_code == 200
+    assert status.json()["enabled"] is True
+    assert status.json()["mutations_enabled"] is False
+    assert requests.status_code == 200
+    assert requests.json()["count"] == 1
+    assert denied_by_wave.status_code == 403
+
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "communications")
+    denied_by_service = client.patch(
+        f"/admin/clubs/club/verified-updates/requests/{created['subscription_id']}",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "action": "approve",
+            "confirmation_text": "SAVE",
+        },
+    )
+    assert denied_by_service.status_code == 403
+    assert "Communications mutations are disabled" in denied_by_service.json()["detail"]
+
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS", "1")
+    confirmation_required = client.patch(
+        f"/admin/clubs/club/verified-updates/requests/{created['subscription_id']}",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "action": "approve",
+            "confirmation_text": "SAVE",
+        },
+    )
+    assert confirmation_required.status_code == 400
+    assert "SAVE VERIFIED REQUEST" in confirmation_required.json()["detail"]
 
 
 def test_admin_verified_updates_approve_writes_audit(monkeypatch):

@@ -54,6 +54,37 @@ test.describe("order-27 Tournament Operations staging evidence", () => {
     expect(payload.review_fingerprint).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  test("read-only ops snapshot resolves the exact staging draw", async ({ request }) => {
+    test.skip(!adminToken || !tournamentId || !drawId, "Admin token and exact staging tournament/draw fixtures are required.");
+    const response = await request.get(
+      `${expectedApiOrigin}/admin/clubs/tres_palapas/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/ops?draw_id=${encodeURIComponent(drawId)}`,
+      { headers: authHeaders() }
+    );
+    expect(response.ok()).toBeTruthy();
+    const payload = await response.json();
+    expect(payload.mode).toBe("tournament_ops_snapshot");
+    expect(payload.tournament?.id).toBe(tournamentId);
+    expect(payload.draw_id).toBe(drawId);
+    expect(payload.draws).toEqual([expect.objectContaining({ id: drawId, tournament_id: tournamentId })]);
+    expect(payload.state_ready).toBe(true);
+  });
+
+  test("DUPR preview is blocked while write wave is none", async ({ request }) => {
+    test.skip(!adminToken || !tournamentId || !drawId, "Admin token and exact staging tournament/draw fixtures are required.");
+    const response = await request.post(
+      `${expectedApiOrigin}/admin/clubs/tres_palapas/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/results-import/preview`,
+      {
+        headers: authHeaders(),
+        data: {
+          raw_text: "playerA1,playerB1,teamAGame1,teamBGame1\nTest A,Test B,11,7",
+          import_mode: "REPLACE",
+        },
+      }
+    );
+    expect(response.status()).toBe(403);
+    expect((await response.json()).detail).toMatch(/outside the selected staging write wave/i);
+  });
+
   test("stale score CAS is refused before mutation", async ({ request }) => {
     test.skip(!adminToken || !tournamentId || !gameId, "Admin token and disposable tournament/game fixtures are required.");
     const snapshotResponse = await request.get(

@@ -22,6 +22,15 @@ This document is the durable source of truth for the Pickleball Club Sandwich
   `29957623653` passed all 56 strict browser checks. PR `#1022` is the
   candidate-evidence PR; its identity must be replaced as one unit after the next
   exact candidate is deployed.
+- The later live pre-evidence candidate
+  `1b1c66b9ff1b1ea2f90ad0491be87921ec1524d8` was identity-aligned across
+  Vercel and Fly, but Parity Final Evidence runs `30126824035` and
+  `30126850714` failed environment preflight before identity/browser execution.
+  Their artifacts contain no browser invocations or writes and are not acceptance
+  evidence. The replacement candidate keeps communications reads available at
+  `write_wave=none`, independently guards every mutation, mints a fresh masked
+  staging-admin JWT per authenticated workflow run, and validates exact disposable
+  fixtures instead of depending on stale stored tokens or IDs.
 - All 37 staging migration-ledger entries are applied through
   `20260720123402_baseline_worker_run_log`. All 29 implementation orders have
   landed, with roughly 70 Next page components covering the 47 tracked Streamlit
@@ -53,7 +62,7 @@ This document is the durable source of truth for the Pickleball Club Sandwich
 | Public leaderboard/read models | Automated-ready; manual acceptance pending | Public leaderboard, League Results, Badge Codex, Challenge Ladder, Weekly Recap, Match Explorer, player, match, live, tournament-registration, roster, partner-board, and static/support surfaces are exposed as sanitized public routes with route-specific checks. | Complete the exact-candidate non-mutating browser session and the separately bounded intake/pairing rows. | Medium |
 | Workers | In progress | Worker CLIs exist and are part of moving jobs out of Streamlit. | Validate worker reliability and club-scoped safety in staging. | Medium |
 | Email safety | At-rest safe; inbox acceptance blocked | Staging is reconciled at `JUPR_EMAIL_MODE=dry_run`; live customer delivery remains disabled. | With Joe's approved staging inbox, prove redirected delivery, recovery, unsubscribe/preferences, provider/audit evidence, and return to `dry_run`. | High |
-| CI/API contract tests | In progress | API contracts now include production-deployment and authenticated admin UX safety suites; Next Web Build runs the guided Tournament Setup payload contract on pinned Node 20; canonical `Staging Smoke` requires 56 strict public-read checks plus five no-skip guided Tournament Setup browser checks. Deployment identity checks remain fail closed, and `make public-web-smoke` remains a noncanonical diagnostic. | Require the parity/manual/manifest guards on staging PRs and manually dispatch canonical `Staging Smoke` only after the final same-SHA Fly `none` release. | Medium |
+| CI/API contract tests | In progress | API contracts now include production-deployment and authenticated admin UX safety suites; Next Web Build runs the guided Tournament Setup payload contract on pinned Node 20; canonical `Staging Smoke` requires 56 strict public-read checks plus five no-skip guided Tournament Setup browser checks. Parity Final Evidence is registered on the default branch but always checks out and binds executable evidence to canonical `staging`; authenticated modes mint and validate a fresh masked staging token. Deployment identity checks remain fail closed, and `make public-web-smoke` remains a noncanonical diagnostic. | Require the parity/manual/manifest guards on staging PRs and manually dispatch canonical `Staging Smoke` only after the final same-SHA Fly `none` release. | Medium |
 | Migrations | In progress | `supabase/migrations/` is canonical and staging-first migration flow is defined. | Continue staging-first apply/verify discipline before production SQL changes. | Medium |
 | Observability | In progress | Vercel runtime/build logs, Fly health/logs, FastAPI health/identity, GitHub workflow evidence, and Supabase logs/advisors are inspectable. | Define owner-visible minimum alerts and escalation/rollback instructions before public cutover. | Medium |
 | Tenant onboarding | Not started | Multi-club onboarding process is not yet standardized for SaaS rollout. | Define repeatable club onboarding checklist and config flow in staging. | Medium |

@@ -1,5 +1,6 @@
 export type AdminWeeklyRecapStatusResponse = {
   enabled: boolean;
+  mutations_enabled: boolean;
   status: string;
   list_endpoint?: string | null;
   generate_endpoint?: string | null;

@@ -1,5 +1,6 @@
 export type AdminPlayerUpdatesStatusResponse = {
   enabled: boolean;
+  mutations_enabled: boolean;
   status: string;
   send_range_endpoint?: string | null;
   workspace_endpoint?: string | null;

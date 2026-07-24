@@ -108,7 +108,7 @@ WAVES: dict[str, tuple[dict[str, object], ...]] = {
         {
             "name": "tournament-operations-read-only",
             "specs": ("e2e/tournament-operations.staging.spec.ts",),
-            "grep": "route-specific operations surfaces|DUPR preview",
+            "grep": "route-specific operations surfaces|read-only ops snapshot|DUPR preview is blocked while write wave is none",
         },
     ),
     "match-rating-writes": (

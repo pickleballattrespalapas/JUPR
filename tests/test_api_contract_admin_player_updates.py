@@ -81,6 +81,81 @@ def test_public_status_is_sanitized(monkeypatch) -> None:
     assert "active_subscription_count" not in payload
     assert "service_role_configured" not in payload
     assert isinstance(payload["smtp_configured"], bool)
+    assert payload["mutations_enabled"] is True
+
+
+def test_staging_player_updates_reads_stay_open_while_mutations_are_double_guarded(
+    monkeypatch,
+) -> None:
+    supabase = FakeSupabase({"player_profile_update_subscriptions": []})
+    _install_env(monkeypatch, supabase)
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "none")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS", "0")
+    monkeypatch.setattr(
+        "services.api.admin_player_updates_routes.build_communications_workspace",
+        lambda *_args, **_kwargs: {"ok": True, "subscriptions": [], "outbox": []},
+    )
+    preview_calls: list[dict[str, object]] = []
+
+    def fake_preview(*_args, **kwargs):
+        preview_calls.append(kwargs)
+        return {"ok": True, "preview": {"player_id": kwargs["player_id"]}}
+
+    monkeypatch.setattr(
+        "services.api.admin_player_updates_routes.preview_player_digest",
+        fake_preview,
+    )
+    client = TestClient(app)
+
+    status = client.get("/admin/clubs/club/player-updates/status")
+    workspace = client.get(
+        "/admin/clubs/club/player-updates/workspace?start_date=2026-04-01&end_date=2026-04-07",
+        headers={"Authorization": "Bearer local"},
+    )
+    denied_by_wave = client.post(
+        "/admin/clubs/club/player-updates/digests/preview",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "player_id": 1,
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-07",
+        },
+    )
+
+    assert status.status_code == 200
+    assert status.json()["enabled"] is True
+    assert status.json()["mutations_enabled"] is False
+    assert workspace.status_code == 200
+    assert denied_by_wave.status_code == 403
+    assert preview_calls == []
+
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "communications")
+    denied_by_service = client.post(
+        "/admin/clubs/club/player-updates/digests/preview",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "player_id": 1,
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-07",
+        },
+    )
+    assert denied_by_service.status_code == 403
+    assert "Communications mutations are disabled" in denied_by_service.json()["detail"]
+    assert preview_calls == []
+
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS", "1")
+    allowed = client.post(
+        "/admin/clubs/club/player-updates/digests/preview",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "player_id": 1,
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-07",
+        },
+    )
+    assert allowed.status_code == 200
+    assert len(preview_calls) == 1
 
 
 def test_admin_player_updates_send_range_requires_confirmation(monkeypatch):

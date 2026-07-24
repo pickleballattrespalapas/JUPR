@@ -23,8 +23,7 @@ STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
         "JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES",
     ),
     "communications": _admin_wave(
-        "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES",
-        "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
+        "JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS",
     ),
     "match-player": _admin_wave(
         "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY",

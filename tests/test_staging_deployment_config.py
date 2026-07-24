@@ -114,6 +114,12 @@ def test_staging_fly_config_is_isolated_and_full_surface():
     assert all(env.get(name) == "0" for name in ALL_STAGING_WRITE_FLAGS)
     assert all(env.get(name, "0") == "0" for name in ALWAYS_DISABLED_FLAGS)
     assert all(env.get(name) == "1" for name in FULL_NEXT_ADMIN_FLAGS)
+    assert env["JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"] == "1"
+    assert env["JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"] == "1"
+    assert env["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "0"
+    assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"] == "0"
+    assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"] == "0"
+    assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "0"
     assert env["JUPR_ALLOWED_ORIGIN_REGEX"].startswith("^https://jupr")
     assert env["JUPR_ALLOWED_ORIGIN_REGEX"].endswith("vercel\\.app$")
     assert re.fullmatch(
@@ -133,6 +139,30 @@ def test_staging_wave_configurator_opens_only_the_selected_wave(tmp_path: Path):
     assert env["JUPR_STAGING_WRITE_WAVE"] == "public-live"
     assert {name: env[name] == "1" for name in ALL_STAGING_WRITE_FLAGS} == expected
     assert expected["JUPR_ENABLE_PUBLIC_LIVE_WRITES"] is True
+
+
+def test_communications_wave_opens_mutations_without_toggling_read_surfaces(
+    tmp_path: Path,
+):
+    config = tmp_path / "fly.staging.toml"
+    config.write_text(
+        (ROOT / "fly.staging.toml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    configure_fly_staging(config, wave="communications")
+
+    env = tomllib.loads(config.read_text(encoding="utf-8"))["env"]
+    expected = expected_write_flags("communications")
+    enabled = {name for name, value in expected.items() if value}
+    assert enabled == {
+        "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT",
+        "JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS",
+    }
+    assert "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES" not in expected
+    assert "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP" not in expected
+    assert env["JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"] == "1"
+    assert env["JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"] == "1"
 
 
 def test_staging_deploy_workflow_has_production_and_database_guards():

@@ -253,6 +253,9 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
         "admin_tools": "JUPR_ENABLE_NEXT_ADMIN_TOOLS",
     }
 
+    def expected_surface_flag(flag: str) -> bool:
+        return expected_gates.get(flag, flag in cse.FULL_NEXT_ADMIN_FLAGS)
+
     def status_payload(path: str):
         gated_statuses = {
             "/match-uploader/status": "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER",
@@ -266,10 +269,24 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
             "/tools/status": "JUPR_ENABLE_NEXT_ADMIN_TOOLS",
         }
         enabled = next(
-            (expected_gates[flag] for suffix, flag in gated_statuses.items() if path.endswith(suffix)),
+            (
+                expected_surface_flag(flag)
+                for suffix, flag in gated_statuses.items()
+                if path.endswith(suffix)
+            ),
             True,
         )
         payload = {"enabled": enabled}
+        if path.endswith(
+            (
+                "/player-updates/status",
+                "/verified-updates/status",
+                "/weekly-recap/status",
+            )
+        ):
+            payload["mutations_enabled"] = expected_gates[
+                "JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"
+            ]
         if path.endswith("/player-updates/status"):
             payload["auto_send_enabled"] = False
         elif path.endswith("/league-manager/status"):
@@ -360,7 +377,7 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
                 "jwt_verification_project_ref": project_ref,
                 "enabled_workflows": [],
                 "workflows": [
-                    {"key": key, "enabled": expected_gates[flag]}
+                    {"key": key, "enabled": expected_surface_flag(flag)}
                     for key, flag in workflow_flags.items()
                 ] + [{"key": "match_log", "apply_enabled": False}],
             }, None
@@ -392,6 +409,16 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
         summary["checked_endpoints"][template.format(club_id="tres_palapas")]["status"] == "ok"
         for template in cse.ADMIN_STATUS_PATHS
     )
+    for suffix in (
+        "player-updates/status",
+        "verified-updates/status",
+        "weekly-recap/status",
+    ):
+        checked = summary["checked_endpoints"][
+            f"/admin/clubs/tres_palapas/{suffix}"
+        ]
+        assert checked["enabled"] is True
+        assert checked["mutations_enabled"] is False
 
     def fake_web_origin_drift_get(url: str):
         status, payload, error = fake_get(url)

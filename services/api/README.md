@@ -104,8 +104,8 @@ Individual workflow flags are intentionally separate:
 - `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_IMPORT_HANDOFF=1` documents the separate staging Operations handoff gate; Registration Admin itself remains no-write for draw teams.
 - `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OPERATIONS_MUTATIONS=1` enables Order-27 draw/import/scoring/playoff/podium/award mutations in staging only. Official publishing additionally requires `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH=1`; automatic player-update handoff additionally requires `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF=1` and `JUPR_EMAIL_MODE=dry_run|staging_redirect`.
 - `JUPR_ENABLE_STAGING_NEXT_ADMIN_TOURNAMENT_LIVE_WRITES=1` opens only the draw-scoped Order-28 in-play runner in `JUPR_ENV=staging`. It requires the order-26 and order-28 private operation migrations, a reviewed draw fingerprint, an exact idempotency UUID, required audit writes, and the FastAPI-only service role. Production and local environments remain read-only.
-- `JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=1`
-- `JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=1`
+- `JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=1` and `JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=1` expose the authenticated communications read surfaces.
+- `JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS=1` permits their POST/PATCH actions only with `JUPR_ENV=staging` and the exact `communications` write wave. Keep it `0` at rest and in production.
 - `JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL=0` keeps Next live delivery blocked independently of the admin UI flag
 - `JUPR_ENABLE_NEXT_ADMIN_TOOLS=1`
 

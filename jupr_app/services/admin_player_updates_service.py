@@ -18,6 +18,10 @@ from jupr_app.domain.notifications.player_update_sender import (
     send_pending_player_update_emails,
 )
 from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
+from jupr_app.services.staging_write_guard import (
+    require_staging_communications_mutations,
+    staging_communications_mutations_enabled,
+)
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 CONFIRM_SEND_PLAYER_UPDATES = "SEND PLAYER UPDATES"
@@ -91,6 +95,7 @@ def build_admin_player_updates_status(supabase: Any | None, *, club_id: str) -> 
     if not is_admin_player_updates_enabled():
         return {
             "enabled": False,
+            "mutations_enabled": False,
             "status": "guarded_off",
             "send_range_endpoint": None,
             "auto_send_enabled": is_auto_player_updates_enabled(),
@@ -99,6 +104,12 @@ def build_admin_player_updates_status(supabase: Any | None, *, club_id: str) -> 
             "warnings": ["Next Player Updates Admin is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES on FastAPI for the closed-club pilot."],
         }
     warnings: list[str] = []
+    mutations_enabled = staging_communications_mutations_enabled()
+    if not mutations_enabled:
+        warnings.append(
+            "Read-only mode is active. Open the isolated communications write wave "
+            "before queueing, sending, retrying, deleting, or changing subscriptions."
+        )
     if not is_auto_player_updates_enabled():
         warnings.append("Automatic post-batch player update email sending is disabled. Set JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS=1 after email mode is verified.")
     if get_email_mode() != EMAIL_MODE_DRY_RUN and not smtp_configured:
@@ -107,6 +118,7 @@ def build_admin_player_updates_status(supabase: Any | None, *, club_id: str) -> 
         warnings.append("Next Player Updates live delivery is blocked. Use dry_run/staging_redirect or deliberately enable JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL=1.")
     return {
         "enabled": True,
+        "mutations_enabled": mutations_enabled,
         "status": "ready_for_player_update_range_reports",
         "send_range_endpoint": "/admin/clubs/{club_id}/player-updates/send-range",
         "workspace_endpoint": "/admin/clubs/{club_id}/player-updates/workspace",
@@ -156,6 +168,7 @@ def run_admin_player_update_range(
 ) -> dict[str, Any]:
     if not is_admin_player_updates_enabled():
         raise PermissionError("Next Player Updates Admin is disabled.")
+    require_staging_communications_mutations()
     if str(confirmation_text or "").strip().upper() != CONFIRM_SEND_PLAYER_UPDATES:
         raise ValueError(f"Type {CONFIRM_SEND_PLAYER_UPDATES} to send player update emails.")
     start = _coerce_date(start_date)

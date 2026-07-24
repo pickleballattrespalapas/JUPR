@@ -237,9 +237,13 @@ def test_player_updates_auto_loads_date_ranges_and_ignores_old_session_responses
     assert "const workspaceIsCurrentRange = Boolean(accessToken && workspace && loadedWorkspaceScope === workspaceScope);" in source
     assert "const currentWorkspace = workspaceIsCurrentRange ? workspace : null;" in source
     assert "const workspaceControlsDisabled = busy || workspaceLoading || !workspaceIsCurrentRange;" in source
+    assert (
+        "const mutationControlsDisabled = workspaceControlsDisabled || "
+        "!status.mutations_enabled;"
+    ) in source
     assert "setLoadedWorkspaceScope(requestedWorkspaceScope);" in source
     assert 'disabled={workspaceControlsDisabled}' in source
-    assert source.count("disabled={workspaceControlsDisabled ||") >= 6
+    assert source.count("disabled={mutationControlsDisabled ||") >= 6
     assert "setReplacementEmail(\"\");" in source
     assert "setReplacementNote(\"\");" in source
     assert "setPreview(null);" in source

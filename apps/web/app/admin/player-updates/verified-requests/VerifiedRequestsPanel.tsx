@@ -17,7 +17,7 @@ type RequestRow = {
 };
 
 type ListResponse = { ok: boolean; requests: RequestRow[]; count: number };
-type StatusResponse = { enabled: boolean; status: string; counts?: Record<string, number>; warnings?: string[] };
+type StatusResponse = { enabled: boolean; mutations_enabled: boolean; status: string; counts?: Record<string, number>; warnings?: string[] };
 
 type Props = { apiBase: string | null; clubId: string; status: StatusResponse | null };
 
@@ -114,6 +114,7 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
         {sessionLoading ? <p>Checking session…</p> : null}
         {sessionMessage ? <p style={{ color: "#64748b" }}>{sessionMessage}</p> : null}
         <p style={{ color: "#475569" }}>Pending: {status.counts?.pending ?? "—"} · Active: {status.counts?.active ?? "—"}</p>
+        {!status.mutations_enabled ? <p role="status" style={{ color: "#92400e" }}><strong>Read-only:</strong> approvals, rejections, and unsubscribe actions stay disabled until the isolated communications write wave is active.</p> : null}
       </article>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Request queue</h2>
@@ -128,7 +129,7 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
           <h3 style={{ marginTop: 0 }}>{row.player_name}</h3>
           <p style={{ color: "#475569" }}>#{row.player_id} · {row.email_masked || "email hidden"} · {row.request_status} · {row.created_at ? String(row.created_at).slice(0, 10) : "—"}</p>
           {row.request_note ? <p><strong>Requester note:</strong> {row.request_note}</p> : null}
-          <label>Admin note<br /><textarea value={notes[row.id] ?? row.admin_note ?? ""} onChange={(event) => setNotes((current) => ({ ...current, [row.id]: event.target.value }))} rows={3} style={inputStyle} /></label>
+          <label>Admin note<br /><textarea value={notes[row.id] ?? row.admin_note ?? ""} onChange={(event) => setNotes((current) => ({ ...current, [row.id]: event.target.value }))} rows={3} disabled={busy || !status.mutations_enabled} style={inputStyle} /></label>
           <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
             <ConfirmAction
               triggerLabel="Approve"
@@ -136,7 +137,7 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
               description={<>This will approve the verified update request for <strong>{row.player_name}</strong> and record your admin note.</>}
               confirmLabel="Yes, approve request"
               confirmationText="SAVE VERIFIED REQUEST"
-              disabled={busy}
+              disabled={busy || !status.mutations_enabled}
               busy={busy}
               onConfirm={(confirmationText) => applyAction(row, "approve", confirmationText)}
             />
@@ -147,7 +148,7 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
               confirmLabel="Yes, reject request"
               confirmationText="SAVE VERIFIED REQUEST"
               tone="danger"
-              disabled={busy}
+              disabled={busy || !status.mutations_enabled}
               busy={busy}
               onConfirm={(confirmationText) => applyAction(row, "reject", confirmationText)}
             />
@@ -158,7 +159,7 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
               confirmLabel="Yes, unsubscribe"
               confirmationText="SAVE VERIFIED REQUEST"
               tone="danger"
-              disabled={busy}
+              disabled={busy || !status.mutations_enabled}
               busy={busy}
               onConfirm={(confirmationText) => applyAction(row, "unsubscribe", confirmationText)}
             />
