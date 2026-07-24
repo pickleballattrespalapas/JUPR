@@ -26,8 +26,8 @@ def test_league_printout_renders_true_leaders_and_print_contract() -> None:
     assert "Reload printout" in panel
     assert "Load selected" not in panel
     assert 'disabled={busy || !printout}' in panel
-    assert "The current printout will remain visible until the replacement is ready." in panel
-    assert "The previous printout remains visible and selected." in panel
+    assert "setPrintout(null);" in panel
+    assert "Loading {leagueName || \"selected league\"}…" in panel
     assert "Weekly leaders" in panel
     assert "Season leaders (Top Performers)" in panel
     assert "data-print-surface" in panel

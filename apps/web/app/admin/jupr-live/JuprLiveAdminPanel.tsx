@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import { deriveLiveLadderOperationKey, idempotencyKeyFor, rotateIdempotencyKey } from "@/lib/liveLadderOperations";
 
@@ -45,20 +46,145 @@ export default function JuprLiveAdminPanel({ apiBase, clubId, clubSlug, status }
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<WriteResponse | null>(null);
+  const sessionsRequest = useLatestRequestGuard(accessToken, () => {
+    operationKeys.current = {};
+    setBusy(false); setMessage(null); setSessions([]); setScoreDrafts({}); setPublishDate({});
+    setLastOperationKey(""); setLastResult(null);
+  });
+  const actionRequest = useLatestRequestGuard(accessToken);
   const writesEnabled = status?.writes_enabled === true;
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> { if (!apiBase) throw new Error("Missing JUPR API base URL."); if (!accessToken) throw new Error("Sign in at /admin/login before using JUPR Live Admin."); const headers = new Headers(options?.headers); headers.set("Authorization", `Bearer ${accessToken}`); if (options?.body) headers.set("Content-Type", "application/json"); const response = await fetch(apiUrl(apiBase, path), { ...options, headers }); if (!response.ok) throw new Error(await apiError(response)); return (await response.json()) as T; }
   function rememberScores(rows: LiveSession[]) { const next: Record<string, Record<string, { score_a: string; score_b: string }>> = {}; for (const row of rows) next[row.session_key] = scoreDrafts[row.session_key] || defaultScoreDraft(row); setScoreDrafts(next); }
-  async function durableFields(scope: string, operationType: string, entityId: string, expectedVersion: string) { if (!writesEnabled) throw new Error("Next writes are guarded off; use Streamlit JUPR Live Admin."); const idempotencyKey = idempotencyKeyFor(operationKeys.current, scope); const operationKey = await deriveLiveLadderOperationKey({ clubId, surface: "jupr_live_admin", operationType, entityId, idempotencyKey }); setLastOperationKey(operationKey); return { idempotency_key: idempotencyKey, expected_version: expectedVersion, operationKey }; }
+  async function durableFields(scope: string, operationType: string, entityId: string, expectedVersion: string) { if (!writesEnabled) throw new Error("Next writes are guarded off; use Streamlit JUPR Live Admin."); const idempotencyKey = idempotencyKeyFor(operationKeys.current, scope); const operationKey = await deriveLiveLadderOperationKey({ clubId, surface: "jupr_live_admin", operationType, entityId, idempotencyKey }); return { idempotency_key: idempotencyKey, expected_version: expectedVersion, operationKey }; }
   function completeScope(scope: string) { rotateIdempotencyKey(operationKeys.current, scope); }
 
-  async function loadSessions() { setBusy(true); setMessage(null); try { const query = filter ? `?status=${encodeURIComponent(filter)}&limit=100` : "?limit=100"; const payload = await requestJson<ListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions${query}`); setSessions(payload.sessions || []); rememberScores(payload.sessions || []); setMessage(`Loaded ${payload.count ?? payload.sessions.length} one-off session(s).`); } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load live sessions."); } finally { setBusy(false); } }
-  async function createSession(confirmationText: string) { if (!writesEnabled) { setMessage("Next writes are guarded off; use Streamlit JUPR Live Admin."); return; } const scope = "create:new"; setBusy(true); setMessage(null); try { const fields = await durableFields(scope, "create_session", "new", "new"); const names = participantNames.replace(/,/g, "\n").split("\n").map((token) => token.trim()).filter(Boolean); const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions`, { method: "POST", body: JSON.stringify({ title, event_type: eventType, participant_names: names, player_ids: parseIds(participantIds), total_rounds: Number(totalRounds), court_sizes: parseIds(courtSizes), confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) }); completeScope(scope); setLastResult(payload); setMessage(`Created durable live session ${payload.session?.session_key || "(recovered)"}.`); await loadSessions(); } catch (error) { setMessage(`${error instanceof Error ? error.message : "Create outcome is uncertain."} Reconcile the operation before creating another session.`); } finally { setBusy(false); } }
-  async function updateSession(row: LiveSession, nextStatus: string, confirmationText: string) { const scope = `status:${row.session_key}:${nextStatus}`; setBusy(true); setMessage(null); try { const fields = await durableFields(scope, "update_session", row.session_key, row.version); const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions/${encodeURIComponent(row.session_key)}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus, title: row.title || undefined, confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) }); completeScope(scope); setLastResult(payload); setMessage(`${row.title || row.session_key} marked ${nextStatus}.`); await loadSessions(); } catch (error) { setMessage(`${error instanceof Error ? error.message : "Session update is uncertain."} Reconcile before retrying.`); } finally { setBusy(false); } }
-  async function saveScores(row: LiveSession, confirmationText: string) { const scope = `scores:${row.session_key}`; setBusy(true); setMessage(null); try { const fields = await durableFields(scope, "save_scores", row.session_key, row.version); const scores = Object.entries(scoreDrafts[row.session_key] || {}).map(([match_id, score]) => ({ match_id, score_a: score.score_a === "" ? null : Number(score.score_a), score_b: score.score_b === "" ? null : Number(score.score_b) })); const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions/${encodeURIComponent(row.session_key)}/scores`, { method: "PATCH", body: JSON.stringify({ scores, confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) }); completeScope(scope); setLastResult(payload); setMessage(`Saved ${payload.changed_scores || 0} score row(s).`); await loadSessions(); } catch (error) { setMessage(`${error instanceof Error ? error.message : "Score save is uncertain."} Reconcile before retrying.`); } finally { setBusy(false); } }
-  async function advanceRound(row: LiveSession, confirmationText: string) { const scope = `advance:${row.session_key}`; setBusy(true); setMessage(null); try { const fields = await durableFields(scope, "advance_round", row.session_key, row.version); const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions/${encodeURIComponent(row.session_key)}/advance`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) }); completeScope(scope); setLastResult(payload); setMessage("Advanced to the next Python-generated live round."); await loadSessions(); } catch (error) { setMessage(`${error instanceof Error ? error.message : "Round advance is uncertain."} Reconcile before retrying.`); } finally { setBusy(false); } }
-  async function publishMatches(row: LiveSession, confirmationText: string) { const scope = `publish:${row.session_key}`; const matchDate = publishDate[row.session_key] || new Date().toISOString(); if (!publishDate[row.session_key]) setPublishDate((current) => ({ ...current, [row.session_key]: matchDate })); setBusy(true); setMessage(null); try { const fields = await durableFields(scope, "official_publish", row.session_key, row.version); const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions/${encodeURIComponent(row.session_key)}/publish`, { method: "POST", body: JSON.stringify({ match_date: matchDate, confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) }); completeScope(scope); setLastResult(payload); setMessage(`${payload.idempotent_replay ? "Recovered" : "Published"} ${payload.published_count || 0} official JUPR Live match(es).`); await loadSessions(); } catch (error) { setMessage(`${error instanceof Error ? error.message : "Publish outcome is uncertain."} Do not publish again; reconcile and inspect Match Log/Replay History.`); } finally { setBusy(false); } }
-  async function reconcileOperation(confirmationText: string) { if (!lastOperationKey) return; setBusy(true); setMessage(null); try { const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/operations/${encodeURIComponent(lastOperationKey)}/reconcile`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText }) }); setLastResult(payload); setMessage(payload.ok ? "Recovered the durable response without replaying the write." : "Outcome remains uncertain. Follow Match Log/Replay History recovery."); await loadSessions(); } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to reconcile live operation."); } finally { setBusy(false); } }
+  async function loadSessions() { const generation = sessionsRequest.begin(); setBusy(true); setMessage(null); setSessions([]); try { const query = filter ? `?status=${encodeURIComponent(filter)}&limit=100` : "?limit=100"; const payload = await requestJson<ListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions${query}`); if (!sessionsRequest.isCurrent(generation)) return; setSessions(payload.sessions || []); rememberScores(payload.sessions || []); setMessage(payload.sessions?.length ? `Loaded ${payload.count ?? payload.sessions.length} one-off session(s).` : `No ${filter || "matching"} sessions.`); } catch (error) { if (sessionsRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load live sessions."); } finally { if (sessionsRequest.isCurrent(generation)) setBusy(false); } }
+  async function createSession(confirmationText: string) {
+    if (!writesEnabled) { setMessage("Next writes are guarded off; use Streamlit JUPR Live Admin."); return; }
+    const generation = actionRequest.begin();
+    const scope = "create:new";
+    setBusy(true); setMessage(null);
+    try {
+      const fields = await durableFields(scope, "create_session", "new", "new");
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(fields.operationKey);
+      const names = participantNames.replace(/,/g, "\n").split("\n").map((token) => token.trim()).filter(Boolean);
+      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions`, { method: "POST", body: JSON.stringify({ title, event_type: eventType, participant_names: names, player_ids: parseIds(participantIds), total_rounds: Number(totalRounds), court_sizes: parseIds(courtSizes), confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setMessage(`Created durable live session ${payload.session?.session_key || "(recovered)"}.`);
+      if (!actionRequest.isCurrent(generation)) return;
+      await loadSessions();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Create outcome is uncertain."} Reconcile the operation before creating another session.`);
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function updateSession(row: LiveSession, nextStatus: string, confirmationText: string) {
+    const generation = actionRequest.begin();
+    const scope = `status:${row.session_key}:${nextStatus}`;
+    setBusy(true); setMessage(null);
+    try {
+      const fields = await durableFields(scope, "update_session", row.session_key, row.version);
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(fields.operationKey);
+      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions/${encodeURIComponent(row.session_key)}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus, title: row.title || undefined, confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setMessage(`${row.title || row.session_key} marked ${nextStatus}.`);
+      if (!actionRequest.isCurrent(generation)) return;
+      await loadSessions();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Session update is uncertain."} Reconcile before retrying.`);
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function saveScores(row: LiveSession, confirmationText: string) {
+    const generation = actionRequest.begin();
+    const scope = `scores:${row.session_key}`;
+    setBusy(true); setMessage(null);
+    try {
+      const fields = await durableFields(scope, "save_scores", row.session_key, row.version);
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(fields.operationKey);
+      const scores = Object.entries(scoreDrafts[row.session_key] || {}).map(([match_id, score]) => ({ match_id, score_a: score.score_a === "" ? null : Number(score.score_a), score_b: score.score_b === "" ? null : Number(score.score_b) }));
+      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions/${encodeURIComponent(row.session_key)}/scores`, { method: "PATCH", body: JSON.stringify({ scores, confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setMessage(`Saved ${payload.changed_scores || 0} score row(s).`);
+      if (!actionRequest.isCurrent(generation)) return;
+      await loadSessions();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Score save is uncertain."} Reconcile before retrying.`);
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function advanceRound(row: LiveSession, confirmationText: string) {
+    const generation = actionRequest.begin();
+    const scope = `advance:${row.session_key}`;
+    setBusy(true); setMessage(null);
+    try {
+      const fields = await durableFields(scope, "advance_round", row.session_key, row.version);
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(fields.operationKey);
+      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions/${encodeURIComponent(row.session_key)}/advance`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setMessage("Advanced to the next Python-generated live round.");
+      if (!actionRequest.isCurrent(generation)) return;
+      await loadSessions();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Round advance is uncertain."} Reconcile before retrying.`);
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function publishMatches(row: LiveSession, confirmationText: string) {
+    const generation = actionRequest.begin();
+    const scope = `publish:${row.session_key}`;
+    const matchDate = publishDate[row.session_key] || new Date().toISOString();
+    if (!publishDate[row.session_key]) setPublishDate((current) => ({ ...current, [row.session_key]: matchDate }));
+    setBusy(true); setMessage(null);
+    try {
+      const fields = await durableFields(scope, "official_publish", row.session_key, row.version);
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(fields.operationKey);
+      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions/${encodeURIComponent(row.session_key)}/publish`, { method: "POST", body: JSON.stringify({ match_date: matchDate, confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setMessage(`${payload.idempotent_replay ? "Recovered" : "Published"} ${payload.published_count || 0} official JUPR Live match(es).`);
+      if (!actionRequest.isCurrent(generation)) return;
+      await loadSessions();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Publish outcome is uncertain."} Do not publish again; reconcile and inspect Match Log/Replay History.`);
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function reconcileOperation(confirmationText: string) {
+    if (!lastOperationKey) return;
+    const generation = actionRequest.begin();
+    const requestedOperationKey = lastOperationKey;
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/operations/${encodeURIComponent(requestedOperationKey)}/reconcile`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastResult(payload);
+      setMessage(payload.ok ? "Recovered the durable response without replaying the write." : "Outcome remains uncertain. Follow Match Log/Replay History recovery.");
+      if (!actionRequest.isCurrent(generation)) return;
+      await loadSessions();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to reconcile live operation.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  useAuthenticatedAutoLoad(status?.enabled ? accessToken : "", loadSessions, filter || "all");
 
   if (!status?.enabled) {
     return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>JUPR Live Admin is disabled</h2><p>{status?.warnings?.[0] || "Enable JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE on FastAPI."}</p></article>;
@@ -100,8 +226,8 @@ export default function JuprLiveAdminPanel({ apiBase, clubId, clubSlug, status }
     <article style={cardStyle}>
       <h2 style={{ marginTop: 0 }}>Manage sessions</h2>
       <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0.75rem", alignItems: "end" }}>
-        <label>Status filter<br /><select value={filter} onChange={(event) => setFilter(event.target.value)} style={inputStyle}><option value="active">active</option><option value="completed">completed</option><option value="abandoned">abandoned</option><option value="archived">archived</option><option value="">all</option></select></label>
-        <button type="button" onClick={loadSessions} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Working…" : "Load sessions"}</button>
+        <label>Status filter<br /><select value={filter} onChange={(event) => setFilter(event.target.value)} disabled={busy} style={inputStyle}><option value="active">active</option><option value="completed">completed</option><option value="abandoned">abandoned</option><option value="archived">archived</option><option value="">all</option></select></label>
+        <button type="button" onClick={loadSessions} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh sessions"}</button>
       </div>
       {message ? <p role="status" aria-live="polite" style={{ color: /unable|type|uncertain|guarded|requires/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </article>

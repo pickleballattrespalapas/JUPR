@@ -81,11 +81,10 @@ test.describe("order-28 Tournament Live staging evidence", () => {
     test.skip(!adminToken || !tournamentId || !drawId, "Admin bearer token and disposable tournament/draw fixtures are required.");
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/admin/tournament-live", { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: "Load tournaments" }).click();
+    await expect(page.getByLabel("Tournament").locator(`option[value="${tournamentId}"]`)).toBeAttached();
     await page.getByLabel("Tournament").selectOption(tournamentId);
-    await page.getByRole("button", { name: "Load prepared draws" }).click();
+    await expect(page.getByLabel("Draw").locator(`option[value="${drawId}"]`)).toBeAttached();
     await page.getByLabel("Draw").selectOption(drawId);
-    await page.getByRole("button", { name: "Open authoritative board" }).click();
     await expect(page.getByText(/Reviewed draw version/i)).toBeVisible();
     await expect(page.getByRole("heading", { name: "2. Enter live scores" })).toBeVisible();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);

@@ -401,6 +401,8 @@ def _check_api(
                 expected_identity = {
                     "environment": "staging",
                     "git_commit_sha": str(expected_git_sha or "").strip().lower() or None,
+                    "image_build_git_sha": str(expected_git_sha or "").strip().lower()
+                    or None,
                     "fly_app_name": str(expected_fly_app_name or "").strip() or None,
                     "supabase_project_ref": str(expected_supabase_project_ref or "").strip().lower() or None,
                     "web_origin": str(expected_web_origin or "").strip().rstrip("/") or None,
@@ -418,7 +420,11 @@ def _check_api(
                 }
                 for key, expected in expected_identity.items():
                     actual = payload.get(key)
-                    if key in {"git_commit_sha", "supabase_project_ref"} and isinstance(actual, str):
+                    if key in {
+                        "git_commit_sha",
+                        "image_build_git_sha",
+                        "supabase_project_ref",
+                    } and isinstance(actual, str):
                         actual = actual.lower()
                     results[path][key] = actual
                     if expected is None or actual != expected:

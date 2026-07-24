@@ -12,6 +12,7 @@ import type {
   AdminLeagueManagerStatusResponse,
   AdminLeagueManagerWriteResponse
 } from "@/lib/adminLeagueManagerApi";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import { GuidedLeagueSettingsEditor } from "./GuidedLeagueSettingsEditor";
 
@@ -60,6 +61,9 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
   const [detail, setDetail] = useState<AdminLeagueManagerDetailResponse | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const listRequest = useLatestRequestGuard(accessToken, clearProtectedLeagueState);
+  const detailRequest = useLatestRequestGuard(accessToken);
+  const actionRequest = useLatestRequestGuard(accessToken);
 
   const [createName, setCreateName] = useState("");
   const [createDescription, setCreateDescription] = useState("");
@@ -106,22 +110,48 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
 
   function hydrateAll(payload: AdminLeagueManagerDetailResponse) { hydrateRoster(payload); }
 
+  function clearProtectedLeagueState() {
+    detailRequest.invalidate();
+    setSaving(false); setMessage(null); setLeagues([]); setSelectedLeague(""); setDetail(null);
+    setRosterPlayerId(""); setRosterAction("activate"); setRosterStartingJupr("3.5");
+  }
+
   async function loadLeagues() {
-    setMessage(null); setDetail(null);
+    const selectedBeforeRefresh = selectedLeague;
+    const generation = listRequest.begin();
+    detailRequest.invalidate();
+    setMessage(null);
+    setDetail(null);
     if (!requireReady()) return;
     setSaving(true);
-    try { const payload = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`); setLeagues(payload.leagues || []); setMessage(`Loaded ${payload.count ?? payload.leagues?.length ?? 0} league(s).`); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load leagues."); }
-    finally { setSaving(false); }
+    try {
+      const payload = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
+      if (!listRequest.isCurrent(generation)) return;
+      const nextLeagues = payload.leagues || [];
+      setLeagues(nextLeagues);
+      if (selectedBeforeRefresh && nextLeagues.some((league) => league.league_name === selectedBeforeRefresh)) {
+        await loadDetail(selectedBeforeRefresh);
+      } else if (selectedBeforeRefresh) {
+        setSelectedLeague("");
+      }
+      setMessage(nextLeagues.length ? `Loaded ${payload.count ?? nextLeagues.length} league(s).` : "No leagues are available yet.");
+    }
+    catch (error) { if (listRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load leagues."); }
+    finally { if (listRequest.isCurrent(generation)) setSaving(false); }
   }
 
   async function loadDetail(leagueName: string) {
+    const generation = detailRequest.begin();
     setSelectedLeague(leagueName); setDetail(null); setMessage(null);
     if (!leagueName || !requireReady()) return;
     setSaving(true);
-    try { const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}`); setDetail(payload); hydrateAll(payload); setDuplicateName(`${leagueName} Copy`); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load league detail."); }
-    finally { setSaving(false); }
+    try {
+      const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}`);
+      if (!detailRequest.isCurrent(generation)) return;
+      setDetail(payload); hydrateAll(payload); setDuplicateName(`${leagueName} Copy`);
+    }
+    catch (error) { if (detailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load league detail."); }
+    finally { if (detailRequest.isCurrent(generation)) setSaving(false); }
   }
 
   async function createLeagueDraft(confirmationText: string) {
@@ -132,18 +162,24 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     if (!name) { setMessage("League name is required."); return; }
     if (!Number.isInteger(minGames) || minGames < 0 || minGames > 1000) { setMessage("Minimum games must be a whole number from 0 to 1000."); return; }
     if (!Number.isInteger(kFactor) || kFactor < 1 || kFactor > 128) { setMessage("K-factor must be a whole number from 1 to 128."); return; }
+    const generation = actionRequest.begin();
     setSaving(true); setMessage(null);
     try {
       const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`, { method: "POST", body: JSON.stringify({ league_name: name, description: createDescription, min_games: minGames, k_factor: kFactor, confirmation_text: confirmationText, source: "next_league_manager_create_form" }) });
+      if (!actionRequest.isCurrent(generation)) return;
       const listing = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
+      if (!actionRequest.isCurrent(generation)) return;
       setLeagues(listing.leagues || []);
       setSelectedLeague(payload.league?.league_name || name);
       if (payload.detail) { setDetail(payload.detail); hydrateAll(payload.detail); }
       setDuplicateName(`${payload.league?.league_name || name} Copy`);
       setCreateName(""); setCreateDescription(""); setCreateMinGames("6"); setCreateKFactor("32");
       setMessage(`Created draft league ${payload.league?.league_name || name}.`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to create league draft."); }
-    finally { setSaving(false); }
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to create league draft.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
   }
 
   async function duplicateLeagueDraft(confirmationText: string) {
@@ -151,56 +187,90 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     if (!requireReady()) return;
     const targetName = duplicateName.trim();
     if (!targetName) { setMessage("New draft name is required."); return; }
+    const generation = actionRequest.begin();
+    const sourceLeague = selectedLeague;
     setSaving(true); setMessage(null);
     try {
-      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/duplicate`, { method: "POST", body: JSON.stringify({ target_league_name: targetName, confirmation_text: confirmationText, source: "next_league_manager_duplicate_form" }) });
+      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(sourceLeague)}/duplicate`, { method: "POST", body: JSON.stringify({ target_league_name: targetName, confirmation_text: confirmationText, source: "next_league_manager_duplicate_form" }) });
+      if (!actionRequest.isCurrent(generation)) return;
       const listing = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
+      if (!actionRequest.isCurrent(generation)) return;
       const createdName = payload.league?.league_name || payload.league_name || targetName;
       setLeagues(listing.leagues || []);
       setSelectedLeague(createdName);
       if (payload.detail) { setDetail(payload.detail); hydrateAll(payload.detail); }
       setDuplicateName(`${createdName} Copy`);
-      setMessage(`Duplicated ${payload.source_league_name || selectedLeague} as draft ${createdName}. Roster and results were not copied.`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to duplicate league draft."); }
-    finally { setSaving(false); }
+      setMessage(`Duplicated ${payload.source_league_name || sourceLeague} as draft ${createdName}. Roster and results were not copied.`);
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to duplicate league draft.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
   }
 
   async function transitionLeagueLifecycle(action: LifecycleAction, confirmationText: string) {
     if (!selectedLeague || !detail) { setMessage("Select a league before changing its lifecycle."); return; }
     if (!requireReady()) return;
+    const generation = actionRequest.begin();
+    const leagueName = selectedLeague;
+    const previousStatus = detail.league.status;
     setSaving(true); setMessage(null);
     try {
-      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/lifecycle`, { method: "POST", body: JSON.stringify({ action, confirmation_text: confirmationText, source: "next_league_manager_lifecycle_controls" }) });
+      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}/lifecycle`, { method: "POST", body: JSON.stringify({ action, confirmation_text: confirmationText, source: "next_league_manager_lifecycle_controls" }) });
+      if (!actionRequest.isCurrent(generation)) return;
       const listing = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
+      if (!actionRequest.isCurrent(generation)) return;
       setLeagues(listing.leagues || []);
       if (payload.detail) { setDetail(payload.detail); hydrateAll(payload.detail); }
-      setMessage(`${lifecycleLabels[action]} completed: ${payload.previous_status || detail.league.status} → ${payload.new_status || payload.league?.status || "updated"}.`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to change league lifecycle."); }
-    finally { setSaving(false); }
+      setMessage(`${lifecycleLabels[action]} completed: ${payload.previous_status || previousStatus} → ${payload.new_status || payload.league?.status || "updated"}.`);
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to change league lifecycle.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
   }
 
   async function saveLeagueSettings(settingsPatch: Record<string, unknown>, confirmationText: string): Promise<boolean> {
     if (!selectedLeague || !detail) { setMessage("Select a league before saving settings."); return false; }
     if (!requireReady()) return false;
     if (detail.league.status === "ended" || detail.league.status === "archived") { setMessage(`League settings are read-only after a league is ${detail.league.status}.`); return false; }
+    const generation = actionRequest.begin();
+    const leagueName = selectedLeague;
     setSaving(true); setMessage(null);
     try {
-      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}`, { method: "PATCH", body: JSON.stringify({ ...settingsPatch, confirmation_text: confirmationText, source: "next_league_manager_guided_settings" }) });
-      if (payload.detail) { setDetail(payload.detail); } else { await loadDetail(selectedLeague); }
-      setMessage(`Saved settings for ${payload.league?.league_name || selectedLeague}.`);
+      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}`, { method: "PATCH", body: JSON.stringify({ ...settingsPatch, confirmation_text: confirmationText, source: "next_league_manager_guided_settings" }) });
+      if (!actionRequest.isCurrent(generation)) return false;
+      if (payload.detail) {
+        setDetail(payload.detail);
+      } else {
+        await loadDetail(leagueName);
+        if (!actionRequest.isCurrent(generation)) return false;
+      }
+      setMessage(`Saved settings for ${payload.league?.league_name || leagueName}.`);
       return true;
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save league settings."); return false; }
-    finally { setSaving(false); }
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save league settings.");
+      return false;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
   }
 
   async function previewLeagueSchedule(scheduleConfig: Record<string, unknown>): Promise<AdminLeagueManagerSchedulePreviewResponse | null> {
     if (!selectedLeague || !detail) { setMessage("Select a league before previewing its schedule."); return null; }
     if (!requireReady()) return null;
+    const generation = actionRequest.begin();
+    const leagueName = selectedLeague;
     setSaving(true); setMessage(null);
     try {
-      return await requestJson<AdminLeagueManagerSchedulePreviewResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/schedule/preview`, { method: "POST", body: JSON.stringify({ schedule_config: scheduleConfig }) });
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to preview league schedule."); return null; }
-    finally { setSaving(false); }
+      const payload = await requestJson<AdminLeagueManagerSchedulePreviewResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}/schedule/preview`, { method: "POST", body: JSON.stringify({ schedule_config: scheduleConfig }) });
+      return actionRequest.isCurrent(generation) ? payload : null;
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to preview league schedule.");
+      return null;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
   }
 
   async function saveRosterMembership(confirmationText: string) {
@@ -209,14 +279,29 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     if (detail?.capabilities?.roster_mutable === false) { setMessage("This league roster is read-only in its current lifecycle state."); return; }
     const rating = Number(rosterStartingJupr);
     if (!Number.isFinite(rating) || rating < 1 || rating > 2800) { setMessage("Starting rating must be a JUPR value from 1.0-7.0 or Elo from 400-2800."); return; }
+    const generation = actionRequest.begin();
+    const leagueName = selectedLeague;
+    const playerId = rosterPlayerId;
+    const requestedAction = rosterAction;
     setSaving(true); setMessage(null);
     try {
-      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/roster/${encodeURIComponent(rosterPlayerId)}`, { method: "PATCH", body: JSON.stringify({ action: rosterAction, starting_rating: rating, confirmation_text: confirmationText, source: "next_league_manager_roster_editor" }) });
-      if (payload.detail) { setDetail(payload.detail); hydrateRoster(payload.detail); } else { await loadDetail(selectedLeague); }
-      setMessage(`${rosterAction === "activate" ? "Activated" : "Deactivated"} player ${payload.player_id ?? rosterPlayerId} for ${selectedLeague}.`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save roster membership."); }
-    finally { setSaving(false); }
+      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}/roster/${encodeURIComponent(playerId)}`, { method: "PATCH", body: JSON.stringify({ action: requestedAction, starting_rating: rating, confirmation_text: confirmationText, source: "next_league_manager_roster_editor" }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      if (payload.detail) {
+        setDetail(payload.detail); hydrateRoster(payload.detail);
+      } else {
+        await loadDetail(leagueName);
+        if (!actionRequest.isCurrent(generation)) return;
+      }
+      setMessage(`${requestedAction === "activate" ? "Activated" : "Deactivated"} player ${payload.player_id ?? playerId} for ${leagueName}.`);
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save roster membership.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
   }
+
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadLeagues);
 
   if (!status.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Next League Manager is disabled</h2><p style={{ color: "#475569" }}>{status.warnings?.[0] || "Enable the League Manager pilot flag on FastAPI."}</p></article>;
 
@@ -229,7 +314,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
         <h2 style={{ marginTop: 0 }}>League Manager admin session</h2>
         <p style={{ color: "#475569" }}>Create league drafts, manage settings and rosters, run persisted live rounds, and load Python-authoritative leader printouts through guarded FastAPI workflows.</p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}><strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong><p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to send authorized League Manager requests." : sessionLoading ? "Checking admin session…" : "Sign in before using League Manager."}</p>{sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}{!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}</div>
-        <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}><button type="button" onClick={loadLeagues} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Working…" : "Load leagues"}</button><Link href="/admin/league-manager/print">League night printout</Link><Link href="/admin/top-players-printable">Previous-month Top 50</Link></p>{status.warnings?.length ? <ul style={{ color: "#92400e" }}>{status.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+        <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}><button type="button" onClick={loadLeagues} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Refreshing…" : "Refresh leagues"}</button><Link href="/admin/league-manager/print">League night printout</Link><Link href="/admin/top-players-printable">Previous-month Top 50</Link></p>{status.warnings?.length ? <ul style={{ color: "#92400e" }}>{status.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
       </article>
 
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
@@ -244,7 +329,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
         <p><ConfirmAction triggerLabel={saving ? "Working…" : "Create draft"} title="Create this league draft?" description={`Create ${createName.trim() || "this league"} as an inactive draft with the reviewed description and rating settings.`} confirmLabel="Yes, create draft" confirmationText="CREATE LEAGUE" disabled={!accessToken || !createName.trim()} busy={saving} onConfirm={createLeagueDraft} /></p>
       </article>
 
-      <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Select league</h2><select value={selectedLeague} onChange={(event) => loadDetail(event.target.value)} style={inputStyle} disabled={!accessToken}><option value="">Choose a league</option>{leagues.map((league) => <option key={league.league_name} value={league.league_name}>{league.league_name} · {league.status}</option>)}</select>{leagues.length ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}>{leagues.map((league) => <button key={league.league_name} type="button" onClick={() => loadDetail(league.league_name)} disabled={!accessToken} style={{ ...cardStyle, textAlign: "left", cursor: "pointer" }}><strong>{league.league_name}</strong><br /><span style={{ border: "1px solid", borderRadius: "999px", padding: "0.12rem 0.45rem", fontSize: "0.78rem", ...statusChipStyle(league.status) }}>{league.status}</span></button>)}</div> : null}</article>
+      <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Select league</h2><select value={selectedLeague} onChange={(event) => loadDetail(event.target.value)} style={inputStyle} disabled={saving || !accessToken}><option value="">Choose a league</option>{leagues.map((league) => <option key={league.league_name} value={league.league_name}>{league.league_name} · {league.status}</option>)}</select>{leagues.length ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}>{leagues.map((league) => <button key={league.league_name} type="button" onClick={() => loadDetail(league.league_name)} disabled={saving || !accessToken} style={{ ...cardStyle, textAlign: "left", cursor: "pointer" }}><strong>{league.league_name}</strong><br /><span style={{ border: "1px solid", borderRadius: "999px", padding: "0.12rem 0.45rem", fontSize: "0.78rem", ...statusChipStyle(league.status) }}>{league.status}</span></button>)}</div> : <p style={{ color: "#64748b" }}>{saving ? "Loading leagues…" : "No leagues are available."}</p>}</article>
 
       {detail ? <>
         <article style={cardStyle}><h2 style={{ marginTop: 0 }}>{detail.league.league_name}</h2>{detail.league.description ? <p style={{ color: "#475569" }}>{detail.league.description}</p> : null}<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.75rem" }}><div><strong>Status</strong><br />{detail.league.status}</div><div><strong>K-factor</strong><br />{detail.league.k_factor ?? "—"}</div><div><strong>Min games</strong><br />{detail.league.min_games ?? "—"}</div><div><strong>Started</strong><br />{detail.league.started_at ? String(detail.league.started_at).slice(0, 10) : "—"}</div><div><strong>Ended</strong><br />{detail.league.ended_at ? String(detail.league.ended_at).slice(0, 10) : "—"}</div><div><strong>Standings rows</strong><br />{detail.standings_count}</div><div><strong>League roster</strong><br />{detail.league_roster_count ?? 0} / {detail.roster_count ?? detail.roster?.length ?? 0}</div></div>{detail.validation ? <div style={{ marginTop: "0.9rem", padding: "0.75rem", borderRadius: "10px", border: `1px solid ${detail.validation.valid ? "#bbf7d0" : "#fecaca"}`, background: detail.validation.valid ? "#f0fdf4" : "#fef2f2" }}><strong>{detail.validation.valid ? "Server validation passed" : "Server validation requires attention"}</strong>{detail.validation.errors.length ? <ul style={{ color: "#b91c1c" }}>{detail.validation.errors.map((item) => <li key={item}>{item}</li>)}</ul> : null}{detail.validation.warnings.length ? <ul style={{ color: "#92400e" }}>{detail.validation.warnings.map((item) => <li key={item}>{item}</li>)}</ul> : null}</div> : null}</article>
@@ -279,7 +364,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
               <label><strong>Starting JUPR/Elo</strong><br /><input value={rosterStartingJupr} onChange={(event) => setRosterStartingJupr(event.target.value)} disabled={!rosterMutable || rosterAction === "deactivate"} style={inputStyle} /></label>
               <ConfirmAction triggerLabel={saving ? "Saving…" : "Save roster"} title={`${rosterAction === "activate" ? "Activate" : "Deactivate"} this league player?`} description={`${selectedRosterRow?.player_name || "The selected player"} will be ${rosterAction === "activate" ? `activated with starting rating ${rosterStartingJupr}` : "deactivated without deleting prior league history"}.`} confirmLabel={`Yes, ${rosterAction === "activate" ? "activate player" : "deactivate player"}`} confirmationText="SAVE ROSTER" tone={rosterAction === "deactivate" ? "danger" : "default"} disabled={!accessToken || !rosterMutable || !rosterPlayerId} busy={saving} onConfirm={saveRosterMembership} />
             </div>
-          ) : <p style={{ color: "#64748b" }}>Load a roster snapshot before editing membership.</p>}
+          ) : <p style={{ color: "#64748b" }}>Select a league to open its roster before editing membership.</p>}
           {selectedRosterRow ? <p style={{ color: "#475569" }}>Selected: <strong>{selectedRosterRow.player_name}</strong> · {selectedRosterRow.in_league ? "currently in league" : "not yet in league"} · current league JUPR {juprLabel(selectedRosterRow.rating_jupr)}</p> : null}
         </article>
 

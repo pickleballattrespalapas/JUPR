@@ -49,8 +49,13 @@ def test_tournament_ops_read_only_mode_hides_post_backed_controls_but_keeps_snap
     assert "{operationsWriteReady ? <div" in results_section
     assert "Commit reviewed results" in results_section
 
-    assert "Load tournaments" in panel
-    assert "Load ops snapshot" in panel
+    assert "useAuthenticatedAutoLoad(" in panel
+    assert "Refresh tournaments" in panel
+    assert "selectTournament(event.target.value)" in panel
+    assert "if (tournamentId) void loadOps(tournamentId, \"\")" in panel
+    assert "Retry snapshot" in panel
+    assert ">Load tournaments<" not in panel
+    assert "Load ops snapshot" not in panel
     for read_only_table in ("Draws", "Teams", "Games", "Podium"):
         assert f">{read_only_table}</h2><GenericRowsTable" in panel
 

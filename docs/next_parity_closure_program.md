@@ -20,15 +20,16 @@ audit-attributed, feature-flagged, and recoverable through Python/FastAPI author
 Streamlit remains the operational fallback until the corresponding manual acceptance
 is complete.
 
-## Pull-request stack
+## Delivered implementation stack
 
-The implementation is split into reviewable, merge-ordered PRs. P0 security and
-data-integrity work lands before feature expansion. Public lanes may be developed
-in parallel, but each published PR names its exact dependency and remains a draft
-until its automated gate passes. No feature PR changes a matrix row to `Done`;
-the final evidence PR does that only after the consolidated manual session.
+The implementation was delivered as reviewable, merge-ordered PRs, with P0
+security and data-integrity work preceding feature expansion. All 29 orders were
+present at the reconciled July 24 checkpoint. Their history remains useful for
+scope and dependency tracing, but it is no longer a future work plan. No feature
+PR changed a matrix row to `Done`; the final evidence PR may do that only after
+the consolidated manual session.
 
-| Order | Planned branch | Track | Scope | Planned base |
+| Order | Delivered branch | Track | Scope | Dependency |
 |---|---|---|---|---|
 | 1 | `agent/parity-closure-plan` | `foundation` | This control plan, corrected matrix actions, shared staging helper, closure guard, deterministic fixture conventions, and page-spec layout | `staging` |
 | 2 | `agent/parity-admin-data-security` | `foundation` | Canonical Supabase migrations, RLS/grant lockdown for server-only admin tables, security-advisor evidence, and anonymous/authenticated denial tests | order 1 |
@@ -71,11 +72,32 @@ database access, exports, and a truthful view-only fallback. The `jupr_live`
 matrix row intentionally remains `Partial` until the consolidated staging book is
 executed.
 
-Order 26 is automated-ready/manual-ready on its branch: dedicated setup, Python templates and impact review, stale-safe tournament/registration edits, durable audit/replay semantics, imported-draw refusal, and the read-only Operations import handoff are covered. The three tournament rows intentionally remain `Partial` until the consolidated staging book is executed.
+Order 26 is automated-ready/manual-ready: the dedicated setup route, Python
+templates and impact review, guided structured day/event-family/division/options
+builder, advanced JSON import/export, stale-safe tournament/registration edits,
+durable audit/replay semantics, imported-draw refusal, and the read-only
+Operations import handoff are covered. The three tournament rows intentionally
+remain `Partial` until the consolidated staging book is executed.
 
-Order 27 has automated implementation and focused recovery evidence on its branch: route-specific draw/import/results/publish workflows, Python-authoritative lifecycle checks, reviewed DUPR import, atomic result/player persistence, game score CAS, and deterministic exact-set official-publish reconciliation are covered. The tournament rows intentionally remain `Partial`; no `Done` marker is allowed until the disposable staging acceptance and cumulative Order-29 evidence are recorded.
+Order 27 has automated implementation and focused recovery evidence:
+route-specific draw/import/results/publish workflows, Python-authoritative
+lifecycle checks, reviewed DUPR import, atomic result/player persistence, game
+score CAS, and deterministic exact-set official-publish reconciliation are
+covered. The tournament rows intentionally remain `Partial`; no `Done` marker is
+allowed until the disposable staging acceptance and cumulative Order-29 evidence
+are recorded.
 
-Order 28 is automated-ready/manual-ready on its branch: the in-play runner is draw-scoped and Python-authoritative, uses a separate staging-only write gate, retains exact requests for deterministic replay, exposes durable audit/recovery evidence, and refuses to unlock ambiguous official publishing. Tournament Live remains `Partial` until the documented desktop/mobile staging book and Order-29 sign-off are complete.
+Order 28 is automated-ready/manual-ready: the in-play runner is draw-scoped and
+Python-authoritative, uses a separate staging-only write gate, retains exact
+requests for deterministic replay, exposes durable audit/recovery evidence, and
+refuses to unlock ambiguous official publishing. Tournament Live remains
+`Partial` until the documented desktop/mobile staging book and Order-29 sign-off
+are complete.
+
+All 29 implementation orders were present at the reconciled
+`eab384545c493f145af383c8e26d8bf97686ab21` checkpoint. Subsequent UX and
+deployment-policy hardening can advance an implemented row to automated-ready or
+manual-ready, but never to `Done` without exact-candidate evidence.
 
 ## Page-level closure contracts
 
@@ -108,13 +130,13 @@ email, recovery, and operator-language checks.
 | `match_log` | `match-player` | Filters, duplicate/no-issue, guided edit, social edit/delete, exclude, cleanup, audit, and replay handoffs are tested. | Exercise reversible staging edits/deletes and verify restored final state. |
 | `player_editor` | `match-player` | Create/update/rating/link/auto-link/merge preview and permission/audit guards are tested. | Use staging-only players; execute merge only with immediate Replay History recovery. |
 | `admin_tools` | `badges-tools` | Roles/activity, reports/CSV, social moderation, badge worker/recompute/lifecycle, and tournament backfill guards are tested. | Exercise isolated staging fixtures, inspect audit rows, and verify recovery runbooks. |
-| `admin_guide` | `badges-tools` | Every migrated admin route, confirmation phrase, stop condition, and fallback link is statically guarded. | Staff review terminology and day-of operating sequence. |
+| `admin_guide` | `badges-tools` | Every migrated admin route, accessible confirmation dialog and internal API safeguard, stop condition, and fallback link is statically guarded. | Staff review terminology and day-of operating sequence. |
 | `challenge_ladder_admin` | `live-ladder` | Eligibility/notices/clock/result preview/publish/rank/pass/roster/tier/override/audit guards are tested. | Run isolated ladder fixtures and recover published matches through Match Log/Replay. |
 | `moneyball` | `live-ladder` | Eight-player selection, expected score, settlement, official publish, and correction handoff are tested. | Run and reverse a disposable staging event. |
 | `jupr_live` | `public-data` | Round-robin, League/Ladder, and Club Social session views; refresh persistence; substitutions; exports; public score state; and edit-token boundaries are asserted. | Operate each one-off event type on mobile, substitute a player, lock the phone, resume, export, and approve persistence. |
 | `jupr_live_admin` | `live-ladder` | Session create/update, score save, round advance, official publish, audit, and tournament rejection are tested. | Run a disposable one-off session and verify public view plus recovery. |
 | `tournaments` | `tournament-admin` | Read/edit/selection/division/bulk/archive/delete guards and stale-state handling are tested. | Operate a staging draft and confirm Streamlit fallback consistency. |
-| `tournament_manager` | `tournament-admin` | Dedicated setup route, settings/draft/templates/impact review/publish confirmation are tested. | Build and publish a disposable tournament setup in staging. |
+| `tournament_manager` | `tournament-admin` | Dedicated setup route, settings/draft/templates/impact review, structured add/remove/reorder controls, payload-equivalent advanced JSON import/export, validation, and publish confirmation are tested. | Build a disposable setup with the guided controls on desktop/mobile, review its summary, then publish it only in the bounded tournament write session. |
 | `tournament_ops` | `tournament-admin` | Draw/import/games/scoring/playoffs/podium/awards/publish/singles/email handoff are tested. | Run a disposable tournament end to end and verify replay recovery. |
 | `tournament_live` | `tournament-admin` | Draw-scoped live scoring/progression/podium/awards/publish and separation from JUPR Live are tested. | Run the in-play staging runner on desktop/mobile and verify recovery. |
 | `tournament_registration` | `public-tournaments` | Profile resolution, partner-selection wizard, submit validation, duplicate email, closed state, selection integrity, sponsor/refund fields, roster handoff, and edit-link request are tested. | Submit representative doubles/singles registrations, including partner-needed and sponsor/refund cases, in staging. |
@@ -136,9 +158,13 @@ email, recovery, and operator-language checks.
 Before any page moves to `Done`:
 
 - `make check-next-parity-matrix` and `make check-parity-closure-program` pass.
-- API contract and focused domain tests pass.
+- API contract, production-deployment verifier, authenticated auto-load, and
+  focused domain/static safety tests pass in GitHub Actions.
 - The full Next production build passes.
-- The isolated staging smoke reports zero public/browser failures and zero flakes.
+- The Next build runs the Tournament Setup payload-builder contract on its pinned
+  Node 20 runtime.
+- The isolated staging smoke passes all 56 strict public-read tests and all five
+  guided Tournament Setup browser tests with zero skips, failures, or flakes.
 - Authenticated tests use only the staging Supabase project and staging-only users.
 - Mutating tests use isolated fixtures and include a verified cleanup or recovery step.
 - Email tests use `dry_run` or `staging_redirect`, never an unrestricted live mode.

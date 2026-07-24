@@ -35,13 +35,15 @@ candidate:
 
 | Baseline field | Preserved value |
 |---|---|
-| Git SHA / PR | `9a0975f18d5d43b3f25e53872a80b04737c3a29c` / `#1018` |
+| Runtime candidate Git SHA | `eab384545c493f145af383c8e26d8bf97686ab21` |
+| Evidence PR at reconciliation | `#1022`; evidence-only head `daffe213324ae4e5c59f565452a800b89f6004f8` |
 | Vercel alias | `https://jupr-git-staging-pickleballattrespalapas1.vercel.app` |
-| Vercel deployment / immutable origin | `dpl_5rQuCqdPquvfnVmLiMHstJENDycS` / `https://jupr-mvw1gcqk4-pickleballattrespalapas1.vercel.app` |
-| Fly image | `registry.fly.io/juprleagues-api-staging:deployment-01KY3V2M6M2DMR04ZEYSF9WE6V` |
-| Final none artifact | `github-run-29886383749`; all controlled writes false for Fly image `registry.fly.io/juprleagues-api-staging:deployment-01KY3V2M6M2DMR04ZEYSF9WE6V`; canonical smoke `29886777122` passed 56 checks |
+| Vercel deployment / immutable origin | `dpl_FTmDVFSdftMmAj4sMwAHrvQpVYLE` / `https://jupr-bifdisfdg-pickleballattrespalapas1.vercel.app` |
+| Fly image | `registry.fly.io/juprleagues-api-staging:deployment-01KY5SVX80SHEZMN7GX37NASRP` |
+| Final none / smoke artifacts | Fly restore run `29957218074`; all controlled writes false; canonical Staging Smoke run `29957623653` passed 56 strict browser checks |
+| Supabase staging | Project `sijpxjxvdtrehmqvirfi`; `ACTIVE_HEALTHY`; 37 applied migration-ledger entries; head `20260720123402_baseline_worker_run_log` |
 | Streamlit fallback | `https://juprtrespalapas.streamlit.app` |
-| Prior operator/session | authenticated staging admin; `2026-07-20 / 2026-07-21` |
+| Checkpoint reconciliation | Read-only deployment, health, migration, log, and advisor review on `2026-07-24` |
 
 After the hardening patch lands, populate the formal table with the new SHA, PR,
 Vercel deployment ID/origin, Fly image, and preflight artifact as one unit. Do not
@@ -77,14 +79,30 @@ unexpected live email, wrong-club visibility, private-field exposure, non-idempo
 retry, or an unavailable recovery path. Record `Blocked` or `Fail`; do not work around
 the guard in SQL or the browser.
 
-## Execution waves
+## Acceptance session order
 
-1. Public read-only: leaderboards, league results, players, gamification, explorer, recap, rules, FAQ, legal, and roster projections.
-2. Public intake/auth: support, corrections/privacy, preferences, verified updates, registration/edit/confirmation, and partner pairing.
-3. Admin read/export: printouts, diagnostics/audits, Admin Guide, reports, previews, and CSV/print output.
-4. Deferred manual reversible writes: recaps, subscriptions/outbox, league configuration, ladder/session state, tournament setup/registration, and social moderation. These are not generic browser-plan automation.
-5. Match/rating writes: the executable workflow automates only the route-specific Tournament Live score command, including dynamic version/fingerprint checks, a distinct idempotency key for each command, reconciliation, and `finally` restoration/readback. Uploader, Match Log, player merge, League Live, Moneyball, ladder, JUPR Live, public live, and Tournament Ops remain manual-only.
-6. Deferred manual recovery: perform authoritative route-specific GET readbacks against the exact resource IDs created or changed, record exact 2xx status and positive state projections, inspect audit/completion rows, and prove Match Log/Replay handoffs. Do not invent universal `operation_key` or `evidence_id` response fields that a route does not return.
+1. Non-mutating public/admin read acceptance: public discovery and policy routes,
+   authenticated automatic loading, empty/error/retry behavior, diagnostics,
+   print/export views, guided Tournament Setup drafting without save, and
+   desktop/mobile layout.
+2. Bounded write/recovery batches: public intake/auth; registration/pairing;
+   recaps and communications; league configuration/live/awards; match/player;
+   ladder and one-off live sessions; tournament administration/operations/live;
+   and social moderation. Each sub-batch uses exactly one named write wave and
+   its own fixture, authoritative readback, recovery, and witness where the
+   manual row requires one. Tournament Live score remains the sole executable
+   automated mutation; the other writes remain manual-only.
+3. Exact-candidate restoration: reconcile every affected resource, deploy a
+   same-candidate `write_wave=none` release, attest the all-false controlled-write
+   projection and `JUPR_EMAIL_MODE=dry_run`, then run canonical Staging Smoke.
+   The final-candidate run must pass the 56-test strict public-read manifest and
+   the separate five-test guided Tournament Setup manifest without skips or flakes.
+
+For deferred manual recovery, use the authoritative route-specific GET readback
+for the exact changed resource, record the JSON-bearing 2xx status and positive
+state projection, inspect audit/completion rows, and prove Match Log/Replay
+handoffs. Do not invent universal `operation_key` or `evidence_id` fields that a
+route does not return.
 
 Every mutating wave uses the state transition `none -> one named wave -> none`.
 Never move directly from one active write wave to another. Record each Fly release
@@ -386,6 +404,8 @@ pages must use either that form or exactly `N/A`.
 - [ ] GitHub checks and Vercel preview remain green after evidence-only edits.
 - [ ] Production flags, migration order, rollout order, rollback aliases, and on-call owner are recorded.
 - [ ] The final Fly ledger row is a same-candidate `write_wave=none` release and its `/health` evidence proves `business_data_write_wave_active=false` plus every controlled write flag false.
-- [ ] Canonical `Staging Smoke` ran only after that final `none` release; `public-web-smoke` evidence is labeled diagnostic/noncanonical.
+- [ ] Canonical `Staging Smoke` ran only after that final `none` release and passed
+      all 56 public-read plus five guided Tournament Setup checks without skips or
+      flakes; `public-web-smoke` evidence is labeled diagnostic/noncanonical.
 - [ ] The manually dispatched `complete-book` job passes the complete-book checker with the exact candidate SHA, Vercel deployment ID, immutable Vercel deployment origin, and Fly image ref, then passes identity-only live re-attestation.
 - [ ] Only then does the final evidence PR reconcile eligible matrix rows from `Partial` to `Done`.

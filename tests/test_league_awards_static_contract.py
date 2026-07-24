@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 
@@ -52,14 +53,14 @@ def test_league_awards_mint_fails_closed_without_seeded_badge_definitions() -> N
     assert "Badge minting is blocked" in panel
 
 
-def test_league_awards_staging_gate_is_not_enabled_in_production_config() -> None:
+def test_league_awards_staging_gate_is_explicitly_disabled_in_production_config() -> None:
     staging = (ROOT / "fly.staging.toml").read_text()
-    production = (ROOT / "fly.toml").read_text()
+    production = tomllib.loads((ROOT / "fly.toml").read_text())
     workflow = (ROOT / ".github/workflows/fly_api_staging_deploy.yml").read_text()
     flag = "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE"
     assert flag in staging
     assert flag in workflow
-    assert flag not in production
+    assert production["env"][flag] == "0"
 
 
 def test_league_awards_manual_evidence_keeps_parity_partial() -> None:

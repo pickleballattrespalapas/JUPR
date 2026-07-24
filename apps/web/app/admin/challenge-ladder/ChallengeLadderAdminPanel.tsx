@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import { deriveLiveLadderOperationKey, idempotencyKeyFor, rotateIdempotencyKey } from "@/lib/liveLadderOperations";
 
@@ -71,6 +72,9 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
   const [tierMovementReview, setTierMovementReview] = useState<TierMovementResponse | null>(null);
   const [lastResult, setLastResult] = useState<ActionResponse | null>(null);
   const [lastOperationKey, setLastOperationKey] = useState("");
+  const dashboardRequest = useLatestRequestGuard(accessToken, clearProtectedChallengeState);
+  const tierReviewRequest = useLatestRequestGuard(accessToken);
+  const actionRequest = useLatestRequestGuard(accessToken);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("Missing JUPR API base URL.");
@@ -88,26 +92,41 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
     if (!dashboard?.state_version) throw new Error("Load the authoritative Python dashboard before writing.");
     const idempotencyKey = idempotencyKeyFor(operationKeys.current, scope);
     const operationKey = await deriveLiveLadderOperationKey({ clubId, surface: "challenge_ladder", operationType, entityId, idempotencyKey });
-    setLastOperationKey(operationKey);
-    return { expected_version: dashboard.state_version, idempotency_key: idempotencyKey };
+    return { expected_version: dashboard.state_version, idempotency_key: idempotencyKey, operationKey };
   }
 
   function completeScope(scope: string) { rotateIdempotencyKey(operationKeys.current, scope); }
 
-  async function loadDashboard() {
-    setBusy(true); setMessage(null);
-    try { const payload = await requestJson<DashboardResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/dashboard`); setDashboard(payload); setMessage("Challenge Ladder dashboard loaded."); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load dashboard."); }
-    finally { setBusy(false); }
+  function clearProtectedChallengeState() {
+    operationKeys.current = {};
+    tierReviewRequest.invalidate();
+    setBusy(false); setMessage(null); setDashboard(null); setTierMovementReview(null);
+    setResultPreview(null); setPreviewedDraftFingerprint(null);
+    setRosterReplacePreview(null); setPreviewedRosterDraftFingerprint(null);
+    setLastNotice(null); setLastResult(null); setLastOperationKey("");
   }
 
+  async function loadDashboard() {
+    const generation = dashboardRequest.begin();
+    tierReviewRequest.invalidate();
+    setBusy(true); setMessage(null);
+    setDashboard(null); setResultPreview(null); setPreviewedDraftFingerprint(null);
+    try { const payload = await requestJson<DashboardResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/dashboard`); if (!dashboardRequest.isCurrent(generation)) return; setDashboard(payload); setMessage("Challenge Ladder dashboard loaded."); }
+    catch (error) { if (dashboardRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load dashboard."); }
+    finally { if (dashboardRequest.isCurrent(generation)) setBusy(false); }
+  }
+
+  useAuthenticatedAutoLoad(status?.enabled ? accessToken : "", loadDashboard);
+
   async function loadTierMovementReview() {
+    const generation = tierReviewRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<TierMovementResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/tier-movement-review`);
+      if (!tierReviewRequest.isCurrent(generation)) return;
       setTierMovementReview(payload); setMessage(payload.triggers.length ? `${payload.triggers.length} tier-movement review item${payload.triggers.length === 1 ? "" : "s"} found.` : "No tier-movement triggers found.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load tier-movement review."); }
-    finally { setBusy(false); }
+    } catch (error) { if (tierReviewRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load tier-movement review."); }
+    finally { if (tierReviewRequest.isCurrent(generation)) setBusy(false); }
   }
 
   function prepareReviewedTierMove(trigger: TierMovementTrigger) {
@@ -121,82 +140,138 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
   }
 
   async function updateChallenge(challenge: Challenge, nextStatus: string, confirmationText: string) {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const scope = `update:${challenge.id}:${nextStatus}`;
-      const fields = await durableFields(scope, "update_challenge", String(challenge.id));
+      const { operationKey, ...fields } = await durableFields(scope, "update_challenge", String(challenge.id));
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(operationKey);
       const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/challenges/${challenge.id}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus, admin_note: notes[challenge.id] || "", confirmation_text: confirmationText, ...fields }) });
-      completeScope(scope); setLastResult(payload); setMessage(`Challenge #${challenge.id} saved as ${nextStatus}.`); await loadDashboard();
-    } catch (error) { setMessage(mutationError(error, "Unable to update challenge.")); }
-    finally { setBusy(false); }
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setMessage(`Challenge #${challenge.id} saved as ${nextStatus}.`);
+      await loadDashboard();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(mutationError(error, "Unable to update challenge."));
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function simpleAction(challenge: Challenge, action: "start-clock" | "accept", confirmationText: string) {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const operationType = action === "start-clock" ? "start_clock" : "accept_challenge";
       const scope = `${operationType}:${challenge.id}`;
-      const fields = await durableFields(scope, operationType, String(challenge.id));
+      const { operationKey, ...fields } = await durableFields(scope, operationType, String(challenge.id));
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(operationKey);
       const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/challenges/${challenge.id}/${action}`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText, ...fields }) });
-      completeScope(scope); setLastResult(payload); setMessage(`Challenge #${challenge.id} updated.`); await loadDashboard();
-    } catch (error) { setMessage(mutationError(error, "Unable to update challenge.")); }
-    finally { setBusy(false); }
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setMessage(`Challenge #${challenge.id} updated.`);
+      await loadDashboard();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(mutationError(error, "Unable to update challenge."));
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function createChallenge(confirmationText: string) {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const entityId = `${createDraft.challenger_id}:${createDraft.defender_id}:${createDraft.tier_id}`;
       const scope = `create:${entityId}`;
-      const fields = await durableFields(scope, "create_challenge", entityId);
+      const { operationKey, ...fields } = await durableFields(scope, "create_challenge", entityId);
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(operationKey);
       const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/challenges`, { method: "POST", body: JSON.stringify({ ...createDraft, challenger_id: Number(createDraft.challenger_id), defender_id: Number(createDraft.defender_id), confirmation_text: confirmationText, ...fields }) });
-      completeScope(scope); setLastResult(payload); setLastNotice(payload.notice || null); setMessage("Challenge created. Copy the notice, send it, then start the acceptance clock."); await loadDashboard();
-    } catch (error) { setMessage(mutationError(error, "Unable to create challenge.")); }
-    finally { setBusy(false); }
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setLastNotice(payload.notice || null); setMessage("Challenge created. Copy the notice, send it, then start the acceptance clock.");
+      await loadDashboard();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(mutationError(error, "Unable to create challenge."));
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function recordForfeit(confirmationText: string) {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const scope = `forfeit:${forfeitDraft.challenge_id}`;
-      const fields = await durableFields(scope, "record_forfeit", forfeitDraft.challenge_id);
+      const { operationKey, ...fields } = await durableFields(scope, "record_forfeit", forfeitDraft.challenge_id);
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(operationKey);
       const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/challenges/${Number(forfeitDraft.challenge_id)}/forfeit`, { method: "POST", body: JSON.stringify({ forfeited_by_id: Number(forfeitDraft.forfeited_by_id), admin_note: forfeitDraft.admin_note, confirmation_text: confirmationText, ...fields }) });
-      completeScope(scope); setLastResult(payload); setMessage("Forfeit recorded."); await loadDashboard();
-    } catch (error) { setMessage(mutationError(error, "Unable to record forfeit.")); }
-    finally { setBusy(false); }
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setMessage("Forfeit recorded.");
+      await loadDashboard();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(mutationError(error, "Unable to record forfeit."));
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function recordPass(confirmationText: string) {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const scope = `pass:${passDraft.challenge_id}`;
-      const fields = await durableFields(scope, "record_pass", passDraft.challenge_id);
+      const { operationKey, ...fields } = await durableFields(scope, "record_pass", passDraft.challenge_id);
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(operationKey);
       const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/challenges/${Number(passDraft.challenge_id)}/pass`, { method: "POST", body: JSON.stringify({ player_id: Number(passDraft.player_id), confirmation_text: confirmationText, ...fields }) });
-      completeScope(scope); setLastResult(payload); setPassDraft({ challenge_id: "", player_id: "" }); setMessage("Monthly pass recorded and challenge closed."); await loadDashboard();
-    } catch (error) { setMessage(mutationError(error, "Unable to record monthly pass.")); }
-    finally { setBusy(false); }
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setPassDraft({ challenge_id: "", player_id: "" }); setMessage("Monthly pass recorded and challenge closed.");
+      await loadDashboard();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(mutationError(error, "Unable to record monthly pass."));
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function addRosterPlayer(confirmationText: string) {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const scope = `roster-add:${rosterAddDraft.player_id}`;
-      const fields = await durableFields(scope, "add_roster_player", rosterAddDraft.player_id);
+      const { operationKey, ...fields } = await durableFields(scope, "add_roster_player", rosterAddDraft.player_id);
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(operationKey);
       const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/roster`, { method: "POST", body: JSON.stringify({ ...rosterAddDraft, player_id: Number(rosterAddDraft.player_id), confirmation_text: confirmationText, ...fields }) });
-      completeScope(scope); setLastResult(payload); setRosterAddDraft((current) => ({ ...current, player_id: "", admin_note: "" })); setMessage("Ladder player added at the bottom of the selected tier."); await loadDashboard();
-    } catch (error) { setMessage(mutationError(error, "Unable to add ladder player.")); }
-    finally { setBusy(false); }
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setRosterAddDraft((current) => ({ ...current, player_id: "", admin_note: "" })); setMessage("Ladder player added at the bottom of the selected tier.");
+      await loadDashboard();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(mutationError(error, "Unable to add ladder player."));
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function moveRosterPlayer(confirmationText: string) {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const scope = `roster-move:${rosterMoveDraft.player_id}:${rosterMoveDraft.destination_tier}`;
-      const fields = await durableFields(scope, "move_roster_player", rosterMoveDraft.player_id);
+      const { operationKey, ...fields } = await durableFields(scope, "move_roster_player", rosterMoveDraft.player_id);
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(operationKey);
       const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/roster/${Number(rosterMoveDraft.player_id)}/move`, { method: "POST", body: JSON.stringify({ destination_tier: rosterMoveDraft.destination_tier, recompress_old: rosterMoveDraft.recompress_old, admin_note: rosterMoveDraft.admin_note, confirmation_text: confirmationText, ...fields }) });
-      completeScope(scope); setLastResult(payload); setRosterMoveDraft((current) => ({ ...current, player_id: "", admin_note: "" })); setMessage("Ladder player moved to the bottom of the destination tier."); await loadDashboard();
-    } catch (error) { setMessage(mutationError(error, "Unable to move ladder player.")); }
-    finally { setBusy(false); }
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setRosterMoveDraft((current) => ({ ...current, player_id: "", admin_note: "" })); setMessage("Ladder player moved to the bottom of the destination tier.");
+      await loadDashboard();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(mutationError(error, "Unable to move ladder player."));
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   function loadCurrentTierRosterForReplacement() {
@@ -213,71 +288,113 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
   async function previewRosterReplacement() {
     const rankedNames = rosterReplaceDraft.ranked_names.split("\n").map((name) => name.trim()).filter(Boolean);
     if (!rankedNames.length) { setMessage("Paste at least one player name before previewing the tier replacement."); return; }
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<TierRosterReplacePreview>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/roster/replace-tier/preview`, { method: "POST", body: JSON.stringify({ tier_id: rosterReplaceDraft.tier_id, ranked_names: rankedNames }) });
+      if (!actionRequest.isCurrent(generation)) return;
       setRosterReplacePreview(payload); setPreviewedRosterDraftFingerprint(tierRosterDraftFingerprint(rosterReplaceDraft));
       setMessage(payload.can_apply ? "Tier replacement preview is ready. Review every change before applying." : "Preview found blockers. Resolve them and preview again before applying.");
     } catch (error) {
-      setRosterReplacePreview(null); setPreviewedRosterDraftFingerprint(null); setMessage(error instanceof Error ? error.message : "Unable to preview the tier replacement.");
-    } finally { setBusy(false); }
+      if (actionRequest.isCurrent(generation)) {
+        setRosterReplacePreview(null); setPreviewedRosterDraftFingerprint(null); setMessage(error instanceof Error ? error.message : "Unable to preview the tier replacement.");
+      }
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function applyRosterReplacement(confirmationText: string) {
     if (!rosterReplacePreview || previewedRosterDraftFingerprint !== tierRosterDraftFingerprint(rosterReplaceDraft)) { setMessage("Preview the current ranked list before applying it."); return; }
     if (!rosterReplacePreview.can_apply) { setMessage("Resolve open challenge blockers and preview the roster again before applying it."); return; }
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const scope = `roster-replace:${rosterReplaceDraft.tier_id}`;
-      const fields = await durableFields(scope, "replace_tier_roster", rosterReplaceDraft.tier_id);
+      const { operationKey, ...fields } = await durableFields(scope, "replace_tier_roster", rosterReplaceDraft.tier_id);
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(operationKey);
       const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/roster/replace-tier`, { method: "POST", body: JSON.stringify({ tier_id: rosterReplaceDraft.tier_id, ranked_player_ids: rosterReplacePreview.proposed_roster.map((row) => row.player_id), preview_fingerprint: rosterReplacePreview.preview_fingerprint, admin_note: rosterReplaceDraft.admin_note, confirmation_text: confirmationText, ...fields }) });
-      completeScope(scope); setLastResult(payload); setRosterReplacePreview(null); setPreviewedRosterDraftFingerprint(null); setRosterReplaceDraft((current) => ({ ...current, admin_note: "" })); setMessage("Reviewed tier roster replacement applied and audited."); await loadDashboard();
-    } catch (error) { setMessage(mutationError(error, "Unable to apply the tier replacement.")); }
-    finally { setBusy(false); }
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setRosterReplacePreview(null); setPreviewedRosterDraftFingerprint(null); setRosterReplaceDraft((current) => ({ ...current, admin_note: "" })); setMessage("Reviewed tier roster replacement applied and audited.");
+      await loadDashboard();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(mutationError(error, "Unable to apply the tier replacement."));
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function savePlayerOverrides(confirmationText: string) {
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const scope = `overrides:${overrideDraft.player_id}`;
-      const fields = await durableFields(scope, "save_player_overrides", overrideDraft.player_id);
+      const { operationKey, ...fields } = await durableFields(scope, "save_player_overrides", overrideDraft.player_id);
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(operationKey);
       const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/roster/${Number(overrideDraft.player_id)}/overrides`, { method: "PATCH", body: JSON.stringify({ vacation_until: overrideDraft.vacation_until.trim() || null, reinstate_required: overrideDraft.reinstate_required, reinstate_notes: overrideDraft.reinstate_notes, confirmation_text: confirmationText, ...fields }) });
-      completeScope(scope); setLastResult(payload); setMessage("Vacation and reinstate overrides saved."); await loadDashboard();
-    } catch (error) { setMessage(mutationError(error, "Unable to save ladder overrides.")); }
-    finally { setBusy(false); }
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setMessage("Vacation and reinstate overrides saved.");
+      await loadDashboard();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(mutationError(error, "Unable to save ladder overrides."));
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function previewResult() {
     if (!resultDraft.challenge_id) { setMessage("Choose a recordable challenge before previewing a result."); return; }
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<ResultPreviewResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/challenges/${Number(resultDraft.challenge_id)}/result/preview`, { method: "POST", body: JSON.stringify(resultPayload(resultDraft)) });
+      if (!actionRequest.isCurrent(generation)) return;
       setResultPreview(payload); setPreviewedDraftFingerprint(resultDraftFingerprint(resultDraft)); setMessage("Result preview is ready. Review it before publishing.");
     } catch (error) {
-      setResultPreview(null); setPreviewedDraftFingerprint(null); setMessage(error instanceof Error ? error.message : "Unable to preview ladder result.");
-    } finally { setBusy(false); }
+      if (actionRequest.isCurrent(generation)) {
+        setResultPreview(null); setPreviewedDraftFingerprint(null); setMessage(error instanceof Error ? error.message : "Unable to preview ladder result.");
+      }
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function publishResult(confirmationText: string) {
     if (!resultPreview || previewedDraftFingerprint !== resultDraftFingerprint(resultDraft)) { setMessage("Preview the current result draft before publishing it."); return; }
+    const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const scope = `publish-result:${resultDraft.challenge_id}`;
-      const fields = await durableFields(scope, "publish_result", resultDraft.challenge_id);
+      const { operationKey, ...fields } = await durableFields(scope, "publish_result", resultDraft.challenge_id);
+      if (!actionRequest.isCurrent(generation)) return;
+      setLastOperationKey(operationKey);
       const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/challenges/${Number(resultDraft.challenge_id)}/result`, { method: "POST", body: JSON.stringify({ ...resultPayload(resultDraft, confirmationText), preview_fingerprint: resultPreview.preview_fingerprint, ...fields }) });
-      completeScope(scope); setLastResult(payload); setResultPreview(null); setPreviewedDraftFingerprint(null); setMessage("Ladder result published."); await loadDashboard();
-    } catch (error) { setMessage(mutationError(error, "Unable to publish ladder result.")); }
-    finally { setBusy(false); }
+      if (!actionRequest.isCurrent(generation)) return;
+      completeScope(scope); setLastResult(payload); setResultPreview(null); setPreviewedDraftFingerprint(null); setMessage("Ladder result published.");
+      await loadDashboard();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(mutationError(error, "Unable to publish ladder result."));
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function reconcileLastOperation(confirmationText: string) {
     if (!lastOperationKey) { setMessage("No operation is available to reconcile."); return; }
+    const generation = actionRequest.begin();
+    const operationKey = lastOperationKey;
     setBusy(true); setMessage(null);
     try {
-      const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/operations/${encodeURIComponent(lastOperationKey)}/reconcile`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText }) });
+      const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/operations/${encodeURIComponent(operationKey)}/reconcile`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText }) });
+      if (!actionRequest.isCurrent(generation)) return;
       setLastResult(payload); setMessage(payload.ok ? "Operation reconciled from the durable result." : "The operation is still uncertain. Inspect Match Log and Replay before any correction.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to reconcile the operation."); }
-    finally { setBusy(false); }
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to reconcile the operation.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   if (!status?.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Challenge Ladder Admin is disabled</h2><p>{status?.warnings?.[0] || "Enable JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER on FastAPI."}</p></article>;
@@ -308,7 +425,7 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
       </article>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Dashboard</h2>
-        <button type="button" onClick={loadDashboard} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Loading…" : "Load Challenge Ladder"}</button>
+        <button type="button" onClick={loadDashboard} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh dashboard"}</button>
         {status.writes_enabled !== true ? <p style={{ color: "#92400e", fontWeight: 700 }}>Next.js writes are guarded off. Use the Streamlit Challenge Ladder fallback for staging writes; this dashboard remains read-only.</p> : null}
         {message ? <p role="status" aria-live="polite" style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("type") || message.toLowerCase().includes("invalid") || message.toLowerCase().includes("uncertain") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
@@ -474,7 +591,7 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
           <p style={{ color: "#475569" }}>Paste exact club player names, one per line, in rank order. Preview is read-only. Apply preserves removed players as inactive, recompresses any source tiers, blocks affected open challenges, and rejects the operation if the live roster changed after preview.</p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
             <label>Tier<br /><select value={rosterReplaceDraft.tier_id} onChange={(e) => { setRosterReplaceDraft((current) => ({ ...current, tier_id: e.target.value })); setRosterReplacePreview(null); setPreviewedRosterDraftFingerprint(null); }} style={inputStyle}>{dashboard.tiers.map((tier) => <option key={tier.tier_id} value={tier.tier_id}>{tier.label}</option>)}</select></label>
-            <button type="button" onClick={loadCurrentTierRosterForReplacement} disabled={busy} style={ghostButtonStyle}>Load current tier order</button>
+            <button type="button" onClick={loadCurrentTierRosterForReplacement} disabled={busy} style={ghostButtonStyle}>Copy current tier order</button>
           </div>
           <label style={{ display: "block", marginTop: "0.75rem" }}>Ranked names (top to bottom)<br /><textarea value={rosterReplaceDraft.ranked_names} onChange={(e) => { setRosterReplaceDraft((current) => ({ ...current, ranked_names: e.target.value })); setRosterReplacePreview(null); setPreviewedRosterDraftFingerprint(null); }} rows={10} placeholder={"Player One\nPlayer Two\nPlayer Three"} style={{ ...inputStyle, resize: "vertical" }} /></label>
           <p><button type="button" onClick={previewRosterReplacement} disabled={busy || !rosterReplaceDraft.ranked_names.trim()} style={ghostButtonStyle}>Preview complete replacement</button></p>

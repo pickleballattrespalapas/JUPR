@@ -14,6 +14,7 @@ import type {
   AdminTournamentOpsTeam,
   AdminTournamentWriteResponse
 } from "@/lib/adminTournamentApi";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import styles from "./TournamentLivePanel.module.css";
 
@@ -172,6 +173,10 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
   const [lastResult, setLastResult] = useState<AdminTournamentWriteResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const listRequest = useLatestRequestGuard(accessToken, clearProtectedLiveState);
+  const drawsRequest = useLatestRequestGuard(accessToken);
+  const boardRequest = useLatestRequestGuard(accessToken);
+  const actionRequest = useLatestRequestGuard(accessToken);
 
   const selectedTournament = tournaments.find((tournament) => tournament.id === selectedTournamentId) || snapshot?.tournament || null;
   const { teamsById, sortedGames, rrGames, playoffGames } = useMemo(() => {
@@ -201,6 +206,13 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
     return payload as T;
   }
 
+  function clearProtectedLiveState() {
+    drawsRequest.invalidate(); boardRequest.invalidate();
+    setBusy(false); setNotice(null);
+    setTournaments([]); setDraws([]); setSelectedTournamentId(""); setSelectedDrawId(""); setSnapshot(null);
+    setScoreGameId(""); setScoreA(""); setScoreB(""); setPendingCommand(null); setLastResult(null);
+  }
+
   function seedScoreEditor(nextSnapshot: AdminTournamentLiveSnapshotResponse | null) {
     const games = [...(nextSnapshot?.games || [])].sort((left, right) => gameSortKey(left).localeCompare(gameSortKey(right)));
     const target = games.find((game) => !isScored(game)) || games[0] || null;
@@ -210,73 +222,128 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
   }
 
   async function fetchBoard(tournamentId: string, drawId: string): Promise<AdminTournamentLiveSnapshotResponse> {
-    const payload = await requestJson<AdminTournamentLiveSnapshotResponse>(
+    return requestJson<AdminTournamentLiveSnapshotResponse>(
       `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(tournamentId)}/snapshot?draw_id=${encodeURIComponent(drawId)}`
     );
+  }
+
+  function hydrateBoard(payload: AdminTournamentLiveSnapshotResponse, tournamentId: string, drawId: string) {
     setSelectedTournamentId(tournamentId);
     setSelectedDrawId(drawId);
     setSnapshot(payload);
     seedScoreEditor(payload);
     setPendingCommand(readPendingCommand(clubId, tournamentId, drawId));
-    return payload;
   }
 
   async function loadTournaments() {
+    const selectedTournamentBeforeRefresh = selectedTournamentId;
+    const selectedDrawBeforeRefresh = selectedDrawId;
+    const generation = listRequest.begin();
+    drawsRequest.invalidate();
+    boardRequest.invalidate();
     setBusy(true);
     setNotice(null);
     setSnapshot(null);
     setDraws([]);
-    setSelectedDrawId("");
     try {
       const suffix = includeArchived ? "?include_archived=true" : "";
       const payload = await requestJson<AdminTournamentListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/ops/tournaments${suffix}`);
-      setTournaments(payload.tournaments || []);
-      setNotice({ tone: "success", text: `Loaded ${payload.count ?? payload.tournaments?.length ?? 0} tournament(s).` });
+      if (!listRequest.isCurrent(generation)) return;
+      const nextTournaments = payload.tournaments || [];
+      const selectionStillAvailable = Boolean(selectedTournamentBeforeRefresh && nextTournaments.some((row) => row.id === selectedTournamentBeforeRefresh));
+      setTournaments(nextTournaments);
+      setNotice(nextTournaments.length
+        ? { tone: "success", text: `Loaded ${payload.count ?? nextTournaments.length} tournament(s).` }
+        : { tone: "info", text: "No tournaments match this view." });
+      if (selectionStillAvailable) await loadDraws(selectedTournamentBeforeRefresh, selectedDrawBeforeRefresh);
+      else {
+        setSelectedTournamentId("");
+        setSelectedDrawId("");
+        setPendingCommand(null);
+      }
     } catch (error) {
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to load tournaments." });
+      if (listRequest.isCurrent(generation)) setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to load tournaments." });
     } finally {
-      setBusy(false);
+      if (listRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function loadDraws() {
-    if (!selectedTournamentId) {
+  async function loadDraws(tournamentId = selectedTournamentId, preferredDrawId = selectedDrawId) {
+    const generation = drawsRequest.begin();
+    boardRequest.invalidate();
+    if (!tournamentId) {
       setNotice({ tone: "error", text: "Select a tournament first." });
       return;
     }
+    let nextSelectedDrawId = "";
     setBusy(true);
     setNotice(null);
     setSnapshot(null);
     try {
       const payload = await requestJson<AdminTournamentLiveSnapshotResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(selectedTournamentId)}/snapshot`
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(tournamentId)}/snapshot`
       );
+      if (!drawsRequest.isCurrent(generation)) return;
       const nextDraws = payload.draws || [];
       setDraws(nextDraws);
-      setSelectedDrawId(nextDraws.length === 1 ? nextDraws[0].id : "");
+      nextSelectedDrawId = preferredDrawId && nextDraws.some((row) => row.id === preferredDrawId)
+        ? preferredDrawId
+        : nextDraws.length === 1 ? nextDraws[0].id : "";
+      setSelectedDrawId(nextSelectedDrawId);
       setNotice({ tone: nextDraws.length ? "success" : "info", text: nextDraws.length ? `Loaded ${nextDraws.length} prepared draw(s).` : "This tournament has no prepared draws. Build one in Tournament Ops." });
     } catch (error) {
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to load tournament draws." });
+      if (drawsRequest.isCurrent(generation)) setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to load tournament draws." });
     } finally {
-      setBusy(false);
+      if (drawsRequest.isCurrent(generation)) setBusy(false);
     }
+    if (nextSelectedDrawId && drawsRequest.isCurrent(generation)) await loadLiveBoard(tournamentId, nextSelectedDrawId);
   }
 
-  async function loadLiveBoard() {
-    if (!selectedTournamentId || !selectedDrawId) {
+  async function loadLiveBoard(tournamentId = selectedTournamentId, drawId = selectedDrawId) {
+    const generation = boardRequest.begin();
+    if (!tournamentId || !drawId) {
       setNotice({ tone: "error", text: "Select a tournament draw first." });
       return;
     }
     setBusy(true);
     setNotice(null);
     try {
-      await fetchBoard(selectedTournamentId, selectedDrawId);
+      const payload = await requestJson<AdminTournamentLiveSnapshotResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(tournamentId)}/snapshot?draw_id=${encodeURIComponent(drawId)}`
+      );
+      if (!boardRequest.isCurrent(generation)) return;
+      setSelectedTournamentId(tournamentId);
+      setSelectedDrawId(drawId);
+      setSnapshot(payload);
+      seedScoreEditor(payload);
+      setPendingCommand(readPendingCommand(clubId, tournamentId, drawId));
       setNotice({ tone: "success", text: "Authoritative draw state loaded from FastAPI." });
     } catch (error) {
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to load Tournament Live board." });
+      if (boardRequest.isCurrent(generation)) setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to load Tournament Live board." });
     } finally {
-      setBusy(false);
+      if (boardRequest.isCurrent(generation)) setBusy(false);
     }
+  }
+
+  function selectTournament(tournamentId: string) {
+    setSelectedTournamentId(tournamentId);
+    setSelectedDrawId("");
+    setDraws([]);
+    setSnapshot(null);
+    setPendingCommand(null);
+    if (tournamentId) void loadDraws(tournamentId, "");
+    else {
+      drawsRequest.invalidate();
+      boardRequest.invalidate();
+    }
+  }
+
+  function selectDraw(drawId: string) {
+    setSelectedDrawId(drawId);
+    setSnapshot(null);
+    setPendingCommand(null);
+    if (selectedTournamentId && drawId) void loadLiveBoard(selectedTournamentId, drawId);
+    else boardRequest.invalidate();
   }
 
   function commandReadiness(command: LiveCommand): AdminTournamentLiveReadiness {
@@ -298,6 +365,7 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
   }
 
   async function executePending(command: PendingCommand, replay: boolean) {
+    const generation = actionRequest.begin();
     setBusy(true);
     setNotice(null);
     try {
@@ -305,9 +373,12 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
         method: "POST",
         body: JSON.stringify(command.body)
       });
+      if (!actionRequest.isCurrent(generation)) return;
       persistPending(null);
       setLastResult(result);
-      await fetchBoard(command.tournamentId, command.drawId);
+      const board = await fetchBoard(command.tournamentId, command.drawId);
+      if (!actionRequest.isCurrent(generation)) return;
+      hydrateBoard(board, command.tournamentId, command.drawId);
       setNotice({
         tone: "success",
         text: result.reconciled
@@ -319,17 +390,21 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
               : `Tournament Live command completed as operation ${compactKey(result.operation_key)}.`
       });
     } catch (error) {
+      if (!actionRequest.isCurrent(generation)) return;
       try {
-        await fetchBoard(command.tournamentId, command.drawId);
+        const board = await fetchBoard(command.tournamentId, command.drawId);
+        if (!actionRequest.isCurrent(generation)) return;
+        hydrateBoard(board, command.tournamentId, command.drawId);
       } catch {
         // Preserve the exact local request even when the recovery read is unavailable.
       }
+      if (!actionRequest.isCurrent(generation)) return;
       setNotice({
         tone: "error",
         text: `${error instanceof Error ? error.message : "Tournament Live command failed."} The exact request is retained below; do not create a replacement command until its operation state is known.`
       });
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -426,16 +501,22 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
 
   async function reconcileOperation(operation: AdminTournamentLiveOperation, confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) return;
+    const generation = actionRequest.begin();
+    const tournamentId = selectedTournamentId;
+    const drawId = selectedDrawId;
     setBusy(true);
     setNotice(null);
     try {
       const result = await requestJson<AdminTournamentWriteResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/operations/${encodeURIComponent(operation.operation_key)}/reconcile`,
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/operations/${encodeURIComponent(operation.operation_key)}/reconcile`,
         { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText }) }
       );
+      if (!actionRequest.isCurrent(generation)) return;
       setLastResult(result);
       if (pendingCommand?.body.idempotency_key === operation.client_idempotency_key) persistPending(null);
-      await fetchBoard(selectedTournamentId, selectedDrawId);
+      const board = await fetchBoard(tournamentId, drawId);
+      if (!actionRequest.isCurrent(generation)) return;
+      hydrateBoard(board, tournamentId, drawId);
       setNotice({
         tone: "success",
         text: result.recovery_disposition === "not_applied"
@@ -443,14 +524,17 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
           : "Authoritative evidence proved the operation completed; recovery was audited without repeating the mutation."
       });
     } catch (error) {
+      if (!actionRequest.isCurrent(generation)) return;
       try {
-        await fetchBoard(selectedTournamentId, selectedDrawId);
+        const board = await fetchBoard(tournamentId, drawId);
+        if (!actionRequest.isCurrent(generation)) return;
+        hydrateBoard(board, tournamentId, drawId);
       } catch {
         // Keep the original recovery error as the operator-facing result.
       }
-      setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to reconcile this Tournament Live operation." });
+      if (actionRequest.isCurrent(generation)) setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to reconcile this Tournament Live operation." });
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -462,6 +546,8 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
     persistPending(null);
     setNotice({ tone: "info", text: "Cleared the local request copy. No active server operation was attached to it." });
   }
+
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadTournaments, includeArchived ? "archived" : "active");
 
   if (!status.enabled) {
     return (
@@ -519,38 +605,33 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
         <h2>1. Select a prepared draw</h2>
         <div className={styles.controlGrid}>
           <label className={styles.checkboxLabel}>
-            <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />
+            <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} disabled={busy} />
             Include archived tournaments
           </label>
           <button type="button" className={styles.primaryButton} onClick={loadTournaments} disabled={busy || !accessToken}>
-            {busy ? "Working…" : "Load tournaments"}
+            {busy ? "Refreshing…" : "Refresh tournaments"}
           </button>
           <label>
             Tournament
             <select
               value={selectedTournamentId}
-              onChange={(event) => {
-                setSelectedTournamentId(event.target.value);
-                setSelectedDrawId("");
-                setDraws([]);
-                setSnapshot(null);
-                setPendingCommand(null);
-              }}
+              onChange={(event) => selectTournament(event.target.value)}
+              disabled={busy}
               className={styles.input}
             >
               <option value="">Choose tournament…</option>
               {tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name} · {tournament.status}</option>)}
             </select>
           </label>
-          <button type="button" className={styles.secondaryButton} onClick={loadDraws} disabled={busy || !selectedTournamentId || !accessToken}>Load prepared draws</button>
+          <button type="button" className={styles.secondaryButton} onClick={() => void loadDraws()} disabled={busy || !selectedTournamentId || !accessToken}>Retry prepared draws</button>
           <label>
             Draw
-            <select value={selectedDrawId} onChange={(event) => { setSelectedDrawId(event.target.value); setSnapshot(null); setPendingCommand(null); }} className={styles.input} disabled={!draws.length}>
+            <select value={selectedDrawId} onChange={(event) => selectDraw(event.target.value)} className={styles.input} disabled={busy || !draws.length}>
               <option value="">Choose draw…</option>
               {draws.map((draw) => <option key={draw.id} value={draw.id}>{drawLabel(draw)}</option>)}
             </select>
           </label>
-          <button type="button" className={styles.primaryButton} onClick={loadLiveBoard} disabled={busy || !selectedTournamentId || !selectedDrawId || !accessToken}>Open authoritative board</button>
+          <button type="button" className={styles.primaryButton} onClick={() => void loadLiveBoard()} disabled={busy || !selectedTournamentId || !selectedDrawId || !accessToken}>Retry authoritative board</button>
         </div>
       </article>
 
@@ -562,7 +643,7 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
                 <p className={styles.eyebrow}>Live draw state</p>
                 <h2>{selectedTournament?.name || snapshot.tournament?.name || "Tournament"}</h2>
               </div>
-              <button type="button" className={styles.secondaryButton} onClick={loadLiveBoard} disabled={busy}>Reload state</button>
+              <button type="button" className={styles.secondaryButton} onClick={() => void loadLiveBoard()} disabled={busy}>Reload state</button>
             </div>
             <div className={styles.statsGrid}>
               <div><span>Status</span><strong>{snapshot.tournament?.status || "—"}</strong></div>

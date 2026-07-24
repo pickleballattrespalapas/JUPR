@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminPlayerEditorDetailResponse, AdminPlayerEditorLeagueRating, AdminPlayerEditorListResponse, AdminPlayerEditorPlayer, AdminPlayerEditorStatusResponse, AdminPlayerEditorWriteResponse, AdminPlayerMergePreview, AdminPlayerSocialIdentity, AdminPlayerSocialIdentityListResponse } from "@/lib/adminPlayerEditorApi";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminPlayerEditorStatusResponse };
@@ -30,34 +31,302 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
   const [mergeSourceId, setMergeSourceId] = useState(""); const [mergeTargetId, setMergeTargetId] = useState(""); const [mergePreview, setMergePreview] = useState<AdminPlayerMergePreview | null>(null);
   const [mergeOperationId, setMergeOperationId] = useState(""); const [mergeAttempted, setMergeAttempted] = useState(false); const [mergeRecovery, setMergeRecovery] = useState<AdminPlayerEditorWriteResponse | null>(null); const [replayJobId, setReplayJobId] = useState("");
   const [saving, setSaving] = useState(false); const [message, setMessage] = useState<string | null>(null);
+  const workspaceRequest = useLatestRequestGuard(accessToken, clearProtectedPlayerState);
+  const playersRequest = useLatestRequestGuard(accessToken);
+  const detailRequest = useLatestRequestGuard(accessToken);
+  const socialRequest = useLatestRequestGuard(accessToken);
+  const actionRequest = useLatestRequestGuard(accessToken);
 
   function requireReady(): boolean { if (!apiBase) { setMessage("API base URL is not configured."); return false; } if (!accessToken) { setMessage("Sign in at /admin/login before using the Player Editor."); return false; } if (!status.enabled) { setMessage("Next Player Editor is disabled on the API."); return false; } return true; }
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> { if (!apiBase) throw new Error("API base URL is not configured."); if (!accessToken) throw new Error("Sign in at /admin/login before using the Player Editor."); const headers = new Headers(options?.headers); headers.set("Content-Type", "application/json"); headers.set("Authorization", `Bearer ${accessToken}`); const response = await fetch(apiUrl(apiBase, path), { ...options, headers }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`)); return payload as T; }
   function seedEditForm(player: AdminPlayerEditorPlayer) { setEditName(player.name || ""); setEditRating(String(player.rating_jupr ?? 3.5)); setEditStartingRating(String(player.starting_jupr ?? player.rating_jupr ?? 3.5)); setEditActive(player.active !== false); }
   function seedLeagueRatingForm(row: AdminPlayerEditorLeagueRating | null) { setSelectedLeagueRatingId(row ? String(row.id) : ""); setEditLeagueRating(String(row?.rating_jupr ?? 3.5)); setEditLeagueStartingRating(String(row?.starting_jupr ?? row?.rating_jupr ?? 3.5)); setEditLeagueActive(row?.is_active !== false); }
   function seedSocialForm(row: AdminPlayerSocialIdentity | null) { setSelectedSocialId(row?.id || ""); setSocialDisplayName(row?.display_name || ""); setSocialLinkedPlayerId(row?.linked_player_id == null ? "" : String(row.linked_player_id)); }
+  function clearPlayerDetail() { setDetail(null); setEditName(""); setEditRating("3.5"); setEditStartingRating("3.5"); setEditActive(true); seedLeagueRatingForm(null); }
+  function clearProtectedPlayerState() {
+    playersRequest.invalidate();
+    detailRequest.invalidate();
+    socialRequest.invalidate();
+    setSaving(false); setMessage(null);
+    setPlayers([]); setSelectedId(""); clearPlayerDetail();
+    setSocialPeople([]); setSocialPlayers([]); seedSocialForm(null);
+    setMergeSourceId(""); setMergeTargetId(""); setMergePreview(null); setMergeRecovery(null); setMergeOperationId(""); setMergeAttempted(false); setReplayJobId("");
+  }
 
-  async function loadPlayers() { setMessage(null); if (!requireReady()) return; setSaving(true); try { const payload = await requestJson<AdminPlayerEditorListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players`); setPlayers(payload.players || []); setMessage(`Loaded ${payload.count ?? payload.players?.length ?? 0} player(s).`); } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load players."); } finally { setSaving(false); } }
-  async function loadDetail(playerId: string) { setSelectedId(playerId); setDetail(null); setMessage(null); if (!playerId || !requireReady()) return; setSaving(true); try { const payload = await requestJson<AdminPlayerEditorDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${encodeURIComponent(playerId)}`); setDetail(payload); seedEditForm(payload.player); seedLeagueRatingForm(payload.league_ratings?.[0] || null); } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load player detail."); } finally { setSaving(false); } }
-  async function loadSocialIdentities() { setMessage(null); if (!requireReady()) return; setSaving(true); try { const payload = await requestJson<AdminPlayerSocialIdentityListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities`); setSocialPeople(payload.people || []); setSocialPlayers(payload.players || []); seedSocialForm((payload.people || [])[0] || null); setMessage(`Loaded ${payload.summary?.people ?? payload.people?.length ?? 0} social identit${(payload.people?.length ?? 0) === 1 ? "y" : "ies"}.`); } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load social identities."); } finally { setSaving(false); } }
-  async function createPlayer() { setMessage(null); if (!requireReady()) return; const name = newName.trim(); const starting = Number(newStartingJupr); if (!name || !Number.isFinite(starting) || starting < 1 || starting > 7) { setMessage("Enter a name and a Starting JUPR between 1.0 and 7.0."); return; } setSaving(true); try { const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players`, { method: "POST", body: JSON.stringify({ name, starting_jupr: starting, source: "next_player_editor_create" }) }); if (payload.player) { setPlayers((current) => [...current.filter((player) => player.id !== payload.player?.id), payload.player as AdminPlayerEditorPlayer].sort((left, right) => left.name.localeCompare(right.name))); setSelectedId(String(payload.player.id)); await loadDetail(String(payload.player.id)); } setNewName(""); setNewStartingJupr("3.5"); setMessage("Player created or confirmed."); } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to create player."); } finally { setSaving(false); } }
-  async function savePlayer() { setMessage(null); if (!selectedId || !requireReady()) return; const rating = Number(editRating); const starting = Number(editStartingRating); if (!editName.trim() || !Number.isFinite(rating) || !Number.isFinite(starting) || rating < 1 || rating > 7 || starting < 1 || starting > 7) { setMessage("Name, Overall JUPR, and Starting JUPR are required. Ratings must be between 1.0 and 7.0."); return; } setSaving(true); try { const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${encodeURIComponent(selectedId)}`, { method: "PATCH", body: JSON.stringify({ name: editName.trim(), rating_jupr: rating, starting_jupr: starting, active: editActive, source: "next_player_editor_update" }) }); if (payload.player) { setPlayers((current) => current.map((player) => player.id === payload.player?.id ? payload.player as AdminPlayerEditorPlayer : player).sort((left, right) => left.name.localeCompare(right.name))); await loadDetail(String(payload.player.id)); } setMessage("Player saved. Use Match Log and Replay History if downstream rating repair is needed."); } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save player."); } finally { setSaving(false); } }
-  async function saveLeagueRating(confirmationText: string) { setMessage(null); if (!selectedId || !selectedLeagueRatingId || !requireReady()) return; const rating = Number(editLeagueRating); const starting = Number(editLeagueStartingRating); if (!Number.isFinite(rating) || !Number.isFinite(starting) || rating < 1 || rating > 7 || starting < 1 || starting > 7) { setMessage("League JUPR and league Starting JUPR must be between 1.0 and 7.0."); return; } setSaving(true); try { const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${encodeURIComponent(selectedId)}/league-ratings/${encodeURIComponent(selectedLeagueRatingId)}`, { method: "PATCH", body: JSON.stringify({ rating_jupr: rating, starting_jupr: starting, is_active: editLeagueActive, confirmation_text: confirmationText, source: "next_player_editor_league_rating" }) }); if (payload.league_ratings && detail) { setDetail({ ...detail, league_ratings: payload.league_ratings }); const updated = payload.league_ratings.find((row) => String(row.id) === selectedLeagueRatingId) || payload.league_ratings[0] || null; seedLeagueRatingForm(updated); } setMessage("League rating saved and audit-flagged for review. Run Replay History if you need to rebuild derived history."); } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save league rating."); } finally { setSaving(false); } }
-  async function saveSocialIdentity(confirmationText: string) { setMessage(null); if (!selectedSocialId || !requireReady()) return; setSaving(true); try { const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities/${encodeURIComponent(selectedSocialId)}`, { method: "PATCH", body: JSON.stringify({ display_name: socialDisplayName, linked_player_id: socialLinkedPlayerId ? Number(socialLinkedPlayerId) : null, confirmation_text: confirmationText, source: "next_player_editor_social_identity" }) }); setMessage(`Saved social identity ${payload.club_person?.display_name || selectedSocialId}.`); await loadSocialIdentities(); } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save social identity."); } finally { setSaving(false); } }
-  async function autoLinkSocialIdentities(confirmationText: string) { setMessage(null); if (!requireReady()) return; setSaving(true); try { const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities/auto-link`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText, source: "next_player_editor_social_auto_link" }) }); setMessage(`Auto-linked ${payload.linked_count ?? 0} social identit${payload.linked_count === 1 ? "y" : "ies"}; skipped ${payload.skipped_count ?? 0}.`); await loadSocialIdentities(); } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to auto-link social identities."); } finally { setSaving(false); } }
-  async function previewMerge() { setMessage(null); setMergePreview(null); setMergeAttempted(false); setMergeRecovery(null); setMergeOperationId(""); if (!mergeSourceId || !mergeTargetId || !requireReady()) return; setSaving(true); try { const payload = await requestJson<AdminPlayerMergePreview>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/merge/preview`, { method: "POST", body: JSON.stringify({ source_player_id: Number(mergeSourceId), target_player_id: Number(mergeTargetId), source: "next_player_editor_merge_preview" }) }); setMergePreview(payload); setMergeOperationId(globalThis.crypto.randomUUID()); setMessage(`Preview ready: ${sumRecord(payload.match_reference_counts)} source match reference(s), ${(payload.league_rating_plan?.move_ids || []).length} league row(s) to move, ${(payload.league_rating_plan?.delete_ids || []).length} conflicting row(s) to delete.`); } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to preview merge."); } finally { setSaving(false); } }
-  async function executeMerge(confirmationText: string) { setMessage(null); if (!mergeSourceId || !mergeTargetId || !mergePreview?.preview_fingerprint || !mergeOperationId || !requireReady()) return; const operationId = mergeOperationId; setMergeAttempted(true); setSaving(true); try { const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/merge`, { method: "POST", body: JSON.stringify({ source_player_id: Number(mergeSourceId), target_player_id: Number(mergeTargetId), preview_fingerprint: mergePreview.preview_fingerprint, operation_id: operationId, confirmation_text: confirmationText, source: "next_player_editor_merge" }) }); setMergePreview(null); setMergeRecovery(payload); await loadPlayers(); if (selectedId === mergeSourceId) setSelectedId(mergeTargetId); setMessage(`Merged player #${payload.source_player_id} into #${payload.target_player_id}. Operation ${payload.operation_id || operationId} is pending full replay evidence.`); } catch (error) { setMergePreview(null); setMergeRecovery(null); setMessage(`${error instanceof Error ? error.message : "Unable to execute merge."} Outcome unknown for operation ${operationId}; check that operation before retrying.`); } finally { setSaving(false); } }
-  async function lookupMergeOperation() { const operationId = mergeRecovery?.operation_id || mergeOperationId; if (!operationId || !requireReady()) return; setSaving(true); try { const payload = await requestJson<{ operation: { status?: string; source_player_id?: number; target_player_id?: number }; recovery?: AdminPlayerEditorWriteResponse["recovery"] }>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/merge/${encodeURIComponent(operationId)}`); setMergeRecovery({ ok: true, operation_id: operationId, operation_status: payload.operation?.status, source_player_id: payload.operation?.source_player_id, target_player_id: payload.operation?.target_player_id, recovery: payload.recovery }); setMessage(`Operation ${operationId} status: ${payload.operation?.status || "unknown"}.`); } catch (error) { setMessage(`${error instanceof Error ? error.message : "Unable to look up merge operation."} If not found, refresh the merge preview before retrying.`); } finally { setSaving(false); } }
-  async function attachReplayEvidence(confirmationText: string) { const operationId = mergeRecovery?.operation_id; if (!operationId || !requireReady()) return; setSaving(true); try { const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/merge/${encodeURIComponent(operationId)}/replay-evidence`, { method: "POST", body: JSON.stringify({ replay_job_id: replayJobId.trim(), confirmation_text: confirmationText, source: "next_player_editor_merge_replay_evidence" }) }); setMergeRecovery(payload); setReplayJobId(""); setMessage("Succeeded full Replay History evidence attached. Merge recovery is complete."); } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to attach replay evidence."); } finally { setSaving(false); } }
-  async function compensateMerge(confirmationText: string) { const operationId = mergeRecovery?.operation_id; if (!operationId || !requireReady()) return; setSaving(true); try { const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/merge/${encodeURIComponent(operationId)}/compensate`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText, source: "next_player_editor_merge_compensation" }) }); setMergeRecovery(payload); await loadPlayers(); setMessage("Merge compensated: pre-merge player, match, league, and social-link state was restored; timestamps may advance."); } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to compensate merge."); } finally { setSaving(false); } }
+  async function loadPlayers() { const generation = playersRequest.begin(); setMessage(null); if (!requireReady()) return null; setSaving(true); try { const payload = await requestJson<AdminPlayerEditorListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players`); if (!playersRequest.isCurrent(generation)) return null; setPlayers(payload.players || []); setMessage(`Loaded ${payload.count ?? payload.players?.length ?? 0} player(s).`); return payload; } catch (error) { if (playersRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load players."); return null; } finally { if (playersRequest.isCurrent(generation)) setSaving(false); } }
+  async function loadDetail(playerId: string) { const generation = detailRequest.begin(); setSelectedId(playerId); setDetail(null); setMessage(null); if (!playerId || !requireReady()) return; setSaving(true); try { const payload = await requestJson<AdminPlayerEditorDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${encodeURIComponent(playerId)}`); if (!detailRequest.isCurrent(generation)) return; setDetail(payload); seedEditForm(payload.player); seedLeagueRatingForm(payload.league_ratings?.[0] || null); } catch (error) { if (detailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load player detail."); } finally { if (detailRequest.isCurrent(generation)) setSaving(false); } }
+  async function loadSocialIdentities() { const generation = socialRequest.begin(); setMessage(null); if (!requireReady()) return; setSaving(true); try { const payload = await requestJson<AdminPlayerSocialIdentityListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities`); if (!socialRequest.isCurrent(generation)) return; setSocialPeople(payload.people || []); setSocialPlayers(payload.players || []); seedSocialForm((payload.people || [])[0] || null); setMessage(`Loaded ${payload.summary?.people ?? payload.people?.length ?? 0} social identit${(payload.people?.length ?? 0) === 1 ? "y" : "ies"}.`); } catch (error) { if (socialRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load social identities."); } finally { if (socialRequest.isCurrent(generation)) setSaving(false); } }
+  async function loadWorkspace() {
+    const selectedPlayerBeforeRefresh = selectedId;
+    const selectedSocialBeforeRefresh = selectedSocialId;
+    const generation = workspaceRequest.begin();
+    setMessage(null);
+    if (!requireReady()) return;
+    setSaving(true);
+    try {
+      const [playerPayload, socialPayload] = await Promise.all([
+        requestJson<AdminPlayerEditorListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players`),
+        requestJson<AdminPlayerSocialIdentityListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities`)
+      ]);
+      if (!workspaceRequest.isCurrent(generation)) return;
+      const nextPlayers = playerPayload.players || [];
+      const nextSocialPeople = socialPayload.people || [];
+      setPlayers(nextPlayers);
+      setSocialPeople(nextSocialPeople);
+      setSocialPlayers(socialPayload.players || []);
+      if (selectedPlayerBeforeRefresh && !nextPlayers.some((row) => String(row.id) === selectedPlayerBeforeRefresh)) {
+        detailRequest.invalidate();
+        setSelectedId("");
+        clearPlayerDetail();
+      }
+      if (!selectedSocialBeforeRefresh || !nextSocialPeople.some((row) => row.id === selectedSocialBeforeRefresh)) {
+        seedSocialForm(nextSocialPeople[0] || null);
+      }
+      setMessage(`Loaded ${playerPayload.count ?? nextPlayers.length} player(s) and ${socialPayload.summary?.people ?? nextSocialPeople.length} social identit${nextSocialPeople.length === 1 ? "y" : "ies"}.`);
+    } catch (error) {
+      if (workspaceRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load Player Editor options.");
+    } finally {
+      if (workspaceRequest.isCurrent(generation)) setSaving(false);
+    }
+  }
+  async function createPlayer() {
+    setMessage(null);
+    if (!requireReady()) return;
+    const name = newName.trim();
+    const starting = Number(newStartingJupr);
+    if (!name || !Number.isFinite(starting) || starting < 1 || starting > 7) { setMessage("Enter a name and a Starting JUPR between 1.0 and 7.0."); return; }
+    const generation = actionRequest.begin();
+    setSaving(true);
+    try {
+      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players`, { method: "POST", body: JSON.stringify({ name, starting_jupr: starting, source: "next_player_editor_create" }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      if (payload.player) {
+        setPlayers((current) => [...current.filter((player) => player.id !== payload.player?.id), payload.player as AdminPlayerEditorPlayer].sort((left, right) => left.name.localeCompare(right.name)));
+        setSelectedId(String(payload.player.id));
+        await loadDetail(String(payload.player.id));
+        if (!actionRequest.isCurrent(generation)) return;
+      }
+      setNewName(""); setNewStartingJupr("3.5"); setMessage("Player created or confirmed.");
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to create player.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
+  }
+
+  async function savePlayer() {
+    setMessage(null);
+    if (!selectedId || !requireReady()) return;
+    const rating = Number(editRating);
+    const starting = Number(editStartingRating);
+    if (!editName.trim() || !Number.isFinite(rating) || !Number.isFinite(starting) || rating < 1 || rating > 7 || starting < 1 || starting > 7) { setMessage("Name, Overall JUPR, and Starting JUPR are required. Ratings must be between 1.0 and 7.0."); return; }
+    const generation = actionRequest.begin();
+    const requestedPlayerId = selectedId;
+    setSaving(true);
+    try {
+      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${encodeURIComponent(requestedPlayerId)}`, { method: "PATCH", body: JSON.stringify({ name: editName.trim(), rating_jupr: rating, starting_jupr: starting, active: editActive, source: "next_player_editor_update" }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      if (payload.player) {
+        setPlayers((current) => current.map((player) => player.id === payload.player?.id ? payload.player as AdminPlayerEditorPlayer : player).sort((left, right) => left.name.localeCompare(right.name)));
+        await loadDetail(String(payload.player.id));
+        if (!actionRequest.isCurrent(generation)) return;
+      }
+      setMessage("Player saved. Use Match Log and Replay History if downstream rating repair is needed.");
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save player.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
+  }
+
+  async function saveLeagueRating(confirmationText: string) {
+    setMessage(null);
+    if (!selectedId || !selectedLeagueRatingId || !requireReady()) return;
+    const rating = Number(editLeagueRating);
+    const starting = Number(editLeagueStartingRating);
+    if (!Number.isFinite(rating) || !Number.isFinite(starting) || rating < 1 || rating > 7 || starting < 1 || starting > 7) { setMessage("League JUPR and league Starting JUPR must be between 1.0 and 7.0."); return; }
+    const generation = actionRequest.begin();
+    const playerId = selectedId;
+    const leagueRatingId = selectedLeagueRatingId;
+    setSaving(true);
+    try {
+      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${encodeURIComponent(playerId)}/league-ratings/${encodeURIComponent(leagueRatingId)}`, { method: "PATCH", body: JSON.stringify({ rating_jupr: rating, starting_jupr: starting, is_active: editLeagueActive, confirmation_text: confirmationText, source: "next_player_editor_league_rating" }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      if (payload.league_ratings && detail) {
+        setDetail({ ...detail, league_ratings: payload.league_ratings });
+        const updated = payload.league_ratings.find((row) => String(row.id) === leagueRatingId) || payload.league_ratings[0] || null;
+        seedLeagueRatingForm(updated);
+      }
+      setMessage("League rating saved and audit-flagged for review. Run Replay History if you need to rebuild derived history.");
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save league rating.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
+  }
+
+  async function saveSocialIdentity(confirmationText: string) {
+    setMessage(null);
+    if (!selectedSocialId || !requireReady()) return;
+    const generation = actionRequest.begin();
+    const socialId = selectedSocialId;
+    setSaving(true);
+    try {
+      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities/${encodeURIComponent(socialId)}`, { method: "PATCH", body: JSON.stringify({ display_name: socialDisplayName, linked_player_id: socialLinkedPlayerId ? Number(socialLinkedPlayerId) : null, confirmation_text: confirmationText, source: "next_player_editor_social_identity" }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      setMessage(`Saved social identity ${payload.club_person?.display_name || socialId}.`);
+      await loadSocialIdentities();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save social identity.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
+  }
+
+  async function autoLinkSocialIdentities(confirmationText: string) {
+    setMessage(null);
+    if (!requireReady()) return;
+    const generation = actionRequest.begin();
+    setSaving(true);
+    try {
+      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities/auto-link`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText, source: "next_player_editor_social_auto_link" }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      setMessage(`Auto-linked ${payload.linked_count ?? 0} social identit${payload.linked_count === 1 ? "y" : "ies"}; skipped ${payload.skipped_count ?? 0}.`);
+      await loadSocialIdentities();
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to auto-link social identities.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
+  }
+
+  async function previewMerge() {
+    setMessage(null); setMergePreview(null); setMergeAttempted(false); setMergeRecovery(null); setMergeOperationId("");
+    if (!mergeSourceId || !mergeTargetId || !requireReady()) return;
+    const generation = actionRequest.begin();
+    const sourceId = mergeSourceId;
+    const targetId = mergeTargetId;
+    setSaving(true);
+    try {
+      const payload = await requestJson<AdminPlayerMergePreview>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/merge/preview`, { method: "POST", body: JSON.stringify({ source_player_id: Number(sourceId), target_player_id: Number(targetId), source: "next_player_editor_merge_preview" }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      setMergePreview(payload);
+      setMergeOperationId(globalThis.crypto.randomUUID());
+      setMessage(`Preview ready: ${sumRecord(payload.match_reference_counts)} source match reference(s), ${(payload.league_rating_plan?.move_ids || []).length} league row(s) to move, ${(payload.league_rating_plan?.delete_ids || []).length} conflicting row(s) to delete.`);
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to preview merge.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
+  }
+  async function executeMerge(confirmationText: string) {
+    setMessage(null);
+    if (!mergeSourceId || !mergeTargetId || !mergePreview?.preview_fingerprint || !mergeOperationId || !requireReady()) return;
+    const operationId = mergeOperationId;
+    const sourceId = mergeSourceId;
+    const targetId = mergeTargetId;
+    const selectedPlayerNeedsReload = selectedId === sourceId || selectedId === targetId;
+    const generation = actionRequest.begin();
+    setMergeAttempted(true);
+    setSaving(true);
+    try {
+      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/merge`, {
+        method: "POST",
+        body: JSON.stringify({
+          source_player_id: Number(sourceId),
+          target_player_id: Number(targetId),
+          preview_fingerprint: mergePreview.preview_fingerprint,
+          operation_id: operationId,
+          confirmation_text: confirmationText,
+          source: "next_player_editor_merge"
+        })
+      });
+      if (!actionRequest.isCurrent(generation)) return;
+      setMergePreview(null);
+      setMergeRecovery(payload);
+      await loadPlayers();
+      if (!actionRequest.isCurrent(generation)) return;
+      if (selectedPlayerNeedsReload) {
+        detailRequest.invalidate();
+        setSelectedId(targetId);
+        clearPlayerDetail();
+        await loadDetail(targetId);
+        if (!actionRequest.isCurrent(generation)) return;
+      }
+      setMessage(`Merged player #${payload.source_player_id} into #${payload.target_player_id}. Operation ${payload.operation_id || operationId} is pending full replay evidence.`);
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) {
+        setMergePreview(null);
+        setMergeRecovery(null);
+        setMessage(`${error instanceof Error ? error.message : "Unable to execute merge."} Outcome unknown for operation ${operationId}; check that operation before retrying.`);
+      }
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
+  }
+  async function lookupMergeOperation() {
+    const operationId = mergeRecovery?.operation_id || mergeOperationId;
+    if (!operationId || !requireReady()) return;
+    const generation = actionRequest.begin();
+    setSaving(true);
+    try {
+      const payload = await requestJson<{ operation: { status?: string; source_player_id?: number; target_player_id?: number }; recovery?: AdminPlayerEditorWriteResponse["recovery"] }>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/merge/${encodeURIComponent(operationId)}`);
+      if (!actionRequest.isCurrent(generation)) return;
+      setMergeRecovery({ ok: true, operation_id: operationId, operation_status: payload.operation?.status, source_player_id: payload.operation?.source_player_id, target_player_id: payload.operation?.target_player_id, recovery: payload.recovery });
+      setMessage(`Operation ${operationId} status: ${payload.operation?.status || "unknown"}.`);
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Unable to look up merge operation."} If not found, refresh the merge preview before retrying.`);
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
+  }
+
+  async function attachReplayEvidence(confirmationText: string) {
+    const operationId = mergeRecovery?.operation_id;
+    if (!operationId || !requireReady()) return;
+    const generation = actionRequest.begin();
+    setSaving(true);
+    try {
+      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/merge/${encodeURIComponent(operationId)}/replay-evidence`, { method: "POST", body: JSON.stringify({ replay_job_id: replayJobId.trim(), confirmation_text: confirmationText, source: "next_player_editor_merge_replay_evidence" }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      setMergeRecovery(payload);
+      setReplayJobId("");
+      setMessage("Succeeded full Replay History evidence attached. Merge recovery is complete.");
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to attach replay evidence.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
+  }
+
+  async function compensateMerge(confirmationText: string) {
+    const operationId = mergeRecovery?.operation_id;
+    if (!operationId || !requireReady()) return;
+    const generation = actionRequest.begin();
+    setSaving(true);
+    try {
+      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/merge/${encodeURIComponent(operationId)}/compensate`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText, source: "next_player_editor_merge_compensation" }) });
+      if (!actionRequest.isCurrent(generation)) return;
+      setMergeRecovery(payload);
+      await loadPlayers();
+      if (!actionRequest.isCurrent(generation)) return;
+      setMessage("Merge compensated: pre-merge player, match, league, and social-link state was restored; timestamps may advance.");
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to compensate merge.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setSaving(false);
+    }
+  }
+
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadWorkspace);
 
   if (!status.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Next Player Editor is disabled</h2><p style={{ color: "#475569" }}>{status.warnings?.[0] || "Enable the Player Editor pilot flag on FastAPI."}</p></article>;
 
   return <section style={{ display: "grid", gap: "1rem" }}>
     {mergeAttempted && mergeOperationId && !mergePreview && !mergeRecovery ? <article style={{ ...cardStyle, background: "#fef2f2", borderColor: "#fca5a5" }}><h2 style={{ marginTop: 0 }}>Merge outcome unknown</h2><p>Do not retry with a new operation. Check operation <code>{mergeOperationId}</code> first; an idempotent server retry uses this same ID.</p><button type="button" onClick={lookupMergeOperation} disabled={saving || !accessToken} style={ghostButtonStyle}>Check merge operation</button></article> : null}
-    <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Player Editor admin session</h2><p style={{ color: "#475569" }}>This route supports roster/detail read, add player, basic player updates, guarded league-rating edits, Club Social identity linking, and guarded player merge. Merges require Replay History after execution.</p><div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}><strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong><p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to send authorized Player Editor requests." : sessionLoading ? "Checking admin session…" : "Sign in before using the Player Editor."}</p>{sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}{!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}</div><button type="button" onClick={loadPlayers} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Working…" : "Load players"}</button>{status.warnings?.length ? <ul style={{ color: "#92400e" }}>{status.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}</article>
+    <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Player Editor admin session</h2><p style={{ color: "#475569" }}>This route supports roster/detail read, add player, basic player updates, guarded league-rating edits, Club Social identity linking, and guarded player merge. Merges require Replay History after execution.</p><div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}><strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong><p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to send authorized Player Editor requests." : sessionLoading ? "Checking admin session…" : "Sign in before using the Player Editor."}</p>{sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}{!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}</div><button type="button" onClick={loadWorkspace} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Refreshing…" : "Refresh players and identities"}</button>{status.warnings?.length ? <ul style={{ color: "#92400e" }}>{status.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}</article>
     <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Add new player</h2><div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(120px, 180px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Name</strong><br /><input value={newName} onChange={(event) => setNewName(event.target.value)} style={inputStyle} /></label><label><strong>Starting JUPR</strong><br /><input value={newStartingJupr} onChange={(event) => setNewStartingJupr(event.target.value)} type="number" min={1} max={7} step={0.1} style={inputStyle} /></label><button type="button" onClick={createPlayer} disabled={saving || !accessToken} style={ghostButtonStyle}>Add player</button></div></article>
-    <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Select player</h2><select value={selectedId} onChange={(event) => loadDetail(event.target.value)} style={inputStyle} disabled={!accessToken}><option value="">Choose a player</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{playerOptionLabel(player)}</option>)}</select></article>
+    <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Select player</h2><select value={selectedId} onChange={(event) => loadDetail(event.target.value)} style={inputStyle} disabled={saving || !accessToken}><option value="">Choose a player</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{playerOptionLabel(player)}</option>)}</select></article>
     {detail ? <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Manage player</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem" }}><label><strong>Name</strong><br /><input value={editName} onChange={(event) => setEditName(event.target.value)} style={inputStyle} /></label><label><strong>Overall JUPR</strong><br /><input value={editRating} onChange={(event) => setEditRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label><label><strong>Starting JUPR</strong><br /><input value={editStartingRating} onChange={(event) => setEditStartingRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label><label><strong>Active</strong><br /><select value={editActive ? "yes" : "no"} onChange={(event) => setEditActive(event.target.value === "yes")} style={inputStyle}><option value="yes">Active</option><option value="no">Inactive</option></select></label></div><p><button type="button" onClick={savePlayer} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Saving…" : "Save player"}</button></p><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}><div><strong>Wins</strong><br />{detail.player.wins ?? 0}</div><div><strong>Losses</strong><br />{detail.player.losses ?? 0}</div><div><strong>Matches</strong><br />{detail.player.matches_played ?? 0}</div><div><strong>Match refs</strong><br />{detail.match_reference_counts?.total ?? 0}</div></div></article> : null}
     {detail?.league_ratings?.length ? (
       <article style={cardStyle}>
@@ -87,7 +356,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
       <h2 style={{ marginTop: 0 }}>Club Social identity linking</h2>
       <p style={{ color: "#475569" }}>Link social-only Club Social identities to official players so future social rows resolve consistently. This does not rewrite rated match history.</p>
       <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-        <button type="button" onClick={loadSocialIdentities} disabled={saving || !accessToken} style={ghostButtonStyle}>Load social identities</button>
+        <button type="button" onClick={loadSocialIdentities} disabled={saving || !accessToken} style={ghostButtonStyle}>Refresh social identities</button>
         <ConfirmAction
           triggerLabel="Auto-link exact names"
           title="Auto-link exact Club Social names?"
@@ -119,7 +388,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
             />
           </p>
         </>
-      ) : <p style={{ color: "#64748b" }}>Load Club Social identities to review existing links.</p>}
+      ) : <p style={{ color: "#64748b" }}>{saving ? "Loading Club Social identities…" : "No Club Social identities are available."}</p>}
     </article>
     <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
       <h2 style={{ marginTop: 0 }}>Merge player accounts</h2>

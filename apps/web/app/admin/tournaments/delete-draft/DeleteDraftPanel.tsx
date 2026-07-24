@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminTournament, AdminTournamentListResponse, AdminTournamentStatusResponse, AdminTournamentWriteResponse } from "@/lib/adminTournamentApi";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
@@ -31,6 +32,8 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
   const [selectedTournamentId, setSelectedTournamentId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const listRequest = useLatestRequestGuard(accessToken, clearProtectedDraftState);
+  const actionRequest = useLatestRequestGuard(accessToken);
   const selectedTournament = tournaments.find((row) => row.id === selectedTournamentId) || null;
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -45,17 +48,25 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
     return payload as T;
   }
 
+  function clearProtectedDraftState() {
+    setBusy(false); setMessage(null); setTournaments([]); setSelectedTournamentId("");
+  }
+
   async function loadTournaments() {
+    const generation = listRequest.begin();
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<AdminTournamentListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments?include_archived=true`);
-      setTournaments((payload.tournaments || []).filter((row) => row.status === "DRAFT"));
-      setMessage(`Loaded ${(payload.tournaments || []).filter((row) => row.status === "DRAFT").length} draft tournament(s).`);
+      if (!listRequest.isCurrent(generation)) return;
+      const drafts = (payload.tournaments || []).filter((row) => row.status === "DRAFT");
+      setTournaments(drafts);
+      setSelectedTournamentId((current) => drafts.some((row) => row.id === current) ? current : "");
+      setMessage(drafts.length ? `Loaded ${drafts.length} draft tournament(s).` : "No empty draft tournaments are available.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
+      if (listRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
     } finally {
-      setBusy(false);
+      if (listRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -64,6 +75,8 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
       setMessage("Select a draft tournament first.");
       return;
     }
+    const generation = actionRequest.begin();
+    const requestedTournamentId = selectedTournamentId;
     setBusy(true);
     setMessage(null);
     try {
@@ -71,15 +84,18 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
         `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/delete-draft`,
         { method: "POST", body: JSON.stringify({ expected_updated_at: selectedTournament?.updated_at, confirmation_text: confirmationText, source: "next_tournament_admin_delete_draft_page" }) }
       );
-      setTournaments((current) => current.filter((row) => row.id !== selectedTournamentId));
+      if (!actionRequest.isCurrent(generation)) return;
+      setTournaments((current) => current.filter((row) => row.id !== requestedTournamentId));
       setSelectedTournamentId("");
       setMessage(`Deleted draft ${payload.tournament_id}. Usage summary: ${usageText(payload.usage_summary)}.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to delete draft tournament.");
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to delete draft tournament.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
+
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadTournaments);
 
   if (!status.enabled) {
     return (
@@ -101,7 +117,7 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
           {sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}
           {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
         </div>
-        <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={ghostButtonStyle}>{busy ? "Working…" : "Load draft tournaments"}</button>
+        <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={ghostButtonStyle}>{busy ? "Refreshing…" : "Refresh draft tournaments"}</button>
       </article>
 
       {tournaments.length ? (
@@ -118,7 +134,7 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
           </div>
           {selectedTournament ? <p style={{ color: "#64748b" }}>Selected: <strong>{selectedTournament.name}</strong> ({selectedTournament.id})</p> : null}
         </article>
-      ) : null}
+      ) : <article style={cardStyle}><p style={{ color: "#64748b" }}>{busy ? "Loading draft tournaments…" : "No empty draft tournaments are available."}</p></article>}
 
       {message ? <p role="status" style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") || message.toLowerCase().includes("sign in") || message.toLowerCase().includes("reload") || message.toLowerCase().includes("changed") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </section>

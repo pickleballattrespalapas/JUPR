@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import type { AdminTournament, AdminTournamentDetailResponse, AdminTournamentListResponse, AdminTournamentStatusResponse, AdminTournamentWriteResponse } from "@/lib/adminTournamentApi";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
@@ -46,6 +47,9 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
   const [appendNote, setAppendNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const listRequest = useLatestRequestGuard(accessToken, clearProtectedBulkState);
+  const detailRequest = useLatestRequestGuard(accessToken);
+  const actionRequest = useLatestRequestGuard(accessToken);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -59,7 +63,17 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
     return payload as T;
   }
 
+  function clearProtectedBulkState() {
+    detailRequest.invalidate();
+    setBusy(false); setMessage(null);
+    setTournaments([]); setSelectedTournamentId(""); setDetail(null); setSelectedIds([]);
+    setRegistrationStatus(""); setPaymentStatus(""); setAppendNote("");
+  }
+
   async function loadTournaments() {
+    const selectedBeforeRefresh = selectedTournamentId;
+    const generation = listRequest.begin();
+    detailRequest.invalidate();
     setBusy(true);
     setMessage(null);
     setDetail(null);
@@ -67,16 +81,23 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
     try {
       const suffix = includeArchived ? "?include_archived=true" : "";
       const payload = await requestJson<AdminTournamentListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments${suffix}`);
-      setTournaments(payload.tournaments || []);
-      setMessage(`Loaded ${payload.count ?? payload.tournaments?.length ?? 0} tournament(s).`);
+      if (!listRequest.isCurrent(generation)) return;
+      const nextTournaments = payload.tournaments || [];
+      const selectionStillAvailable = Boolean(selectedBeforeRefresh && nextTournaments.some((row) => row.id === selectedBeforeRefresh));
+      setTournaments(nextTournaments);
+      setMessage(nextTournaments.length ? `Loaded ${payload.count ?? nextTournaments.length} tournament(s).` : "No tournaments match this view.");
+      if (selectionStillAvailable) await loadDetail(selectedBeforeRefresh);
+      else setSelectedTournamentId("");
     } catch (error) {
+      if (!listRequest.isCurrent(generation)) return;
       setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
     } finally {
-      setBusy(false);
+      if (listRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function loadDetail(tournamentId: string) {
+    const generation = detailRequest.begin();
     setSelectedTournamentId(tournamentId);
     setDetail(null);
     setSelectedIds([]);
@@ -85,11 +106,13 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
     setMessage(null);
     try {
       const payload = await requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`);
+      if (!detailRequest.isCurrent(generation)) return;
       setDetail(payload);
     } catch (error) {
+      if (!detailRequest.isCurrent(generation)) return;
       setMessage(error instanceof Error ? error.message : "Unable to load tournament detail.");
     } finally {
-      setBusy(false);
+      if (detailRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -110,6 +133,8 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
       setMessage("Choose a status/payment change or note to append.");
       return;
     }
+    const generation = actionRequest.begin();
+    const requestedTournamentId = detail.tournament.id;
     setBusy(true);
     setMessage(null);
     try {
@@ -129,16 +154,20 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
           })
         }
       );
-      const refreshed = await requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(detail.tournament.id)}`);
+      if (!actionRequest.isCurrent(generation)) return;
+      const refreshed = await requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(requestedTournamentId)}`);
+      if (!actionRequest.isCurrent(generation)) return;
       setDetail(refreshed);
       setSelectedIds([]);
       setMessage(payload.idempotent_replay ? "Bulk response reconciled from the durable operation." : `Updated ${payload.updated_count ?? payload.registration_ids?.length ?? 0} registration(s).`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update registrations.");
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to update registrations.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
+
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadTournaments, includeArchived ? "archived" : "active");
 
   if (!status.enabled) {
     return (
@@ -161,21 +190,21 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
           {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
         </div>
         <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.75rem" }}>
-          <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />
+          <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} disabled={busy} />
           Include archived tournaments
         </label>
-        <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Working…" : "Load tournaments"}</button>
+        <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh tournaments"}</button>
       </article>
 
       {tournaments.length ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Select tournament</h2>
-          <select value={selectedTournamentId} onChange={(event) => loadDetail(event.target.value)} style={inputStyle}>
+          <select value={selectedTournamentId} onChange={(event) => loadDetail(event.target.value)} disabled={busy} style={inputStyle}>
             <option value="">Choose a tournament…</option>
             {tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name} · {tournament.status} · {tournament.registration_count ?? 0} registrations</option>)}
           </select>
         </article>
-      ) : null}
+      ) : <article style={cardStyle}><p style={{ color: "#64748b" }}>{busy ? "Loading tournaments…" : "No tournaments match this view."}</p></article>}
 
       {detail ? (
         <>

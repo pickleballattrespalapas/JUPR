@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type RequestRow = {
@@ -46,6 +47,10 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const rowsRequest = useLatestRequestGuard(accessToken, () => {
+    setBusy(false); setMessage(null); setRows([]); setNotes({});
+  });
+  const actionRequest = useLatestRequestGuard(accessToken);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("Missing JUPR API base URL.");
@@ -59,20 +64,24 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
   }
 
   async function loadRows() {
+    const generation = rowsRequest.begin();
     setBusy(true);
     setMessage(null);
+    setRows([]);
     try {
       const payload = await requestJson<ListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/verified-updates/requests?status=${encodeURIComponent(filter)}&limit=200`);
+      if (!rowsRequest.isCurrent(generation)) return;
       setRows(payload.requests || []);
-      setMessage(`Loaded ${payload.count ?? payload.requests?.length ?? 0} request(s).`);
+      setMessage(payload.requests?.length ? `Loaded ${payload.count ?? payload.requests.length} request(s).` : `No ${filter} requests.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load requests.");
+      if (rowsRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load requests.");
     } finally {
-      setBusy(false);
+      if (rowsRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function applyAction(row: RequestRow, action: string, confirmationText: string) {
+    const generation = actionRequest.begin();
     setBusy(true);
     setMessage(null);
     try {
@@ -80,14 +89,18 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
         method: "PATCH",
         body: JSON.stringify({ action, admin_note: notes[row.id] || "", confirmation_text: confirmationText, source: "next_verified_updates_request_review" })
       });
+      if (!actionRequest.isCurrent(generation)) return;
       setMessage(`${action} saved for ${row.player_name}.`);
+      if (!actionRequest.isCurrent(generation)) return;
       await loadRows();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update request.");
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to update request.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
+
+  useAuthenticatedAutoLoad(status?.enabled ? accessToken : "", loadRows, filter);
 
   if (!status?.enabled) {
     return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Verified requests are disabled</h2><p>{status?.warnings?.[0] || "Enable Player Updates Admin on FastAPI."}</p></article>;
@@ -105,8 +118,8 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Request queue</h2>
         <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0.75rem", alignItems: "end" }}>
-          <label>Status<br /><select value={filter} onChange={(event) => setFilter(event.target.value)} style={inputStyle}><option value="pending">pending</option><option value="active">active</option><option value="rejected">rejected</option><option value="unsubscribed">unsubscribed</option></select></label>
-          <button type="button" onClick={loadRows} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Loading…" : "Load requests"}</button>
+          <label>Status<br /><select value={filter} onChange={(event) => setFilter(event.target.value)} disabled={busy} style={inputStyle}><option value="pending">pending</option><option value="active">active</option><option value="rejected">rejected</option><option value="unsubscribed">unsubscribed</option></select></label>
+          <button type="button" onClick={loadRows} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh requests"}</button>
         </div>
         {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("type") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>

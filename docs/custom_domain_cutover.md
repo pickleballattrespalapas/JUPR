@@ -1,11 +1,22 @@
 # Custom Domain Cutover
 
-Pickleball Club Sandwich is the official public SaaS name and domain direction. The current production-compatible domains are:
+Pickleball Club Sandwich is the official public SaaS name and domain direction. The intended production domain set is:
 
 - `pickleballclubsandwich.com` — primary public SaaS domain.
 - `www.pickleballclubsandwich.com` — primary www alias.
 - `juprleagues.com` — transitional alias during the JUPR-to-Pickleball Club Sandwich rename.
 - `www.juprleagues.com` — transitional www alias.
+
+## Current read-only inventory
+
+On 2026-07-24, both apex domains returned HTTP 200 from the current Vercel
+project. Both `www` domains returned HTTP 502 and were absent from the project's
+domain assignments. FastAPI CORS preflight succeeded for each of the four listed
+origins and returned the exact origin rather than a wildcard.
+
+No domain assignment, DNS record, redirect, CORS setting, or production
+environment variable was changed during this inventory. The steps below remain
+owner-controlled cutover work and require explicit approval before execution.
 
 ## Application configuration
 
@@ -33,7 +44,8 @@ Do not put Supabase service-role credentials in Vercel frontend variables.
 
 ## Vercel domain setup
 
-Add these domains to the Vercel project that serves `apps/web`:
+Verify the two existing apex assignments, then add and verify the missing `www`
+aliases in the Vercel project that serves `apps/web`:
 
 - `pickleballclubsandwich.com`
 - `www.pickleballclubsandwich.com`
@@ -59,8 +71,7 @@ After DNS is verified and Vercel deploys production:
 ```bash
 python scripts/smoke_public_web.py \
   --api-base-url <public FastAPI base URL> \
-  --web-base-url https://pickleballclubsandwich.com \
-  --allow-live-unconfigured
+  --web-base-url https://pickleballclubsandwich.com
 ```
 
 Then run the same command for the transitional alias:
@@ -68,21 +79,23 @@ Then run the same command for the transitional alias:
 ```bash
 python scripts/smoke_public_web.py \
   --api-base-url <public FastAPI base URL> \
-  --web-base-url https://juprleagues.com \
-  --allow-live-unconfigured
+  --web-base-url https://juprleagues.com
 ```
-
-Remove `--allow-live-unconfigured` once live-session migrations and grants are confirmed.
 
 ## Rollback
 
 If the custom domain cutover fails:
 
-1. Revert the primary domain in Vercel to the prior working Vercel deployment URL.
+1. Use the production candidate record to identify the exact previously working
+   Vercel deployment and restore its domain assignment.
 2. Remove or pause the custom domain assignment in Vercel if it is serving a broken deployment.
 3. Re-point DNS to the previous working target or use the direct Vercel deployment URL in communications.
 4. Keep the Streamlit app available as the admin fallback until the public web app passes smoke.
 5. Re-run `scripts/smoke_public_web.py` before trying the custom domain again.
+
+Before cutover, record the production Git SHA, immutable Vercel deployment,
+production Fly image, Supabase project ref/migration head, and feature-flag
+projection in one rollback packet. Do not infer any of them from a moving alias.
 
 ## Rename follow-up
 

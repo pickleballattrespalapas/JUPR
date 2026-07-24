@@ -169,6 +169,7 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
         assert staged_safety_value in workflow
     assert '"SUPABASE_JWKS_URL=${SUPABASE_URL%/}/auth/v1/.well-known/jwks.json"' in workflow
     assert '"JUPR_SUPABASE_JWT_MODE=jwks"' in workflow
+    assert '--build-arg "JUPR_DEPLOYMENT_GIT_SHA=$GITHUB_SHA"' in workflow
     assert f'--expected-web-origin "{EXPECTED_STAGING_WEB_ORIGIN}"' in workflow
     assert "fly.staging.toml" in workflow
 
@@ -295,7 +296,7 @@ def test_staging_smoke_scopes_bypass_secret_to_request_steps():
     assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in job_env
     assert workflow.count(
         "VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}"
-    ) == 4
+    ) == 5
 
 
 def test_staging_smoke_attests_exact_sha_and_disabled_write_projection():

@@ -10,6 +10,7 @@ import type {
   AdminTournamentSelection,
   AdminTournamentStatusResponse
 } from "@/lib/adminTournamentApi";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
@@ -63,6 +64,9 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
   const [importHandoff, setImportHandoff] = useState<ImportHandoff | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const listRequest = useLatestRequestGuard(accessToken, clearProtectedRegistrationState);
+  const detailRequest = useLatestRequestGuard(accessToken);
+  const actionRequest = useLatestRequestGuard(accessToken);
 
   const [registrationStatus, setRegistrationStatus] = useState("");
   const [paymentStatus, setPaymentStatus] = useState("");
@@ -88,31 +92,52 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
     return payload as T;
   }
 
+  function clearProtectedRegistrationState() {
+    detailRequest.invalidate();
+    setBusy(false); setMessage(null);
+    setTournaments([]); setSelectedTournamentId(""); setDetail(null); setImportHandoff(null);
+    setBroadcastSubject(""); setBroadcastMessage(""); setBroadcastPreview(null);
+  }
+
   async function loadTournaments(): Promise<void> {
+    const selectedBeforeRefresh = selectedTournamentId;
+    const generation = listRequest.begin();
+    detailRequest.invalidate();
     setBusy(true);
     setMessage(null);
+    setDetail(null);
+    setImportHandoff(null);
+    setBroadcastPreview(null);
     try {
       const payload = await requestJson<AdminTournamentListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments`);
-      setTournaments(payload.tournaments || []);
-      setMessage(`Loaded ${payload.count ?? payload.tournaments.length} tournament(s).`);
+      if (!listRequest.isCurrent(generation)) return;
+      const nextTournaments = payload.tournaments || [];
+      const selectionStillAvailable = Boolean(selectedBeforeRefresh && nextTournaments.some((row) => row.id === selectedBeforeRefresh));
+      setTournaments(nextTournaments);
+      setMessage(nextTournaments.length ? `Loaded ${payload.count ?? nextTournaments.length} tournament(s).` : "No tournaments are available.");
+      if (selectionStillAvailable) await loadDetail(selectedBeforeRefresh, true);
+      else setSelectedTournamentId("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
+      if (listRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
     } finally {
-      setBusy(false);
+      if (listRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function loadDetail(tournamentId: string): Promise<void> {
+  async function loadDetail(tournamentId: string, preserveFilters = false): Promise<void> {
+    const generation = detailRequest.begin();
     setSelectedTournamentId(tournamentId);
     setDetail(null);
     setImportHandoff(null);
     setBroadcastPreview(null);
-    setRegistrationStatus("");
-    setPaymentStatus("");
-    setPartnerMode("");
-    setRegistrationDayId("");
-    setEventOptionId("");
-    setSearch("");
+    if (!preserveFilters) {
+      setRegistrationStatus("");
+      setPaymentStatus("");
+      setPartnerMode("");
+      setRegistrationDayId("");
+      setEventOptionId("");
+      setSearch("");
+    }
     if (!tournamentId) return;
     setBusy(true);
     setMessage(null);
@@ -121,11 +146,16 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
         requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`),
         requestJson<ImportHandoff>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/registrations/import-handoff`)
       ]);
+      if (!detailRequest.isCurrent(generation)) return;
       setDetail(detailPayload); setImportHandoff(handoffPayload);
+      if (preserveFilters) {
+        setRegistrationDayId((current) => detailPayload.days.some((row) => String(row.id || "") === current) ? current : "");
+        setEventOptionId((current) => detailPayload.event_options.some((row) => String(row.id || "") === current) ? current : "");
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load registration reporting data.");
+      if (detailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load registration reporting data.");
     } finally {
-      setBusy(false);
+      if (detailRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -173,34 +203,40 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
 
   async function exportCsv(): Promise<void> {
     if (!apiBase || !accessToken || !detail) return;
+    const generation = actionRequest.begin();
+    const requestedTournamentId = detail.tournament.id;
     setBusy(true);
     setMessage(null);
     try {
       const query = filterQuery().toString();
       const response = await fetch(
-        apiUrl(apiBase, `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(detail.tournament.id)}/registrations/export.csv${query ? `?${query}` : ""}`),
+        apiUrl(apiBase, `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(requestedTournamentId)}/registrations/export.csv${query ? `?${query}` : ""}`),
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
         throw new Error(String(payload?.detail || `API error (${response.status})`));
       }
-      downloadText(`${detail.tournament.id}-registrations.csv`, await response.text());
+      const csv = await response.text();
+      if (!actionRequest.isCurrent(generation)) return;
+      downloadText(`${requestedTournamentId}-registrations.csv`, csv);
       setMessage(`Downloaded ${response.headers.get("X-JUPR-Export-Row-Count") || "filtered"} registration row(s).`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to export registrations.");
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to export registrations.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function previewBroadcast(): Promise<void> {
     if (!detail) return;
+    const generation = actionRequest.begin();
+    const requestedTournamentId = detail.tournament.id;
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<AdminTournamentBroadcastPreviewResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(detail.tournament.id)}/registrations/broadcast-preview`,
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(requestedTournamentId)}/registrations/broadcast-preview`,
         {
           method: "POST",
           body: JSON.stringify({
@@ -216,14 +252,17 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
           })
         }
       );
+      if (!actionRequest.isCurrent(generation)) return;
       setBroadcastPreview(payload);
       setMessage(`Previewed ${payload.recipient_count} unique recipient(s). No email was sent.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to preview broadcast recipients.");
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to preview broadcast recipients.");
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
+
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadTournaments);
 
   if (!status.enabled) {
     return <article style={cardStyle}><h2>Tournament Admin is disabled</h2><p>{status.warnings?.[0]}</p></article>;
@@ -233,7 +272,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Registration reporting session</h2>
-        <p style={{ color: "#475569" }}>Load tournament data through the guarded admin API. CSV downloads and recipient previews use the same filters shown below.</p>
+        <p style={{ color: "#475569" }}>Tournament options load automatically after the admin session is ready. CSV downloads and recipient previews use the same filters shown below.</p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "0.75rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>
@@ -244,7 +283,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
           {!apiBase ? <p style={{ color: "#b91c1c" }}>The Tournament Admin API base URL is not configured.</p> : null}
         </div>
         <button type="button" onClick={loadTournaments} disabled={busy || !accessToken || !apiBase} style={buttonStyle}>
-          {busy ? "Working…" : "Load tournaments"}
+          {busy ? "Refreshing…" : "Refresh tournaments"}
         </button>
       </article>
 
@@ -253,7 +292,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
           <h2 style={{ marginTop: 0 }}>Tournament</h2>
           <label>
             <strong>Choose a tournament</strong><br />
-            <select value={selectedTournamentId} onChange={(event) => loadDetail(event.target.value)} style={inputStyle}>
+            <select value={selectedTournamentId} onChange={(event) => loadDetail(event.target.value)} disabled={busy} style={inputStyle}>
               <option value="">Choose a tournament…</option>
               {tournaments.map((tournament) => (
                 <option key={tournament.id} value={tournament.id}>
@@ -263,7 +302,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
             </select>
           </label>
         </article>
-      ) : null}
+      ) : <article style={cardStyle}><p style={{ color: "#64748b" }}>{busy ? "Loading tournaments…" : "No tournaments are available."}</p></article>}
 
       {detail ? (
         <>

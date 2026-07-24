@@ -33,6 +33,10 @@ from jupr_app.services.public_live_write_service import (
     update_public_live_scores,
 )
 from jupr_app.services.public_player_service import build_public_player_directory, get_public_match_detail, get_public_matches, get_public_player_profile
+from scripts.deployment_verifier import (
+    PRODUCTION_FEATURE_FLAGS,
+    feature_flag_fingerprint,
+)
 from scripts.staging_write_waves import ALL_STAGING_WRITE_FLAGS
 from services.api.auth import (
     authenticate_bearer,
@@ -164,8 +168,8 @@ def _log_runtime_guardrails() -> None:
 
 
 app = FastAPI(title="JUPR API", version="0.1.0")
-app.add_middleware(StructuredRequestLoggingMiddleware)
 app.add_middleware(StagingWriteWaveMiddleware)
+app.add_middleware(StructuredRequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_cors_allowed_origins(),
@@ -682,37 +686,52 @@ def startup_checks() -> None:
 @app.get("/health")
 def health() -> dict[str, Any]:
     payload: dict[str, Any] = {"ok": True, "service": "jupr-api"}
-    if is_staging_env():
+    environment = get_jupr_env()
+    if environment in {"staging", "production"}:
         supabase_host = (urlparse(os.getenv("SUPABASE_URL", "")).hostname or "").lower()
         controlled_write_flags = {
             name: os.getenv(name, "").strip().lower() in {"1", "true", "yes", "y", "on"}
             for name in ALL_STAGING_WRITE_FLAGS
         }
-        controlled_write_flag_fingerprint = hashlib.sha256(
-            "\n".join(
-                f"{name}={1 if enabled else 0}"
-                for name, enabled in sorted(controlled_write_flags.items())
-            ).encode("utf-8")
-        ).hexdigest()
+        feature_flags = {
+            name: os.getenv(name, "").strip().lower()
+            in {"1", "true", "yes", "y", "on"}
+            for name in PRODUCTION_FEATURE_FLAGS
+        }
+        write_wave = os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip() or None
         payload.update(
             {
-                "environment": get_jupr_env(),
-                "git_commit_sha": os.getenv("JUPR_DEPLOYMENT_GIT_SHA", "").strip().lower() or None,
+                "environment": environment,
+                "git_commit_sha": (
+                    os.getenv("JUPR_IMAGE_BUILD_GIT_SHA", "").strip().lower()
+                    or os.getenv("JUPR_DEPLOYMENT_GIT_SHA", "").strip().lower()
+                    or None
+                ),
+                "image_build_git_sha": os.getenv(
+                    "JUPR_IMAGE_BUILD_GIT_SHA", ""
+                ).strip().lower()
+                or None,
                 "fly_app_name": os.getenv("FLY_APP_NAME", "").strip() or None,
                 "fly_image_ref": os.getenv("FLY_IMAGE_REF", "").strip() or None,
                 "fly_machine_version": os.getenv("FLY_MACHINE_VERSION", "").strip() or None,
                 "web_origin": _canonical_https_origin(os.getenv("JUPR_WEB_BASE_URL")),
-                "staging_write_wave": os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip() or None,
-                "business_data_write_wave_active": os.getenv(
-                    "JUPR_STAGING_WRITE_WAVE", ""
+                "write_wave": write_wave,
+                "staging_write_wave": write_wave,
+                "business_data_write_wave_active": write_wave not in {None, "none"},
+                "production_business_write_policy": os.getenv(
+                    "JUPR_PRODUCTION_WRITE_POLICY", ""
                 ).strip()
-                not in {"", "none"},
+                or None,
                 "security_denial_audit_logging_required": is_api_audit_log_required(),
                 "jwt_verification_configured": jwt_verification_configured(),
                 "jwt_verification_mode": jwt_verification_mode(),
                 "jwt_verification_project_ref": jwt_verification_project_ref(),
+                "feature_flags": feature_flags,
+                "feature_flag_fingerprint": feature_flag_fingerprint(feature_flags),
                 "controlled_write_flags": controlled_write_flags,
-                "controlled_write_flag_fingerprint": controlled_write_flag_fingerprint,
+                "controlled_write_flag_fingerprint": feature_flag_fingerprint(
+                    controlled_write_flags
+                ),
                 "public_live_writes_enabled": is_public_live_write_enabled(),
                 "public_live_production_override_enabled": os.getenv(
                     "JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION", ""
@@ -744,6 +763,20 @@ def health() -> dict[str, Any]:
                     ).strip().lower()
                     in {"1", "true", "yes", "y", "on"},
                 },
+                "expected_migration_head": os.getenv(
+                    "JUPR_EXPECTED_MIGRATION_HEAD", ""
+                ).strip()
+                or None,
+                "expected_migration_contract": os.getenv(
+                    "JUPR_EXPECTED_MIGRATION_CONTRACT", ""
+                ).strip().lower()
+                or None,
+                "expected_migration_profile": os.getenv(
+                    "JUPR_EXPECTED_MIGRATION_PROFILE", ""
+                ).strip()
+                or None,
+                "cors_allowed_origins": get_cors_allowed_origins(),
+                "cors_allowed_origin_regex": get_cors_allowed_origin_regex(),
                 "supabase_project_ref": (
                     supabase_host.split(".", 1)[0]
                     if supabase_host.endswith(".supabase.co")

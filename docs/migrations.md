@@ -132,7 +132,7 @@ For schema changes:
 1. Review SQL in the PR.
 2. Paste and run SQL in **Supabase SQL editor** (staging project first).
 3. Confirm expected table/column/constraint exists in staging.
-4. Deploy the `Test` branch application and run staging smoke checks.
+4. Deploy the `staging` branch application and run staging smoke checks.
 5. Promote to production only after staging verification; then run reviewed SQL in production.
 
 The communications migration must precede the corresponding API/web release. Verify the four `row_version` columns, the outbox `sending` state, and `replace_verified_update_subscription`; confirm `anon` and `authenticated` cannot access the four server-only tables or execute the replacement RPC.
@@ -148,7 +148,7 @@ python scripts/check_supabase_migration_versions.py
 
 Behavior:
 
-- `check_migration_sources.py` detects newly-added `migrations/*.sql` files in the current branch (compared to `Test` by default).
+- `check_migration_sources.py` detects newly-added `migrations/*.sql` files in the current branch (compared to `origin/staging` by default).
 - `check_migration_sources.py` fails unless each new root migration is documented in `docs/migrations_root_explanations.md`.
 - `check_supabase_migration_versions.py` fails if two `supabase/migrations/*.sql` files share the same version prefix (text before the first underscore).
 - This keeps contributors from accidentally treating `migrations/` as the primary Supabase source and prevents Supabase `schema_migrations` version collisions.

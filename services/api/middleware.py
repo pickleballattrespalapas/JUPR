@@ -36,7 +36,7 @@ class StructuredRequestLoggingMiddleware(BaseHTTPMiddleware):
 
 
 class StagingWriteWaveMiddleware(BaseHTTPMiddleware):
-    """Fail closed before routing unless the runtime and write wave are explicit."""
+    """Fail closed before routing unless the runtime and write policy are explicit."""
 
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
         environment = os.getenv("JUPR_ENV", "").strip().lower()
@@ -53,6 +53,18 @@ class StagingWriteWaveMiddleware(BaseHTTPMiddleware):
                 status_code=403,
                 content={"detail": "Unsafe requests require an explicit runtime environment."},
             )
+        if unsafe and environment == "production":
+            policy = os.getenv("JUPR_PRODUCTION_WRITE_POLICY", "").strip().lower()
+            if policy != "enabled":
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "detail": (
+                            "Production business-data writes are disabled by the "
+                            "fail-closed deployment policy."
+                        )
+                    },
+                )
         if environment == "staging" and unsafe:
             wave = os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip()
             if not wave_allows_request(wave, request.method, request.url.path):

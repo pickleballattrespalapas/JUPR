@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type {
   AdminWeeklyRecapCandidate,
   AdminWeeklyRecapDetailResponse,
@@ -10,6 +10,7 @@ import type {
   AdminWeeklyRecapWriteResponse
 } from "@/lib/adminWeeklyRecapApi";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import AdminWeeklyRecapPreview from "./AdminWeeklyRecapPreview";
 import { clubTodayIso, clubWeekStartIso } from "@/lib/clubDate";
@@ -98,18 +99,14 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [messageSeverity, setMessageSeverity] = useState<"success" | "error" | null>(null);
+  const listRequest = useLatestRequestGuard(accessToken, clearProtectedRecapState);
+  const recapRequest = useLatestRequestGuard(accessToken);
+  const writeRequest = useLatestRequestGuard(accessToken);
 
   const candidateKeys = useMemo(() => normalizeCandidateKeys(candidates), [candidates]);
   const recapNumbers = numbersFromRecap(selectedRecap);
   const spotlightPreview = finalSpotlight(selectedRecap);
   const targetExistingRecap = recaps.find((recap) => recap.week_start === weekStart) || (selectedRecap?.week_start === weekStart ? selectedRecap : null);
-
-  useEffect(() => {
-    if (!accessToken || !initialWeekStart || selectedRecap) return;
-    void loadSelectedRecap(initialWeekStart);
-    // Deep-linked preview should load once after the authenticated session is restored.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, initialWeekStart]);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -144,25 +141,43 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
     setSpotlightEdits(buildSpotlightEdits(payload.recap, nextCandidates));
   }
 
+  function clearProtectedRecapState() {
+    recapRequest.invalidate();
+    writeRequest.invalidate();
+    setBusy(false); setMessage(null); setMessageSeverity(null);
+    setRecaps([]); setSelectedWeekStart(""); setSelectedRecap(null); setCandidates({}); setSpotlightEdits({});
+  }
+
   async function loadRecaps() {
+    const generation = listRequest.begin();
     setBusy(true);
     setMessage(null);
     setMessageSeverity(null);
     try {
       const payload = await requestJson<AdminWeeklyRecapListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps?limit=100`);
-      setRecaps(payload.recaps || []);
-      if (!selectedWeekStart && payload.recaps?.length) setSelectedWeekStart(payload.recaps[0].week_start);
-      setMessage(`Loaded ${payload.count ?? payload.recaps?.length ?? 0} recap(s).`);
+      if (!listRequest.isCurrent(generation)) return;
+      const nextRecaps = payload.recaps || [];
+      setRecaps(nextRecaps);
+      if (selectedWeekStart && !nextRecaps.some((recap) => recap.week_start === selectedWeekStart)) {
+        recapRequest.invalidate();
+        setSelectedWeekStart("");
+        setSelectedRecap(null);
+        setCandidates({});
+      }
+      setMessage(nextRecaps.length ? `Loaded ${payload.count ?? nextRecaps.length} recap(s).` : "No saved recaps are available.");
       setMessageSeverity("success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load weekly recaps.");
-      setMessageSeverity("error");
+      if (listRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to load weekly recaps.");
+        setMessageSeverity("error");
+      }
     } finally {
-      setBusy(false);
+      if (listRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function loadSelectedRecap(explicitWeekStart?: string) {
+    const generation = recapRequest.begin();
     const target = explicitWeekStart || selectedWeekStart || weekStart;
     if (!target) {
       setMessage("Select a recap first.");
@@ -172,20 +187,39 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
     setBusy(true);
     setMessage(null);
     setMessageSeverity(null);
+    setSelectedRecap(null);
+    setCandidates({});
     try {
       const payload = await requestJson<AdminWeeklyRecapDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps/${encodeURIComponent(target)}?include_candidates=true`);
+      if (!recapRequest.isCurrent(generation)) return;
       applyDetail(payload);
       setMessage("Weekly recap loaded.");
       setMessageSeverity("success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load weekly recap.");
-      setMessageSeverity("error");
+      if (recapRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to load weekly recap.");
+        setMessageSeverity("error");
+      }
     } finally {
-      setBusy(false);
+      if (recapRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
+  function selectRecap(target: string) {
+    setSelectedWeekStart(target);
+    setSelectedRecap(null);
+    setCandidates({});
+    if (target) void loadSelectedRecap(target);
+    else recapRequest.invalidate();
+  }
+
+  async function loadInitialRecapWorkspace() {
+    await loadRecaps();
+    if (initialWeekStart) await loadSelectedRecap(initialWeekStart);
+  }
+
   async function generateDraft(confirmationText: string) {
+    const generation = writeRequest.begin();
     setBusy(true);
     setMessage(null);
     setMessageSeverity(null);
@@ -194,15 +228,19 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
         method: "POST",
         body: JSON.stringify({ week_start: weekStart, week_end: weekEnd, confirmation_text: confirmationText, expected_row_version: selectedRecap?.week_start === weekStart ? selectedRecap.row_version : null, source: "next_weekly_recap_generate" })
       });
+      if (!writeRequest.isCurrent(generation)) return;
       applyDetail(payload);
       await loadRecaps();
+      if (!writeRequest.isCurrent(generation)) return;
       setMessage("Draft generated from current match, social, and tournament data.");
       setMessageSeverity("success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to generate weekly recap draft.");
-      setMessageSeverity("error");
+      if (writeRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to generate weekly recap draft.");
+        setMessageSeverity("error");
+      }
     } finally {
-      setBusy(false);
+      if (writeRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -212,6 +250,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
       setMessageSeverity("error");
       return;
     }
+    const generation = writeRequest.begin();
     setBusy(true);
     setMessage(null);
     setMessageSeverity(null);
@@ -220,14 +259,17 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
         method: "PATCH",
         body: JSON.stringify({ edits_json: buildEditsPayload(lookingAhead, spotlightEdits), confirmation_text: confirmationText, expected_row_version: selectedRecap.row_version, source: "next_weekly_recap_save" })
       });
+      if (!writeRequest.isCurrent(generation)) return;
       applyDetail(payload);
       setMessage("Draft edits saved.");
       setMessageSeverity("success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save weekly recap draft.");
-      setMessageSeverity("error");
+      if (writeRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to save weekly recap draft.");
+        setMessageSeverity("error");
+      }
     } finally {
-      setBusy(false);
+      if (writeRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -237,6 +279,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
       setMessageSeverity("error");
       return;
     }
+    const generation = writeRequest.begin();
     setBusy(true);
     setMessage(null);
     setMessageSeverity(null);
@@ -245,15 +288,19 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
         method: "POST",
         body: JSON.stringify({ action, edits_json: buildEditsPayload(lookingAhead, spotlightEdits), confirmation_text: confirmationText, expected_row_version: selectedRecap.row_version, source: action === "publish" ? "next_weekly_recap_publish" : "next_weekly_recap_unpublish" })
       });
+      if (!writeRequest.isCurrent(generation)) return;
       applyDetail(payload);
       await loadRecaps();
+      if (!writeRequest.isCurrent(generation)) return;
       setMessage(action === "publish" ? "Weekly recap published." : "Weekly recap unpublished and returned to draft.");
       setMessageSeverity("success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : `Unable to ${action} weekly recap.`);
-      setMessageSeverity("error");
+      if (writeRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : `Unable to ${action} weekly recap.`);
+        setMessageSeverity("error");
+      }
     } finally {
-      setBusy(false);
+      if (writeRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -267,6 +314,8 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
     nextPlayers[index] = value;
     updateSpotlight(key, { players: nextPlayers });
   }
+
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadInitialRecapWorkspace, initialWeekStart);
 
   if (!status.enabled) {
     return (
@@ -306,13 +355,13 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) auto auto", gap: "0.75rem", marginTop: "0.75rem", alignItems: "end" }}>
           <label>Existing recaps<br />
-            <select value={selectedWeekStart} onChange={(event) => setSelectedWeekStart(event.target.value)} style={inputStyle}>
+            <select value={selectedWeekStart} onChange={(event) => selectRecap(event.target.value)} disabled={busy} style={inputStyle}>
               <option value="">Select recap…</option>
               {recaps.map((row) => <option key={row.week_start} value={row.week_start}>{row.week_start} → {row.week_end} · {row.status}</option>)}
             </select>
           </label>
-          <button type="button" onClick={loadRecaps} disabled={busy || !accessToken} style={ghostButtonStyle}>Load recaps</button>
-          <button type="button" onClick={() => loadSelectedRecap()} disabled={busy || !selectedWeekStart} style={ghostButtonStyle}>Open selected</button>
+          <button type="button" onClick={loadRecaps} disabled={busy || !accessToken} style={ghostButtonStyle}>{busy ? "Refreshing…" : "Refresh recaps"}</button>
+          <button type="button" onClick={() => loadSelectedRecap()} disabled={busy || !selectedWeekStart} style={ghostButtonStyle}>Retry selected recap</button>
         </div>
         {message ? <p role={messageSeverity === "error" ? "alert" : "status"} style={{ color: messageSeverity === "error" ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>

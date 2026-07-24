@@ -6,6 +6,7 @@ import type {
   AdminLeagueManagerStatusResponse,
   AdminTopPlayersPrintableResponse
 } from "@/lib/adminLeagueManagerApi";
+import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
@@ -27,12 +28,17 @@ export default function TopPlayersPrintablePanel({ apiBase, clubId, limit, statu
   const [payload, setPayload] = useState<AdminTopPlayersPrintableResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const rankingsRequest = useLatestRequestGuard(accessToken, () => {
+    setBusy(false); setMessage(null); setPayload(null);
+  });
 
   async function loadRankings() {
+    const generation = rankingsRequest.begin();
     if (!apiBase) { setMessage("API base URL is not configured."); return; }
     if (!accessToken) { setMessage("Sign in before loading the authenticated ranking export."); return; }
     setBusy(true);
     setMessage(null);
+    setPayload(null);
     try {
       const response = await fetch(apiUrl(apiBase, `/admin/clubs/${encodeURIComponent(clubId)}/league-manager/top-players-printable?limit=${encodeURIComponent(String(limit))}`), {
         headers: { Authorization: `Bearer ${accessToken}` }
@@ -40,15 +46,20 @@ export default function TopPlayersPrintablePanel({ apiBase, clubId, limit, statu
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error(String(body?.detail || `API error (${response.status})`));
       const next = body as AdminTopPlayersPrintableResponse;
+      if (!rankingsRequest.isCurrent(generation)) return;
       setPayload(next);
       setMessage(`Loaded ${next.ranking_count} eligible player(s) for ${next.period.label}.`);
     } catch (error) {
-      setPayload(null);
-      setMessage(error instanceof Error ? error.message : "Unable to load rankings.");
+      if (rankingsRequest.isCurrent(generation)) {
+        setPayload(null);
+        setMessage(error instanceof Error ? error.message : "Unable to load rankings.");
+      }
     } finally {
-      setBusy(false);
+      if (rankingsRequest.isCurrent(generation)) setBusy(false);
     }
   }
+
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadRankings);
 
   if (!status.enabled) {
     return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2>League Manager is disabled</h2><p>{status.warnings?.[0]}</p></article>;
@@ -64,7 +75,7 @@ export default function TopPlayersPrintablePanel({ apiBase, clubId, limit, statu
         {sessionLoading ? <p>Checking admin session…</p> : null}
         {sessionMessage ? <p style={{ color: "#b91c1c" }}>{sessionMessage}</p> : null}
         {!accessToken ? <p><Link href="/admin/login">Open admin login</Link></p> : null}
-        <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}><button type="button" onClick={loadRankings} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Loading…" : "Load previous-month Top 50"}</button><button type="button" onClick={() => window.print()} disabled={!payload} style={buttonStyle}>Print or save PDF</button></p>
+        <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}><button type="button" onClick={loadRankings} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh rankings"}</button><button type="button" onClick={() => window.print()} disabled={busy || !payload} style={buttonStyle}>Print or save PDF</button></p>
         {message ? <p style={{ color: /unable|error|sign in/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
 
