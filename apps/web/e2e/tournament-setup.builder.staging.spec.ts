@@ -352,7 +352,7 @@ test("Tournament Setup clears the prior record while a new selection loads", asy
 
   await page.goto("/admin/tournament-setup", { waitUntil: "domcontentloaded" });
   await expect(page.getByText("Loaded setup: First setup")).toBeVisible();
-  await page.getByLabel("Tournament").selectOption("tour-2");
+  await page.getByLabel("Tournament", { exact: true }).selectOption("tour-2");
   await expect(page.getByRole("heading", { name: "Draft summary" })).toHaveCount(0);
   await expect(page.getByText("Loaded setup: First setup")).toHaveCount(0);
   releaseSecond();
