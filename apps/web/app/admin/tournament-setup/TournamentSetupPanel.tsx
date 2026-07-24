@@ -294,7 +294,7 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
     <article style={cardStyle} aria-busy={Boolean(detailLoadingId)}>
       <h2 style={{ marginTop: 0 }}>1. Select tournament</h2>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-        <label>Tournament<br /><select value={selectedId} onChange={(event) => selectTournament(event.target.value)} disabled={busy || !accessToken} aria-busy={busy && !tournaments.length} style={inputStyle}><option value="" disabled>{busy && !tournaments.length ? "Loading tournaments…" : "Choose a tournament"}</option>{tournaments.map((row) => <option key={row.id} value={row.id}>{row.name || row.id} · {row.status || "status"} · {row.registration_status || "registration"}</option>)}</select></label>
+        <label>Tournament<br /><select aria-label="Tournament" value={selectedId} onChange={(event) => selectTournament(event.target.value)} disabled={busy || !accessToken} aria-busy={busy && !tournaments.length} style={inputStyle}><option value="" disabled>{busy && !tournaments.length ? "Loading tournaments…" : "Choose a tournament"}</option>{tournaments.map((row) => <option key={row.id} value={row.id}>{row.name || row.id} · {row.status || "status"} · {row.registration_status || "registration"}</option>)}</select></label>
         <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={ghostButtonStyle}>Refresh list</button>
         <button type="button" onClick={() => loadDetail()} disabled={busy || !selectedId} style={buttonStyle}>{detailLoadingId ? "Loading setup…" : "Reload setup"}</button>
       </div>
