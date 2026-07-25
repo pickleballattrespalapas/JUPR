@@ -132,8 +132,9 @@ COMMON_REQUIRED_ENV = {
 WAVE_REQUIRED_ENV: dict[str, set[str]] = {
     "public-read": set(),
     "public-intake-auth": {
+        "STAGING_ADMIN_BEARER_TOKEN",
         "STAGING_ADMIN_EMAIL",
-        "STAGING_ADMIN_PASSWORD",
+        "JUPR_REAL_AUTH_EXPECTED_ROLE",
         "JUPR_TOURNAMENT_REGISTRATION_FIXTURE_SLUG",
     },
     "admin-read-export": {
@@ -156,6 +157,45 @@ WAVE_REQUIRED_ENV: dict[str, set[str]] = {
     },
 }
 MUTATING_WAVES = {"match-rating-writes"}
+SENSITIVE_ARTIFACT_ENV_NAMES = (
+    "STAGING_ADMIN_BEARER_TOKEN",
+    "JUPR_STAGING_ADMIN_ACCESS_TOKEN",
+    "STAGING_ADMIN_EMAIL",
+    "JUPR_STAGING_ADMIN_EMAIL",
+    "STAGING_ADMIN_PASSWORD",
+    "JUPR_STAGING_ADMIN_PASSWORD",
+    "VERCEL_AUTOMATION_BYPASS_SECRET",
+    "STAGING_SUPABASE_ANON_KEY",
+    "STAGING_SUPABASE_SERVICE_ROLE_KEY",
+)
+
+
+def redact_artifact_text(text: str, env: Mapping[str, str]) -> str:
+    """Remove workflow credentials and operator identity from retained text.
+
+    GitHub log masking does not apply to uploaded artifacts. Playwright embeds
+    request headers and assertion values in its JSON call logs, so redact both
+    literal and JSON-escaped renderings before parsing or writing the report.
+    """
+
+    sensitive_renderings: list[tuple[str, str]] = []
+    for name in SENSITIVE_ARTIFACT_ENV_NAMES:
+        value = str(env.get(name) or "")
+        if not value:
+            continue
+        marker = f"[REDACTED:{name}]"
+        sensitive_renderings.append((value, marker))
+        for ensure_ascii in (False, True):
+            encoded_value = json.dumps(value, ensure_ascii=ensure_ascii)[1:-1]
+            if encoded_value != value:
+                sensitive_renderings.append((encoded_value, marker))
+
+    redacted = text
+    for rendering, marker in sorted(
+        set(sensitive_renderings), key=lambda item: len(item[0]), reverse=True
+    ):
+        redacted = redacted.replace(rendering, marker)
+    return redacted
 
 
 def _canonical_origin(value: object) -> str | None:
@@ -590,12 +630,14 @@ def run_wave(
             )
             report_path = report_dir / f"{name}.json"
             stderr_path = report_dir / f"{name}.stderr.log"
-            report_path.write_text(result.stdout, encoding="utf-8")
-            stderr_path.write_text(result.stderr, encoding="utf-8")
+            redacted_stdout = redact_artifact_text(result.stdout, playwright_env)
+            redacted_stderr = redact_artifact_text(result.stderr, playwright_env)
+            report_path.write_text(redacted_stdout, encoding="utf-8")
+            stderr_path.write_text(redacted_stderr, encoding="utf-8")
 
             invocation_errors: list[str] = []
             try:
-                report = json.loads(result.stdout)
+                report = json.loads(redacted_stdout)
             except json.JSONDecodeError as exc:
                 report = {}
                 invocation_errors.append(f"Playwright emitted invalid JSON: {exc}")
