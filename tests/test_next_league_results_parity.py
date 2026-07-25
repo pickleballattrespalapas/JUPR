@@ -13,11 +13,11 @@ def test_league_results_page_hydrates_all_deep_link_selectors() -> None:
         '"week"',
         '"player"',
         '"weekly_min_games"',
-        '"print"',
     ):
         assert selector in source
     assert "getClubLeagueResults(" in source
     assert "weeklyMinGames" in source
+    assert "printMode" not in source
 
 
 def test_league_results_page_has_distinct_scopes_and_complete_player_detail() -> None:
@@ -30,3 +30,8 @@ def test_league_results_page_has_distinct_scopes_and_complete_player_detail() ->
     assert "data.recent_matches" in source
     assert "playerCandidates.map" in source
     assert "playerCandidates.slice" not in source
+    assert "data.cumulative" not in source
+    assert "Season cumulative performance" not in source
+    assert "Print view" not in source
+    assert "<PrintButton />" in source
+    assert "@media print" in source

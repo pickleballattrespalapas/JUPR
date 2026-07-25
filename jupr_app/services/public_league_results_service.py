@@ -5,12 +5,15 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
 
-LEAGUE_META_SELECT = "club_id,league_name,is_active,status,min_games,k_factor,start_week,end_week,num_weeks,total_weeks,weeks"
+LEAGUE_META_SELECT = (
+    "club_id,league_name,is_active,status,min_games,k_factor,schedule_config"
+)
 LEAGUE_RATINGS_SELECT = "club_id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active"
 PLAYER_SELECT = "id,club_id,name,rating,active,inactive_at"
 MATCH_SELECT = (
     "id,club_id,date,league,match_type,week_tag,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,"
-    "t1_p1_r,t1_p1_r_end,t1_p2_r,t1_p2_r_end,t2_p1_r,t2_p1_r_end,t2_p2_r,t2_p2_r_end"
+    "t1_p1_r,t1_p1_r_end,t1_p2_r,t1_p2_r_end,t2_p1_r,t2_p1_r_end,t2_p2_r,t2_p2_r_end,"
+    "deleted_at"
 )
 DEFAULT_WEEKLY_HIGHLIGHT_MIN_GAMES = 4
 
@@ -98,9 +101,22 @@ def _is_active_player(row: dict[str, Any]) -> bool:
     return True
 
 
-def _fetch_table(supabase: Any, table_name: str, select_cols: str, *, club_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+def _fetch_table(
+    supabase: Any,
+    table_name: str,
+    select_cols: str,
+    *,
+    club_id: str,
+    filters: dict[str, Any] | None = None,
+    null_filters: tuple[str, ...] = (),
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
     try:
         query = supabase.table(table_name).select(select_cols).eq("club_id", str(club_id))
+        for field, value in (filters or {}).items():
+            query = query.eq(str(field), value)
+        for field in null_filters:
+            query = query.is_(str(field), None)
         if limit is not None:
             query = query.limit(int(limit))
         return _safe_rows(query.execute())
@@ -151,8 +167,17 @@ def get_public_league_results_overview(supabase: Any, *, club_id: str) -> dict[s
         if league_name:
             names.add(league_name)
 
-    match_rows = _fetch_table(supabase, "matches", "league,match_type,score_t1,score_t2", club_id=cid, limit=5000)
+    match_rows = _fetch_table(
+        supabase,
+        "matches",
+        "league,match_type,score_t1,score_t2,deleted_at",
+        club_id=cid,
+        null_filters=("deleted_at",),
+        limit=5000,
+    )
     for row in match_rows:
+        if row.get("deleted_at") not in (None, ""):
+            continue
         league_name = _active_league_name(row)
         match_type = str(row.get("match_type") or "").strip()
         score_t1 = _safe_int(row.get("score_t1"), 0) or 0
@@ -163,6 +188,12 @@ def get_public_league_results_overview(supabase: Any, *, club_id: str) -> dict[s
     leagues = []
     for name in sorted(names, key=_league_sort_key):
         meta = meta_by_name.get(name, {})
+        schedule_config = meta.get("schedule_config")
+        configured_weeks = (
+            _safe_int(schedule_config.get("weeks"), None)
+            if isinstance(schedule_config, dict)
+            else None
+        )
         leagues.append(
             {
                 "name": name,
@@ -171,7 +202,13 @@ def get_public_league_results_overview(supabase: Any, *, club_id: str) -> dict[s
                 "start_week": _safe_int(meta.get("start_week"), None),
                 "end_week": _safe_int(meta.get("end_week"), None),
                 "num_weeks": _safe_int(
-                    meta.get("num_weeks", meta.get("total_weeks", meta.get("weeks"))),
+                    meta.get(
+                        "num_weeks",
+                        meta.get(
+                            "total_weeks",
+                            meta.get("weeks", configured_weeks),
+                        ),
+                    ),
                     None,
                 ),
             }
@@ -204,9 +241,19 @@ def _league_meta(overview: dict[str, Any], league_name: str | None) -> dict[str,
 
 
 def _league_matches(supabase: Any, *, club_id: str, league_name: str) -> list[dict[str, Any]]:
-    rows = _fetch_table(supabase, "matches", MATCH_SELECT, club_id=club_id, limit=5000)
+    rows = _fetch_table(
+        supabase,
+        "matches",
+        MATCH_SELECT,
+        club_id=club_id,
+        filters={"league": str(league_name)},
+        null_filters=("deleted_at",),
+        limit=5000,
+    )
     result: list[dict[str, Any]] = []
     for row in rows:
+        if row.get("deleted_at") not in (None, ""):
+            continue
         if str(row.get("league") or "").strip() != str(league_name).strip():
             continue
         if str(row.get("match_type") or "").strip() == "PopUp":
@@ -318,7 +365,14 @@ def _summarize(rows: list[dict[str, Any]], group_keys: tuple[str, ...]) -> list[
 
 
 def _standing_rows(supabase: Any, *, club_id: str, league_name: str, players_by_id: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = _fetch_table(supabase, "league_ratings", LEAGUE_RATINGS_SELECT, club_id=club_id, limit=5000)
+    rows = _fetch_table(
+        supabase,
+        "league_ratings",
+        LEAGUE_RATINGS_SELECT,
+        club_id=club_id,
+        filters={"league_name": str(league_name)},
+        limit=5000,
+    )
     output: list[dict[str, Any]] = []
     for row in rows:
         if str(row.get("league_name") or "").strip() != str(league_name).strip():
@@ -351,6 +405,95 @@ def _standing_rows(supabase: Any, *, club_id: str, league_name: str, players_by_
     for rank, row in enumerate(output, start=1):
         row["rank"] = rank
     return output
+
+
+def _canonical_season_rows(
+    standings: list[dict[str, Any]],
+    match_cumulative: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return one public season record per player.
+
+    ``league_ratings`` is the materialized authority for a rated league's
+    season record, current rating, and rating rank. Match-derived totals remain
+    useful for players who do not yet have a league-ratings row, but they must
+    not replace the official record for a rated player and create contradictory
+    public summaries.
+    """
+
+    rows: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for standing in standings:
+        player_id = _safe_int(standing.get("player_id"))
+        if player_id is None:
+            continue
+        seen.add(player_id)
+        rows.append(
+            {
+                "week_num": None,
+                "player_id": player_id,
+                "player_name": standing.get("player_name"),
+                "games": standing.get("matches_played", 0),
+                "wins": standing.get("wins", 0),
+                "losses": standing.get("losses", 0),
+                "win_pct": standing.get("win_pct"),
+                "rating_delta_jupr": standing.get("rating_delta_jupr"),
+                "rating_jupr": standing.get("rating_jupr"),
+                "rank": standing.get("rank"),
+                "prev_rank": None,
+                "rank_delta": None,
+            }
+        )
+
+    for match_row in match_cumulative:
+        player_id = _safe_int(match_row.get("player_id"))
+        if player_id is None or player_id in seen:
+            continue
+        rows.append(
+            {
+                **match_row,
+                "week_num": None,
+                "rating_jupr": None,
+                "rank": None,
+                "prev_rank": None,
+                "rank_delta": None,
+            }
+        )
+
+    return rows
+
+
+def _standings_with_fallback_players(
+    standings: list[dict[str, Any]],
+    season_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep match-only participants visible without duplicating season tables."""
+
+    rows = [dict(row) for row in standings]
+    seen = {
+        int(player_id)
+        for row in standings
+        if (player_id := _safe_int(row.get("player_id"))) is not None
+    }
+    for season_row in season_rows:
+        player_id = _safe_int(season_row.get("player_id"))
+        if player_id is None or player_id in seen:
+            continue
+        seen.add(player_id)
+        rows.append(
+            {
+                "player_id": player_id,
+                "player_name": season_row.get("player_name"),
+                "rating": None,
+                "rating_jupr": None,
+                "wins": season_row.get("wins", 0),
+                "losses": season_row.get("losses", 0),
+                "matches_played": season_row.get("games", 0),
+                "win_pct": season_row.get("win_pct"),
+                "rating_delta_jupr": None,
+                "rank": None,
+            }
+        )
+    return rows
 
 
 def _week_list(matches: list[dict[str, Any]], league: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -640,30 +783,26 @@ def build_public_league_results(
             )
         )
     weekly.sort(key=lambda row: (row.get("week_num") or 0, -(row.get("wins") or 0), -(row.get("games") or 0), str(row.get("player_name") or "").lower()))
-    cumulative = _summarize(expanded, ("player_id", "player_name"))
-    cumulative.sort(key=lambda row: (-(row.get("wins") or 0), -(row.get("games") or 0), str(row.get("player_name") or "").lower()))
+    match_cumulative = _summarize(expanded, ("player_id", "player_name"))
+    match_cumulative.sort(
+        key=lambda row: (
+            -(row.get("wins") or 0),
+            -(row.get("games") or 0),
+            str(row.get("player_name") or "").lower(),
+        )
+    )
     league = _league_meta(overview, selected)
-    standings = _standing_rows(
+    rating_standings = _standing_rows(
         supabase,
         club_id=cid,
         league_name=selected,
         players_by_id=players_by_id,
     )
+    cumulative = _canonical_season_rows(rating_standings, match_cumulative)
+    standings = _standings_with_fallback_players(rating_standings, cumulative)
     standing_by_player = {
         int(row["player_id"]): row for row in standings if _safe_int(row.get("player_id")) is not None
     }
-    season_rows: list[dict[str, Any]] = []
-    for row in cumulative:
-        standing = standing_by_player.get(int(row.get("player_id") or 0), {})
-        season_rows.append(
-            {
-                **row,
-                "rating_jupr": standing.get("rating_jupr"),
-                "rating_delta_jupr": standing.get("rating_delta_jupr"),
-                "rank": standing.get("rank"),
-            }
-        )
-    cumulative = season_rows
     weeks = _week_list(matches, league)
     valid_weeks = [int(row["week_num"]) for row in weeks]
     selected_week = int(week_num) if week_num is not None and int(week_num) in valid_weeks else None
@@ -716,10 +855,10 @@ def build_public_league_results(
             "rank": selected_standing.get("rank"),
             "rating_jupr": selected_standing.get("rating_jupr"),
             "rating_delta_jupr": selected_standing.get("rating_delta_jupr"),
-            "games": selected_cumulative.get("games", selected_standing.get("matches_played", 0)),
-            "wins": selected_cumulative.get("wins", selected_standing.get("wins", 0)),
-            "losses": selected_cumulative.get("losses", selected_standing.get("losses", 0)),
-            "win_pct": selected_cumulative.get("win_pct", selected_standing.get("win_pct")),
+            "games": selected_standing.get("matches_played", selected_cumulative.get("games", 0)),
+            "wins": selected_standing.get("wins", selected_cumulative.get("wins", 0)),
+            "losses": selected_standing.get("losses", selected_cumulative.get("losses", 0)),
+            "win_pct": selected_standing.get("win_pct", selected_cumulative.get("win_pct")),
         }
         if selected_player_id is not None
         else None

@@ -27,6 +27,11 @@ class FakeQuery:
         self._filters[key] = value
         return self
 
+    def is_(self, key, value):
+        assert value is None
+        self._filters[key] = None
+        return self
+
     def limit(self, value):
         self._limit = int(value)
         return self
@@ -115,12 +120,25 @@ def test_public_league_results_contract(client):
     assert payload["selected_week"] == 1
     assert payload["weekly_results"]
     assert payload["cumulative"]
+    alex_season = next(
+        row for row in payload["cumulative"] if row["player_name"] == "Alex"
+    )
+    assert (
+        alex_season["games"],
+        alex_season["wins"],
+        alex_season["losses"],
+    ) == (4, 3, 1)
     assert payload["weekly_results"][0]["rank"]
     assert payload["weekly_results"][0]["rank_delta"] is None
     assert payload["weekly_highlights"]["scope"] == "week"
     assert payload["season_highlights"]["scope"] == "season"
     assert payload["players"]
     assert payload["player_summary"]
+    assert (
+        payload["player_summary"]["games"],
+        payload["player_summary"]["wins"],
+        payload["player_summary"]["losses"],
+    ) == (4, 3, 1)
     assert payload["recent_matches"]
 
     assert "admin_notes" not in payload["club"]
@@ -147,6 +165,11 @@ def test_public_league_results_deep_link_selectors_are_server_authoritative(clie
     assert payload["selected_week"] == 1
     assert payload["selected_player_id"] == 2
     assert payload["player_summary"]["player_name"] == "Blair"
+    assert (
+        payload["player_summary"]["games"],
+        payload["player_summary"]["wins"],
+        payload["player_summary"]["losses"],
+    ) == (4, 2, 2)
     assert payload["weekly_highlights"]["min_games"] == 1
     assert payload["recent_matches"][0]["partner"]["player_name"] == "Alex"
 

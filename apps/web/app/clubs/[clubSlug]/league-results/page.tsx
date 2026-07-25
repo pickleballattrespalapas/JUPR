@@ -112,8 +112,7 @@ function pageHref({
   section,
   week,
   player,
-  weeklyMinGames,
-  print
+  weeklyMinGames
 }: {
   clubSlug: string;
   league?: string | null;
@@ -121,7 +120,6 @@ function pageHref({
   week?: number | null;
   player?: string | number | null;
   weeklyMinGames?: number | null;
-  print?: boolean;
 }): string {
   const params = new URLSearchParams();
   if (league) params.set("league", league);
@@ -129,7 +127,6 @@ function pageHref({
   if (week) params.set("week", String(week));
   if (player) params.set("player", String(player));
   if (weeklyMinGames) params.set("weekly_min_games", String(weeklyMinGames));
-  if (print) params.set("print", "1");
   const query = params.toString();
   return `/clubs/${clubSlug}/league-results${query ? `?${query}` : ""}`;
 }
@@ -304,6 +301,7 @@ function StatTable({ rows, clubSlug, title }: { rows: LeagueResultsStatRow[]; cl
 
 function StandingsCharts({ standings, clubSlug }: { standings: LeagueResultsStanding[]; clubSlug: string }) {
   const topRatings = [...standings]
+    .filter((row) => row.rating_jupr != null)
     .sort((a, b) => safeNumber(b.rating_jupr) - safeNumber(a.rating_jupr))
     .slice(0, 10)
     .map((row) => ({
@@ -380,7 +378,6 @@ export default async function LeagueResultsPage({ params, searchParams }: League
   const { clubSlug } = params;
   const leagueName = decodeParam(firstParam(searchParams, "league"));
   const activeSection = normalizeSection(firstParam(searchParams, "section"));
-  const printMode = firstParam(searchParams, "print") === "1";
   const requestedWeek = parsePositiveInt(firstParam(searchParams, "week"));
   const requestedPlayer = firstParam(searchParams, "player");
   const weeklyMinGames = boundedInt(firstParam(searchParams, "weekly_min_games"), 4, 1, 20);
@@ -398,9 +395,9 @@ export default async function LeagueResultsPage({ params, searchParams }: League
   const selectedPlayerId = data?.selected_player_id ?? null;
   const selectedPlayerName = data?.player_summary?.player_name ?? "Player";
   const playerWeeklyRows = data?.player_weekly ?? [];
-  const showOverall = printMode || activeSection === "overall";
-  const showWeekly = printMode || activeSection === "weekly";
-  const showPlayer = printMode || activeSection === "player";
+  const showOverall = activeSection === "overall";
+  const showWeekly = activeSection === "weekly";
+  const showPlayer = activeSection === "player";
 
   return (
     <section>
@@ -445,9 +442,6 @@ export default async function LeagueResultsPage({ params, searchParams }: League
                 </Link>
               );
             })}
-            <Link href={pageHref({ clubSlug, league: selectedLeague, week: selectedWeek, player: selectedPlayerId, weeklyMinGames, print: true })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: printMode ? "#fef9c3" : "white", color: "#0f172a", textDecoration: "none", fontWeight: 800 }}>
-              Print view
-            </Link>
             <PrintButton />
           </div>
         </div>
@@ -465,21 +459,25 @@ export default async function LeagueResultsPage({ params, searchParams }: League
           {showOverall ? (
             <section style={sectionStyle}>
               <h2>Current standings</h2>
+              <p style={{ color: "#64748b" }}>
+                Current rating and rank with the league&apos;s official season record.
+                Players awaiting a league rating appear unranked.
+              </p>
               <StandingsTable standings={data.standings} clubSlug={clubSlug} />
               <StandingsCharts standings={data.standings} clubSlug={clubSlug} />
 
               <h2>Season highlights</h2>
               <p style={{ color: "#64748b" }}>Season totals only; win-percentage leaders must meet the league minimum of {data.season_highlights.min_games ?? 1} games.</p>
               <HighlightGrid highlights={data.season_highlights} clubSlug={clubSlug} />
-
-              <h2>Season cumulative performance</h2>
-              <StatTable title="Season" rows={data.cumulative.slice(0, 25)} clubSlug={clubSlug} />
             </section>
           ) : null}
 
           {showWeekly ? (
             <section style={sectionStyle}>
               <h2>Weekly results{selectedWeek ? ` — Week ${selectedWeek}` : ""}</h2>
+              <p style={{ color: "#64748b" }}>
+                Weekly results come from active, non-deleted match records; standings use the league&apos;s official rated record.
+              </p>
               {data.weeks.length ? (
                 <div className="no-print" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", marginBottom: "1rem" }}>
                   {data.weeks.map((week) => {
@@ -515,6 +513,9 @@ export default async function LeagueResultsPage({ params, searchParams }: League
           {showPlayer && selectedPlayerId ? (
             <section style={sectionStyle}>
               <h2>Player summary — {selectedPlayerName}</h2>
+              <p style={{ color: "#64748b" }}>
+                The summary uses the official rated season record. Weekly and recent activity comes from active, non-deleted matches.
+              </p>
               <div className="no-print" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", marginBottom: "1rem" }}>
                 {playerCandidates.map((row) => {
                   const active = String(row.player_id) === String(selectedPlayerId);
