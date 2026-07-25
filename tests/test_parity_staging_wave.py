@@ -1,6 +1,7 @@
-from pathlib import Path
 import hashlib
+import json
 import re
+from pathlib import Path
 
 import scripts.run_parity_staging_wave as staging_wave
 from scripts.run_parity_staging_wave import (
@@ -12,12 +13,14 @@ from scripts.run_parity_staging_wave import (
     MUTATING_WAVES,
     MUTATION_CONFIRMATION,
     REQUIRED_REAL_SPECS,
+    WAVE_REQUIRED_ENV,
     WAVES,
     candidate_errors,
     deployment_identity_errors,
     environment_errors,
     integrated_manifest_errors,
     manifest_errors,
+    redact_artifact_text,
     report_errors,
 )
 from scripts.staging_write_waves import expected_write_flags
@@ -49,6 +52,16 @@ def _match_write_env() -> dict[str, str]:
         "JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_B": "8",
         "JUPR_TOURNAMENT_LIVE_ALLOW_MUTATION_E2E": "1",
         "JUPR_PARITY_MUTATION_CONFIRMATION": MUTATION_CONFIRMATION,
+    }
+
+
+def _public_intake_env() -> dict[str, str]:
+    return {
+        **_base_env(),
+        "STAGING_ADMIN_BEARER_TOKEN": "token",
+        "STAGING_ADMIN_EMAIL": "test@x.invalid",
+        "JUPR_REAL_AUTH_EXPECTED_ROLE": "super_admin",
+        "JUPR_TOURNAMENT_REGISTRATION_FIXTURE_SLUG": "smoke",
     }
 
 
@@ -105,6 +118,61 @@ def test_report_guard_requires_tests_and_rejects_skips_flakes_and_failures() -> 
     ) == []
 
 
+def test_artifact_redaction_scrubs_playwright_call_logs_and_preserves_json() -> None:
+    token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzdGFnaW5nIn0.signature"
+    email = "operator@example.invalid"
+    bypass = "vercel-bypass-secret-value"
+    env = {
+        "STAGING_ADMIN_BEARER_TOKEN": token,
+        "JUPR_STAGING_ADMIN_ACCESS_TOKEN": token,
+        "STAGING_ADMIN_EMAIL": email,
+        "JUPR_STAGING_ADMIN_EMAIL": email,
+        "VERCEL_AUTOMATION_BYPASS_SECRET": bypass,
+    }
+    playwright_report = {
+        "stats": {"expected": 1, "skipped": 0, "unexpected": 0, "flaky": 0},
+        "suites": [
+            {
+                "specs": [
+                    {
+                        "tests": [
+                            {
+                                "results": [
+                                    {
+                                        "error": {
+                                            "message": (
+                                                "apiRequestContext.get: "
+                                                f"Authorization: Bearer {token}\n"
+                                                f"x-vercel-protection-bypass: {bypass}\n"
+                                                f"operator: {email}"
+                                            )
+                                        },
+                                        "stdout": [
+                                            {
+                                                "text": (
+                                                    f"request for {email} used "
+                                                    f"Bearer {token}"
+                                                )
+                                            }
+                                        ],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ],
+    }
+
+    redacted = redact_artifact_text(json.dumps(playwright_report), env)
+
+    assert json.loads(redacted)["stats"]["expected"] == 1
+    for sensitive_value in {token, email, bypass}:
+        assert sensitive_value not in redacted
+    assert "[REDACTED:" in redacted
+
+
 def test_environment_guard_uses_exact_origins_and_only_one_mutating_wave() -> None:
     env = _base_env()
     assert environment_errors("public-read", env) == []
@@ -133,6 +201,15 @@ def test_environment_guard_uses_exact_origins_and_only_one_mutating_wave() -> No
     )
 
     assert environment_errors("match-rating-writes", _match_write_env()) == []
+    assert environment_errors("public-intake-auth", _public_intake_env()) == []
+    assert "STAGING_ADMIN_PASSWORD" not in WAVE_REQUIRED_ENV["public-intake-auth"]
+    assert "STAGING_ADMIN_BEARER_TOKEN" in WAVE_REQUIRED_ENV["public-intake-auth"]
+    missing_auth_token = _public_intake_env()
+    missing_auth_token.pop("STAGING_ADMIN_BEARER_TOKEN")
+    assert any(
+        "STAGING_ADMIN_BEARER_TOKEN" in error
+        for error in environment_errors("public-intake-auth", missing_auth_token)
+    )
     missing_confirmation = _match_write_env()
     missing_confirmation.pop("JUPR_PARITY_MUTATION_CONFIRMATION")
     assert any(
@@ -528,20 +605,87 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     ) in workflow
     assert "Prepare authenticated parity staging session" in workflow
     assert (
-        "if: needs.evidence-contract.outputs.mode == 'admin-read-export' || "
+        "if: needs.evidence-contract.outputs.mode == 'public-intake-auth' || "
+        "needs.evidence-contract.outputs.mode == 'admin-read-export' || "
         "needs.evidence-contract.outputs.mode == 'match-rating-writes'"
     ) in workflow
-    assert 'python scripts/prepare_parity_staging_session.py "$PARITY_MODE"' in workflow
+    initialize_step = workflow.split(
+        "- name: Initialize staging evidence artifact directory", maxsplit=1
+    )[1].split("- name: Require complete stacked staging manifest", maxsplit=1)[0]
+    prepare_step = workflow.split(
+        "- name: Prepare authenticated parity staging session", maxsplit=1
+    )[1].split("- name: Run exact wave and reject skips or flakes", maxsplit=1)[0]
+    run_step = workflow.split(
+        "- name: Run exact wave and reject skips or flakes", maxsplit=1
+    )[1].split("- name: End authenticated parity refresh session", maxsplit=1)[0]
+    cleanup_step = workflow.split(
+        "- name: End authenticated parity refresh session", maxsplit=1
+    )[1].split("- name: Retain success and failure evidence", maxsplit=1)[0]
+    assert (
+        'python scripts/prepare_parity_staging_session.py \\\n'
+        '            "$PARITY_MODE" \\\n'
+        "            --report-dir parity-staging-artifacts"
+    ) in prepare_step
     assert 'test -n "$GITHUB_ENV"' in workflow
-    assert "STAGING_ADMIN_EMAIL: ${{ vars.STAGING_ADMIN_EMAIL }}" in workflow
-    assert "STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}" in workflow
+    assert "Initialize staging evidence artifact directory" in workflow
+    assert "mkdir -p parity-staging-artifacts" in initialize_step
+    assert (
+        "parity-staging-artifacts/workflow-initialized.json"
+        in initialize_step
+    )
+    assert (
+        """printf '{"candidate_sha":"%s","mode":"%s","status":"initialized"}\\n'"""
+        in initialize_step
+    )
+    assert "${{ secrets." not in initialize_step
+    assert "TOKEN" not in initialize_step
+    assert "PASSWORD" not in initialize_step
+    assert "SERVICE_ROLE" not in initialize_step
+    assert (
+        "STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}"
+        in prepare_step
+    )
+    assert (
+        "STAGING_SUPABASE_SERVICE_ROLE_KEY: "
+        "${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}"
+    ) in prepare_step
+    assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" not in run_step
+    assert workflow.count("STAGING_SUPABASE_SERVICE_ROLE_KEY:") == 1
+    assert workflow.count("${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}") == 1
+    assert "if: always()" in cleanup_step
+    assert "public-read)" in cleanup_step
+    assert (
+        "public-intake-auth|admin-read-export|match-rating-writes)"
+        in cleanup_step
+    )
+    assert (
+        "STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}"
+        in cleanup_step
+    )
+    assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" not in cleanup_step
+    assert "continue-on-error" not in cleanup_step
+    assert (
+        "python scripts/prepare_parity_staging_session.py \\\n"
+        "                cleanup \\\n"
+        "                --report-dir parity-staging-artifacts"
+    ) in cleanup_step
+    assert workflow.index(
+        "- name: End authenticated parity refresh session"
+    ) < workflow.index("- name: Retain success and failure evidence")
+    assert (
+        workflow.index("- name: Initialize staging evidence artifact directory")
+        < workflow.index("- name: Prepare authenticated parity staging session")
+    )
+    retain_step = workflow.split(
+        "- name: Retain success and failure evidence", maxsplit=1
+    )[1].split("complete-book-deployment-identity:", maxsplit=1)[0]
+    assert "if: always()" in retain_step
+    assert "if-no-files-found: error" in retain_step
+    assert "${{ vars.STAGING_ADMIN_EMAIL }}" not in workflow
+    assert "${{ vars.JUPR_REAL_AUTH_EXPECTED_ROLE }}" not in workflow
+    assert "STAGING_ADMIN_PASSWORD" not in workflow
     assert "STAGING_ADMIN_BEARER_TOKEN: ${{" not in workflow
     assert "JUPR_STAGING_ADMIN_ACCESS_TOKEN: ${{" not in workflow
-    assert (
-        "STAGING_ADMIN_PASSWORD: "
-        "${{ needs.evidence-contract.outputs.mode == 'public-intake-auth' "
-        "&& secrets.STAGING_ADMIN_PASSWORD || '' }}"
-    ) in workflow
     assert "make check-parity-final-evidence-integrated" in workflow
     assert 'playwright_env["STAGING_WEB_BASE_URL"] = attested_web_origin' in runner
     assert (

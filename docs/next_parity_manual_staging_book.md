@@ -49,6 +49,23 @@ After the hardening patch lands, populate the formal table with the new SHA, PR,
 Vercel deployment ID/origin, Fly image, and preflight artifact as one unit. Do not
 append new-candidate evidence to the preserved baseline table.
 
+### Preserved pre-fix diagnostic runs
+
+Candidate `ccf2e469b6ef76cffbbd5525c5b1ff1f5ff503bc` reached exact-identity
+public-read execution before the authenticated-session prerequisite was
+hardened. These runs are retained for diagnosis only. The hardening patch changes
+the candidate SHA, so none of these results may be copied into the blank formal
+candidate table or used to mark a parity row `Pass`.
+
+| Workflow mode | GitHub run | Exact result | Artifact / steady state |
+|---|---|---|---|
+| `public-read` | `30160267159` | Passed `56/56` expected browser tests; `0` skipped, `0` flaky, and `0` unexpected | Artifact `8620058712`; digest `sha256:6391d4e163e186b04e5069fb33ea7f099dcd79bbc1af4b3d259537163385140a`; candidate-bound diagnostic only |
+| `admin-read-export` | `30161862524` | Failed safely during session preparation because the former `STAGING_ADMIN_EMAIL` / `STAGING_ADMIN_PASSWORD` inputs were absent; `0` browser tests and `0` writes | No artifact was uploaded; Fly remained `write_wave=none` |
+
+The failed authenticated run did not exercise login, admin reads, exports, or
+fixtures. Its failure is not acceptance evidence, and the successful public-read
+artifact remains evidence only for its recorded pre-fix SHA.
+
 If any candidate identity changes during the session, stop and start a new book.
 Evidence from different SHAs, Fly releases, Vercel deployments, or Supabase projects
 must not be combined into one acceptance result.
@@ -61,7 +78,7 @@ Record the identity artifact in the exact form
 - [ ] Fly `/health` reports the same candidate SHA, exact `FLY_IMAGE_REF`, staging app name, and staging Supabase project ref.
 - [ ] Preview data isolation and preview auth isolation are both configured and active.
 - [ ] The Vercel automation bypass is available only to the test runner.
-- [ ] FastAPI holds the staging service-role key; neither Vercel nor any `NEXT_PUBLIC_*` variable does.
+- [ ] FastAPI and the server-only authenticated-workflow preparation step hold the staging service-role key; neither Vercel, the browser test, nor any `NEXT_PUBLIC_*` variable does.
 - [ ] Production write flags remain off; staging is `write_wave=none` at rest and enables only one approved workflow while it is under test.
 - [ ] No "enable all" configuration is used; a distinct final Fly release restores `none`, `business_data_write_wave_active=false`, and every controlled write flag false.
 - [ ] Email mode is `dry_run` or `staging_redirect`, with the redirect inbox visibly identified.
@@ -175,10 +192,36 @@ GitHub lists the workflow from the repository default branch
 canonical `origin/staging` candidate. A dispatch from either `staging` or
 `rollback-feb8` must match that branch's current event SHA; every executable wave
 then requires `candidate_sha` to equal `origin/staging`. For authenticated read
-and Tournament Live modes, the workflow mints a fresh masked Supabase JWT from
-the staging admin credentials, validates the club-scoped permissions against
-FastAPI, and discovers only the allowlisted disposable fixtures. No expiring
-bearer token or fixture ID needs to be stored as a long-lived GitHub setting.
+and Tournament Live modes, a server-only preparation step uses the staging
+service role to require exactly one eligible existing admin assignment bound to
+an Auth user. It verifies that identity, calls Supabase Admin `generate_link`,
+exchanges the returned token hash directly without sending email, validates the
+short-lived session against club-scoped FastAPI capabilities, and discovers only
+the allowlisted fixtures. The browser step receives short-lived session material,
+never the service-role key, and a mandatory cleanup step fails the job unless the
+refreshable session is ended or already inactive. The access JWT must be bound to
+the exact issuer, user, session, and authenticated audience with a maximum
+one-hour lifetime. Supabase logout ends refreshability but may not invalidate
+that JWT before its `exp` claim, so cleanup clears every exported credential and
+records that remaining lifetime explicitly. Retained Playwright output redacts
+the JWT, operator email, and Vercel bypass value. The workflow does not create or
+delete an Auth user, change an admin role assignment, or mutate application
+business data. `generate_link`, token verification, and logout intentionally
+create and consume bounded staging Auth link-token, session, and audit metadata.
+A run can supersede an unused staging magic/recovery link for that same account,
+so do not run an automated authenticated wave concurrently with manual
+password-recovery or inbox acceptance. No admin email, password, bearer token,
+user ID, or fixture ID needs to be stored as a long-lived GitHub setting.
+
+`write_wave=none` attests that every controlled FastAPI business-data write flag
+is off; it does not mean Supabase Auth creates no session or audit records during
+an authenticated evidence run.
+
+This exact-candidate browser path proves a live, capability-checked Supabase
+session and local-scope sign-out. It does not prove operator password entry,
+password recovery, or email-inbox delivery; password-form behavior remains under
+component/browser contract coverage, while password entry and recovery/inbox
+acceptance remain manual.
 
 Configure only the route-specific staging variables named by the workflow.
 Tournament Live is the sole automated mutation opt-in. Keep every other mutation
@@ -194,8 +237,8 @@ committed book.
 |---|---|---|---|---|---|
 | `preflight` | `make check-parity-final-evidence` plus production Next build and full focused Python suite | Candidate SHA and clean integrated Order-28 tree | `Pending` | — | — |
 | `public-read` | `Parity Final Evidence` workflow mode `public-read`; local equivalent: `python scripts/run_parity_staging_wave.py public-read --candidate-sha <sha> --vercel-deployment-id <id> --vercel-deployment-origin <immutable-origin> --fly-image-ref <ref>` | Exact preview/API/Auth origins, deployment identities, and Vercel bypass | `Pending` | — | — |
-| `public-intake-auth` | Workflow mode `public-intake-auth`; local equivalent uses the same runner | Real staging auth account; read-only intake, registration, and partner-board readiness; no mutation confirmation | `Pending` | — | — |
-| `admin-read-export` | Workflow mode `admin-read-export`; local equivalent uses the same runner | Staging admin email/password and anon key; the workflow mints a fresh masked token, validates permissions, and verifies the exact unpublished recap plus tournament/draw fixtures | `Pending` | — | — |
+| `public-intake-auth` | Workflow mode `public-intake-auth`; local equivalent uses the same runner | Server-only exact-one bound-admin lookup, no-email token-hash exchange, capability validation, and read-only intake/registration/partner-board readiness; no mutation confirmation | `Pending` | — | — |
+| `admin-read-export` | Workflow mode `admin-read-export`; local equivalent uses the same runner | Server-only exact-one bound-admin lookup, no-email token-hash exchange, capability validation, exact unpublished recap plus tournament/draw fixture validation, confirmed refresh-session termination, and a maximum one-hour access-JWT lifetime | `Pending` | — | — |
 | `reversible-admin-writes` | Manual-only deferred procedure; no workflow mode | Exact per-page route/resource plan, captured pre-state, truthful inverse, positive write/readback/restore projections, named operator, and a separate human witness | `Pending` | — | — |
 | `match-rating-writes` | Workflow mode `match-rating-writes` for Tournament Live only; all other cases manual-only | Tournament Live disposable game/version fixture, dynamic fingerprints, distinct idempotency keys, exact mutation confirmation, and `finally` restore/re-read | `Pending` | — | — |
 | `recovery` | Manual-only route-specific reconciliation; no workflow mode | Exact affected resource IDs, authoritative GET routes, JSON-bearing 2xx statuses, positive state/audit projections, Match Log/Replay handoff evidence, all mutation flags off | `Pending` | — | — |

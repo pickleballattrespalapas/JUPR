@@ -61,13 +61,22 @@ Use disposable staging rows. The operator captures the requested screenshots;
 the evidence runner records audit/provider IDs.
 
 The read-only browser evidence in `apps/web/e2e/communications.staging.spec.ts`
-uses a fresh workflow-minted `STAGING_ADMIN_BEARER_TOKEN`, optional
-`STAGING_ADMIN_EMAIL`, and the validated disposable draft for week
-`2099-01-05`. The fixture contains only `Test` and `staging only` content and
-remains unpublished. The workflow discovers these values after authenticating;
-it does not depend on a stored bearer token or stored fixture IDs. The suite
-intentionally performs no writes; the steps below remain deferred to the
-consolidated session.
+uses a fresh short-lived `STAGING_ADMIN_BEARER_TOKEN`, a masked runtime identity
+value, and the validated disposable draft for week `2099-01-05`.
+The server-only preparation step finds exactly one eligible existing bound
+staging admin, performs a Supabase Admin no-email token-hash exchange, and
+validates its FastAPI capabilities before the browser runs. The fixture contains
+only `Test` and `staging only` content and remains unpublished. The workflow does
+not depend on a stored admin email/password, bearer token, user ID, or fixture
+ID; it never exposes the service-role key to the browser, always runs cleanup,
+and fails unless the refreshable session is ended or already inactive. The
+access JWT is validated as candidate-bound with at most a one-hour lifetime,
+removed from the workflow environment after cleanup, and treated as potentially
+usable until its `exp` claim. Retained browser artifacts redact the JWT, operator
+email, and Vercel bypass value. The browser suite intentionally performs no
+communications or other application-business writes; its server-only bootstrap
+does create and consume bounded staging Auth link-token, session, and audit
+metadata. The steps below remain deferred to the consolidated session.
 
 1. Generate a recap, open its full unpublished preview, print/save it, change a spotlight selection, save, publish, unpublish, and compare with Streamlit.
 2. Open the same recap in two browsers. Save in the first; confirm the second receives a stale-state message and cannot overwrite it.

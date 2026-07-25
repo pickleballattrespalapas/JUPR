@@ -22,15 +22,32 @@ This document is the durable source of truth for the Pickleball Club Sandwich
   `29957623653` passed all 56 strict browser checks. PR `#1022` is the
   candidate-evidence PR; its identity must be replaced as one unit after the next
   exact candidate is deployed.
-- The later live pre-evidence candidate
-  `1b1c66b9ff1b1ea2f90ad0491be87921ec1524d8` was identity-aligned across
-  Vercel and Fly, but Parity Final Evidence runs `30126824035` and
-  `30126850714` failed environment preflight before identity/browser execution.
-  Their artifacts contain no browser invocations or writes and are not acceptance
-  evidence. The replacement candidate keeps communications reads available at
-  `write_wave=none`, independently guards every mutation, mints a fresh masked
-  staging-admin JWT per authenticated workflow run, and validates exact disposable
-  fixtures instead of depending on stale stored tokens or IDs.
+- Candidate `ccf2e469b6ef76cffbbd5525c5b1ff1f5ff503bc` is preserved as
+  pre-fix diagnostic evidence, not as the final accepted candidate. Parity Final
+  Evidence public-read run `30160267159` passed all `56/56` expected browser
+  tests with zero skips, flakes, or unexpected results. Artifact `8620058712`
+  has digest
+  `sha256:6391d4e163e186b04e5069fb33ea7f099dcd79bbc1af4b3d259537163385140a`.
+  Admin-read-export run `30161862524` then failed safely during session
+  preparation because the former stored staging-admin email/password inputs were
+  absent. It ran zero browser tests, performed zero writes, uploaded no artifact,
+  and left Fly at `write_wave=none`. The session-bootstrap hardening changes the
+  application SHA, so the successful public-read run cannot be carried forward
+  as final-candidate acceptance.
+- Authenticated evidence no longer depends on a stored admin email, password,
+  bearer token, user ID, or fixture ID. The server-side preparation step uses the
+  staging service role to require exactly one eligible, existing, user-bound
+  staging admin assignment, verifies that Auth identity, requests a Supabase
+  Admin `generate_link`, exchanges its token hash directly without sending an
+  email, validates club-scoped FastAPI capabilities and allowlisted fixtures, and
+  exposes only short-lived session material to the browser step. Cleanup is
+  mandatory and fails the job unless the refreshable session is ended or already
+  inactive. The access JWT is exact-identity bound, limited to one hour, cleared
+  from subsequent workflow steps, and explicitly treated as potentially valid
+  until `exp`. Retained browser artifacts redact the JWT, operator email, and
+  Vercel bypass value. The process creates or deletes no Auth user and changes no
+  role assignment or business row. It intentionally creates and consumes bounded
+  staging Auth link-token, session, and audit metadata.
 - All 37 staging migration-ledger entries are applied through
   `20260720123402_baseline_worker_run_log`. All 29 implementation orders have
   landed, with roughly 70 Next page components covering the 47 tracked Streamlit
@@ -57,12 +74,12 @@ This document is the durable source of truth for the Pickleball Club Sandwich
 | Next.js admin operations cockpit | Automated-ready; manual acceptance pending | `/admin` renders migration mode, workflow flags, pilot gates, and Streamlit fallback from FastAPI status. The tracked operational surfaces are implemented behind scoped gates. | Complete the consolidated exact-candidate read and bounded-write acceptance book; keep Streamlit available. | Medium |
 | Vercel staging | In progress | The `staging` branch Preview alias and immutable deployment identity are available; `/api/environment` participates in candidate attestation. | After the hardening merge, capture the replacement deployment ID and immutable origin, then run canonical `Staging Smoke` against that exact candidate. | Medium |
 | Next.js admin score entry | Blocked by default | Admin rated score entry is disabled by feature flag and guarded by Match Log/Replay recovery contracts. | Exercise it only in a bounded staging write wave with disposable rows, Match Log and Replay History open, and exact restoration. | High |
-| Admin auth/JWT | Implemented; acceptance pending | Next stores a Supabase admin session and FastAPI validates Supabase JWTs for guarded routes. | Complete exact-candidate authenticated browser acceptance, including expired/invalid-session behavior. | High |
+| Admin auth/JWT | Implemented; acceptance pending | Next stores a Supabase admin session and FastAPI validates Supabase JWTs for guarded routes. Candidate evidence bootstraps one existing bound staging admin through a server-only no-email magic-link exchange, ends its refreshable session after use, clears exported credentials, and records that the access JWT may remain valid until its bounded `exp`; no user/role/business row is created, deleted, or changed, while bounded Auth token/session/audit metadata is created and consumed. | Complete exact-candidate live-session/sign-out evidence plus manual password-entry, recovery/inbox, expired/invalid-session, wrong-club, and permission-denial acceptance. | High |
 | Club-scoped roles | Implemented; acceptance pending | Guarded FastAPI admin routes enforce club-scoped permissions and audit attribution. | Prove representative denial and allowed-action paths in the consolidated staging session before broad staff use. | High |
 | Public leaderboard/read models | Automated-ready; manual acceptance pending | Public leaderboard, League Results, Badge Codex, Challenge Ladder, Weekly Recap, Match Explorer, player, match, live, tournament-registration, roster, partner-board, and static/support surfaces are exposed as sanitized public routes with route-specific checks. | Complete the exact-candidate non-mutating browser session and the separately bounded intake/pairing rows. | Medium |
 | Workers | In progress | Worker CLIs exist and are part of moving jobs out of Streamlit. | Validate worker reliability and club-scoped safety in staging. | Medium |
 | Email safety | At-rest safe; inbox acceptance blocked | Staging is reconciled at `JUPR_EMAIL_MODE=dry_run`; live customer delivery remains disabled. | With Joe's approved staging inbox, prove redirected delivery, recovery, unsubscribe/preferences, provider/audit evidence, and return to `dry_run`. | High |
-| CI/API contract tests | In progress | API contracts now include production-deployment and authenticated admin UX safety suites; Next Web Build runs the guided Tournament Setup payload contract on pinned Node 20; canonical `Staging Smoke` requires 56 strict public-read checks plus five no-skip guided Tournament Setup browser checks. Parity Final Evidence is registered on the default branch but always checks out and binds executable evidence to canonical `staging`; authenticated modes mint and validate a fresh masked staging token. Deployment identity checks remain fail closed, and `make public-web-smoke` remains a noncanonical diagnostic. | Require the parity/manual/manifest guards on staging PRs and manually dispatch canonical `Staging Smoke` only after the final same-SHA Fly `none` release. | Medium |
+| CI/API contract tests | In progress | API contracts now include production-deployment and authenticated admin UX safety suites; Next Web Build runs the guided Tournament Setup payload contract on pinned Node 20; canonical `Staging Smoke` requires 56 strict public-read checks plus five no-skip guided Tournament Setup browser checks. Parity Final Evidence is registered on the default branch but always checks out and binds executable evidence to canonical `staging`; authenticated modes use a server-only service-role lookup plus no-email token-hash exchange for exactly one existing bound staging admin, validate an exact-identity access JWT with a maximum one-hour lifetime, and require confirmed refresh-session termination in an always-running cleanup step. Cleanup clears exported credentials and reports that the access JWT may remain valid until `exp`; retained browser output is redacted. The exact-candidate browser test proves a live capability-checked session and sign-out, not manual password entry or recovery-email delivery. Deployment identity checks remain fail closed, and `make public-web-smoke` remains a noncanonical diagnostic. | Require the parity/manual/manifest guards on staging PRs, repeat every required evidence mode after the hardened candidate is deployed, and manually dispatch canonical `Staging Smoke` only after the final same-SHA Fly `none` release. | Medium |
 | Migrations | In progress | `supabase/migrations/` is canonical and staging-first migration flow is defined. | Continue staging-first apply/verify discipline before production SQL changes. | Medium |
 | Observability | In progress | Vercel runtime/build logs, Fly health/logs, FastAPI health/identity, GitHub workflow evidence, and Supabase logs/advisors are inspectable. | Define owner-visible minimum alerts and escalation/rollback instructions before public cutover. | Medium |
 | Tenant onboarding | Not started | Multi-club onboarding process is not yet standardized for SaaS rollout. | Define repeatable club onboarding checklist and config flow in staging. | Medium |

@@ -101,7 +101,7 @@ Any admin workflow may fully move off Streamlit only when:
 | `top_players_printable` | 🧾 Top Active Players PDF | Admin | `Partial` — Next `/admin/top-players-printable` provides browser-printable top active players output. | Export only | Admin/export gate | Validate print layout in staging; server PDFs remain deferred unless needed. |
 | `weekly_recap_admin` | 🗞️ Weekly Recap Admin | Admin | `Partial` — Next `/admin/weekly-recap` has guarded draft generation, Looking Ahead edits, spotlight candidate selectors, preview, publish, and unpublish. | Yes | Admin auth + recap write/audit gate | Validate generated/edit/publish parity against Streamlit. |
 | `player_updates_admin` | 📬 Player Updates Admin | Admin | `Partial` — Next `/admin/player-updates` and `/admin/player-updates/verified-requests` support date-range reports, selected exact-range sends, SMTP/JUPR_EMAIL_MODE safety, and verified request review. | Yes/email | Admin auth + email safety gate | Validate SMTP dry-run/staging redirect before live email and automatic post-batch sends. |
-| `admin_login` | 🔐 Admin Login | Hidden/auth | `Partial` — Next `/admin/login` now capability-checks Supabase JWTs through FastAPI before persistence, restores/refreshes authorized sessions, uses local-scope sign-out, keeps redirects on allowlisted admin paths, and has mocked browser/API denial contracts. | No | Supabase Auth/session + auth E2E gate | Run the dedicated staging-role E2E for sign-in/sign-out, expired token, reset-password, wrong-club, and permission-denied cases. |
+| `admin_login` | 🔐 Admin Login | Hidden/auth | `Partial` — Next `/admin/login` now capability-checks Supabase JWTs through FastAPI before persistence, restores/refreshes authorized sessions, uses local-scope sign-out, keeps redirects on allowlisted admin paths, and has mocked browser/API denial contracts. The exact-candidate workflow proves a live capability-checked session and sign-out but does not claim password-entry evidence. | No | Supabase Auth/session + auth E2E gate | Retain the live-session workflow artifact, then manually verify password entry plus expired token, reset-password, wrong-club, and permission-denied cases. |
 | `reset_password` | 🔐 Reset Password | Hidden/auth | `Partial` — Next `/admin/reset-password` now provides non-enumerating request/resend, PKCE/code/token-hash plus legacy recovery consumption, capability validation, password-policy guidance, and recovery-session cleanup. | Auth write | Supabase Auth/session + staging auth E2E gate | Complete one staging Supabase recovery email, post-reset login, and configured password-policy test. |
 | `verified_updates_request` | 📬 Verified Updates Request | Public hidden | `Partial` — Next `/verified-updates` and public FastAPI routes let users request verified player update subscriptions for admin review. | Email/preference request | Tokenized email safety gate | Validate public request and admin approval/reject/unsubscribe queue in staging. |
 
@@ -114,8 +114,9 @@ verification, staged acceptance, and release preparation:
    quality gates, production deployment-verifier tests, the Node-20 Tournament
    Setup builder contract, and browser automation are green.
 2. Bind Vercel and the dedicated Fly staging app to that exact SHA, restore
-   `write_wave=none`, and complete the non-mutating public/admin acceptance
-   session.
+   `write_wave=none`, and complete the public/admin acceptance session without
+   application-business writes. Authenticated checks still create and consume
+   short-lived staging Auth token/session/audit state.
 3. Complete the bounded write/recovery batches with disposable fixtures, one
    least-privilege wave at a time, then restore the exact candidate to
    `write_wave=none` and run canonical Staging Smoke. The candidate smoke now

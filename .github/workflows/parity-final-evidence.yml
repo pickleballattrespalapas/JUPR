@@ -238,9 +238,6 @@ jobs:
       STAGING_WEB_BASE_URL: "https://jupr-git-staging-pickleballattrespalapas1.vercel.app"
       JUPR_SMOKE_CLUB_SLUG: ${{ vars.JUPR_SMOKE_CLUB_SLUG }}
       STAGING_CLUB_SLUG: ${{ vars.JUPR_SMOKE_CLUB_SLUG }}
-      STAGING_ADMIN_EMAIL: ${{ vars.STAGING_ADMIN_EMAIL }}
-      JUPR_REAL_AUTH_EXPECTED_ROLE: ${{ vars.JUPR_REAL_AUTH_EXPECTED_ROLE }}
-      JUPR_STAGING_ADMIN_EMAIL: ${{ vars.STAGING_ADMIN_EMAIL }}
       JUPR_TOURNAMENT_REGISTRATION_FIXTURE_SLUG: ${{ vars.JUPR_TOURNAMENT_REGISTRATION_FIXTURE_SLUG }}
       JUPR_TOURNAMENT_LIVE_TOURNAMENT_ID: ${{ vars.JUPR_TOURNAMENT_LIVE_TOURNAMENT_ID }}
       JUPR_TOURNAMENT_LIVE_DRAW_ID: ${{ vars.JUPR_TOURNAMENT_LIVE_DRAW_ID }}
@@ -255,6 +252,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.evidence-contract.outputs.candidate_sha }}
+
+      - name: Initialize staging evidence artifact directory
+        env:
+          CANDIDATE_SHA: ${{ needs.evidence-contract.outputs.candidate_sha }}
+          PARITY_MODE: ${{ needs.evidence-contract.outputs.mode }}
+        run: |
+          mkdir -p parity-staging-artifacts
+          printf '{"candidate_sha":"%s","mode":"%s","status":"initialized"}\n' \
+            "$CANDIDATE_SHA" \
+            "$PARITY_MODE" \
+            > parity-staging-artifacts/workflow-initialized.json
 
       - name: Require complete stacked staging manifest
         run: make check-parity-final-evidence-integrated
@@ -280,17 +288,18 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Prepare authenticated parity staging session
-        if: needs.evidence-contract.outputs.mode == 'admin-read-export' || needs.evidence-contract.outputs.mode == 'match-rating-writes'
+        if: needs.evidence-contract.outputs.mode == 'public-intake-auth' || needs.evidence-contract.outputs.mode == 'admin-read-export' || needs.evidence-contract.outputs.mode == 'match-rating-writes'
         env:
           PARITY_MODE: ${{ needs.evidence-contract.outputs.mode }}
-          STAGING_ADMIN_EMAIL: ${{ vars.STAGING_ADMIN_EMAIL }}
-          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
           STAGING_API_BASE_URL: "https://juprleagues-api-staging.fly.dev"
           STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
           STAGING_SUPABASE_URL: "https://sijpxjxvdtrehmqvirfi.supabase.co"
         run: |
           test -n "$GITHUB_ENV"
-          python scripts/prepare_parity_staging_session.py "$PARITY_MODE"
+          python scripts/prepare_parity_staging_session.py \
+            "$PARITY_MODE" \
+            --report-dir parity-staging-artifacts
 
       - name: Run exact wave and reject skips or flakes
         env:
@@ -299,7 +308,6 @@ jobs:
           JUPR_PARITY_MUTATION_CONFIRMATION: ${{ needs.evidence-contract.outputs.mutation_confirmation }}
           PARITY_MODE: ${{ needs.evidence-contract.outputs.mode }}
           REQUIRED_STAGING_WRITE_WAVE: ${{ needs.evidence-contract.outputs.write_wave }}
-          STAGING_ADMIN_PASSWORD: ${{ needs.evidence-contract.outputs.mode == 'public-intake-auth' && secrets.STAGING_ADMIN_PASSWORD || '' }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           VERCEL_DEPLOYMENT_ID: ${{ needs.evidence-contract.outputs.vercel_deployment_id }}
           VERCEL_DEPLOYMENT_ORIGIN: ${{ needs.evidence-contract.outputs.vercel_deployment_origin }}
@@ -312,6 +320,28 @@ jobs:
             --fly-image-ref "$FLY_IMAGE_REF" \
             --expected-write-wave "$REQUIRED_STAGING_WRITE_WAVE" \
             --report-dir parity-staging-artifacts
+
+      - name: End authenticated parity refresh session
+        if: always()
+        env:
+          PARITY_MODE: ${{ needs.evidence-contract.outputs.mode }}
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_URL: "https://sijpxjxvdtrehmqvirfi.supabase.co"
+        run: |
+          case "$PARITY_MODE" in
+            public-read)
+              echo "No authenticated staging session was prepared for public-read."
+              ;;
+            public-intake-auth|admin-read-export|match-rating-writes)
+              python scripts/prepare_parity_staging_session.py \
+                cleanup \
+                --report-dir parity-staging-artifacts
+              ;;
+            *)
+              echo "Refusing cleanup for an unexpected evidence mode." >&2
+              exit 2
+              ;;
+          esac
 
       - name: Retain success and failure evidence
         if: always()
