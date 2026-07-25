@@ -1,6 +1,9 @@
 name: Deploy FastAPI staging to Fly
 
 on:
+  push:
+    branches:
+      - staging
   workflow_dispatch:
     inputs:
       app_name:
@@ -147,9 +150,15 @@ jobs:
       - name: Configure one least-privilege staging write wave
         shell: bash
         env:
-          SELECTED_WRITE_WAVE: ${{ inputs.write_wave }}
+          # Every automatic staging-branch deploy is forced to the no-write
+          # projection. Named write waves remain manual-only.
+          SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'none' }}
         run: |
           set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$SELECTED_WRITE_WAVE" != "none" ]; then
+            echo "::error title=Automatic write wave rejected::Push-triggered staging deploys must use write_wave=none."
+            exit 2
+          fi
           python scripts/staging_write_waves.py \
             --wave "$SELECTED_WRITE_WAVE" \
             --fly-config fly.staging.toml \
@@ -166,15 +175,15 @@ jobs:
         with:
           version: "0.4.49"
 
-      - name: Validate staging dispatch inputs
+      - name: Resolve and validate staging deployment parameters
         id: validate-inputs
         shell: bash
         env:
-          CLUB_ID_INPUT: ${{ inputs.club_id }}
-          CLUB_SLUG_INPUT: ${{ inputs.club_slug }}
-          FLY_APP_NAME_INPUT: ${{ inputs.app_name }}
-          FLY_ORG_INPUT: ${{ inputs.fly_org }}
-          FLY_PRIMARY_REGION_INPUT: ${{ inputs.primary_region }}
+          CLUB_ID_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.club_id || 'tres_palapas' }}
+          CLUB_SLUG_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.club_slug || 'tres-palapas' }}
+          FLY_APP_NAME_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.app_name || 'juprleagues-api-staging' }}
+          FLY_ORG_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.fly_org || '' }}
+          FLY_PRIMARY_REGION_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.primary_region || 'dfw' }}
         run: |
           set -euo pipefail
 
