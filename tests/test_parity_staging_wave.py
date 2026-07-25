@@ -294,9 +294,11 @@ def test_identity_preflight_queries_the_supplied_immutable_candidate_origin(
     fly_image = "registry.fly.io/juprleagues-api-staging:deployment-1234567890"
     immutable_origin = "https://jupr-a1b2c3d4-pickleballattrespalapas1.vercel.app"
     requested_urls: list[str] = []
+    requested_headers: list[dict[str, str]] = []
 
     def fake_get_json(url: str, headers=None):
         requested_urls.append(url)
+        requested_headers.append(dict(headers or {}))
         if url.endswith("/api/environment"):
             return {
                 "environment": "staging",
@@ -323,6 +325,8 @@ def test_identity_preflight_queries_the_supplied_immutable_candidate_origin(
     assert errors == []
     assert requested_urls[0] == f"{immutable_origin}/api/environment"
     assert EXPECTED_STAGING_WEB_ORIGIN not in requested_urls[0]
+    assert requested_headers[0] == {"x-vercel-protection-bypass": "secret"}
+    assert requested_headers[1] == {}
 
 
 def test_manifest_is_route_specific_and_generic_mutation_modes_are_absent(tmp_path: Path) -> None:
