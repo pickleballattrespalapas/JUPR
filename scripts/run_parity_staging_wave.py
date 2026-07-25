@@ -436,11 +436,13 @@ def _deployment_identity(
     phase: str = "preflight",
 ) -> tuple[dict[str, object], list[str]]:
     try:
+        # This dependency-free identity probe carries no browser cookie jar.
+        # The optional bypass-cookie handshake would redirect instead of
+        # returning the identity JSON, so use the direct automation header only.
         web = _get_json(
             f"{web_origin}/api/environment",
             {
                 "x-vercel-protection-bypass": str(env["VERCEL_AUTOMATION_BYPASS_SECRET"]),
-                "x-vercel-set-bypass-cookie": "true",
             },
         )
         api = _get_json(f"{EXPECTED_STAGING_API_ORIGIN}/health")
