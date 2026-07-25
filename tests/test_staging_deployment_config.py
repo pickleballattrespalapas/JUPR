@@ -204,6 +204,19 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
     assert "fly.staging.toml" in workflow
 
 
+def test_staging_deploy_projects_always_on_read_flags_over_stale_fly_secrets():
+    workflow = (ROOT / ".github/workflows/fly_api_staging_deploy.yml").read_text(
+        encoding="utf-8"
+    )
+
+    for name in (
+        "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES",
+        "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
+    ):
+        assert f'"{name}=${name}"' in workflow
+        assert name not in ALL_STAGING_WRITE_FLAGS
+
+
 def test_staging_deploy_wave_choices_exactly_match_the_code_ledger():
     workflow = (ROOT / ".github/workflows/fly_api_staging_deploy.yml").read_text(
         encoding="utf-8"

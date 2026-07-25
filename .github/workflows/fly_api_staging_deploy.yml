@@ -352,6 +352,10 @@ jobs:
             "JUPR_SUPABASE_JWT_MODE=jwks"
             "JUPR_DEPLOYMENT_GIT_SHA=$GITHUB_SHA"
             "JUPR_STAGING_WRITE_WAVE=$JUPR_STAGING_WRITE_WAVE"
+            # Fly secrets override fly.staging.toml [env]. Re-project the
+            # always-on read surfaces so stale historical secrets cannot win.
+            "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=$JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"
+            "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=$JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"
             "JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL=0"
             "JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION=0"
           )
