@@ -121,13 +121,18 @@ the same staging Supabase project as FastAPI. `/api/environment` must report
 
 ## Deploy the isolated staging API
 
-Run `Deploy FastAPI staging to Fly` from GitHub Actions. The workflow:
+Every push to `staging` automatically runs `Deploy FastAPI staging to Fly` with
+`write_wave=none`. This is the fail-closed candidate deployment path: automatic
+runs cannot select a business-data write wave. Use the workflow's manual
+dispatcher only for one explicitly approved named write wave or for an explicit
+same-candidate restoration to `none`. The workflow:
 
 1. validates all staging secrets and the expected Supabase project ref;
 2. refuses the production Fly app name;
 3. creates or updates only `juprleagues-api-staging`;
-4. derives the exact controlled-write projection for the selected wave and forces
-   every non-selected write flag off;
+4. forces automatic deploys to `none`, otherwise derives the exact
+   controlled-write projection for the manually selected wave, and forces every
+   non-selected write flag off;
 5. waits for health; and
 6. verifies the complete schema inventory, deployment identity, selected wave,
    and public-safe admin status surface.
@@ -150,10 +155,10 @@ none -> one approved named write wave -> none
 ```
 
 Do not dispatch a second write wave from an active write wave and never emulate an
-"enable all" deployment by editing flags. For each dispatch, record the workflow
-run URL, candidate SHA, Fly image ref, machine/release identifier, selected wave,
-allowed action, readback/audit evidence, and the next state. The final ledger row
-must be a separate `none` release whose `/health` readback shows
+"enable all" deployment by editing flags. For each deployment run, record the
+workflow run URL, candidate SHA, Fly image ref, machine/release identifier,
+selected wave, allowed action, readback/audit evidence, and the next state. The
+final ledger row must be a separate `none` release whose `/health` readback shows
 `business_data_write_wave_active=false` and every controlled write flag false.
 
 | Sequence | Candidate SHA | Fly workflow run / image | Selected wave | Approved action and evidence | Required next state |

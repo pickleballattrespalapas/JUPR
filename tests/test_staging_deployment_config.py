@@ -168,13 +168,33 @@ def test_communications_wave_opens_mutations_without_toggling_read_surfaces(
 def test_staging_deploy_workflow_has_production_and_database_guards():
     workflow = (ROOT / ".github/workflows/fly_api_staging_deploy.yml").read_text(encoding="utf-8")
 
+    assert "  push:\n    branches:\n      - staging\n" in workflow
+    assert (
+        "SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'none' }}"
+        in workflow
+    )
+    assert (
+        '[ "$GITHUB_EVENT_NAME" = "push" ] && [ "$SELECTED_WRITE_WAVE" != "none" ]'
+        in workflow
+    )
+    assert "${{ inputs." not in workflow
+    assert workflow.index(
+        '[ "$GITHUB_EVENT_NAME" = "push" ] && [ "$SELECTED_WRITE_WAVE" != "none" ]'
+    ) < workflow.index("python scripts/staging_write_waves.py")
     assert "STAGING_SUPABASE_URL" in workflow
     assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" in workflow
     assert "STAGING_SUPABASE_PROJECT_REF" in workflow
     # Reject every target except the dedicated staging app. This exact allowlist
     # is stricter than the former guard that rejected only the production name.
     assert "FLY_APP_NAME: juprleagues-api-staging" in workflow
-    assert "FLY_APP_NAME_INPUT: ${{ inputs.app_name }}" in workflow
+    for automatic_input in (
+        "CLUB_ID_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.club_id || 'tres_palapas' }}",
+        "CLUB_SLUG_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.club_slug || 'tres-palapas' }}",
+        "FLY_APP_NAME_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.app_name || 'juprleagues-api-staging' }}",
+        "FLY_ORG_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.fly_org || '' }}",
+        "FLY_PRIMARY_REGION_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.primary_region || 'dfw' }}",
+    ):
+        assert automatic_input in workflow
     assert 'if [ "$FLY_APP_NAME_INPUT" != "juprleagues-api-staging" ]; then' in workflow
     assert 'if [ "$GITHUB_REF" != "refs/heads/staging" ]; then' in workflow
     assert "HEAD_SHA=\"$(git rev-parse HEAD)\"" in workflow
