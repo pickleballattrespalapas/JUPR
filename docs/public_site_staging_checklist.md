@@ -176,6 +176,10 @@ authorizes the corresponding route, the possible checks are:
 
 ## Remaining deployment tasks
 
+- Merge and deploy the repair candidate, apply/verify the reviewed 38-name
+  staging migration inventory including `singles_replay_recovery`, and rerun the
+  exact-SHA public/admin read evidence. The superseded `7cedb81` artifacts are
+  diagnostic only.
 - Add and verify both `www` aliases in Vercel/DNS; the two apex domains are
   currently served, while the `www` hosts returned HTTP 502 on 2026-07-24.
 - Reconfirm FastAPI CORS at cutover. Read-only preflight checks passed for the
@@ -186,3 +190,8 @@ authorizes the corresponding route, the possible checks are:
   unsubscribe/preferences through an approved test inbox, decide on Supabase
   leaked-password protection, and establish minimum alerts.
 - Keep Streamlit available as fallback until the custom-domain smoke passes.
+
+The full 45-row administrative parity book governs later Streamlit retirement;
+it is not a reason to make billing, self-serve onboarding, a second-club pilot,
+or still-guarded admin replacements block the initial public Tres Palapas
+launch. Legal/domain/monitoring/approved-inbox prerequisites still apply.

@@ -9,6 +9,7 @@ from jupr_app.domain.admin_activity_log import build_activity_payload, write_adm
 from jupr_app.domain.schedule import get_match_schedule
 from jupr_app.services import ServiceContext, submit_match_batch
 from jupr_app.services.admin_live_ladder_operation_service import (
+    build_match_log_recovery_url,
     deterministic_match_context_id,
     is_staging_write_gate_enabled,
     stable_request_fingerprint,
@@ -381,8 +382,13 @@ def submit_admin_moneyball(
         "result": result.data,
         "match_context_ids": [str(row["context_id"]) for row in match_payloads],
         "correction": {
-            "match_log_url": f"/admin/match-log?context_type=moneyball&context_id={match_payloads[0]['context_id']}",
-            "replay_history_url": f"/admin/replay-history?context_type=moneyball&context_id={match_payloads[0]['context_id']}",
+            "match_log_url": build_match_log_recovery_url(
+                context_type="moneyball",
+                context_ids=[
+                    str(row.get("context_id") or "") for row in match_payloads
+                ],
+            ),
+            "replay_history_url": "/admin/replay-history",
             "instructions": "Correct official Moneyball rows in Match Log, then run and verify Replay History. Never resubmit the night as a correction.",
         },
         "warnings": [write.warning] if write.warning else [],

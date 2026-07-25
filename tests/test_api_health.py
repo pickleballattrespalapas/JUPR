@@ -116,7 +116,7 @@ def test_production_health_attests_exact_read_only_deployment_identity(monkeypat
     monkeypatch.setenv("JUPR_EXPECTED_MIGRATION_CONTRACT", "c" * 64)
     monkeypatch.setenv(
         "JUPR_EXPECTED_MIGRATION_PROFILE",
-        "next-fastapi-readonly-2026-07-24",
+        "next-fastapi-readonly-2026-07-25",
     )
     monkeypatch.setenv(
         "JUPR_ALLOWED_ORIGINS", ",".join(PRODUCTION_ALLOWED_ORIGINS)
@@ -141,7 +141,7 @@ def test_production_health_attests_exact_read_only_deployment_identity(monkeypat
     assert payload["expected_migration_contract"] == "c" * 64
     assert (
         payload["expected_migration_profile"]
-        == "next-fastapi-readonly-2026-07-24"
+        == "next-fastapi-readonly-2026-07-25"
     )
     assert payload["cors_allowed_origins"] == list(PRODUCTION_ALLOWED_ORIGINS)
     assert payload["cors_allowed_origin_regex"] is None

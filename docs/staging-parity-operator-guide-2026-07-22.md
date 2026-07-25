@@ -10,7 +10,7 @@ candidate, project, or active write wave changes.
 The operator does only three things:
 
 1. follow one browser instruction at a time;
-2. report what is visibly shown, usually with one screenshot; and
+2. report whether the expected result is visibly shown; and
 3. stop immediately if the page, data, or result differs from the instruction.
 
 The evidence runner owns candidate binding, migration and flag checks, disposable
@@ -33,7 +33,8 @@ Use these values whenever a form permits them. Do not invent long dated names.
 | Name | `Test` |
 | Email | `test@x.invalid` |
 | Subject / title | `smoke` |
-| Details / note | `test only` |
+| Details | `staging only` |
+| Admin note | `test only` |
 | Requested change / action | `none` |
 | Player name, only when required | `Test Player` |
 
@@ -75,14 +76,15 @@ Each operator prompt must contain only:
 - the exact link or navigation label;
 - one action to perform;
 - the visible result to look for; and
-- what screenshot to send.
+- the failure screenshot or text to send only if the result differs.
 
 The witness receives the same short behavior expectation. They confirm that the
 operator performed the named action and that the expected result or recovery was
 visible. Neither person is asked to transcribe candidate or deployment metadata.
 
-No prompt should ask the operator to inspect source code, network requests,
-database rows, environment variables, workflow IDs, or deployment identifiers.
+The evidence runner captures normal success evidence. No prompt should ask the
+operator to inspect source code, network requests, database rows, environment
+variables, workflow IDs, or deployment identifiers.
 
 ## Stop and recovery rules
 

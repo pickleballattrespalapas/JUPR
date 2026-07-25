@@ -21,9 +21,12 @@ from jupr_app.services.staging_write_guard import (
     staging_match_canonical_normalize_writes_enabled,
 )
 from scripts.staging_write_waves import (
+    ALL_STAGING_WRITE_FLAGS,
+    DORMANT_STAGING_WRITE_FLAGS,
     NO_WRITE_WAVE,
     STAGING_WRITE_WAVES,
     STAGING_WRITE_WAVE_ROUTES,
+    expected_write_flags,
     wave_allows_request,
 )
 from services.api.middleware import StagingWriteWaveMiddleware
@@ -101,6 +104,14 @@ def test_every_unsafe_fastapi_route_has_an_exact_nonstale_wave_classification() 
         },
         (
             "POST",
+            "/admin/clubs/{club_id}/match-uploader/round-robin/preview",
+        ): (
+            "match-player",
+            "league-live-domain",
+            "league-live-submit",
+        ),
+        (
+            "POST",
             "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/matches/publish",
         ): (
             "tournament-official-publish",
@@ -150,14 +161,77 @@ def test_safe_route_bodies_have_no_direct_non_audit_mutating_sink() -> None:
 def test_wave_matching_is_exact_and_unknown_or_none_never_allows_writes() -> None:
     intake_path = "/clubs/tres-palapas/support/intake"
     challenge_path = "/admin/clubs/tres_palapas/challenge-ladder/challenges"
+    round_robin_preview_path = (
+        "/admin/clubs/tres_palapas/match-uploader/round-robin/preview"
+    )
 
     assert wave_allows_request("public-intake-auth", "POST", intake_path)
     assert not wave_allows_request("public-intake-auth", "POST", f"{intake_path}/extra")
     assert not wave_allows_request("public-intake-auth", "GET", intake_path)
     assert not wave_allows_request("public-intake-auth", "POST", challenge_path)
     assert wave_allows_request("challenge-ladder", "POST", challenge_path)
+    assert wave_allows_request(
+        "league-live-domain", "POST", round_robin_preview_path
+    )
+    assert wave_allows_request(
+        "league-live-submit", "POST", round_robin_preview_path
+    )
+    assert not wave_allows_request(
+        "league-live-domain", "POST", f"{round_robin_preview_path}/extra"
+    )
+    assert not wave_allows_request(
+        NO_WRITE_WAVE, "POST", round_robin_preview_path
+    )
+    for uploader_write in ("singles", "batch", "players"):
+        uploader_write_path = (
+            f"/admin/clubs/tres_palapas/match-uploader/{uploader_write}"
+        )
+        assert not wave_allows_request(
+            "league-live-domain", "POST", uploader_write_path
+        )
+        assert not wave_allows_request(
+            "league-live-submit", "POST", uploader_write_path
+        )
     assert not wave_allows_request(NO_WRITE_WAVE, "POST", intake_path)
     assert not wave_allows_request("unknown", "POST", intake_path)
+
+
+def test_league_live_waves_open_preview_only_uploader_capability() -> None:
+    for wave in ("league-live-domain", "league-live-submit"):
+        flags = set(STAGING_WRITE_WAVES[wave])
+        assert "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_PREVIEW" in flags
+        assert "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER" not in flags
+
+
+def test_direct_singles_uploader_gate_stays_dormant_in_every_wave() -> None:
+    flag = "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES"
+
+    assert flag in DORMANT_STAGING_WRITE_FLAGS
+    assert all(flag not in flags for flags in STAGING_WRITE_WAVES.values())
+    assert expected_write_flags("match-player")[flag] is False
+    assert f'{flag} = "0"' in (ROOT / "fly.staging.toml").read_text(
+        encoding="utf-8"
+    )
+    assert f'{flag} = "0"' in (ROOT / "fly.toml").read_text(encoding="utf-8")
+    assert f'{flag}: "0"' in (
+        ROOT / ".github/workflows/fly_api_staging_deploy.yml"
+    ).read_text(encoding="utf-8")
+
+
+def test_match_log_destructive_gate_stays_dormant_in_every_wave() -> None:
+    flag = "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE"
+
+    assert len(ALL_STAGING_WRITE_FLAGS) == 32
+    assert flag in DORMANT_STAGING_WRITE_FLAGS
+    assert all(flag not in flags for flags in STAGING_WRITE_WAVES.values())
+    assert expected_write_flags("match-player")[flag] is False
+    assert f'{flag} = "0"' in (ROOT / "fly.staging.toml").read_text(
+        encoding="utf-8"
+    )
+    assert f'{flag} = "0"' in (ROOT / "fly.toml").read_text(encoding="utf-8")
+    assert f'{flag}: "0"' in (
+        ROOT / ".github/workflows/fly_api_staging_deploy.yml"
+    ).read_text(encoding="utf-8")
 
 
 def _middleware_client() -> TestClient:

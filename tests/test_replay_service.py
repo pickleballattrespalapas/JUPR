@@ -65,7 +65,12 @@ class FakeSupabase:
 
 def test_run_replay_with_job_tracking_success(monkeypatch):
     supabase = FakeSupabase()
-    replay_result = {"skipped_incomplete": 0, "matches_rewritten": 4, "league_ratings_rows": 10}
+    replay_result = {
+        "skipped_incomplete": 0,
+        "matches_rewritten": 4,
+        "league_ratings_rows": 10,
+        "singles_replay_supported": True,
+    }
 
     monkeypatch.setattr(replay_service, "replay_history", lambda **_: replay_result)
 
@@ -87,6 +92,27 @@ def test_run_replay_with_job_tracking_success(monkeypatch):
     assert supabase.state["updates"][0]["status"] == "running"
     assert supabase.state["updates"][1]["status"] == "succeeded"
     assert supabase.state["updates"][1]["result_json"] == replay_result
+
+
+def test_full_replay_without_singles_attestation_marks_job_failed(monkeypatch):
+    supabase = FakeSupabase()
+    monkeypatch.setattr(
+        replay_service,
+        "replay_history",
+        lambda **_: {"matches_rewritten": 4},
+    )
+
+    with pytest.raises(RuntimeError, match="singles recovery"):
+        replay_service.run_replay_with_job_tracking(
+            supabase=supabase,
+            club_id="club-a",
+            df_meta=None,
+            target_reset="ALL (Full System Reset)",
+        )
+
+    assert supabase.state["updates"][0]["status"] == "running"
+    assert supabase.state["updates"][1]["status"] == "failed"
+    assert "singles recovery" in supabase.state["updates"][1]["error_text"]
 
 
 def test_run_replay_with_job_tracking_failure_marks_failed(monkeypatch):

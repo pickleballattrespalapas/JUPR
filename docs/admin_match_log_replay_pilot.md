@@ -1,6 +1,9 @@
 # Match Log + Replay History closed-club pilot
 
-This runbook is for the first Next/FastAPI admin write pilot. It intentionally limits the pilot to Match Log apply/duplicate cleanup and Replay History recovery.
+This runbook is for the first Next/FastAPI admin write pilot. The current
+candidate limits the pilot to ordinary atomic Match Log edits, duplicate
+no-issue resolution, and Replay History inspection/recovery. Duplicate cleanup
+and bulk exclusion are future protocols, not currently authorized actions.
 
 ## Runtime flags
 
@@ -11,6 +14,7 @@ JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT=1
 JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1
 JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY=1
 JUPR_ENABLE_NEXT_ADMIN_REPLAY=1
+JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=0
 ```
 
 Recommended for production pilot once `admin_activity_log` is confirmed available:
@@ -24,6 +28,8 @@ Do **not** enable these yet for this pilot:
 ```text
 JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY
 JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER
+JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES
+JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE
 JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR
 JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER
 JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER
@@ -38,7 +44,7 @@ JUPR_ENABLE_NEXT_ADMIN_TOOLS
 2. The operator has an active `admin_role_assignments` row for `club_id=tres_palapas`.
 3. The role has:
    - `manage_matches` for Match Log edits.
-   - `delete_matches` for duplicate cleanup.
+   - `delete_matches` for future duplicate cleanup and bulk exclusion.
    - `run_replay` for Replay History.
 4. Streamlit admin remains available as fallback.
 5. FastAPI has `SUPABASE_SERVICE_ROLE_KEY` configured.
@@ -110,11 +116,14 @@ Operator steps:
 
 For a later rating-affecting smoke, confirm the response includes a replay job ID and the corresponding Replay History row is `succeeded`. If the page shows **Mandatory replay recovery required**, stop additional edits, type `RECOVER`, and complete the same job before continuing.
 
-### Step 3 — Duplicate cleanup only if preview is correct
+### Step 3 — Future duplicate cleanup protocol; do not run while dormant
 
-Only run duplicate cleanup when the preview's keep/delete IDs are correct.
+Keep `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=0` for the current
+candidate. The steps below are retained for a future candidate only after
+cleanup/exclusion has atomic, idempotent recovery and the gate has been
+explicitly reviewed for a bounded staging wave.
 
-Operator steps:
+Future operator steps:
 
 1. Confirm the preview keeps the oldest/canonical row.
 2. Type `DELETE`.
@@ -122,7 +131,7 @@ Operator steps:
 4. Confirm audit row exists and is flagged for review.
 5. Immediately run Replay History.
 
-### Step 3a — Resolve duplicate false positives as no issue
+### Step 3a — Resolve duplicate false positives as no issue now
 
 If the scanner flags a legitimate repeated matchup, do **not** run cleanup. Mark the group as no issue instead.
 
@@ -130,7 +139,8 @@ Operator steps:
 
 1. Confirm the rows are distinct real matches.
 2. Add a reason, for example: `Legitimate repeated matchup with same players and score`.
-3. Type `NO ISSUE`.
+3. Confirm the accessible Yes/No dialog. The client supplies the internal
+   `NO ISSUE` safeguard.
 4. Confirm FastAPI response is `ok: true` with `mode: duplicate_no_issue`.
 5. Refresh Match Log and confirm the group is no longer listed as an active cleanup candidate.
 6. Confirm an audit row exists in `admin_activity_log` with `action_type=match_duplicate_false_positive_resolved`.
@@ -155,12 +165,15 @@ Operator steps:
 
 ## Rollback path
 
-1. Disable `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY` first.
-2. Disable `JUPR_ENABLE_NEXT_ADMIN_REPLAY` if replay should stop.
-3. Leave `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` temporarily if read-only investigation is still needed.
-4. Fall back to Streamlit correction tools.
-5. If a bad duplicate cleanup happened, restore via database backup/audit data and replay history.
-6. If a false-positive group was marked no issue by mistake, update the corresponding `admin_match_log_duplicate_resolutions` row to `is_active=false` and reload Match Log.
+1. Disable `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE` first.
+2. Disable `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY`.
+3. Disable `JUPR_ENABLE_NEXT_ADMIN_REPLAY` if replay should stop.
+4. Leave `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` temporarily if read-only investigation is still needed.
+5. Fall back to Streamlit correction tools.
+6. If a bad duplicate cleanup happened in a future authorized wave, stop and
+   use the reviewed atomic/idempotent recovery path; do not improvise direct
+   repair.
+7. If a false-positive group was marked no issue by mistake, update the corresponding `admin_match_log_duplicate_resolutions` row to `is_active=false` and reload Match Log.
 
 ## Stop conditions
 

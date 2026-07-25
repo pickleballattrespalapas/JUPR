@@ -165,9 +165,12 @@ function previewToSchedule(preview: AdminMatchUploaderRoundRobinPreview): RrCour
 
 export default function MatchUploaderForm({ apiBase, clubId, players, status }: Props) {
   const firstFormat = status.round_robin_format_options?.[0] || "4-Player";
+  const singlesEnabled = Boolean(status.singles_write_enabled && status.singles_submit_endpoint);
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [knownPlayers, setKnownPlayers] = useState<PublicPlayer[]>(players);
-  const [entryMethod, setEntryMethod] = useState<"singles" | "manual" | "round_robin">("singles");
+  const [entryMethod, setEntryMethod] = useState<"singles" | "manual" | "round_robin">(
+    () => singlesEnabled ? "singles" : "manual"
+  );
   const [context, setContext] = useState<"league" | "popup">("league");
   const [defaultDate, setDefaultDate] = useState(todayIsoDate());
   const [defaultLeague, setDefaultLeague] = useState(status.league_options[0] || "Open");
@@ -254,6 +257,10 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     setMessage(null);
     setResult(null);
     if (!requireReady()) return;
+    if (!singlesEnabled) {
+      setMessage("Direct singles submission is unavailable until its transactional write and replay path is complete.");
+      return;
+    }
     const error = validateSingles(singlesRow);
     if (error) {
       setMessage(error);
@@ -426,7 +433,15 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Match entry setup</h2>
-        <p style={{ color: "#475569" }}>Singles input writes to the separate singles rating. Doubles manual/batch and round-robin entry continue to use the existing doubles/overall rating path.</p>
+        <p style={{ color: "#475569" }}>
+          Doubles manual/batch and round-robin entry use the existing doubles/overall rating path.
+          {singlesEnabled ? " Singles input writes to the separate singles rating." : " Direct singles entry remains unavailable until its write and replay path is transaction-safe."}
+        </p>
+        {status.warnings?.length ? (
+          <ul style={{ color: "#92400e" }}>
+            {status.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+          </ul>
+        ) : null}
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "0.75rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>
@@ -436,7 +451,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
           {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
-          <label><strong>Entry method</strong><br /><select value={entryMethod} onChange={(event) => setEntryMethod(event.target.value as "singles" | "manual" | "round_robin")} style={inputStyle}><option value="singles">Singles match</option><option value="manual">Doubles manual / batch</option><option value="round_robin">Doubles round robin</option></select></label>
+          <label><strong>Entry method</strong><br /><select value={entryMethod} onChange={(event) => setEntryMethod(event.target.value as "singles" | "manual" | "round_robin")} style={inputStyle}>{singlesEnabled ? <option value="singles">Singles match</option> : null}<option value="manual">Doubles manual / batch</option><option value="round_robin">Doubles round robin</option></select></label>
           {entryMethod !== "singles" ? <label><strong>Context</strong><br /><select value={context} onChange={(event) => setContext(event.target.value as "league" | "popup")} style={inputStyle}><option value="league">Official League</option><option value="popup">Pop-Up / Social</option></select></label> : null}
           {entryMethod !== "singles" ? <label><strong>Default date</strong><br /><input value={defaultDate} onChange={(event) => setDefaultDate(event.target.value)} type="date" style={inputStyle} /></label> : null}
           {entryMethod !== "singles" ? <label><strong>Default league</strong><br /><select value={defaultLeague} onChange={(event) => setDefaultLeague(event.target.value)} disabled={context === "popup"} style={inputStyle}>{status.league_options.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
@@ -445,7 +460,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
         </div>
       </article>
 
-      {entryMethod === "singles" ? (
+      {entryMethod === "singles" && singlesEnabled ? (
         <article style={{ ...cardStyle, background: "#f8fafc" }}>
           <h2 style={{ marginTop: 0 }}>Singles match input</h2>
           <p style={{ color: "#475569" }}>Use this for one-on-one games only. This updates each player’s singles rating and writes an official match row with <code>match_format=singles</code>.</p>
@@ -461,7 +476,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
             <label><strong>Score B</strong><br /><input type="number" min={0} max={99} value={singlesRow.scoreB} onChange={(event) => patchSingles({ scoreB: event.target.value })} style={inputStyle} /></label>
             <label><strong>Player B</strong><br /><select value={singlesRow.playerB} onChange={(event) => patchSingles({ playerB: event.target.value })} style={inputStyle}><option value="">Choose player…</option>{playerOptions}</select></label>
           </div>
-          <p><button type="button" onClick={submitSinglesMatch} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Submitting…" : "Submit singles match"}</button></p>
+          <p><button type="button" onClick={submitSinglesMatch} disabled={saving || !accessToken || !singlesEnabled} style={buttonStyle}>{saving ? "Submitting…" : "Submit singles match"}</button></p>
         </article>
       ) : null}
 

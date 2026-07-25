@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from jupr_app.domain.replay_history import replay_history
+from jupr_app.domain.replay_history import FULL_RESET_LABEL, replay_history
 
 
 def _utc_now_iso() -> str:
@@ -130,6 +130,18 @@ def mark_replay_job_failed(*, supabase, job_id: str, error_text: str) -> None:
     ).eq("id", job_id).execute()
 
 
+def _require_complete_replay_result(
+    *, target_reset: str, result: dict[str, Any]
+) -> None:
+    if (
+        str(target_reset).strip() == FULL_RESET_LABEL
+        and result.get("singles_replay_supported") is not True
+    ):
+        raise RuntimeError(
+            "Full replay did not attest replay-managed singles recovery."
+        )
+
+
 
 def is_replay_jobs_table_missing_error(exc: Exception) -> bool:
     code = str(getattr(exc, "code", "") or "").upper()
@@ -187,10 +199,24 @@ def run_replay_with_job_tracking(
     if existing_status == "failed":
         raise RuntimeError(str(job.get("error_text") or "The prior replay attempt failed. Use the guarded recovery action after review."))
     if existing_status in {"running", "succeeded"}:
+        existing_result = dict(job.get("result_json") or {})
+        if existing_status == "succeeded":
+            try:
+                _require_complete_replay_result(
+                    target_reset=target_reset,
+                    result=existing_result,
+                )
+            except RuntimeError as exc:
+                mark_replay_job_failed(
+                    supabase=supabase,
+                    job_id=job_id,
+                    error_text=str(exc),
+                )
+                raise
         return {
             "job_id": job_id,
             "job_status": existing_status,
-            "result": dict(job.get("result_json") or {}),
+            "result": existing_result,
             "idempotent_replay": True,
         }
     claimed = mark_replay_job_running(supabase=supabase, job_id=job_id)
@@ -212,6 +238,10 @@ def run_replay_with_job_tracking(
             df_meta=df_meta,
             target_reset=target_reset,
             progress_cb=progress_cb,
+        )
+        _require_complete_replay_result(
+            target_reset=target_reset,
+            result=result,
         )
         mark_replay_job_succeeded(supabase=supabase, job_id=job_id, result_json=result)
         return {"job_id": job_id, "job_status": "succeeded", "result": result, "idempotent_replay": False}

@@ -30,6 +30,20 @@ def is_admin_match_uploader_enabled() -> bool:
     return _truthy_env("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER")
 
 
+def is_admin_match_uploader_singles_enabled() -> bool:
+    """Keep the non-atomic direct singles writer behind its own dormant gate."""
+    return is_admin_match_uploader_enabled() and _truthy_env(
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES"
+    )
+
+
+def is_admin_match_uploader_preview_enabled() -> bool:
+    """Allow the read-only round-robin planner without opening uploader writes."""
+    return is_admin_match_uploader_enabled() or _truthy_env(
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_PREVIEW"
+    )
+
+
 def is_api_audit_log_required() -> bool:
     return _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG")
 
@@ -231,8 +245,10 @@ def build_admin_match_uploader_status(supabase: Any | None, *, club_id: str) -> 
     if not is_admin_match_uploader_enabled():
         return {
             "enabled": False,
+            "singles_write_enabled": False,
             "status": "guarded_off",
             "submit_endpoint": None,
+            "singles_submit_endpoint": None,
             "max_batch_rows": MAX_MATCH_UPLOADER_BATCH_ROWS,
             "league_options": ["Open", "POPUP"],
             "week_tag_options": [f"Week {idx}" for idx in range(1, 13)] + ["Playoffs", "Finals", "Event"],
@@ -251,8 +267,14 @@ def build_admin_match_uploader_status(supabase: Any | None, *, club_id: str) -> 
         pass
     return {
         "enabled": True,
+        "singles_write_enabled": is_admin_match_uploader_singles_enabled(),
         "status": "ready_for_manual_batch_and_round_robin",
         "submit_endpoint": "/admin/clubs/{club_id}/match-uploader/batch",
+        "singles_submit_endpoint": (
+            "/admin/clubs/{club_id}/match-uploader/singles"
+            if is_admin_match_uploader_singles_enabled()
+            else None
+        ),
         "round_robin_preview_endpoint": "/admin/clubs/{club_id}/match-uploader/round-robin/preview",
         "player_create_endpoint": "/admin/clubs/{club_id}/match-uploader/players",
         "max_batch_rows": MAX_MATCH_UPLOADER_BATCH_ROWS,
@@ -260,7 +282,14 @@ def build_admin_match_uploader_status(supabase: Any | None, *, club_id: str) -> 
         "week_tag_options": [f"Week {idx}" for idx in range(1, 21)] + ["Playoffs", "Finals", "Event"],
         "round_robin_format_options": round_robin_formats,
         "round_robin_expected_games": round_robin_expected_games,
-        "warnings": [],
+        "warnings": (
+            []
+            if is_admin_match_uploader_singles_enabled()
+            else [
+                "Direct singles submission is disabled pending transactional "
+                "write/replay hardening."
+            ]
+        ),
     }
 
 
@@ -328,8 +357,8 @@ def build_admin_match_uploader_round_robin_preview(
     schedule_mode: str = SCHEDULE_MODE_FULL,
     source: str = "next_match_uploader_round_robin_preview",
 ) -> dict[str, Any]:
-    if not is_admin_match_uploader_enabled():
-        raise PermissionError("Next Match Uploader is disabled.")
+    if not is_admin_match_uploader_preview_enabled():
+        raise PermissionError("Next Match Uploader preview is disabled.")
     if not courts:
         raise ValueError("Add at least one round-robin court.")
     if len(courts) > MAX_MATCH_UPLOADER_RR_COURTS:

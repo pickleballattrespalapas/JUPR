@@ -15,6 +15,7 @@ from jupr_app.domain.live_beta_engine import (
     start_next_league_round,
 )
 from jupr_app.services.admin_live_ladder_operation_service import (
+    build_match_log_recovery_url,
     deterministic_match_context_id,
     is_staging_write_gate_enabled,
 )
@@ -534,8 +535,12 @@ def publish_admin_jupr_live_matches(supabase: Any, *, club_id: str, session_key:
         "match_context_ids": contexts,
         "session": _session_payload(updated),
         "correction": {
-            "match_log_url": f"/admin/match-log?context_type=jupr_live&context_id={contexts[0] if contexts else session_key}",
-            "replay_history_url": f"/admin/replay-history?context_type=jupr_live&context_id={contexts[0] if contexts else session_key}",
+            "match_log_url": build_match_log_recovery_url(
+                context_type="jupr_live",
+                context_ids=contexts,
+                fallback_context_id=str(session_key),
+            ),
+            "replay_history_url": "/admin/replay-history",
             "instructions": "Correct official one-off results in Match Log, then run and verify Replay History. Do not republish the session as a correction.",
         },
     }

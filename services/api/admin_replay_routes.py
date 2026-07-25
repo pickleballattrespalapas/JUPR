@@ -53,9 +53,24 @@ def install_admin_replay_routes(app, *, get_supabase_client) -> None:
     """Register guarded replay routes for the Next admin pilot."""
 
     @app.get("/admin/clubs/{club_id}/replay-history")
-    def get_admin_replay_history_status(club_id: str) -> dict[str, Any]:
+    def get_admin_replay_history_status(
+        club_id: str,
+        include_jobs: bool = False,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
         supabase = get_supabase_client() if is_admin_replay_enabled() else None
-        return build_admin_replay_status(supabase, club_id=str(club_id))
+        if include_jobs and is_admin_replay_enabled():
+            _resolve_replay_role_or_403(
+                supabase=supabase,
+                club_id=str(club_id),
+                authorization=authorization,
+                source="next_replay_history_status",
+            )
+        return build_admin_replay_status(
+            supabase,
+            club_id=str(club_id),
+            include_recent_jobs=bool(include_jobs),
+        )
 
     @app.post("/admin/clubs/{club_id}/replay-history")
     def post_admin_replay_history(

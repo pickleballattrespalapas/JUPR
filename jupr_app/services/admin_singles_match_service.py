@@ -5,7 +5,10 @@ from typing import Any
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.singles_match_processing import process_singles_matches
-from jupr_app.services.admin_match_uploader_service import is_admin_match_uploader_enabled, is_api_audit_log_required
+from jupr_app.services.admin_match_uploader_service import (
+    is_admin_match_uploader_singles_enabled,
+    is_api_audit_log_required,
+)
 
 
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
@@ -128,8 +131,11 @@ def submit_admin_singles_match(
     actor_role: str,
     source: str = "next_match_uploader_singles",
 ) -> dict[str, Any]:
-    if not is_admin_match_uploader_enabled():
-        raise PermissionError("Next Match Uploader is disabled.")
+    if not is_admin_match_uploader_singles_enabled():
+        raise PermissionError(
+            "Direct singles submission is disabled pending transactional "
+            "write/replay hardening."
+        )
     clean_match = _normalize_single_match(match)
     player_ids = [int(clean_match["t1_p1"]), int(clean_match["t2_p1"])]
     before_players = _fetch_players(supabase, club_id=str(club_id), player_ids=player_ids)

@@ -12,6 +12,8 @@ from jupr_app.services.admin_match_uploader_service import (
     build_admin_match_uploader_status,
     create_admin_match_uploader_players,
     is_admin_match_uploader_enabled,
+    is_admin_match_uploader_preview_enabled,
+    is_admin_match_uploader_singles_enabled,
     submit_admin_match_uploader_batch,
 )
 from jupr_app.services.admin_player_updates_service import auto_send_player_updates_for_match_payloads
@@ -109,9 +111,7 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
     @app.get("/admin/clubs/{club_id}/match-uploader/status")
     def get_admin_match_uploader_status(club_id: str) -> dict[str, Any]:
         supabase = get_supabase_client() if is_admin_match_uploader_enabled() else None
-        status = build_admin_match_uploader_status(supabase, club_id=str(club_id))
-        status["singles_submit_endpoint"] = "/admin/clubs/{club_id}/match-uploader/singles"
-        return status
+        return build_admin_match_uploader_status(supabase, club_id=str(club_id))
 
     @app.post("/admin/clubs/{club_id}/match-uploader/round-robin/preview")
     def post_admin_match_uploader_round_robin_preview(
@@ -119,8 +119,8 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
         payload: AdminMatchUploaderRoundRobinPreviewRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        if not is_admin_match_uploader_enabled():
-            raise HTTPException(status_code=403, detail="Next Match Uploader is disabled.")
+        if not is_admin_match_uploader_preview_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Uploader preview is disabled.")
         supabase = get_supabase_client()
         _resolve_score_entry_role_or_403(
             supabase=supabase,
@@ -173,8 +173,14 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
         payload: AdminMatchUploaderSinglesRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        if not is_admin_match_uploader_enabled():
-            raise HTTPException(status_code=403, detail="Next Match Uploader is disabled.")
+        if not is_admin_match_uploader_singles_enabled():
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Direct singles submission is disabled pending transactional "
+                    "write/replay hardening."
+                ),
+            )
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_score_entry_role_or_403(
             supabase=supabase,

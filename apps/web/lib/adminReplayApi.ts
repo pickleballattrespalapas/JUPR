@@ -37,6 +37,14 @@ export type AdminReplayResultResponse = {
     matches_snapshots_updated_rows: number;
     league_ratings_rows: number;
     matches_scanned_total: number;
+    singles_replay_supported: boolean;
+    singles_players_updated: number;
+    singles_matches_rewritten: number;
+    singles_matches_scanned_total: number;
+    singles_active_rated: number;
+    singles_active_unrated: number;
+    singles_deleted_skipped: number;
+    singles_invalid_skipped: number;
   } | Record<string, never>;
   warnings: string[];
 };
@@ -71,12 +79,25 @@ async function apiErrorMessage(response: Response): Promise<string> {
   return `${fallback} ${bodyText.slice(0, 240)}`;
 }
 
-async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
-  const apiBase = baseUrl();
+async function fetchJson<T>(
+  path: string,
+  options: { accessToken?: string; apiBase?: string | null; noStore?: boolean } = {}
+): Promise<ApiResult<T>> {
+  const apiBase = options.apiBase ?? baseUrl();
   if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
-    const response = await fetch(url, { next: { revalidate: 30 } });
+    const response = await fetch(
+      url,
+      options.accessToken
+        ? {
+            cache: "no-store",
+            headers: { Authorization: `Bearer ${options.accessToken}` }
+          }
+        : options.noStore
+          ? { cache: "no-store" }
+          : { next: { revalidate: 30 } }
+    );
     if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
     return { data: (await response.json()) as T, error: null };
   } catch (error) {
@@ -84,6 +105,21 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   }
 }
 
-export async function getAdminReplayStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminReplayStatusResponse>> {
-  return fetchJson<AdminReplayStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/replay-history`);
+export async function getAdminReplayStatus(
+  clubId = "tres_palapas",
+  options: {
+    accessToken?: string;
+    apiBase?: string | null;
+    includeJobs?: boolean;
+  } = {}
+): Promise<ApiResult<AdminReplayStatusResponse>> {
+  const query = options.includeJobs ? "?include_jobs=true" : "";
+  return fetchJson<AdminReplayStatusResponse>(
+    `/admin/clubs/${encodeURIComponent(clubId)}/replay-history${query}`,
+    {
+      accessToken: options.accessToken,
+      apiBase: options.apiBase,
+      noStore: Boolean(options.includeJobs)
+    }
+  );
 }

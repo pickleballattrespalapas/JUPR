@@ -13,6 +13,7 @@ from jupr_app.services.admin_live_ladder_operation_service import (
     deterministic_match_context_id,
     deterministic_operation_key,
     is_staging_write_gate_enabled,
+    operation_recovery_handoff,
     reconcile_durable_admin_operation,
     replay_durable_admin_operation_if_present,
     run_durable_admin_operation,
@@ -135,6 +136,34 @@ def test_durable_operation_persists_intent_completion_and_replays_once():
         "intent_live_ladder_operation_admin",
         "complete_live_ladder_operation_admin",
     ]
+
+
+def test_recovery_handoff_filters_match_log_but_labels_replay_as_global():
+    recovery = operation_recovery_handoff(
+        surface="moneyball",
+        entity_id="night-1",
+        match_context_ids=["context-1"],
+    )
+
+    assert recovery["match_log_url"] == (
+        "/admin/match-log?context_type=moneyball&context_id=context-1"
+    )
+    assert recovery["replay_history_url"] == "/admin/replay-history"
+
+
+def test_recovery_handoff_links_every_unique_match_context():
+    recovery = operation_recovery_handoff(
+        surface="moneyball",
+        entity_id="night-1",
+        match_context_ids=["context-1", "context 2", "context-1"],
+    )
+
+    assert recovery["match_context_ids"] == ["context-1", "context 2"]
+    assert recovery["match_log_url"] == (
+        "/admin/match-log?"
+        "context_type=moneyball&context_ids=context-1%2Ccontext+2"
+    )
+    assert recovery["replay_history_url"] == "/admin/replay-history"
 
 
 def test_match_context_is_stable_uuid_v5_for_canonical_matches_column():

@@ -43,9 +43,11 @@ STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE",
     ),
     "league-live-domain": _admin_wave(
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_PREVIEW",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
     ),
     "league-live-submit": _admin_wave(
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_PREVIEW",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT",
     ),
@@ -100,6 +102,14 @@ STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
 }
 
 DORMANT_STAGING_WRITE_FLAGS = (
+    # Match Log duplicate cleanup and rated-match bulk exclusion are not
+    # response-loss safe yet. Keep both destructive routes unavailable even
+    # when the broader match-player apply wave is open.
+    "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE",
+    # Direct singles upload currently inserts the match before separate player
+    # aggregate updates. Keep it unavailable even when the broader uploader
+    # wave is open until that path is one transactional operation.
+    "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES",
     # The current import handoff is a GET-only, write_count=0 projection. Keep
     # its reserved future write gate explicitly off until a mutation exists.
     "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_IMPORT_HANDOFF",
@@ -185,6 +195,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/close"),
     ),
     "league-live-domain": (
+        ("POST", "/admin/clubs/{club_id}/match-uploader/round-robin/preview"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live/roster-suggestion"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions"),
         ("PATCH", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/snapshot"),
@@ -192,6 +203,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}"),
     ),
     "league-live-submit": (
+        ("POST", "/admin/clubs/{club_id}/match-uploader/round-robin/preview"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live/roster-suggestion"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions"),
         ("PATCH", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/snapshot"),

@@ -116,10 +116,15 @@ def fake_load_data(_supabase, _club_id):
 
 def test_match_uploader_status_disabled_is_db_free(monkeypatch) -> None:
     monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", raising=False)
+    monkeypatch.delenv(
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES",
+        raising=False,
+    )
 
     payload = build_admin_match_uploader_status(None, club_id="club")
 
     assert payload["enabled"] is False
+    assert payload["singles_write_enabled"] is False
     assert payload["submit_endpoint"] is None
     assert payload["max_batch_rows"] >= 1
     assert "4-Player" in payload["round_robin_format_options"]
@@ -127,10 +132,16 @@ def test_match_uploader_status_disabled_is_db_free(monkeypatch) -> None:
 
 def test_match_uploader_status_enabled_lists_leagues_and_round_robin(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
+    monkeypatch.delenv(
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES",
+        raising=False,
+    )
 
     payload = build_admin_match_uploader_status(FakeSupabase(fake_storage()), club_id="club")
 
     assert payload["enabled"] is True
+    assert payload["singles_write_enabled"] is False
+    assert payload["singles_submit_endpoint"] is None
     assert payload["status"] == "ready_for_manual_batch_and_round_robin"
     assert payload["submit_endpoint"] == "/admin/clubs/{club_id}/match-uploader/batch"
     assert payload["round_robin_preview_endpoint"] == "/admin/clubs/{club_id}/match-uploader/round-robin/preview"

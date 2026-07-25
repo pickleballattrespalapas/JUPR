@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
+import math
 from typing import Any, Callable
 
 from jupr_app.domain.matches import (
@@ -57,15 +58,23 @@ def _fetch_player_rows(supabase: Any, *, club_id: str, player_ids: set[int]) -> 
     try:
         rows = (
             supabase.table("players")
-            .select("id,name,rating,wins,losses,matches_played,last_game_at,inactive_at,active,singles_rating,singles_wins,singles_losses,singles_matches_played,singles_last_game_at")
+            .select(
+                "id,name,rating,wins,losses,matches_played,last_game_at,"
+                "inactive_at,active,singles_rating,singles_wins,singles_losses,"
+                "singles_matches_played,singles_last_game_at,"
+                "singles_replay_baseline"
+            )
             .eq("club_id", str(club_id))
             .in_("id", sorted(int(pid) for pid in player_ids))
             .execute()
             .data
             or []
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError(
+            "Authoritative singles player baselines are unavailable; "
+            "no singles match was written."
+        ) from exc
     result: dict[int, dict[str, Any]] = {}
     for row in rows:
         try:
@@ -75,11 +84,30 @@ def _fetch_player_rows(supabase: Any, *, club_id: str, player_ids: set[int]) -> 
     return result
 
 
+def _singles_replay_baseline(row: dict[str, Any] | None) -> dict[str, Any]:
+    baseline = (row or {}).get("singles_replay_baseline")
+    return dict(baseline) if isinstance(baseline, dict) else {}
+
+
 def _seed_singles_rating(row: dict[str, Any] | None) -> float:
     row = row or {}
     if row.get("singles_rating") not in (None, ""):
-        return _safe_float(row.get("singles_rating"), 1200.0)
-    return _safe_float(row.get("rating"), 1200.0)
+        raw_rating = row.get("singles_rating")
+    else:
+        baseline = _singles_replay_baseline(row)
+        raw_rating = baseline.get("rating")
+        if raw_rating in (None, ""):
+            raise RuntimeError(
+                "A preserved singles replay baseline is required before the "
+                "first managed singles match."
+            )
+    try:
+        rating = float(raw_rating)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("The singles rating seed is invalid.") from exc
+    if isinstance(raw_rating, bool) or not math.isfinite(rating):
+        raise RuntimeError("The singles rating seed is invalid.")
+    return rating
 
 
 def _seed_stat(row: dict[str, Any] | None, key: str) -> int:
@@ -99,18 +127,17 @@ def _update_player_singles_row(supabase: Any, *, club_id: str, player_id: int, p
             .execute()
         )
 
-    try:
-        result = sb_retry(lambda: _update(payload))
-    except Exception as exc:
-        text = str(exc).lower()
-        if "singles_last_game_at" in text and "column" in text:
-            stripped = dict(payload)
-            stripped.pop("singles_last_game_at", None)
-            result = sb_retry(lambda: _update(stripped))
-        else:
-            raise
-    if not getattr(result, "data", None):
-        supabase.table("players").insert({"club_id": str(club_id), "id": int(player_id), **payload}).execute()
+    result = sb_retry(lambda: _update(payload))
+    updated_ids = {
+        int(row.get("id"))
+        for row in (getattr(result, "data", None) or [])
+        if row.get("id") is not None
+    }
+    if updated_ids != {int(player_id)}:
+        raise RuntimeError(
+            "Singles player aggregate update did not affect exactly one "
+            f"authoritative row for player {int(player_id)}."
+        )
 
 
 def process_singles_matches(
@@ -136,7 +163,14 @@ def process_singles_matches(
         def sb_retry(fn):
             return fn()
 
-    singles_rows = [row for row in (match_list or []) if _is_singles_match(row)]
+    prepared_singles_rows: list[tuple[datetime, int, dict[str, Any]]] = []
+    for row_index, row in enumerate(match_list or []):
+        if not _is_singles_match(row):
+            continue
+        match_dt = coerce_utc_datetime(row.get("date")) or datetime.now(timezone.utc)
+        prepared_singles_rows.append((match_dt, row_index, row))
+    prepared_singles_rows.sort(key=lambda item: (item[0], item[1]))
+
     db_matches: list[dict[str, Any]] = []
     player_updates: dict[int, dict[str, Any]] = {}
     last_game_updates: dict[int, datetime] = {}
@@ -150,12 +184,18 @@ def process_singles_matches(
     bonus_player_elo_total = 0.0
 
     candidate_ids: set[int] = set()
-    for match in singles_rows:
+    for _match_dt, _row_index, match in prepared_singles_rows:
         for key in ("t1_p1", "t2_p1"):
             pid = as_player_id(match.get(key), name_to_id)
             if pid is not None:
                 candidate_ids.add(int(pid))
     live_players = _fetch_player_rows(supabase, club_id=str(club_id), player_ids=candidate_ids)
+    missing_player_ids = sorted(candidate_ids - set(live_players))
+    if missing_player_ids:
+        raise RuntimeError(
+            "Authoritative singles player rows are incomplete; "
+            f"no singles match was written: {missing_player_ids[:10]}"
+        )
 
     def player_row(pid: int) -> dict[str, Any] | None:
         if int(pid) in live_players:
@@ -191,7 +231,7 @@ def process_singles_matches(
             player_updates[pid]["l"] += 1
         return float(player_updates[pid]["r"])
 
-    for match in singles_rows:
+    for match_dt, _row_index, match in prepared_singles_rows:
         p1_raw = as_player_id(match.get("t1_p1"), name_to_id)
         p2_raw = as_player_id(match.get("t2_p1"), name_to_id)
         if p1_raw is None or p2_raw is None:
@@ -209,7 +249,6 @@ def process_singles_matches(
         rating_scope = normalize_rating_scope(match)
         is_unrated = rating_scope == "unrated"
         winner_bonus_elo = 0.0 if is_unrated else _safe_positive_float(match.get("rating_bonus_elo", match.get("winner_bonus_elo")))
-        match_dt = coerce_utc_datetime(match.get("date")) or datetime.now(timezone.utc)
         dt_val = match_dt.isoformat()
         r1, r2 = get_singles_r(p1), get_singles_r(p2)
         d1, d2 = (0.0, 0.0) if is_unrated else compute_team_deltas(
@@ -229,7 +268,6 @@ def process_singles_matches(
             end_r1, end_r2 = r1, r2
             stored_delta = 0.0
             skipped_unrated += 1
-            continue
         else:
             end_r1 = apply_update(p1, d1, p1_outcome, bonus_elo=p1_bonus)
             end_r2 = apply_update(p2, d2, p2_outcome, bonus_elo=p2_bonus)
@@ -241,23 +279,23 @@ def process_singles_matches(
                 bonus_player_elo_total += winner_bonus_elo
             stored_delta = (abs(d1) if p1_outcome is True else abs(d2)) + (winner_bonus_elo if (p1_outcome is True or p2_outcome is True) else 0.0)
 
-        db_matches.append(
-            build_match_row(
-                club_id=str(club_id),
-                dt_val=dt_val,
-                league_name=str(match.get("league") or "Singles").strip() or "Singles",
-                pids=(p1, None, p2, None),
-                scores=(int(score_t1), int(score_t2)),
-                stored_elo_delta=stored_delta,
-                match_type=str(match.get("match_type") or "Singles"),
-                week_tag=str(match.get("week_tag") or "Singles"),
-                start_ratings=(r1, None, r2, None),
-                end_ratings=(end_r1, None, end_r2, None),
-                context={**match, "match_format": "singles"},
-                rating_scope=rating_scope,
-                match_format="singles",
-            )
+        db_match = build_match_row(
+            club_id=str(club_id),
+            dt_val=dt_val,
+            league_name=str(match.get("league") or "Singles").strip() or "Singles",
+            pids=(p1, None, p2, None),
+            scores=(int(score_t1), int(score_t2)),
+            stored_elo_delta=stored_delta,
+            match_type=str(match.get("match_type") or "Singles"),
+            week_tag=str(match.get("week_tag") or "Singles"),
+            start_ratings=(r1, None, r2, None),
+            end_ratings=(end_r1, None, end_r2, None),
+            context={**match, "match_format": "singles"},
+            rating_scope=rating_scope,
+            match_format="singles",
         )
+        db_match["singles_replay_managed"] = True
+        db_matches.append(db_match)
         successful_match_dates.append(dt_val)
 
     if build_write_plan_only:
@@ -271,6 +309,11 @@ def process_singles_matches(
                 )
             current = dict(live_players[int(pid)])
             latest_match_at = last_game_updates.get(int(pid))
+            singles_last_game_at = max_activity_time(
+                current.get("singles_last_game_at")
+                or _singles_replay_baseline(current).get("last_game_at"),
+                latest_match_at,
+            )
             activity_update = build_player_activity_update(current.get("last_game_at"), latest_match_at)
             expected = {
                 "singles_rating": _seed_singles_rating(current),
@@ -288,7 +331,9 @@ def process_singles_matches(
                 "singles_losses": int(stats["l"]),
                 "singles_matches_played": int(stats["mp"]),
                 "singles_last_game_at": (
-                    latest_match_at.isoformat() if latest_match_at else current.get("singles_last_game_at")
+                    singles_last_game_at.isoformat()
+                    if singles_last_game_at
+                    else None
                 ),
                 **activity_update,
             }
@@ -336,13 +381,22 @@ def process_singles_matches(
         existing_row = player_row(int(pid)) or {}
         existing_last_game_at = existing_row.get("last_game_at")
         latest_match_at = last_game_updates.get(int(pid))
+        singles_last_game_at = max_activity_time(
+            existing_row.get("singles_last_game_at")
+            or _singles_replay_baseline(existing_row).get("last_game_at"),
+            latest_match_at,
+        )
         activity_update = build_player_activity_update(existing_last_game_at, latest_match_at)
         payload = {
             "singles_rating": float(stats["r"]),
             "singles_wins": int(stats["w"]),
             "singles_losses": int(stats["l"]),
             "singles_matches_played": int(stats["mp"]),
-            "singles_last_game_at": latest_match_at.isoformat() if latest_match_at else existing_row.get("singles_last_game_at"),
+            "singles_last_game_at": (
+                singles_last_game_at.isoformat()
+                if singles_last_game_at
+                else None
+            ),
         }
         if activity_update:
             payload.update(activity_update)

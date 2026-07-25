@@ -4,6 +4,10 @@ from pathlib import Path
 from scripts.check_parity_manual_book import (
     BOOK_PATH,
     BOOK_ROW_RE,
+    DORMANT_BLOCKER_ROW_RE,
+    EXPECTED_DORMANT_BLOCKER_KEYS,
+    EXPECTED_FLAG_KEYS,
+    EXPECTED_MANUAL_MUTATIONS,
     FIXTURE_ROW_RE,
     FLAG_ROW_RE,
     MANUAL_MUTATION_ROW_RE,
@@ -20,6 +24,18 @@ FLY_IMAGE = "registry.fly.io/juprleagues-api-staging@sha256:123"
 
 def test_manual_book_covers_every_partial_page_and_manifest_entry_once() -> None:
     assert check_book() == []
+
+
+def test_dormant_high_risk_gates_are_structural_blockers_not_manual_shortcuts() -> None:
+    text = BOOK_PATH.read_text(encoding="utf-8")
+    assert {"direct-singles", "match-log-destructive"} <= EXPECTED_FLAG_KEYS
+    assert EXPECTED_DORMANT_BLOCKER_KEYS == {
+        "direct-uploader-singles",
+        "match-log-destructive",
+    }
+    assert "match-uploader-singles" not in EXPECTED_MANUAL_MUTATIONS
+    assert "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES=0" in text
+    assert "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=0" in text
 
 
 def test_manual_book_guard_rejects_missing_duplicate_stale_and_manifest_rows(
@@ -137,6 +153,13 @@ def _completed_book(text: str, candidate_sha: str) -> str:
         lambda match: (
             f"| `flag:{match.group('key')}` | {match.group('staging')} | {match.group('production')} "
             f"| {match.group('disable')} | Verified disabled: flag-evidence-1 | owner-1 |"
+        ),
+        text,
+    )
+    text = DORMANT_BLOCKER_ROW_RE.sub(
+        lambda match: (
+            f"| `blocker:{match.group('key')}` | {match.group('gate')} | `Cleared` "
+            f"| Verified: blocker-evidence-{match.group('key')} |"
         ),
         text,
     )

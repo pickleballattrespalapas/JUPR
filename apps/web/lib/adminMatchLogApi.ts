@@ -61,6 +61,7 @@ export type AdminCorrectionPlan = {
   mode: string;
   apply_endpoint?: string | null;
   duplicate_cleanup_endpoint?: string | null;
+  exclude_endpoint?: string | null;
   duplicate_no_issue_endpoint?: string | null;
   future_apply_endpoint?: string | null;
   editable_fields_planned: string[];
@@ -93,6 +94,9 @@ export type AdminMatchLogResponse = {
     match_id?: number | null;
     league?: string | null;
     week_tag?: string | null;
+    context_type?: string | null;
+    context_id?: string | null;
+    context_ids?: string[];
     start_date?: string | null;
     end_date?: string | null;
     limit: number;
@@ -231,6 +235,9 @@ export async function getAdminMatchLog(params?: {
   matchId?: string | number | null;
   league?: string | null;
   weekTag?: string | null;
+  contextType?: string | null;
+  contextId?: string | number | null;
+  contextIds?: string | Array<string | number> | null;
   startDate?: string | null;
   endDate?: string | null;
   limit?: string | number | null;
@@ -241,6 +248,14 @@ export async function getAdminMatchLog(params?: {
   if (params?.matchId) query.set("match_id", String(params.matchId));
   if (params?.league) query.set("league", String(params.league));
   if (params?.weekTag) query.set("week_tag", String(params.weekTag));
+  if (params?.contextType) query.set("context_type", String(params.contextType));
+  if (params?.contextId) query.set("context_id", String(params.contextId));
+  if (params?.contextIds) {
+    const contextIds = Array.isArray(params.contextIds)
+      ? params.contextIds.map((value) => String(value).trim()).filter(Boolean).join(",")
+      : String(params.contextIds).trim();
+    if (contextIds) query.set("context_ids", contextIds);
+  }
   if (params?.startDate) query.set("start_date", String(params.startDate));
   if (params?.endDate) query.set("end_date", String(params.endDate));
   if (params?.limit) query.set("limit", String(params.limit));

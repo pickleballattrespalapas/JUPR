@@ -27,11 +27,18 @@ test("match uploader exposes every entry mode and recovery language", async ({ p
   if (!/match uploader is disabled/i.test(body)) {
     const entryMethod = page.getByLabel("Entry method");
     await expect(entryMethod).toBeVisible();
-    await expect(entryMethod.locator("option")).toHaveText([
-      "Singles match",
-      "Doubles manual / batch",
-      "Doubles round robin"
-    ]);
+    if (/direct singles (submission|entry).*(disabled|unavailable)/i.test(body)) {
+      await expect(entryMethod.locator("option")).toHaveText([
+        "Doubles manual / batch",
+        "Doubles round robin"
+      ]);
+    } else {
+      await expect(entryMethod.locator("option")).toHaveText([
+        "Singles match",
+        "Doubles manual / batch",
+        "Doubles round robin"
+      ]);
+    }
   }
 });
 

@@ -16,6 +16,8 @@ def test_match_uploader_exposes_all_modes_and_post_commit_email_outcome() -> Non
     assert "match_write_committed" in source
     assert "Outcome unknown: check Match Log before retrying" in source
     assert "Open Player Updates" in source
+    assert "status.singles_write_enabled && status.singles_submit_endpoint" in source
+    assert "Direct singles entry remains unavailable" in source
 
 
 def test_player_editor_exposes_reviewed_atomic_merge_and_recovery() -> None:

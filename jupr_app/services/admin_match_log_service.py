@@ -15,12 +15,17 @@ MATCH_LOG_SELECT = (
     "score_t1,score_t2,notes,deleted_at,context_type,context_id,updated_at"
 )
 MATCH_LOG_MINIMAL_SELECT = "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,deleted_at"
+MATCH_LOG_RECOVERY_SELECT = (
+    f"{MATCH_LOG_MINIMAL_SELECT},context_type,context_id"
+)
 DUPLICATE_RESOLUTIONS_TABLE = "admin_match_log_duplicate_resolutions"
 MAX_FETCH_ROWS = 5000
 MAX_RETURN_ROWS = 1000
 MAX_PATCHES = 100
 MAX_CLEANUP_IDS = 500
 MAX_RESOLUTION_IDS = 20
+MAX_CONTEXT_IDS = 200
+MAX_CONTEXT_ID_LENGTH = 200
 
 
 def _truthy_env(name: str) -> bool:
@@ -33,6 +38,12 @@ def is_admin_match_log_enabled() -> bool:
 
 def is_admin_match_log_apply_enabled() -> bool:
     return _truthy_env("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY")
+
+
+def is_admin_match_log_destructive_enabled() -> bool:
+    return is_admin_match_log_apply_enabled() and _truthy_env(
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE"
+    )
 
 
 def _json_safe(value: Any) -> Any:
@@ -74,32 +85,82 @@ def _resolution_lookup_key(*, dup_key: str, match_ids: list[int]) -> tuple[str, 
     return (str(dup_key or "").strip(), _match_id_key(match_ids))
 
 
-def _fetch_match_rows(supabase: Any, *, club_id: str, fetch_limit: int) -> tuple[list[dict[str, Any]], list[str]]:
+def _normalize_context_ids(
+    *,
+    context_id: str | None = None,
+    context_ids: str | list[str] | tuple[str, ...] | None = None,
+) -> list[str]:
+    raw_values: list[Any] = []
+    if context_id not in (None, ""):
+        raw_values.append(context_id)
+    if isinstance(context_ids, str):
+        raw_values.extend(context_ids.split(","))
+    elif context_ids:
+        for value in context_ids:
+            raw_values.extend(str(value or "").split(","))
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in raw_values:
+        clean = str(value or "").strip()
+        if not clean or clean in seen:
+            continue
+        if len(clean) > MAX_CONTEXT_ID_LENGTH:
+            raise ValueError(
+                f"Each recovery context ID must be {MAX_CONTEXT_ID_LENGTH} characters or fewer."
+            )
+        seen.add(clean)
+        normalized.append(clean)
+    if len(normalized) > MAX_CONTEXT_IDS:
+        raise ValueError(
+            f"No more than {MAX_CONTEXT_IDS} recovery context IDs may be loaded at once."
+        )
+    return normalized
+
+
+def _fetch_match_rows(
+    supabase: Any,
+    *,
+    club_id: str,
+    fetch_limit: int,
+    match_id: int | None = None,
+    context_type: str | None = None,
+    context_ids: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
     warnings: list[str] = []
-    try:
-        rows = _safe_rows(
+    requested_context_type = str(context_type or "").strip().casefold() or None
+    requested_context_ids = _normalize_context_ids(context_ids=context_ids)
+
+    def _query(columns: str):
+        query = (
             supabase.table("matches")
-            .select(MATCH_LOG_SELECT)
+            .select(columns)
             .eq("club_id", str(club_id))
             .is_("deleted_at", None)
-            .order("date", desc=True)
-            .limit(int(fetch_limit))
-            .execute()
         )
+        if match_id is not None:
+            query = query.eq("id", int(match_id))
+        if requested_context_type:
+            query = query.eq("context_type", requested_context_type)
+        if len(requested_context_ids) == 1:
+            query = query.eq("context_id", requested_context_ids[0])
+        elif requested_context_ids:
+            query = query.in_("context_id", requested_context_ids)
+        return query.order("date", desc=True).limit(int(fetch_limit)).execute()
+
+    try:
+        rows = _safe_rows(_query(MATCH_LOG_SELECT))
         return rows, warnings
     except Exception as exc:
         warnings.append(f"Fell back to minimal match columns: {exc.__class__.__name__}")
 
+    fallback_columns = (
+        MATCH_LOG_RECOVERY_SELECT
+        if requested_context_type or requested_context_ids
+        else MATCH_LOG_MINIMAL_SELECT
+    )
     try:
-        rows = _safe_rows(
-            supabase.table("matches")
-            .select(MATCH_LOG_MINIMAL_SELECT)
-            .eq("club_id", str(club_id))
-            .is_("deleted_at", None)
-            .order("date", desc=True)
-            .limit(int(fetch_limit))
-            .execute()
-        )
+        rows = _safe_rows(_query(fallback_columns))
         return rows, warnings
     except Exception as exc:
         warnings.append(f"Could not load matches: {exc.__class__.__name__}")
@@ -129,6 +190,8 @@ def _matches_filter(
     match_id: int | None,
     league: str | None,
     week_tag: str | None,
+    context_type: str | None,
+    context_ids: list[str],
     start_date: str | None,
     end_date: str | None,
 ) -> list[dict[str, Any]]:
@@ -145,6 +208,21 @@ def _matches_filter(
         result = [row for row in result if str(row.get("league") or "").strip() == str(league).strip()]
     if week_tag:
         result = [row for row in result if str(row.get("week_tag") or "").strip() == str(week_tag).strip()]
+    if context_type:
+        expected_context_type = str(context_type).strip().casefold()
+        result = [
+            row
+            for row in result
+            if str(row.get("context_type") or "").strip().casefold()
+            == expected_context_type
+        ]
+    if context_ids:
+        expected_context_ids = set(context_ids)
+        result = [
+            row
+            for row in result
+            if str(row.get("context_id") or "").strip() in expected_context_ids
+        ]
     if start_date:
         result = [row for row in result if str(row.get("date") or "")[:10] >= str(start_date)[:10]]
     if end_date:
@@ -362,10 +440,20 @@ def _correction_plan() -> dict[str, Any]:
         ]
     )
     apply_enabled = is_admin_match_log_apply_enabled()
+    destructive_enabled = is_admin_match_log_destructive_enabled()
     return {
         "mode": "apply_enabled" if apply_enabled else "planning_only",
         "apply_endpoint": "/admin/clubs/{club_id}/match-log/edits" if apply_enabled else None,
-        "duplicate_cleanup_endpoint": "/admin/clubs/{club_id}/match-log/duplicates/cleanup" if apply_enabled else None,
+        "duplicate_cleanup_endpoint": (
+            "/admin/clubs/{club_id}/match-log/duplicates/cleanup"
+            if destructive_enabled
+            else None
+        ),
+        "exclude_endpoint": (
+            "/admin/clubs/{club_id}/match-log/exclude"
+            if destructive_enabled
+            else None
+        ),
         "duplicate_no_issue_endpoint": "/admin/clubs/{club_id}/match-log/duplicates/resolve" if apply_enabled else None,
         "future_apply_endpoint": "/admin/clubs/{club_id}/match-log/edits",
         "editable_fields_planned": [
@@ -406,16 +494,28 @@ def build_admin_match_log(
     match_id: int | None = None,
     league: str | None = None,
     week_tag: str | None = None,
+    context_type: str | None = None,
+    context_id: str | None = None,
+    context_ids: str | list[str] | tuple[str, ...] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     limit: int = 500,
 ) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit or 500), MAX_RETURN_ROWS))
+    requested_context_ids = _normalize_context_ids(
+        context_id=context_id,
+        context_ids=context_ids,
+    )
     filters = {
         "filter": filter_type or "All",
         "match_id": match_id,
         "league": league or None,
         "week_tag": week_tag or None,
+        "context_type": str(context_type or "").strip() or None,
+        "context_id": requested_context_ids[0]
+        if len(requested_context_ids) == 1
+        else None,
+        "context_ids": requested_context_ids,
         "start_date": start_date or None,
         "end_date": end_date or None,
         "limit": safe_limit,
@@ -445,13 +545,22 @@ def build_admin_match_log(
         }
 
     fetch_limit = min(MAX_FETCH_ROWS, max(safe_limit * 5, safe_limit))
-    raw_rows, warnings = _fetch_match_rows(supabase, club_id=str(club_id), fetch_limit=fetch_limit)
+    raw_rows, warnings = _fetch_match_rows(
+        supabase,
+        club_id=str(club_id),
+        fetch_limit=fetch_limit,
+        match_id=match_id,
+        context_type=context_type,
+        context_ids=requested_context_ids,
+    )
     filtered_rows = _matches_filter(
         raw_rows,
         filter_type=filter_type,
         match_id=match_id,
         league=league,
         week_tag=week_tag,
+        context_type=context_type,
+        context_ids=requested_context_ids,
         start_date=start_date,
         end_date=end_date,
     )
@@ -570,6 +679,8 @@ def apply_admin_match_log_duplicate_cleanup(
 ) -> dict[str, Any]:
     if not is_admin_match_log_apply_enabled():
         raise PermissionError("Next Match Log apply is disabled.")
+    if not is_admin_match_log_destructive_enabled():
+        raise PermissionError("Next Match Log destructive actions are disabled.")
     if str(confirmation_text or "").strip().upper() != "DELETE":
         raise ValueError("Type DELETE to confirm duplicate cleanup.")
     requested_ids = sorted({int(match_id) for match_id in (delete_ids or []) if _safe_int(match_id) is not None})

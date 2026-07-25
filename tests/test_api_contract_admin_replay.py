@@ -44,10 +44,11 @@ def test_admin_replay_post_disabled_before_auth(monkeypatch):
 
 
 def test_admin_replay_status_enabled_contract(monkeypatch):
+    storage = fake_storage()
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_REPLAY", "1")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
-    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(fake_storage()))
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
 
     response = TestClient(app).get("/admin/clubs/club/replay-history")
 
@@ -56,6 +57,41 @@ def test_admin_replay_status_enabled_contract(monkeypatch):
     assert payload["enabled"] is True
     assert payload["apply_endpoint"] == "/admin/clubs/{club_id}/replay-history"
     assert "Open" in payload["options"]
+    assert payload["recent_jobs"] == []
+    assert "admin@example.com" not in response.text
+    assert "private detail" not in response.text
+
+
+def test_admin_replay_job_history_requires_permission(monkeypatch):
+    storage = fake_storage()
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_REPLAY", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
+    client = TestClient(app)
+
+    unauthenticated = client.get(
+        "/admin/clubs/club/replay-history?include_jobs=true"
+    )
+    assert unauthenticated.status_code in {401, 403}
+
+    monkeypatch.setattr(
+        "services.api.admin_replay_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(
+            email="admin@example.com", user_id="user-1"
+        ),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_replay_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="super_admin"),
+    )
+    authorized = client.get(
+        "/admin/clubs/club/replay-history?include_jobs=true",
+        headers={"Authorization": "Bearer local"},
+    )
+    assert authorized.status_code == 200
+    assert authorized.json()["recent_jobs"][0]["id"] == "job-private"
+    assert authorized.json()["recent_jobs"][0]["actor_email"] == "admin@example.com"
 
 
 def test_admin_replay_post_contract(monkeypatch):

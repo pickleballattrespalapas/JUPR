@@ -27,6 +27,10 @@ def _install_auth(monkeypatch) -> None:
 
 def test_match_uploader_status_disabled_contract(monkeypatch):
     monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", raising=False)
+    monkeypatch.delenv(
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES",
+        raising=False,
+    )
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
@@ -36,6 +40,8 @@ def test_match_uploader_status_disabled_contract(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["enabled"] is False
+    assert payload["singles_write_enabled"] is False
+    assert payload["singles_submit_endpoint"] is None
     assert payload["submit_endpoint"] is None
     assert "4-Player" in payload["round_robin_format_options"]
 
@@ -58,6 +64,10 @@ def test_match_uploader_submit_disabled_before_auth(monkeypatch):
 
 def test_match_uploader_status_enabled_contract(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
+    monkeypatch.delenv(
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES",
+        raising=False,
+    )
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(fake_storage()))
@@ -67,6 +77,8 @@ def test_match_uploader_status_enabled_contract(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["enabled"] is True
+    assert payload["singles_write_enabled"] is False
+    assert payload["singles_submit_endpoint"] is None
     assert payload["submit_endpoint"] == "/admin/clubs/{club_id}/match-uploader/batch"
     assert payload["round_robin_preview_endpoint"] == "/admin/clubs/{club_id}/match-uploader/round-robin/preview"
     assert payload["player_create_endpoint"] == "/admin/clubs/{club_id}/match-uploader/players"
@@ -95,6 +107,57 @@ def test_match_uploader_round_robin_preview_contract(monkeypatch):
     assert payload["missing_players"] == []
     assert payload["match_count"] == 3
     assert payload["courts"][0]["matches"][0]["t1_p1"]
+
+
+def test_match_uploader_preview_gate_does_not_open_uploader_writes(monkeypatch):
+    monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", raising=False)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_PREVIEW", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr(
+        "services.api.main.create_client",
+        lambda _url, _credential: FakeSupabase(fake_storage()),
+    )
+    _install_auth(monkeypatch)
+    client = TestClient(app)
+
+    status = client.get("/admin/clubs/club/match-uploader/status")
+    assert status.status_code == 200
+    assert status.json()["enabled"] is False
+    assert status.json()["submit_endpoint"] is None
+
+    preview = client.post(
+        "/admin/clubs/club/match-uploader/round-robin/preview",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "source": "test_preview_only",
+            "courts": [
+                {
+                    "court": 1,
+                    "format_type": "4-Player",
+                    "player_names": ["Alex", "Blair", "Casey", "Devon"],
+                }
+            ],
+        },
+    )
+    assert preview.status_code == 200
+    assert preview.json()["match_count"] == 3
+
+    assert client.post(
+        "/admin/clubs/club/match-uploader/batch",
+        headers={"Authorization": "Bearer local"},
+        json={"matches": []},
+    ).status_code == 403
+    assert client.post(
+        "/admin/clubs/club/match-uploader/singles",
+        headers={"Authorization": "Bearer local"},
+        json={"t1_p1": 1, "t2_p1": 2, "score_t1": 11, "score_t2": 7},
+    ).status_code == 403
+    assert client.post(
+        "/admin/clubs/club/match-uploader/players",
+        headers={"Authorization": "Bearer local"},
+        json={"players": [{"name": "Test", "starting_jupr": 3.5}]},
+    ).status_code == 403
 
 
 def test_match_uploader_create_players_contract(monkeypatch):

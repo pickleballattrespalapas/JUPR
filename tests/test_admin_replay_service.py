@@ -55,6 +55,17 @@ def fake_storage():
             {"club_id": "club", "league_name": "Open", "k_factor": 32, "is_active": True},
             {"club_id": "club", "league_name": "Advanced", "k_factor": 24, "is_active": False},
         ],
+        "replay_jobs": [
+            {
+                "id": "job-private",
+                "club_id": "club",
+                "target_reset": "Open",
+                "status": "failed",
+                "actor_email": "admin@example.com",
+                "source": "test",
+                "error_text": "private detail",
+            }
+        ],
         "admin_activity_log": [],
     }
 
@@ -78,6 +89,15 @@ def test_replay_status_enabled_lists_options(monkeypatch) -> None:
     assert payload["enabled"] is True
     assert payload["status"] == "replay_enabled"
     assert payload["options"] == ["ALL (Full System Reset)", "Advanced", "Open"]
+    assert payload["recent_jobs"] == []
+
+    protected = build_admin_replay_status(
+        FakeSupabase(fake_storage()),
+        club_id="club",
+        include_recent_jobs=True,
+    )
+    assert protected["recent_jobs"][0]["id"] == "job-private"
+    assert protected["recent_jobs"][0]["actor_email"] == "admin@example.com"
 
 
 def test_run_replay_requires_confirmation(monkeypatch) -> None:
@@ -136,3 +156,42 @@ def test_run_replay_calls_domain_and_audits(monkeypatch) -> None:
     assert calls and calls[0]["target_reset"] == "Open"
     assert result["job_id"] == "job-1"
     assert storage["admin_activity_log"][0]["action_type"] == "replay_history"
+
+
+def test_full_replay_without_singles_attestation_is_incomplete(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_REPLAY", "1")
+    failed_jobs: list[dict[str, str]] = []
+
+    monkeypatch.setattr(
+        "jupr_app.services.admin_replay_service.run_replay_with_job_tracking",
+        lambda **_kwargs: {
+            "job_id": "job-incomplete",
+            "job_status": "succeeded",
+            "idempotent_replay": False,
+            "result": {
+                "target_reset": "ALL (Full System Reset)",
+                "singles_replay_supported": False,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "jupr_app.services.admin_replay_service.mark_replay_job_failed",
+        lambda **kwargs: failed_jobs.append(kwargs),
+    )
+
+    result = run_admin_replay_history(
+        FakeSupabase(fake_storage()),
+        club_id="club",
+        target_reset="ALL (Full System Reset)",
+        actor_email="admin@example.com",
+        actor_role="super_admin",
+        confirmation_text="REPLAY",
+    )
+
+    assert result["job_status"] == "failed"
+    assert result["ok"] is False
+    assert result["mode"] == "replay_incomplete"
+    assert "singles recovery" in " ".join(result["warnings"]).lower()
+    assert len(failed_jobs) == 1
+    assert failed_jobs[0]["job_id"] == "job-incomplete"
+    assert "singles recovery" in failed_jobs[0]["error_text"].lower()

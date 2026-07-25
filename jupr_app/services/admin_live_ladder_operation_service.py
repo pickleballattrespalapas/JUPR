@@ -6,6 +6,7 @@ import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Callable
+from urllib.parse import urlencode
 from uuid import NAMESPACE_URL, uuid5
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
@@ -110,6 +111,35 @@ def require_staging_write_gate(*, surface_label: str, flag_name: str) -> None:
     )
 
 
+def build_match_log_recovery_url(
+    *,
+    context_type: str,
+    context_ids: list[str] | tuple[str, ...] | None = None,
+    fallback_context_id: str = "",
+) -> str:
+    clean_type = str(context_type or "").strip()
+    contexts: list[str] = []
+    seen: set[str] = set()
+    for value in context_ids or ():
+        clean = str(value or "").strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            contexts.append(clean)
+
+    query: dict[str, str] = {}
+    if clean_type:
+        query["context_type"] = clean_type
+    if len(contexts) == 1:
+        query["context_id"] = contexts[0]
+    elif contexts:
+        query["context_ids"] = ",".join(contexts)
+    else:
+        fallback = str(fallback_context_id or "").strip()
+        if fallback:
+            query["context_id"] = fallback
+    return f"/admin/match-log?{urlencode(query)}" if query else "/admin/match-log"
+
+
 def operation_recovery_handoff(
     *,
     surface: str,
@@ -121,14 +151,22 @@ def operation_recovery_handoff(
         "moneyball": "moneyball",
         "jupr_live_admin": "jupr_live",
     }.get(str(surface), str(surface))
-    contexts = [str(value) for value in (match_context_ids or []) if str(value or "").strip()]
-    primary_context = contexts[0] if contexts else str(entity_id or "")
-    query = f"context_type={context_type}&context_id={primary_context}"
+    contexts: list[str] = []
+    seen: set[str] = set()
+    for value in match_context_ids or []:
+        clean = str(value or "").strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            contexts.append(clean)
     return {
         "outcome": "verify_before_retry",
         "match_context_ids": contexts,
-        "match_log_url": f"/admin/match-log?{query}",
-        "replay_history_url": f"/admin/replay-history?{query}",
+        "match_log_url": build_match_log_recovery_url(
+            context_type=context_type,
+            context_ids=contexts,
+            fallback_context_id=str(entity_id or ""),
+        ),
+        "replay_history_url": "/admin/replay-history",
         "instructions": (
             "Reload the durable operation first. If its outcome is still uncertain, stop: inspect the listed "
             "contexts in Match Log, make any correction there, then run/verify Replay History before retrying."
