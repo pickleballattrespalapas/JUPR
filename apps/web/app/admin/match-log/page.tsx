@@ -18,6 +18,9 @@ type MatchLogPageProps = {
     match_id?: string;
     league?: string;
     week_tag?: string;
+    context_type?: string;
+    context_id?: string;
+    context_ids?: string;
     start_date?: string;
     end_date?: string;
     limit?: string;
@@ -99,7 +102,8 @@ function DuplicateGroupCard({ group, resolved = false }: { group: AdminDuplicate
 export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
   const clubId = "tres_palapas";
   const { accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
-  const [data, setData] = useState<AdminMatchLogResponse | null>(null);
+  const [rawData, setRawData] = useState<AdminMatchLogResponse | null>(null);
+  const [dataScope, setDataScope] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [replayData, setReplayData] = useState<AdminReplayStatusResponse | null>(null);
   const [replayError, setReplayError] = useState<string | null>(null);
@@ -108,14 +112,36 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
   const matchIdParam = searchParams?.match_id || null;
   const leagueParam = searchParams?.league || null;
   const weekTagParam = searchParams?.week_tag || null;
+  const contextTypeParam = searchParams?.context_type || null;
+  const contextIdParam = searchParams?.context_id || null;
+  const contextIdsParam = searchParams?.context_ids || contextIdParam || null;
   const startDateParam = searchParams?.start_date || null;
   const endDateParam = searchParams?.end_date || null;
   const limitParam = searchParams?.limit || "250";
+  const requestScope = [
+    accessToken,
+    sessionLoading ? "loading" : "ready",
+    selectedFilterParam,
+    matchIdParam || "",
+    leagueParam || "",
+    weekTagParam || "",
+    contextTypeParam || "",
+    contextIdsParam || "",
+    startDateParam || "",
+    endDateParam || "",
+    limitParam
+  ].join("\u0000");
+  const data = dataScope === requestScope ? rawData : null;
 
   useEffect(() => {
     let cancelled = false;
 
     if (sessionLoading) {
+      setRawData(null);
+      setDataScope("");
+      setReplayData(null);
+      setError(null);
+      setReplayError(null);
       setLoading(true);
       return () => {
         cancelled = true;
@@ -123,7 +149,8 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
     }
 
     if (!accessToken) {
-      setData(null);
+      setRawData(null);
+      setDataScope("");
       setReplayData(null);
       setError(sessionMessage);
       setReplayError(null);
@@ -133,8 +160,12 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
       };
     }
 
+    setRawData(null);
+    setDataScope("");
+    setReplayData(null);
     setLoading(true);
     setError(null);
+    setReplayError(null);
     Promise.all([
       getAdminMatchLog({
         clubId,
@@ -142,6 +173,8 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
         matchId: matchIdParam,
         league: leagueParam,
         weekTag: weekTagParam,
+        contextType: contextTypeParam,
+        contextIds: contextIdsParam,
         startDate: startDateParam,
         endDate: endDateParam,
         limit: limitParam
@@ -150,7 +183,8 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
     ])
       .then(([matchLogResult, replayResult]) => {
         if (cancelled) return;
-        setData(matchLogResult.data);
+        setRawData(matchLogResult.data);
+        setDataScope(matchLogResult.data ? requestScope : "");
         setError(matchLogResult.error);
         setReplayData(replayResult.data);
         setReplayError(replayResult.error);
@@ -164,6 +198,8 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
     };
   }, [
     accessToken,
+    contextIdsParam,
+    contextTypeParam,
     endDateParam,
     leagueParam,
     limitParam,
@@ -171,6 +207,7 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
     selectedFilterParam,
     sessionLoading,
     sessionMessage,
+    requestScope,
     startDateParam,
     weekTagParam
   ]);
@@ -223,13 +260,13 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
         <>
           <form data-testid="match-log-filters" style={{ ...cardStyle, marginBottom: "1rem", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
             <label>Filter<br />
-              <select name="filter" defaultValue={selectedFilter} style={{ width: "100%" }}>
+              <select key={`filter-${selectedFilterParam}`} name="filter" defaultValue={selectedFilter} style={{ width: "100%" }}>
                 <option>All</option>
                 <option>League</option>
                 <option>Pop-Up</option>
               </select>
             </label>
-            <label>Match ID<br /><input name="match_id" defaultValue={searchParams?.match_id || ""} style={{ width: "100%" }} /></label>
+            <label>Match ID<br /><input key={`match-${matchIdParam || "all"}`} name="match_id" defaultValue={matchIdParam || ""} style={{ width: "100%" }} /></label>
             <label>League<br />
               <select key={`league-${leagueParam || "all"}`} name="league" defaultValue={leagueParam || ""} style={{ width: "100%" }}>
                 <option value="">All leagues</option>
@@ -242,9 +279,16 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
                 {weekTagOptions.map((weekTag) => <option key={weekTag} value={weekTag}>{weekTag}</option>)}
               </select>
             </label>
-            <label>Start date<br /><input name="start_date" type="date" defaultValue={searchParams?.start_date || ""} style={{ width: "100%" }} /></label>
-            <label>End date<br /><input name="end_date" type="date" defaultValue={searchParams?.end_date || ""} style={{ width: "100%" }} /></label>
-            <label>Limit<br /><input name="limit" type="number" min="1" max="1000" defaultValue={searchParams?.limit || "250"} style={{ width: "100%" }} /></label>
+            <details style={{ gridColumn: "1 / -1" }} open={Boolean(contextTypeParam || contextIdsParam)}>
+              <summary style={{ cursor: "pointer", fontWeight: 700 }}>Advanced recovery context</summary>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}>
+                <label>Context type<br /><input key={`context-type-${contextTypeParam || "all"}`} name="context_type" defaultValue={contextTypeParam || ""} style={{ width: "100%" }} /></label>
+                <label>Context IDs (comma-separated)<br /><input key={`context-ids-${contextIdsParam || "all"}`} name="context_ids" defaultValue={contextIdsParam || ""} style={{ width: "100%" }} /></label>
+              </div>
+            </details>
+            <label>Start date<br /><input key={`start-${startDateParam || "all"}`} name="start_date" type="date" defaultValue={startDateParam || ""} style={{ width: "100%" }} /></label>
+            <label>End date<br /><input key={`end-${endDateParam || "all"}`} name="end_date" type="date" defaultValue={endDateParam || ""} style={{ width: "100%" }} /></label>
+            <label>Limit<br /><input key={`limit-${limitParam}`} name="limit" type="number" min="1" max="1000" defaultValue={limitParam} style={{ width: "100%" }} /></label>
             <button type="submit" style={{ padding: "0.5rem 0.75rem", borderRadius: "8px", border: "1px solid #0f172a", background: "#0f172a", color: "white" }}>Apply filters</button>
             <Link href="/admin/match-log" style={{ padding: "0.5rem 0.75rem", borderRadius: "8px", border: "1px solid #64748b", color: "#0f172a", textAlign: "center", textDecoration: "none" }}>Clear filters</Link>
           </form>
@@ -320,6 +364,7 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
           <article style={{ ...cardStyle, marginBottom: "1rem" }}>
             <p style={muted}>Apply endpoint: {data.correction_plan.apply_endpoint || "not enabled"}</p>
             <p style={muted}>Duplicate cleanup endpoint: {data.correction_plan.duplicate_cleanup_endpoint || "not enabled"}</p>
+            <p style={muted}>Rated-match exclude endpoint: {data.correction_plan.exclude_endpoint || "not enabled"}</p>
             <p style={muted}>Duplicate no-issue endpoint: {data.correction_plan.duplicate_no_issue_endpoint || "not enabled"}</p>
             <p><strong>Editable fields:</strong> {data.correction_plan.editable_fields_planned.join(", ")}</p>
             <p><strong>Sample recompute scope:</strong> standings={String(data.correction_plan.recompute_scope_for_sample_edit.standings)}, ratings={String(data.correction_plan.recompute_scope_for_sample_edit.ratings)}</p>
@@ -332,6 +377,7 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
             apiBase={apiBase}
             clubId={clubId}
             applyEnabled={Boolean(data.apply_enabled)}
+            duplicateCleanupEnabled={Boolean(data.correction_plan.duplicate_cleanup_endpoint)}
             duplicatePreview={data.duplicate_delete_preview}
             duplicateGroups={data.duplicate_groups}
             matches={data.matches}
@@ -343,7 +389,7 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
           </div>
 
           <div style={{ marginTop: "1rem" }}>
-            <MatchLogBulkExcludePanel apiBase={apiBase} clubId={clubId} enabled={Boolean(data.apply_enabled)} matches={data.matches} />
+            <MatchLogBulkExcludePanel apiBase={apiBase} clubId={clubId} enabled={Boolean(data.correction_plan.exclude_endpoint)} matches={data.matches} />
           </div>
 
           <div style={{ marginTop: "1rem" }}>

@@ -273,6 +273,9 @@ def fake_supabase() -> FakeSupabase:
 def test_admin_match_log_disabled_is_db_free(monkeypatch) -> None:
     monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", raising=False)
     monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", raising=False)
+    monkeypatch.delenv(
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", raising=False
+    )
 
     payload = build_admin_match_log(None, club_id="club")
 
@@ -286,6 +289,9 @@ def test_admin_match_log_disabled_is_db_free(monkeypatch) -> None:
 def test_admin_match_log_duplicate_scan(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
     monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", raising=False)
+    monkeypatch.delenv(
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", raising=False
+    )
 
     payload = build_admin_match_log(fake_supabase(), club_id="club", filter_type="League", limit=20)
 
@@ -341,6 +347,169 @@ def test_admin_match_log_filter_options_remain_stable_after_value_filters(monkey
         "leagues": ["Open", "POPUP"],
         "week_tags": ["Event", "Week 1"],
     }
+
+
+def test_admin_match_log_filters_exact_recovery_context(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    tables = fake_tables()
+    tables["matches"][0]["context_type"] = "moneyball"
+    tables["matches"][0]["context_id"] = "context-a"
+    tables["matches"][1]["context_type"] = "moneyball"
+    tables["matches"][1]["context_id"] = "context-b"
+    tables["matches"][2]["context_type"] = "jupr_live"
+    tables["matches"][2]["context_id"] = "context-a"
+
+    payload = build_admin_match_log(
+        FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES),
+        club_id="club",
+        context_type="MONEYBALL",
+        context_id="context-a",
+        limit=20,
+    )
+
+    assert payload["filters"]["context_type"] == "MONEYBALL"
+    assert payload["filters"]["context_id"] == "context-a"
+    assert [match["id"] for match in payload["matches"]] == [1]
+
+    missing = build_admin_match_log(
+        FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES),
+        club_id="club",
+        context_type="moneyball",
+        context_id="wrong-context",
+        limit=20,
+    )
+    assert missing["summary"]["returned_matches"] == 0
+    assert missing["matches"] == []
+
+
+def test_admin_match_log_filters_all_unique_recovery_contexts(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    tables = fake_tables()
+    tables["matches"][0]["context_type"] = "moneyball"
+    tables["matches"][0]["context_id"] = "context-a"
+    tables["matches"][1]["context_type"] = "moneyball"
+    tables["matches"][1]["context_id"] = "context-b"
+    tables["matches"][2]["context_type"] = "jupr_live"
+    tables["matches"][2]["context_id"] = "context-a"
+
+    payload = build_admin_match_log(
+        FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES),
+        club_id="club",
+        context_type="MONEYBALL",
+        context_ids=" context-a,context-b,context-a ",
+        limit=20,
+    )
+
+    assert payload["filters"]["context_id"] is None
+    assert payload["filters"]["context_ids"] == ["context-a", "context-b"]
+    assert [match["id"] for match in payload["matches"]] == [2, 1]
+
+
+def test_admin_match_log_pushes_recovery_identity_before_fetch_limit(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    tables = fake_tables()
+    tables["matches"][0]["context_type"] = "moneyball"
+    tables["matches"][0]["context_id"] = "old-operation"
+    template = dict(tables["matches"][0])
+    for index in range(6):
+        tables["matches"].append(
+            {
+                **template,
+                "id": 100 + index,
+                "date": f"2026-04-{index + 1:02d}T10:00:00Z",
+                "context_type": "moneyball",
+                "context_id": f"new-operation-{index}",
+            }
+        )
+
+    payload = build_admin_match_log(
+        FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES),
+        club_id="club",
+        context_type="moneyball",
+        context_id="old-operation",
+        limit=1,
+    )
+
+    assert payload["summary"]["scanned_matches"] == 1
+    assert [match["id"] for match in payload["matches"]] == [1]
+
+
+def test_admin_match_log_pushes_multiple_contexts_before_fetch_limit(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    tables = fake_tables()
+    tables["matches"][0]["context_type"] = "moneyball"
+    tables["matches"][0]["context_id"] = "old-a"
+    tables["matches"][1]["context_type"] = "moneyball"
+    tables["matches"][1]["context_id"] = "old-b"
+    template = dict(tables["matches"][0])
+    for index in range(6):
+        tables["matches"].append(
+            {
+                **template,
+                "id": 100 + index,
+                "date": f"2026-04-{index + 1:02d}T10:00:00Z",
+                "context_id": f"new-operation-{index}",
+            }
+        )
+
+    payload = build_admin_match_log(
+        FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES),
+        club_id="club",
+        context_type="moneyball",
+        context_ids=["old-a", "old-b"],
+        limit=2,
+    )
+
+    assert payload["summary"]["scanned_matches"] == 2
+    assert [match["id"] for match in payload["matches"]] == [2, 1]
+
+
+def test_admin_match_log_pushes_context_type_before_fetch_limit(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    tables = fake_tables()
+    tables["matches"][0]["context_type"] = "moneyball"
+    tables["matches"][0]["context_id"] = "shared-context"
+    tables["matches"].append(
+        {
+            **tables["matches"][0],
+            "id": 100,
+            "date": "2026-04-01T10:00:00Z",
+            "context_type": "jupr_live",
+        }
+    )
+
+    payload = build_admin_match_log(
+        FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES),
+        club_id="club",
+        context_type="MONEYBALL",
+        context_id="shared-context",
+        limit=1,
+    )
+
+    assert payload["summary"]["scanned_matches"] == 1
+    assert [match["id"] for match in payload["matches"]] == [1]
+
+
+def test_admin_match_log_context_type_survives_recovery_column_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    tables = fake_tables()
+    for row in tables["matches"]:
+        row.pop("notes", None)
+    tables["matches"][0]["context_type"] = "moneyball"
+    tables["matches"][0]["context_id"] = "context-a"
+    tables["matches"][1]["context_type"] = "jupr_live"
+    tables["matches"][1]["context_id"] = "context-b"
+    supabase = FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES)
+
+    payload = build_admin_match_log(
+        supabase,
+        club_id="club",
+        context_type="moneyball",
+        limit=20,
+    )
+
+    assert [match["id"] for match in payload["matches"]] == [1]
+    assert payload["warnings"] == ["Fell back to minimal match columns: RuntimeError"]
 
 
 def test_admin_match_log_minimal_fallback_still_excludes_soft_deleted_rows(monkeypatch) -> None:
@@ -630,6 +799,7 @@ def test_club_social_update_requires_event_name_update_result() -> None:
 
 def test_admin_match_log_duplicate_cleanup(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
     tables = fake_tables()
     supabase = FakeSupabase(tables)
 
@@ -685,6 +855,7 @@ def test_admin_match_log_duplicate_no_issue_resolution(monkeypatch) -> None:
 
 def test_admin_match_log_cleanup_rejects_no_issue_resolution(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
     tables = fake_tables()
     supabase = FakeSupabase(tables)
 

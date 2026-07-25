@@ -99,6 +99,26 @@ All 29 implementation orders were present at the reconciled
 deployment-policy hardening can advance an implemented row to automated-ready or
 manual-ready, but never to `Done` without exact-candidate evidence.
 
+The later exact-read candidate
+`7cedb81ca251023806b0953db996a6e7b80c381a` is also historical. Its public and
+authenticated read suites passed, but the fixture/recovery audit found managed
+singles replay, League Live preview gating, and recovery-context defects. The
+repair candidate adds a replay baseline/managed marker, a preview-only Match
+Uploader dependency for League Live, and exact Match Log context filtering while
+keeping Replay global. All candidate-bound evidence must be rerun after that
+repair; the `7cedb81` artifacts cannot close a row.
+
+The repair also makes two incomplete high-risk subflows explicitly fail closed.
+Direct Match Uploader singles is implemented but `Blocked` behind
+`JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES=0` until its writer is atomic.
+Match Log duplicate cleanup and bulk exclusion are implemented but `Blocked`
+behind `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=0` until their recovery is
+atomic and idempotent. Both flags are dormant in every staging wave and in
+production. The singles replay migration is reviewed in the repository but has
+not yet been formally applied and accepted in staging. Tournament Operations
+official singles publishing is a separate, automated-ready CAS path; its manual
+exclude/replay evidence is still deferred while destructive exclusion is off.
+
 ## Page-level closure contracts
 
 The automated column defines evidence that can be built before the final manual test
@@ -125,9 +145,9 @@ email, recovery, and operator-language checks.
 | `data_corrections` | `static-support` | Email/evidence validation, safe URL schemes, rate/deduplication guard, club-owned player validation, persisted intake, wrong-club admin denial, audit, and no-direct-mutation boundaries are tested. | Submit a staging request, move it through review/resolution, and verify source data remains unchanged. |
 | `email_preferences` | `static-support` | Senders emit the Next token URL; invalid/expired/idempotent unsubscribe, category/global semantics, and deliberate legacy-sid handling are contract tested. | Open a staging-redirect email link, confirm masked identity, unsubscribe, and verify future queueing skips it. |
 | `profile_privacy` | `static-support` | Persisted review request, identity/fulfillment status contract, permission/club/audit guards, and no-immediate-public-mutation behavior are tested. | Verify identity, perform the approved alias/hide SOP, and check every public projection before resolving. |
-| `league_manager` | `league-comms` | Draft/save/preview/lifecycle locks, roster, live movement, awards, and recovery handoffs are tested. | Run a disposable staging league through create, live round, close, and recovery. |
-| `match_uploader` | `match-player` | Manual, batch, singles, round-robin, new-player continuation, audit, and email handoff contracts are tested. | Submit disposable rows, verify ratings/audit, then correct through Match Log/Replay. |
-| `match_log` | `match-player` | Filters, duplicate/no-issue, guided edit, social edit/delete, exclude, cleanup, audit, and replay handoffs are tested. | Exercise reversible staging edits/deletes and verify restored final state. |
+| `league_manager` | `league-comms` | Draft/save/preview/lifecycle locks, roster, live movement, awards, preview-only Match Uploader dependency, and recovery handoffs are tested. | Run a disposable staging league through create, automatic round-robin preview, live round, close, and recovery while the full uploader write gate remains off. |
+| `match_uploader` | `match-player` | Manual/batch doubles, round-robin, new-player continuation, audit, email handoff, and the dormant direct-singles guard contracts are tested. Direct rated/unrated singles remains `Blocked` behind `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES` pending an atomic writer and staging migration acceptance. | For the current candidate, validate non-mutating preview/session behavior only. Preserve the future rated/unrated submit→readback→exact-exclude→full-replay protocol, but do not run it or any match-producing uploader acceptance whose cleanup depends on dormant destructive exclusion. |
+| `match_log` | `match-player` | Exact context filters, duplicate/no-issue, guided atomic edit, social edit/delete, managed-singles refusal, audit, and global replay handoffs are tested. Duplicate cleanup and bulk exclusion remain `Blocked` behind `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE` pending atomic idempotent recovery. | Exercise one independently reversible ordinary edit and a prepared duplicate no-issue case. Preserve duplicate-cleanup, bulk-exclusion, and dependent match-producing recovery protocols for a later gate-enabled candidate; do not claim those subflows accepted now. |
 | `player_editor` | `match-player` | Create/update/rating/link/auto-link/merge preview and permission/audit guards are tested. | Use staging-only players; execute merge only with immediate Replay History recovery. |
 | `admin_tools` | `badges-tools` | Roles/activity, reports/CSV, social moderation, badge worker/recompute/lifecycle, and tournament backfill guards are tested. | Exercise isolated staging fixtures, inspect audit rows, and verify recovery runbooks. |
 | `admin_guide` | `badges-tools` | Every migrated admin route, accessible confirmation dialog and internal API safeguard, stop condition, and fallback link is statically guarded. | Staff review terminology and day-of operating sequence. |
@@ -137,7 +157,7 @@ email, recovery, and operator-language checks.
 | `jupr_live_admin` | `live-ladder` | Session create/update, score save, round advance, official publish, audit, and tournament rejection are tested. | Run a disposable one-off session and verify public view plus recovery. |
 | `tournaments` | `tournament-admin` | Read/edit/selection/division/bulk/archive/delete guards and stale-state handling are tested. | Operate a staging draft and confirm Streamlit fallback consistency. |
 | `tournament_manager` | `tournament-admin` | Dedicated setup route, settings/draft/templates/impact review, structured add/remove/reorder controls, payload-equivalent advanced JSON import/export, validation, and publish confirmation are tested. | Build a disposable setup with the guided controls on desktop/mobile, review its summary, then publish it only in the bounded tournament write session. |
-| `tournament_ops` | `tournament-admin` | Draw/import/games/scoring/playoffs/podium/awards/publish/singles/email handoff are tested. | Run a disposable tournament end to end and verify replay recovery. |
+| `tournament_ops` | `tournament-admin` | Draw/import/games/scoring/playoffs/podium/awards/publish/replay-managed singles/email handoff are tested. The official-singles publisher is automated-ready and preserves the managed marker through an atomic CAS RPC. | Exercise independently reversible setup/scoring cases now. Preserve official singles publish→exact Match Log→exclude→full-Replay as a future protocol until destructive exclusion is safely enabled. |
 | `tournament_live` | `tournament-admin` | Draw-scoped live scoring/progression/podium/awards/publish and separation from JUPR Live are tested. | Run the in-play staging runner on desktop/mobile and verify recovery. |
 | `tournament_registration` | `public-tournaments` | Profile resolution, partner-selection wizard, submit validation, duplicate email, closed state, selection integrity, sponsor/refund fields, roster handoff, and edit-link request are tested. | Submit representative doubles/singles registrations, including partner-needed and sponsor/refund cases, in staging. |
 | `tournament_registration_admin` | `tournament-admin` | List/detail/single/bulk/selection edits and ops import handoff are tested with audit guards. | Review and modify disposable registrations, then import them into a draw. |
@@ -169,3 +189,9 @@ Before any page moves to `Done`:
 - Mutating tests use isolated fixtures and include a verified cleanup or recovery step.
 - Email tests use `dry_run` or `staging_redirect`, never an unrestricted live mode.
 - The page's manual acceptance row above is signed off in the consolidated test book.
+
+These gates define full parity and administrative replacement. The earlier Tres
+Palapas public launch remains a separate finish line governed by the public-site
+checklist, legal/domain/monitoring/email prerequisites, and continued Streamlit
+admin fallback. Billing, self-serve onboarding, and a second-club pilot are later
+SaaS work and do not block that public launch.

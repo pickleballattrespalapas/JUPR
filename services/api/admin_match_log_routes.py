@@ -30,6 +30,7 @@ from jupr_app.services.admin_match_log_service import (
     apply_admin_match_log_edits,
     build_admin_match_log,
     is_admin_match_log_apply_enabled,
+    is_admin_match_log_destructive_enabled,
     is_admin_match_log_enabled,
     resolve_admin_match_log_duplicate_false_positive,
 )
@@ -239,6 +240,9 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
         match_id: int | None = Query(default=None),
         league: str | None = Query(default=None),
         week_tag: str | None = Query(default=None),
+        context_type: str | None = Query(default=None, max_length=80),
+        context_id: str | None = Query(default=None, max_length=200),
+        context_ids: str | None = Query(default=None, max_length=8000),
         start_date: str | None = Query(default=None),
         end_date: str | None = Query(default=None),
         limit: int = Query(default=500, ge=1, le=1000),
@@ -253,17 +257,23 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
                 permission=(PERMISSION_MANAGE_MATCHES, PERMISSION_ENTER_SCORES),
                 source="next_match_log_read",
             )
-        return build_admin_match_log(
-            supabase,
-            club_id=str(club_id),
-            filter_type=filter_type,
-            match_id=match_id,
-            league=league,
-            week_tag=week_tag,
-            start_date=start_date,
-            end_date=end_date,
-            limit=limit,
-        )
+        try:
+            return build_admin_match_log(
+                supabase,
+                club_id=str(club_id),
+                filter_type=filter_type,
+                match_id=match_id,
+                league=league,
+                week_tag=week_tag,
+                context_type=context_type,
+                context_id=context_id,
+                context_ids=context_ids,
+                start_date=start_date,
+                end_date=end_date,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/admin/clubs/{club_id}/match-log/player-options")
     def get_admin_match_log_player_options(
@@ -550,6 +560,11 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_match_log_apply_enabled():
             raise HTTPException(status_code=403, detail="Next Match Log apply is disabled.")
+        if not is_admin_match_log_destructive_enabled():
+            raise HTTPException(
+                status_code=403,
+                detail="Next Match Log destructive actions are disabled.",
+            )
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(
             supabase=supabase,
@@ -583,6 +598,11 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_match_log_apply_enabled():
             raise HTTPException(status_code=403, detail="Next Match Log apply is disabled.")
+        if not is_admin_match_log_destructive_enabled():
+            raise HTTPException(
+                status_code=403,
+                detail="Next Match Log destructive actions are disabled.",
+            )
         normalized_confirmation = str(payload.confirmation_text or "").strip().upper()
         if normalized_confirmation != "DELETE":
             raise HTTPException(status_code=400, detail="Type DELETE to confirm rated match exclusion.")
@@ -611,7 +631,14 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
                 note=payload.note,
                 flagged_for_review=True,
             )
-            return {"ok": True, "mode": "matches_excluded", **result}
+            if result.get("recovery_required") or result.get("replay_error"):
+                return {
+                    **result,
+                    "ok": False,
+                    "mode": "matches_excluded_recovery_required",
+                    "recovery_required": True,
+                }
+            return {**result, "ok": True, "mode": "matches_excluded"}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:

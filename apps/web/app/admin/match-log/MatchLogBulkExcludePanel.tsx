@@ -28,6 +28,7 @@ type ExcludeResult = {
   } | null;
   warning?: string | null;
   replay_error?: string | null;
+  recovery_required?: boolean;
 };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -53,6 +54,10 @@ function playerNames(players: Array<{ id: number | null; name: string }>): strin
 function resultSummary(result: ExcludeResult | null): string | null {
   if (!result) return null;
   const deleted = result.deleted_count ?? 0;
+  if (result.recovery_required || result.mode === "matches_excluded_recovery_required") {
+    const detail = result.replay_error ? ` ${result.replay_error}` : "";
+    return `Excluded ${deleted} match(es), but recovery did not complete. Do not retry the exclusion; run Replay History immediately.${detail}`;
+  }
   if (result.replay_error) return `Excluded ${deleted} match(es), but Replay ALL failed. Run Replay History immediately. ${result.replay_error}`;
   if (result.replay_result) return `Excluded ${deleted} match(es) and Replay ALL completed.`;
   return `Excluded ${deleted} match(es).`;
@@ -123,7 +128,7 @@ export default function MatchLogBulkExcludePanel({ apiBase, clubId, enabled, mat
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
         <h2 style={{ marginTop: 0 }}>Bulk exclude is disabled</h2>
         <p style={{ color: "#475569" }}>
-          Excluding rated matches requires <code>JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY=1</code> on FastAPI plus Supabase JWT delete-match authorization.
+          Excluding rated matches requires both <code>JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY=1</code> and <code>JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=1</code> on FastAPI, plus Supabase JWT delete-match authorization.
         </p>
       </article>
     );

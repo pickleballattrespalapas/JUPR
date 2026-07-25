@@ -42,9 +42,11 @@ Enable only one workflow at a time unless a prior workflow is already proven.
 ```text
 JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1
 JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY=1
+JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=0
 JUPR_ENABLE_NEXT_ADMIN_REPLAY=1
 JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1
 JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER=1
+JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES=0
 JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR=1
 JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER=1
 JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER=1
@@ -64,7 +66,7 @@ JUPR_ENABLE_NEXT_ADMIN_TOOLS=1
 
 1. Admin operations shell.
 2. Match Log read, duplicate scan, correction preview, and replay planning.
-3. Guarded Match Log apply and duplicate cleanup.
+3. Guarded ordinary Match Log apply and duplicate no-issue resolution.
 4. Replay History.
 5. Score Entry MVP.
 6. Match Uploader manual/batch score entry.
@@ -75,6 +77,17 @@ JUPR_ENABLE_NEXT_ADMIN_TOOLS=1
 11. Tournament Admin/Ops.
 12. Weekly Recap Admin.
 13. Admin Tools, workers, and backfills.
+
+Direct Match Uploader singles and destructive Match Log duplicate cleanup/bulk
+exclusion are implemented but not part of that sequence. Their dedicated gates
+remain forced to `0` in every wave and in production. Enable them only in a
+later reviewed candidate after the direct singles writer is atomic, destructive
+cleanup/exclusion has atomic idempotent recovery, the singles replay migration
+is formally accepted in staging, and their preserved future protocols pass.
+Until then, defer every manual match-producing acceptance case whose required
+cleanup depends on bulk exclusion. Tournament official singles publishing is a
+separate compare-and-swap path and remains automated-ready, although its manual
+exclude/replay acceptance is also deferred while destructive exclusion is off.
 
 Challenge Ladder Admin now includes the guarded core staging workflow: tier-aware challenge creation with server-side player-status eligibility and explicit override, domain-built email/SMS notice copy, accept-clock transitions, a read-only played-result preview, exact-draft browser review gating, official match publication through the Python match service, direct challenger-win rank swaps, forfeits, server-month-scoped pass resolution, roster append/reactivation, audited cross-tier moves with optional old-tier rank recompression, stale-safe whole-tier roster replacement preview/apply, vacation/reinstate overrides, and a read-only computed tier-movement review queue that hands off to the existing guarded move form. Whole-tier replacement resolves exact club names, blocks affected open challenges, preserves removed rows as inactive, recompresses affected source tiers, and records the reviewed before/after set in centralized Admin Tools activity. The Next workflow remains a staging pilot until exercised against isolated ladder data with Match Log and Replay History recovery checks.
 
@@ -104,7 +117,8 @@ Current migrated slices include:
 - match list/read endpoint with filters,
 - duplicate scan using the existing duplicate-key logic,
 - audited match edit apply,
-- audited duplicate cleanup,
+- audited duplicate no-issue resolution; destructive cleanup is implemented but
+  dormant,
 - server-side Replay History endpoint and page,
 - role-gated replay execution through the Python replay domain function,
 - Match Uploader manual/batch entry through FastAPI and the Python match-processing path.

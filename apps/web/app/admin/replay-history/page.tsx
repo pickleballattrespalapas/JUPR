@@ -15,7 +15,7 @@ export default async function AdminReplayHistoryPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Replay History</h1>
       <p style={{ color: "#334155", maxWidth: "860px" }}>
-        Server-side replay for rebuilding match snapshots, league ratings, and overall player stats after Match Log corrections. This is the Next/FastAPI replacement for the Streamlit Admin Tools replay path.
+        Server-side replay for rebuilding match snapshots, league ratings, overall player stats, and replay-managed singles after Match Log corrections. This is the Next/FastAPI replacement for the Streamlit Admin Tools replay path.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Replay status is temporarily unavailable. {error}</p> : null}
@@ -63,26 +63,6 @@ export default async function AdminReplayHistoryPage() {
             defaultTarget={data.default_target_reset}
           />
 
-          <article style={{ ...cardStyle, marginTop: "1rem" }} data-testid="replay-job-history">
-            <h2 style={{ marginTop: 0 }}>Recent durable replay jobs</h2>
-            {data.recent_jobs?.length ? (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "760px" }}>
-                  <thead><tr>{["Created", "Scope", "Status", "Actor", "Source", "Job ID"].map((label) => <th key={label} style={{ textAlign: "left", borderBottom: "1px solid #cbd5e1", padding: "0.55rem" }}>{label}</th>)}</tr></thead>
-                  <tbody>{data.recent_jobs.map((job) => (
-                    <tr key={job.id} data-replay-status={job.status}>
-                      <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.55rem" }}>{job.created_at ? new Date(job.created_at).toISOString().slice(0, 19).replace("T", " ") : "—"}</td>
-                      <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.55rem" }}>{job.target_reset || "—"}</td>
-                      <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.55rem" }}>{job.status}{job.error_text ? ` · ${job.error_text}` : ""}</td>
-                      <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.55rem" }}>{job.actor_email || "—"}</td>
-                      <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.55rem" }}>{job.source || "—"}</td>
-                      <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.55rem", fontFamily: "monospace" }}>{job.id}</td>
-                    </tr>
-                  ))}</tbody>
-                </table>
-              </div>
-            ) : <p style={{ color: "#475569" }}>No replay jobs have been recorded for this club yet.</p>}
-          </article>
         </>
       ) : null}
 

@@ -23,7 +23,7 @@ IMMUTABLE_IMAGE_REF = (
     f"registry.fly.io/{verifier.PRODUCTION_FLY_APP}@{IMAGE_DIGEST}"
 )
 FLY_CONFIG_SHA = "4" * 64
-MIGRATION_PROFILE = "next-fastapi-readonly-2026-07-24"
+MIGRATION_PROFILE = "next-fastapi-readonly-2026-07-25"
 MIGRATION_CONTRACT = verifier.load_migration_contract(
     ROOT / "config/production_migration_contract.json",
     ROOT / "supabase/migrations",
@@ -172,6 +172,24 @@ def test_production_feature_projection_covers_every_runtime_flag() -> None:
     assert discovered == set(verifier.PRODUCTION_FEATURE_FLAGS)
 
 
+def test_direct_singles_uploader_gate_is_projected_off_in_production() -> None:
+    flag = "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES"
+
+    assert flag in verifier.PRODUCTION_FEATURE_FLAGS
+    assert verifier.expected_production_feature_flags()[flag] is False
+    config = tomllib.loads((ROOT / "fly.toml").read_text(encoding="utf-8"))
+    assert config["env"][flag] == "0"
+
+
+def test_match_log_destructive_gate_is_projected_off_in_production() -> None:
+    flag = "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE"
+
+    assert flag in verifier.PRODUCTION_FEATURE_FLAGS
+    assert verifier.expected_production_feature_flags()[flag] is False
+    config = tomllib.loads((ROOT / "fly.toml").read_text(encoding="utf-8"))
+    assert config["env"][flag] == "0"
+
+
 def test_production_fly_config_rejects_enabled_or_missing_feature_flag(
     tmp_path: Path,
 ) -> None:
@@ -197,11 +215,11 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 37
+    assert len(versions) == 38
     assert versions[-1] == "20261020000000"
-    assert len(names) == 37
+    assert len(names) == 38
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 37
+    assert len(contract["required_ledger_names"]) == 38
     assert contract["allow_additional_ledger_names"] is False
     assert contract["schema_contract_only_repository_migrations"] == (
         "tournament_registrations_player_id_postgrest_reload",

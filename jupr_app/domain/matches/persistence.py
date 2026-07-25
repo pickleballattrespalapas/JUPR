@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import Any, Callable
 
 
-OPTIONAL_MATCH_INSERT_COLUMNS = ("rating_scope", "rating_bonus_elo", "rating_bonus_reason", "match_format")
+OPTIONAL_MATCH_INSERT_COLUMNS = (
+    "rating_scope",
+    "rating_bonus_elo",
+    "rating_bonus_reason",
+    "match_format",
+)
 
 
 def _safe_positive_float(value: Any) -> float:

@@ -4,7 +4,20 @@ This runbook covers the Next/FastAPI Weekly Recap Admin and Player Updates Admin
 
 ## Deployment prerequisites
 
-Apply the canonical migration history through `supabase/migrations/20260720123402_baseline_worker_run_log.sql` to the staging Supabase project before deploying the API. This includes `supabase/migrations/20260719182606_communications_outbox_stale_guards.sql`, which adds optimistic row versions, idempotency keys, delivery-attempt metadata, an atomic verified-subscriber replacement RPC, and explicit service-role-only Data API grants. The forward worker-ledger baseline creates the durable pre-run marker if the historical migration is absent, enables RLS, revokes browser-role access, and preserves service-role access.
+At minimum, apply the communications prerequisites through
+`supabase/migrations/20260720123402_baseline_worker_run_log.sql` to the staging
+Supabase project before deploying the API. This includes
+`supabase/migrations/20260719182606_communications_outbox_stale_guards.sql`,
+which adds optimistic row versions, idempotency keys, delivery-attempt metadata,
+an atomic verified-subscriber replacement RPC, and explicit service-role-only
+Data API grants. The forward worker-ledger baseline creates the durable pre-run
+marker if the historical migration is absent, enables RLS, revokes browser-role
+access, and preserves service-role access.
+
+The final repair candidate additionally requires the reviewed 38-name migration
+inventory, including `singles_replay_recovery`, even though that migration does
+not alter communications tables. Record the connector-assigned staging ledger
+head after application; do not infer it from the repository filename.
 
 FastAPI staging requires:
 
@@ -57,8 +70,10 @@ that bounded session.
 
 ## Deferred manual acceptance
 
-Use disposable staging rows. The operator captures the requested screenshots;
-the evidence runner records audit/provider IDs.
+Use disposable staging rows. The evidence runner retains success artifacts and
+records audit/provider IDs. Ask the operator for a screenshot or log only when a
+visible discrepancy occurs, unless a formal row explicitly names a screenshot
+as its required evidence.
 
 The read-only browser evidence in `apps/web/e2e/communications.staging.spec.ts`
 uses a fresh short-lived `STAGING_ADMIN_BEARER_TOKEN`, a masked runtime identity

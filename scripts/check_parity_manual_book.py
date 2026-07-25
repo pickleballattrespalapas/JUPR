@@ -72,6 +72,8 @@ EXPECTED_FLAG_KEYS = {
     "admin-read",
     "communications",
     "match-player",
+    "direct-singles",
+    "match-log-destructive",
     "league",
     "live-ladder-admin",
     "public-live",
@@ -79,6 +81,10 @@ EXPECTED_FLAG_KEYS = {
     "tournament-ops",
     "tournament-live",
     "email-safety",
+}
+EXPECTED_DORMANT_BLOCKER_KEYS = {
+    "direct-uploader-singles",
+    "match-log-destructive",
 }
 EXPECTED_MIGRATION_KEYS = {
     "baseline-verified-updates",
@@ -118,6 +124,7 @@ EXPECTED_MIGRATION_KEYS = {
     "order-27-tournament-ops",
     "order-28-tournament-live",
     "order-25-public-live",
+    "singles-replay-recovery",
 }
 RECOVERY_REQUIRED_KEYS = {
     "match_canonical_audit",
@@ -201,6 +208,11 @@ FLAG_ROW_RE = re.compile(
     r"^\|\s*`flag:(?P<key>[^`]+)`\s*\|\s*(?P<staging>[^|]*?)\s*\|"
     r"\s*(?P<production>[^|]*?)\s*\|\s*(?P<disable>[^|]*?)\s*\|"
     r"\s*(?P<evidence>[^|]*?)\s*\|\s*(?P<owner>[^|]*?)\s*\|$",
+    re.MULTILINE,
+)
+DORMANT_BLOCKER_ROW_RE = re.compile(
+    r"^\|\s*`blocker:(?P<key>[^`]+)`\s*\|\s*(?P<gate>[^|]*?)\s*\|"
+    r"\s*`(?P<status>Blocked|Cleared)`\s*\|\s*(?P<evidence>[^|]*?)\s*\|$",
     re.MULTILINE,
 )
 CANDIDATE_ROW_RE = re.compile(
@@ -477,6 +489,14 @@ def check_book(
             EXPECTED_FLAG_KEYS,
         )
     )
+    errors.extend(
+        _manifest_key_errors(
+            "Dormant high-risk blocker",
+            list(DORMANT_BLOCKER_ROW_RE.finditer(text)),
+            "key",
+            EXPECTED_DORMANT_BLOCKER_KEYS,
+        )
+    )
 
     return errors
 
@@ -695,6 +715,16 @@ def check_book_complete(
             errors.append(
                 f"Feature-flag prerequisite {key} evidence must be "
                 "`Verified disabled: <config evidence>`."
+            )
+
+    for match in DORMANT_BLOCKER_ROW_RE.finditer(text):
+        key = match.group("key")
+        if match.group("status") != "Cleared":
+            errors.append(f"Dormant high-risk blocker is not Cleared: {key}")
+        if not _verified(match.group("evidence")):
+            errors.append(
+                f"Dormant high-risk blocker {key} requires "
+                "`Verified: <candidate-bound enablement evidence>`."
             )
 
     for heading in ("Fail-closed preflight", "Final reconciliation"):

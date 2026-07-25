@@ -11,6 +11,7 @@ type MatchLogApplyPanelProps = {
   apiBase: string | null;
   clubId: string;
   applyEnabled: boolean;
+  duplicateCleanupEnabled: boolean;
   duplicatePreview?: AdminDuplicateDeletePreview | null;
   duplicateGroups?: AdminDuplicateGroup[];
   matches?: AdminMatchLogMatch[];
@@ -244,7 +245,7 @@ function MatchSummary({ match }: { match: AdminMatchLogMatch }) {
   );
 }
 
-export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, duplicatePreview, duplicateGroups = [], matches = [], recentOperations = [] }: MatchLogApplyPanelProps) {
+export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, duplicateCleanupEnabled, duplicatePreview, duplicateGroups = [], matches = [], recentOperations = [] }: MatchLogApplyPanelProps) {
   const router = useRouter();
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const firstMatch = matches.find((match) => match.id != null) || null;
@@ -697,22 +698,30 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
       <hr style={{ border: 0, borderTop: "1px solid #e2e8f0", margin: "1rem 0" }} />
 
       <h3>Duplicate cleanup</h3>
-      <p style={{ color: "#475569" }}>
-        Current preview would remove {duplicatePreview?.delete_count ?? 0} duplicate row(s): {(duplicatePreview?.delete_ids ?? []).join(", ") || "none"}.
-      </p>
-      <p>
-        <ConfirmAction
-          triggerLabel="Clean duplicate rows from preview"
-          title={`Delete ${duplicatePreview?.delete_count ?? 0} duplicate row(s)?`}
-          description={<>This will delete the exact duplicate row IDs from the current preview: {(duplicatePreview?.delete_ids ?? []).join(", ") || "none"}. Recovery may require Replay History.</>}
-          confirmLabel="Yes, delete duplicate rows"
-          confirmationText="DELETE"
-          tone="danger"
-          disabled={busy || !accessToken || !(duplicatePreview?.delete_ids?.length)}
-          busy={busy}
-          onConfirm={cleanupDuplicates}
-        />
-      </p>
+      {duplicateCleanupEnabled ? (
+        <>
+          <p style={{ color: "#475569" }}>
+            Current preview would remove {duplicatePreview?.delete_count ?? 0} duplicate row(s): {(duplicatePreview?.delete_ids ?? []).join(", ") || "none"}.
+          </p>
+          <p>
+            <ConfirmAction
+              triggerLabel="Clean duplicate rows from preview"
+              title={`Delete ${duplicatePreview?.delete_count ?? 0} duplicate row(s)?`}
+              description={<>This will delete the exact duplicate row IDs from the current preview: {(duplicatePreview?.delete_ids ?? []).join(", ") || "none"}. Recovery may require Replay History.</>}
+              confirmLabel="Yes, delete duplicate rows"
+              confirmationText="DELETE"
+              tone="danger"
+              disabled={busy || !accessToken || !(duplicatePreview?.delete_ids?.length)}
+              busy={busy}
+              onConfirm={cleanupDuplicates}
+            />
+          </p>
+        </>
+      ) : (
+        <p style={{ color: "#475569" }}>
+          Destructive duplicate cleanup is disabled. Match edits and duplicate no-issue resolution remain available.
+        </p>
+      )}
 
       {message ? <p style={{ color: result?.ok ? "#166534" : "#b91c1c" }}>{message}</p> : null}
       {result?.warnings?.length ? (

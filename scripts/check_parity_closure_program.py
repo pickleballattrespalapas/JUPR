@@ -31,6 +31,27 @@ ALLOWED_TRACKS = {
     "live-ladder",
     "tournament-admin",
 }
+REQUIRED_HIGH_RISK_ROW_TOKENS = {
+    "match_uploader": (
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES",
+        "`Blocked`",
+        "atomic writer",
+    ),
+    "match_log": (
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE",
+        "`Blocked`",
+        "atomic idempotent recovery",
+    ),
+    "tournament_ops": (
+        "automated-ready",
+        "atomic CAS RPC",
+    ),
+}
+
+
+def _row_text(text: str, key: str) -> str:
+    match = re.search(rf"^\|\s*`{re.escape(key)}`\s*\|.*$", text, re.MULTILINE)
+    return match.group(0) if match else ""
 
 
 def partial_keys(text: str) -> set[str]:
@@ -51,8 +72,10 @@ def check_program(
     if not program_path.exists():
         return [f"Missing parity closure program: {program_path}"]
 
-    expected = partial_keys(matrix_path.read_text(encoding="utf-8"))
-    rows = list(PROGRAM_ROW_RE.finditer(program_path.read_text(encoding="utf-8")))
+    matrix_text = matrix_path.read_text(encoding="utf-8")
+    program_text = program_path.read_text(encoding="utf-8")
+    expected = partial_keys(matrix_text)
+    rows = list(PROGRAM_ROW_RE.finditer(program_text))
     counts = Counter(match.group("key") for match in rows)
     documented = set(counts)
 
@@ -81,6 +104,18 @@ def check_program(
             f"Expected the current closure wave to contain 45 Partial pages, found {len(expected)}. "
             "Update the program deliberately when matrix statuses change."
         )
+
+    for key, tokens in REQUIRED_HIGH_RISK_ROW_TOKENS.items():
+        if key not in expected:
+            continue
+        for label, text in (("matrix", matrix_text), ("closure program", program_text)):
+            row = _row_text(text, key)
+            missing_tokens = [token for token in tokens if token not in row]
+            if missing_tokens:
+                errors.append(
+                    f"{label.title()} row {key} is missing high-risk contract token(s): "
+                    + ", ".join(missing_tokens)
+                )
 
     return errors
 

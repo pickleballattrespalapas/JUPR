@@ -93,7 +93,7 @@ timestamps. For example, the reconciled staging ledger records
 repository filename begins `20260719155515`. Treating those numbers as equal
 would incorrectly request duplicate migration application.
 
-The reviewed profile therefore requires the exact 37 logical ledger names
+The reviewed profile therefore requires the exact 38 logical ledger names
 known from the reconciled environment and rejects missing, duplicate, malformed,
 or additional names. Its repository-content fingerprint hashes every canonical
 migration filename and its SQL bytes, forcing an explicit profile review when
@@ -170,7 +170,7 @@ reviewed production-owner bootstrap decision before this workflow can be used.
 Read-only reconciliation of production Supabase project
 `dnoockbwfenunhcibwfn` found exactly one migration-ledger row:
 `20250220 badges_v1`. The reviewed deployment contract requires the exact
-37-name Next/FastAPI ledger profile and its reviewed head. Although the
+38-name Next/FastAPI ledger profile and its reviewed head. Although the
 registration `player_id` column/index/unique-index probes currently pass and
 no duplicate tournament/player groups were found, that schema shape is not a
 substitute for ledger provenance. Do not set

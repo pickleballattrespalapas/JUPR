@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "profile": "next-fastapi-readonly-2026-07-24",
-  "repository_migration_content_sha256": "d812dba0456c113639482aed7984797d2b3216729ffdb29bd235d5560f385ddc",
+  "profile": "next-fastapi-readonly-2026-07-25",
+  "repository_migration_content_sha256": "506c17fe4c1ac5867ea84a2158c41e3d387c6d6559031077e5c44cfa49aec41b",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -37,6 +37,7 @@
     "selection_relationship_update_lock_scope",
     "selection_update_transaction_guards",
     "server_only_data_api_lockdown",
+    "singles_replay_recovery",
     "tournament_admin_operations",
     "tournament_live_operations",
     "tournament_operations_guard_surface",

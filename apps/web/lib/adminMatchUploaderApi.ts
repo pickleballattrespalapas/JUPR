@@ -1,5 +1,6 @@
 export type AdminMatchUploaderStatusResponse = {
   enabled: boolean;
+  singles_write_enabled?: boolean;
   status: string;
   submit_endpoint?: string | null;
   singles_submit_endpoint?: string | null;

@@ -23,6 +23,7 @@ from jupr_app.domain.challenge_ladder import (
 from jupr_app.domain.tier_movement import compute_out_of_tier_streak
 from jupr_app.services.context import ServiceContext
 from jupr_app.services.admin_live_ladder_operation_service import (
+    build_match_log_recovery_url,
     deterministic_match_context_id,
     is_staging_write_gate_enabled,
     stable_request_fingerprint,
@@ -1661,8 +1662,12 @@ def record_admin_challenge_ladder_result(
         "match_context_ids": contexts,
         "rank_result": rank_result,
         "correction": {
-            "match_log_url": f"/admin/match-log?context_type=challenge_ladder&context_id={contexts[0] if contexts else challenge_id}",
-            "replay_history_url": f"/admin/replay-history?context_type=challenge_ladder&context_id={contexts[0] if contexts else challenge_id}",
+            "match_log_url": build_match_log_recovery_url(
+                context_type="challenge_ladder",
+                context_ids=contexts,
+                fallback_context_id=str(challenge_id),
+            ),
+            "replay_history_url": "/admin/replay-history",
             "instructions": "Correct official ladder matches in Match Log, then run and verify Replay History before changing ladder state again.",
         },
         "warnings": [warning] if warning else [],
