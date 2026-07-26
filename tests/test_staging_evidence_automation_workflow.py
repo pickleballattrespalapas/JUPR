@@ -1,5 +1,8 @@
 import ast
+import json
+import os
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -34,6 +37,22 @@ def _literal_assignment(source: str, name: str) -> object:
         ):
             return ast.literal_eval(statement.value)
     raise AssertionError(f"Missing literal assignment: {name}")
+
+
+def _controller_delegation_filter(workflow: str) -> str:
+    step = _between(
+        workflow,
+        "      - name: Verify automated controller delegation\n",
+        "\n      - name:",
+    )
+    match = re.search(
+        r"jq -e \\\n\s+'(?P<filter>select\(.+?\) \| \.id)' "
+        r'<<<"\$RUN_JSON" >/dev/null',
+        step,
+        flags=re.DOTALL,
+    )
+    assert match is not None
+    return match.group("filter")
 
 
 def test_controller_is_reopened_issue_only_with_exact_owner_controls() -> None:
@@ -174,7 +193,8 @@ def test_controller_children_use_verified_dynamic_locks() -> None:
         assert "|| 'jupr-staging-api-and-parity-evidence'" in child
         assert "cancel-in-progress: false" in child
         assert "Verify automated controller delegation" in child
-        assert '.name == "Automated Staging Evidence"' in child
+        assert ".workflow_id == 320947530" in child
+        assert '.name == "Automated Staging Evidence"' not in child
         assert (
             '.path == ".github/workflows/staging-evidence-automation.yml'
             '@rollback-feb8"'
@@ -196,6 +216,50 @@ def test_controller_children_use_verified_dynamic_locks() -> None:
     )
     assert "group: jupr-staging-fly-deploy" in deploy_job
     assert "cancel-in-progress: false" in deploy_job
+
+
+def test_controller_children_accept_live_run_name_but_require_workflow_id() -> None:
+    run = {
+        "id": 30218492999,
+        "workflow_id": 320947530,
+        "name": "Staging evidence control #1050",
+        "display_title": "Staging evidence control #1050",
+        "path": ".github/workflows/staging-evidence-automation.yml",
+        "event": "issues",
+        "status": "in_progress",
+        "run_attempt": 1,
+        "head_branch": "rollback-feb8",
+        "actor": {"id": 250933369},
+        "triggering_actor": {"id": 250933369},
+        "repository": {"id": 1120897513},
+    }
+    environment = {
+        **os.environ,
+        "ORCHESTRATION_RUN_ID": str(run["id"]),
+    }
+
+    for child_path in (FLY_CHILD_PATH, PARITY_CHILD_PATH):
+        jq_filter = _controller_delegation_filter(_read(child_path))
+        accepted = subprocess.run(
+            ["jq", "-e", jq_filter],
+            input=json.dumps(run),
+            text=True,
+            capture_output=True,
+            check=False,
+            env=environment,
+        )
+        assert accepted.returncode == 0, accepted.stderr
+
+        wrong_workflow = {**run, "workflow_id": 999}
+        rejected = subprocess.run(
+            ["jq", "-e", jq_filter],
+            input=json.dumps(wrong_workflow),
+            text=True,
+            capture_output=True,
+            check=False,
+            env=environment,
+        )
+        assert rejected.returncode != 0
 
 
 def test_recovery_is_automatic_and_can_only_dispatch_fixed_none() -> None:

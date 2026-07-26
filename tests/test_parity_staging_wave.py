@@ -672,7 +672,7 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     assert "environment: staging" in workflow
     assert "orchestration_run_id:" in workflow
     assert "jupr-staging-orchestration-child-{0}" in workflow
-    assert "Automated Staging Evidence" in workflow
+    assert ".workflow_id == 320947530" in workflow
     assert (
         ".github/workflows/staging-evidence-automation.yml@rollback-feb8"
         in workflow
