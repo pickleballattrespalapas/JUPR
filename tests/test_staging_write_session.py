@@ -345,6 +345,67 @@ def test_authorization_treats_a_newer_live_body_as_superseded_noop() -> None:
     }
 
 
+def test_authorization_treats_open_edit_companion_from_close_as_noop() -> None:
+    nonce = str(uuid4())
+    open_body = _body(nonce=nonce)
+    close_body = _body(
+        command="close",
+        expected_write_wave="league-manager",
+        write_wave="none",
+        nonce=nonce,
+    )
+    request, calls = _request(_issue(body=open_body))
+
+    result = session.authorize_event(
+        _event(
+            action="edited",
+            body=open_body,
+            previous_body=close_body,
+        ),
+        run_attempt=1,
+        request_json=request,
+        now=NOW,
+    )
+
+    assert result == {
+        "authorized": False,
+        "superseded": True,
+        "issue_number": session.CONTROL_ISSUE_NUMBER,
+    }
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "previous_body",
+    [
+        _body(),
+        _body(
+            command="advance",
+            expected_write_wave="league-manager",
+            write_wave="league-awards",
+        ),
+        "not a control command",
+    ],
+)
+def test_open_edit_companion_rejects_active_or_malformed_prior_command(
+    previous_body: str,
+) -> None:
+    open_body = _body()
+    request, _ = _request(_issue(body=open_body))
+
+    with pytest.raises(ContractError):
+        session.authorize_event(
+            _event(
+                action="edited",
+                body=open_body,
+                previous_body=previous_body,
+            ),
+            run_attempt=1,
+            request_json=request,
+            now=NOW,
+        )
+
+
 @pytest.mark.parametrize(
     "case",
     [
