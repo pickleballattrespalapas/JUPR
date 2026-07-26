@@ -14,6 +14,10 @@ from jupr_app.domain.ratings import calculate_hybrid_elo
 FULL_RESET_LABEL = "ALL (Full System Reset)"
 
 
+class ReplayLeaseLostError(RuntimeError):
+    """Raised before a replay write when its durable lease is no longer valid."""
+
+
 def _safe_int(value: Any) -> int | None:
     if value in (None, ""):
         return None
@@ -243,6 +247,8 @@ def replay_history(
     df_meta: Optional[pd.DataFrame],
     target_reset: str,
     progress_cb: Optional[Callable[[float], None]] = None,
+    write_fence: Optional[Dict[str, str]] = None,
+    before_write_batch: Optional[Callable[[], None]] = None,
 ) -> Dict[str, Any]:
     """
     Replays match history in chronological order and:
@@ -266,6 +272,7 @@ def replay_history(
     RPC_MATCH_SNAPSHOTS = "bulk_update_match_snapshots"
     RPC_PLAYERS_STATS = "bulk_update_players_stats"
     RPC_PLAYER_SINGLES_STATS = "bulk_update_player_singles_stats"
+    RPC_FENCED_WRITE_BATCH = "apply_replay_write_batch_atomic"
 
     # ------------------------------
     # Helpers
@@ -309,6 +316,21 @@ def replay_history(
                 if attempt == RETRIES - 1:
                     raise
                 time.sleep(0.35 * (2**attempt) + random.random() * 0.15)
+
+    def _is_replay_fence_error(exc: Exception) -> bool:
+        parts = [str(exc)]
+        args = getattr(exc, "args", ())
+        if args and isinstance(args[0], dict):
+            parts.extend(str(value) for value in args[0].values())
+        parts.extend(
+            str(getattr(exc, key, "") or "")
+            for key in ("code", "message", "details", "hint")
+        )
+        searchable = " ".join(parts).upper()
+        return (
+            "JUPR_REPLAY_WRITE_FENCE_LOST" in searchable
+            or "REPLAY_LEASE_LOST" in searchable
+        )
 
     def _load_exact_pages(
         query_factory: Callable[[int, int], Any],
@@ -357,6 +379,47 @@ def replay_history(
     target_reset_raw = str(target_reset).strip()
     full_reset = target_reset_raw == FULL_RESET_LABEL
     target_league_norm = _norm_league(target_reset_raw)
+    fence_params: dict[str, str] | None = None
+    if write_fence is not None:
+        if not isinstance(write_fence, dict):
+            raise ValueError("Replay write fence must be an exact mapping.")
+        fence_params = {
+            "p_job_id": str(write_fence.get("job_id") or "").strip(),
+            "p_club_id": str(club_id),
+            "p_lease_token": str(
+                write_fence.get("lease_token") or ""
+            ).strip(),
+            "p_worker_id": str(write_fence.get("worker_id") or "").strip(),
+            "p_target_reset": target_reset_raw,
+        }
+        if not all(fence_params.values()):
+            raise ValueError(
+                "Replay write fence requires job, club, lease token, worker, "
+                "and target."
+            )
+
+    def _before_mutation() -> None:
+        if before_write_batch is not None:
+            before_write_batch()
+
+    def _fenced_rpc(params: dict[str, Any], *, label: str) -> Any:
+        if fence_params is None:
+            raise RuntimeError("Replay fenced RPC called without a write fence.")
+        try:
+            return _retry(
+                lambda: supabase.rpc(
+                    RPC_FENCED_WRITE_BATCH,
+                    {**fence_params, **params},
+                ).execute(),
+                label=label,
+            )
+        except Exception as exc:
+            if _is_replay_fence_error(exc):
+                raise ReplayLeaseLostError(
+                    "Replay mutation was rejected because this worker no "
+                    "longer owns the active database lease."
+                ) from exc
+            raise
 
     # ---------------------------------------------------------
     # Load players (only what we need)
@@ -471,6 +534,9 @@ def replay_history(
     matches_to_update: list[dict[str, Any]] = []
     skipped_incomplete_scope = 0
     matches_scanned_total = 0
+    last_game_at_by_pid: dict[int, Any] = {
+        player_id: None for player_id in valid_player_ids
+    }
 
     expected_match_count: int | None = None
     offset = 0
@@ -524,6 +590,33 @@ def replay_history(
         for m in page:
             if m.get("deleted_at") is not None:
                 continue
+            # Player activity is a projection of every active, scored match,
+            # including unrated and singles rows. Compute it before rating
+            # scope/format filtering so exclusion replay restores the prior
+            # active timestamp (or NULL when no scored match remains).
+            activity_score_t1 = _safe_int(m.get("score_t1"))
+            activity_score_t2 = _safe_int(m.get("score_t2"))
+            activity_time = coerce_utc_datetime(m.get("date"))
+            if (
+                activity_score_t1 is not None
+                and activity_score_t2 is not None
+                and (activity_score_t1 + activity_score_t2) > 0
+                and activity_time is not None
+            ):
+                for player_value in (
+                    m.get("t1_p1"),
+                    m.get("t1_p2"),
+                    m.get("t2_p1"),
+                    m.get("t2_p2"),
+                ):
+                    activity_player_id = _safe_int(player_value)
+                    if activity_player_id in last_game_at_by_pid:
+                        last_game_at_by_pid[activity_player_id] = (
+                            max_activity_time(
+                                last_game_at_by_pid[activity_player_id],
+                                activity_time,
+                            )
+                        )
             if "rating_scope" in m and str(m.get("rating_scope", "") or "").strip().lower() == "unrated":
                 continue
             lg = _norm_league(m.get("league", "") or "")
@@ -714,6 +807,9 @@ def replay_history(
         for pid, s in p_map.items():
             if pid not in valid_player_ids:
                 continue
+            last_game_at = coerce_utc_datetime(
+                last_game_at_by_pid.get(int(pid))
+            )
             player_updates.append(
                 {
                     "id": int(pid),
@@ -722,14 +818,29 @@ def replay_history(
                     "wins": int(s["w"]),
                     "losses": int(s["l"]),
                     "matches_played": int(s["mp"]),
+                    "last_game_at": (
+                        last_game_at.isoformat() if last_game_at else None
+                    ),
                 }
             )
 
         for batch in _chunk(player_updates, WRITE_BATCH_SIZE):
-            response = _retry(
-                lambda b=batch: supabase.rpc(RPC_PLAYERS_STATS, {"rows": b}).execute(),
-                label="rpc_bulk_update_players_stats",
-            )
+            _before_mutation()
+            if fence_params is not None:
+                response = _fenced_rpc(
+                    {
+                        "p_write_kind": "players_stats",
+                        "p_rows": batch,
+                    },
+                    label="rpc_fenced_bulk_update_players_stats",
+                )
+            else:
+                response = _retry(
+                    lambda b=batch: supabase.rpc(
+                        RPC_PLAYERS_STATS, {"rows": b}
+                    ).execute(),
+                    label="rpc_bulk_update_players_stats",
+                )
             _require_rpc_count(
                 response,
                 expected=len(batch),
@@ -737,12 +848,22 @@ def replay_history(
             )
 
         for batch in _chunk(singles_plan["player_updates"], WRITE_BATCH_SIZE):
-            response = _retry(
-                lambda b=batch: supabase.rpc(
-                    RPC_PLAYER_SINGLES_STATS, {"rows": b}
-                ).execute(),
-                label="rpc_bulk_update_player_singles_stats",
-            )
+            _before_mutation()
+            if fence_params is not None:
+                response = _fenced_rpc(
+                    {
+                        "p_write_kind": "player_singles_stats",
+                        "p_rows": batch,
+                    },
+                    label="rpc_fenced_bulk_update_player_singles_stats",
+                )
+            else:
+                response = _retry(
+                    lambda b=batch: supabase.rpc(
+                        RPC_PLAYER_SINGLES_STATS, {"rows": b}
+                    ).execute(),
+                    label="rpc_bulk_update_player_singles_stats",
+                )
             _require_rpc_count(
                 response,
                 expected=len(batch),
@@ -750,9 +871,31 @@ def replay_history(
             )
 
     # 2) league_ratings: delete then insert (insert is fine because rows are complete)
-    if not full_reset:
+    if fence_params is not None:
+        league_names = (
+            []
+            if full_reset
+            else list(
+                dict.fromkeys(
+                    value
+                    for value in (target_reset_raw, target_league_norm)
+                    if value
+                )
+            )
+        )
+        _before_mutation()
+        _fenced_rpc(
+            {
+                "p_write_kind": "delete_league_ratings",
+                "p_delete_all": full_reset,
+                "p_league_names": league_names,
+            },
+            label="rpc_fenced_delete_league_ratings",
+        )
+    elif not full_reset:
         # delete both raw and normalized league names if they differ
         if target_reset_raw and target_reset_raw != target_league_norm:
+            _before_mutation()
             _retry(
                 lambda: supabase.table("league_ratings")
                 .delete(returning="minimal")
@@ -762,6 +905,7 @@ def replay_history(
                 label="delete_league_ratings_raw",
             )
 
+        _before_mutation()
         _retry(
             lambda: supabase.table("league_ratings")
             .delete(returning="minimal")
@@ -771,6 +915,7 @@ def replay_history(
             label="delete_league_ratings_norm",
         )
     else:
+        _before_mutation()
         _retry(
             lambda: supabase.table("league_ratings")
             .delete(returning="minimal")
@@ -780,12 +925,22 @@ def replay_history(
         )
 
     for batch in _chunk(new_rows, WRITE_BATCH_SIZE):
-        _retry(
-            lambda b=batch: supabase.table("league_ratings")
-            .insert(b, returning="minimal")
-            .execute(),
-            label="insert_league_ratings",
-        )
+        _before_mutation()
+        if fence_params is not None:
+            _fenced_rpc(
+                {
+                    "p_write_kind": "insert_league_ratings",
+                    "p_rows": batch,
+                },
+                label="rpc_fenced_insert_league_ratings",
+            )
+        else:
+            _retry(
+                lambda b=batch: supabase.table("league_ratings")
+                .insert(b, returning="minimal")
+                .execute(),
+                label="insert_league_ratings",
+            )
 
     # 3) match snapshots: update via RPC bulk UPDATE (never touches league)
     total = max(1, len(matches_to_update))
@@ -793,10 +948,22 @@ def replay_history(
     updated_rows_total = 0
 
     for batch in _chunk(matches_to_update, WRITE_BATCH_SIZE):
-        resp = _retry(
-            lambda b=batch: supabase.rpc(RPC_MATCH_SNAPSHOTS, {"rows": b}).execute(),
-            label="rpc_bulk_update_match_snapshots",
-        )
+        _before_mutation()
+        if fence_params is not None:
+            resp = _fenced_rpc(
+                {
+                    "p_write_kind": "match_snapshots",
+                    "p_rows": batch,
+                },
+                label="rpc_fenced_bulk_update_match_snapshots",
+            )
+        else:
+            resp = _retry(
+                lambda b=batch: supabase.rpc(
+                    RPC_MATCH_SNAPSHOTS, {"rows": b}
+                ).execute(),
+                label="rpc_bulk_update_match_snapshots",
+            )
         updated_rows_total += _require_rpc_count(
             resp,
             expected=len(batch),
@@ -805,10 +972,7 @@ def replay_history(
 
         rewritten += len(batch)
         if progress_cb:
-            try:
-                progress_cb(rewritten / total)
-            except Exception:
-                pass
+            progress_cb(rewritten / total)
 
     return {
         "target_reset": target_reset,
@@ -818,6 +982,29 @@ def replay_history(
         "matches_snapshots_updated_rows": int(updated_rows_total),
         "league_ratings_rows": int(len(new_rows)),
         "matches_scanned_total": int(matches_scanned_total),
+        "activity_players_updated": (
+            int(len(valid_player_ids)) if full_reset else 0
+        ),
+        "activity_players_with_matches": (
+            int(
+                sum(
+                    value is not None
+                    for value in last_game_at_by_pid.values()
+                )
+            )
+            if full_reset
+            else 0
+        ),
+        "activity_players_without_matches": (
+            int(
+                sum(
+                    value is None
+                    for value in last_game_at_by_pid.values()
+                )
+            )
+            if full_reset
+            else 0
+        ),
         "singles_replay_supported": bool(full_reset),
         "singles_players_updated": int(len(singles_plan["player_updates"])),
         "singles_matches_rewritten": int(len(singles_plan["snapshots"])),

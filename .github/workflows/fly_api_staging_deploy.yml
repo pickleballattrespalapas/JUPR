@@ -36,6 +36,7 @@ on:
           - public-intake-auth
           - communications
           - match-player
+          - match-exclusion-recovery
           - support-requests
           - league-manager
           - league-awards

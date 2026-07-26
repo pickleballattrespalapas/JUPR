@@ -12,6 +12,7 @@ on:
           - public-intake-auth
           - admin-read-export
           - match-rating-writes
+          - match-exclusion-recovery
           - complete-book
       candidate_sha:
         description: "Exact 40-character Git SHA deployed to Vercel and Fly"
@@ -132,7 +133,7 @@ jobs:
             exit 2
           fi
           case "$PARITY_MODE" in
-            public-read|public-intake-auth|admin-read-export|match-rating-writes|complete-book) ;;
+            public-read|public-intake-auth|admin-read-export|match-rating-writes|match-exclusion-recovery|complete-book) ;;
             *)
               echo "mode is not one of the supported evidence modes" >&2
               exit 2
@@ -148,9 +149,12 @@ jobs:
             match-rating-writes)
               WRITE_WAVE="tournament-live"
               ;;
+            match-exclusion-recovery)
+              WRITE_WAVE="match-exclusion-recovery"
+              ;;
           esac
           case "$PARITY_MODE" in
-            match-rating-writes)
+            match-rating-writes|match-exclusion-recovery)
               if [ "$MUTATION_CONFIRMATION" != "RUN DISPOSABLE STAGING WRITES" ]; then
                 echo "mutating evidence modes require the exact mutation confirmation" >&2
                 exit 2
@@ -264,6 +268,26 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Pre-attest live deployment identity and write wave without mutations
+        env:
+          CANDIDATE_SHA: ${{ needs.evidence-contract.outputs.candidate_sha }}
+          FLY_IMAGE_REF: ${{ needs.evidence-contract.outputs.fly_image_ref }}
+          PARITY_MODE: ${{ needs.evidence-contract.outputs.mode }}
+          REQUIRED_STAGING_WRITE_WAVE: ${{ needs.evidence-contract.outputs.write_wave }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          VERCEL_DEPLOYMENT_ID: ${{ needs.evidence-contract.outputs.vercel_deployment_id }}
+          VERCEL_DEPLOYMENT_ORIGIN: ${{ needs.evidence-contract.outputs.vercel_deployment_origin }}
+        run: |
+          python scripts/run_parity_staging_wave.py \
+            "$PARITY_MODE" \
+            --identity-only \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --vercel-deployment-id "$VERCEL_DEPLOYMENT_ID" \
+            --vercel-deployment-origin "$VERCEL_DEPLOYMENT_ORIGIN" \
+            --fly-image-ref "$FLY_IMAGE_REF" \
+            --expected-write-wave "$REQUIRED_STAGING_WRITE_WAVE" \
+            --report-dir parity-staging-artifacts/pre-mutation-identity
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -280,7 +304,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Prepare authenticated parity staging session
-        if: needs.evidence-contract.outputs.mode == 'public-intake-auth' || needs.evidence-contract.outputs.mode == 'admin-read-export' || needs.evidence-contract.outputs.mode == 'match-rating-writes'
+        if: needs.evidence-contract.outputs.mode == 'public-intake-auth' || needs.evidence-contract.outputs.mode == 'admin-read-export' || needs.evidence-contract.outputs.mode == 'match-rating-writes' || needs.evidence-contract.outputs.mode == 'match-exclusion-recovery'
         env:
           PARITY_MODE: ${{ needs.evidence-contract.outputs.mode }}
           STAGING_API_BASE_URL: "https://juprleagues-api-staging.fly.dev"
@@ -305,6 +329,18 @@ jobs:
             --report-dir parity-staging-artifacts \
             --github-env "$GITHUB_ENV"
 
+      - name: Prepare isolated Match Log exclusion fixture
+        if: needs.evidence-contract.outputs.mode == 'match-exclusion-recovery'
+        env:
+          CANDIDATE_SHA: ${{ needs.evidence-contract.outputs.candidate_sha }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          test -n "$GITHUB_ENV"
+          python scripts/prepare_parity_match_exclusion_fixture.py \
+            prepare \
+            --report-dir parity-staging-artifacts \
+            --github-env "$GITHUB_ENV"
+
       - name: Run exact wave and reject skips or flakes
         env:
           CANDIDATE_SHA: ${{ needs.evidence-contract.outputs.candidate_sha }}
@@ -323,6 +359,16 @@ jobs:
             --vercel-deployment-origin "$VERCEL_DEPLOYMENT_ORIGIN" \
             --fly-image-ref "$FLY_IMAGE_REF" \
             --expected-write-wave "$REQUIRED_STAGING_WRITE_WAVE" \
+            --report-dir parity-staging-artifacts
+
+      - name: Remove isolated Match Log exclusion fixture
+        if: always() && needs.evidence-contract.outputs.mode == 'match-exclusion-recovery'
+        env:
+          CANDIDATE_SHA: ${{ needs.evidence-contract.outputs.candidate_sha }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python scripts/prepare_parity_match_exclusion_fixture.py \
+            cleanup \
             --report-dir parity-staging-artifacts
 
       - name: Remove disposable Tournament Live score fixture
@@ -345,7 +391,7 @@ jobs:
             public-read)
               echo "No authenticated staging session was prepared for public-read."
               ;;
-            public-intake-auth|admin-read-export|match-rating-writes)
+            public-intake-auth|admin-read-export|match-rating-writes|match-exclusion-recovery)
               python scripts/prepare_parity_staging_session.py \
                 cleanup \
                 --report-dir parity-staging-artifacts

@@ -13,13 +13,13 @@ from postgrest.exceptions import APIError
 
 
 logger = logging.getLogger(__name__)
-PLAYER_BADGES_CONFLICT_KEY = "club_id,player_id,badge_id,context_id"
+PLAYER_BADGES_CONFLICT_KEY = "club_id,player_id,badge_id,context_type,context_id"
 _PLAYER_BADGES_CONTRACT_CHECKED = False
 _PLAYER_BADGES_OPTIONAL_COLUMNS = ("awarded_by", "rule_version", "eval_run_id")
 
 
 def ensure_player_badges_contract(supabase: Any) -> bool:
-    expected_columns = ["club_id", "player_id", "badge_id", "context_id"]
+    expected_columns = ["club_id", "player_id", "badge_id", "context_type", "context_id"]
     try:
         resp = (
             supabase.table("pg_indexes")
@@ -101,7 +101,12 @@ def upsert_player_badges(
         if candidate.context_id is None or str(candidate.context_id).strip() == "":
             raise ValueError(f"Missing context_id for badge {candidate.badge_id} (player {candidate.player_id})")
         context_id = str(candidate.context_id)
-        key = (int(candidate.player_id), str(candidate.badge_id), str(context_id))
+        key = (
+            int(candidate.player_id),
+            str(candidate.badge_id),
+            str(candidate.context_type),
+            str(context_id),
+        )
         if key in existing:
             continue
         existing.add(key)
@@ -225,12 +230,12 @@ def _fetch_existing_keys(
     supabase: Any,
     club_id: str,
     candidates: list[BadgeCandidate],
-) -> set[tuple[int, str, str]]:
+) -> set[tuple[int, str, str, str]]:
     badge_ids = sorted({str(c.badge_id) for c in candidates})
     try:
         resp = (
             supabase.table("player_badges")
-            .select("player_id,badge_id,context_id")
+            .select("player_id,badge_id,context_type,context_id")
             .eq("club_id", club_id)
             .in_("badge_id", badge_ids)
             .execute()
@@ -246,10 +251,11 @@ def _fetch_existing_keys(
         except Exception:
             continue
         badge_id = str(row.get("badge_id"))
+        context_type = str(row.get("context_type"))
         context_id = row.get("context_id")
         if context_id is None:
             continue
-        existing.add((player_id, badge_id, str(context_id)))
+        existing.add((player_id, badge_id, context_type, str(context_id)))
     return existing
 
 

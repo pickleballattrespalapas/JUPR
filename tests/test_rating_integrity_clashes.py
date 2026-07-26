@@ -102,8 +102,18 @@ class _Supabase:
         self.rpc_calls.append((name, payload))
 
         def _execute():
-            rows = payload.get("rows", [])
-            if name == "bulk_update_match_snapshots":
+            rows = payload.get("rows", payload.get("p_rows", []))
+            write_kind = (
+                str(payload.get("p_write_kind") or "")
+                if name == "apply_replay_write_batch_atomic"
+                else ""
+            )
+            effective_name = {
+                "players_stats": "bulk_update_players_stats",
+                "player_singles_stats": "bulk_update_player_singles_stats",
+                "match_snapshots": "bulk_update_match_snapshots",
+            }.get(write_kind, name)
+            if effective_name == "bulk_update_match_snapshots":
                 table = self.tables["matches"]
                 for patch in rows:
                     for row in table:
@@ -112,7 +122,7 @@ class _Supabase:
                             and int(row.get("id")) == int(patch.get("id"))
                         ):
                             row.update(dict(patch))
-            elif name in {
+            elif effective_name in {
                 "bulk_update_players_stats",
                 "bulk_update_player_singles_stats",
             }:
@@ -130,6 +140,49 @@ class _Supabase:
                                     if key not in {"id", "club_id"}
                                 }
                             )
+            elif write_kind == "delete_league_ratings":
+                before = len(self.tables["league_ratings"])
+                if payload.get("p_delete_all"):
+                    self.tables["league_ratings"] = [
+                        row
+                        for row in self.tables["league_ratings"]
+                        if str(row.get("club_id"))
+                        != str(payload.get("p_club_id"))
+                    ]
+                else:
+                    names = set(payload.get("p_league_names") or [])
+                    self.tables["league_ratings"] = [
+                        row
+                        for row in self.tables["league_ratings"]
+                        if not (
+                            str(row.get("club_id"))
+                            == str(payload.get("p_club_id"))
+                            and row.get("league_name") in names
+                        )
+                    ]
+                return SimpleNamespace(
+                    data=before - len(self.tables["league_ratings"])
+                )
+            elif write_kind == "insert_league_ratings":
+                table = self.tables["league_ratings"]
+                for patch in rows:
+                    existing = next(
+                        (
+                            row
+                            for row in table
+                            if str(row.get("club_id"))
+                            == str(patch.get("club_id"))
+                            and int(row.get("player_id"))
+                            == int(patch.get("player_id"))
+                            and str(row.get("league_name"))
+                            == str(patch.get("league_name"))
+                        ),
+                        None,
+                    )
+                    if existing is None:
+                        table.append(dict(patch))
+                    else:
+                        existing.update(dict(patch))
             return SimpleNamespace(data=len(rows))
 
         return SimpleNamespace(execute=_execute)
@@ -262,6 +315,241 @@ def test_replay_history_ignores_soft_deleted_matches():
     assert result["matches_rewritten"] == 1
 
 
+def test_tracked_replay_fences_every_projection_write_batch():
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players()
+    sb.tables["matches"] = [
+        {
+            "id": 1,
+            "club_id": "club",
+            "date": "2024-01-01T00:00:00Z",
+            "league": "Main",
+            "match_type": "League",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 5,
+            "deleted_at": None,
+            "rating_scope": None,
+        }
+    ]
+    heartbeats = []
+    fence = {
+        "job_id": "11111111-1111-1111-1111-111111111111",
+        "lease_token": "22222222-2222-2222-2222-222222222222",
+        "worker_id": "worker-a",
+    }
+
+    replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=pd.DataFrame(),
+        target_reset=FULL_RESET_LABEL,
+        write_fence=fence,
+        before_write_batch=lambda: heartbeats.append("heartbeat"),
+    )
+
+    assert sb.rpc_calls
+    assert {
+        payload["p_write_kind"] for _name, payload in sb.rpc_calls
+    } == {
+        "players_stats",
+        "player_singles_stats",
+        "delete_league_ratings",
+        "insert_league_ratings",
+        "match_snapshots",
+    }
+    assert {
+        name for name, _payload in sb.rpc_calls
+    } == {"apply_replay_write_batch_atomic"}
+    assert len(heartbeats) == len(sb.rpc_calls)
+    for _name, payload in sb.rpc_calls:
+        assert payload["p_job_id"] == fence["job_id"]
+        assert payload["p_lease_token"] == fence["lease_token"]
+        assert payload["p_worker_id"] == fence["worker_id"]
+        assert payload["p_club_id"] == "club"
+        assert payload["p_target_reset"] == FULL_RESET_LABEL
+    players_batch = next(
+        payload
+        for _name, payload in sb.rpc_calls
+        if payload["p_write_kind"] == "players_stats"
+    )
+    assert {
+        row["last_game_at"] for row in players_batch["p_rows"]
+    } == {"2024-01-01T00:00:00+00:00"}
+
+
+def test_stale_replay_fence_stops_before_first_projection_mutation():
+    class _LostFenceSupabase(_Supabase):
+        def rpc(self, name, payload):
+            self.rpc_calls.append((name, payload))
+            if name != "apply_replay_write_batch_atomic":
+                return super().rpc(name, payload)
+
+            def _execute():
+                raise RuntimeError(
+                    {
+                        "code": "55000",
+                        "message": (
+                            "JUPR_REPLAY_WRITE_FENCE_LOST: stale worker"
+                        ),
+                    }
+                )
+
+            return SimpleNamespace(execute=_execute)
+
+    sb = _LostFenceSupabase()
+    sb.tables["players"] = _seed_players()
+
+    with pytest.raises(
+        RuntimeError,
+        match="no longer owns the active database lease",
+    ):
+        replay_history(
+            supabase=sb,
+            club_id="club",
+            df_meta=pd.DataFrame(),
+            target_reset=FULL_RESET_LABEL,
+            write_fence={
+                "job_id": "11111111-1111-1111-1111-111111111111",
+                "lease_token": "22222222-2222-2222-2222-222222222222",
+                "worker_id": "stale-worker",
+            },
+            before_write_batch=lambda: None,
+        )
+
+    assert len(sb.rpc_calls) == 1
+    assert sb.rpc_calls[0][1]["p_write_kind"] == "players_stats"
+    assert all(player["rating"] == 1200 for player in sb.tables["players"])
+
+
+def test_replay_progress_failure_is_not_swallowed():
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players()
+    sb.tables["matches"] = [
+        {
+            "id": 1,
+            "club_id": "club",
+            "date": "2024-01-01T00:00:00Z",
+            "league": "Main",
+            "match_type": "League",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 5,
+            "deleted_at": None,
+            "rating_scope": None,
+        }
+    ]
+
+    def _progress_failed(_value):
+        raise RuntimeError("progress lease check failed")
+
+    with pytest.raises(RuntimeError, match="progress lease check failed"):
+        replay_history(
+            supabase=sb,
+            club_id="club",
+            df_meta=pd.DataFrame(),
+            target_reset=FULL_RESET_LABEL,
+            progress_cb=_progress_failed,
+        )
+
+
+def test_early_exclusion_changes_transitively_connected_player_projection():
+    sb = _Supabase()
+    players = _seed_players()
+    players.extend(
+        {
+            "id": player_id,
+            "club_id": "club",
+            "name": f"P{player_id}",
+            "rating": 1200,
+            "starting_rating": 1200,
+            "wins": 0,
+            "losses": 0,
+            "matches_played": 0,
+            "singles_replay_baseline": {
+                "rating": 1200,
+                "wins": 0,
+                "losses": 0,
+                "matches_played": 0,
+                "last_game_at": None,
+            },
+        }
+        for player_id in (5, 6)
+    )
+    sb.tables["players"] = players
+    sb.tables["matches"] = [
+        {
+            "id": 1,
+            "club_id": "club",
+            "date": "2024-01-01T00:00:00Z",
+            "league": "Main",
+            "match_type": "League",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 5,
+            "deleted_at": None,
+            "rating_scope": None,
+        },
+        {
+            "id": 2,
+            "club_id": "club",
+            "date": "2024-01-02T00:00:00Z",
+            "league": "Main",
+            "match_type": "League",
+            "t1_p1": 3,
+            "t1_p2": 4,
+            "t2_p1": 5,
+            "t2_p2": 6,
+            "score_t1": 11,
+            "score_t2": 8,
+            "deleted_at": None,
+            "rating_scope": None,
+        },
+    ]
+
+    replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=pd.DataFrame(),
+        target_reset=FULL_RESET_LABEL,
+    )
+    player_five_before = next(
+        row for row in sb.tables["players"] if row["id"] == 5
+    )["rating"]
+    later_snapshot_before = sb.tables["matches"][1]["t1_p1_r"]
+
+    # Player 5 never played the excluded row, but their later opponent did.
+    sb.tables["matches"][0]["deleted_at"] = "2026-07-26T00:00:00Z"
+    replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=pd.DataFrame(),
+        target_reset=FULL_RESET_LABEL,
+    )
+    player_five_after = next(
+        row for row in sb.tables["players"] if row["id"] == 5
+    )["rating"]
+    later_snapshot_after = sb.tables["matches"][1]["t1_p1_r"]
+
+    assert 5 not in {
+        sb.tables["matches"][0]["t1_p1"],
+        sb.tables["matches"][0]["t1_p2"],
+        sb.tables["matches"][0]["t2_p1"],
+        sb.tables["matches"][0]["t2_p2"],
+    }
+    assert player_five_after != player_five_before
+    assert later_snapshot_after != later_snapshot_before
+
+
 def test_replay_history_missing_rating_scope_fails_closed_before_writes():
     sb = _StrictSchemaSupabase(missing_match_columns={"rating_scope"})
     sb.tables["players"] = _seed_players()
@@ -300,6 +588,97 @@ def test_replay_history_includes_null_rating_scope_but_skips_unrated():
     )
 
     assert result["matches_rewritten"] == 1
+    assert result["activity_players_updated"] == 4
+    assert result["activity_players_with_matches"] == 4
+    assert result["activity_players_without_matches"] == 0
+    assert {
+        row["last_game_at"] for row in sb.tables["players"]
+    } == {"2024-01-02T00:00:00+00:00"}
+
+
+def test_full_replay_restores_last_game_at_to_prior_active_scored_match():
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players()
+    sb.tables["matches"] = [
+        {
+            "id": match_id,
+            "club_id": "club",
+            "date": date,
+            "league": "Main",
+            "match_type": "League",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 7,
+            "deleted_at": deleted_at,
+            "rating_scope": rating_scope,
+        }
+        for match_id, date, deleted_at, rating_scope in (
+            (1, "2024-01-01T00:00:00Z", None, None),
+            (2, "2024-01-02T00:00:00Z", None, "unrated"),
+        )
+    ]
+
+    replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=pd.DataFrame(),
+        target_reset=FULL_RESET_LABEL,
+    )
+    assert {
+        row["last_game_at"] for row in sb.tables["players"]
+    } == {"2024-01-02T00:00:00+00:00"}
+
+    sb.tables["matches"][1]["deleted_at"] = "2024-01-03T00:00:00Z"
+    result = replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=pd.DataFrame(),
+        target_reset=FULL_RESET_LABEL,
+    )
+
+    assert {
+        row["last_game_at"] for row in sb.tables["players"]
+    } == {"2024-01-01T00:00:00+00:00"}
+    assert result["activity_players_with_matches"] == 4
+    assert result["activity_players_without_matches"] == 0
+
+
+def test_full_replay_clears_last_game_at_when_no_scored_match_remains():
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players()
+    for player in sb.tables["players"]:
+        player["last_game_at"] = "2024-01-02T00:00:00Z"
+    sb.tables["matches"] = [
+        {
+            "id": 1,
+            "club_id": "club",
+            "date": "2024-01-02T00:00:00Z",
+            "league": "Main",
+            "match_type": "League",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 7,
+            "deleted_at": "2024-01-03T00:00:00Z",
+            "rating_scope": None,
+        }
+    ]
+
+    result = replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=pd.DataFrame(),
+        target_reset=FULL_RESET_LABEL,
+    )
+
+    assert {row["last_game_at"] for row in sb.tables["players"]} == {None}
+    assert result["activity_players_with_matches"] == 0
+    assert result["activity_players_without_matches"] == 4
 
 
 def _singles_replay_players():

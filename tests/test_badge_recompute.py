@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from jupr_app.domain.gamification.recompute import run_badge_recompute
+from jupr_app.domain.gamification.badge_types import BadgeCandidate
 
 
 class FakeTable:
@@ -168,7 +169,50 @@ def test_recompute_append_only_idempotent():
     assert all(row.get("awarded_by") == "recompute" for row in storage.get("player_badges", []))
 
 
-def test_recompute_strict_revokes_missing():
+def test_recompute_same_context_id_with_different_context_type_is_distinct(monkeypatch):
+    storage = {
+        "player_badges": [
+            {
+                "id": "existing-league",
+                "club_id": "club",
+                "player_id": 1,
+                "badge_id": "participant",
+                "context_type": "league",
+                "context_id": "shared-context",
+                "revoked_at": None,
+            }
+        ]
+    }
+    candidate = BadgeCandidate(
+        badge_id="participant",
+        player_id=1,
+        club_id="club",
+        context_type="overall",
+        context_id="shared-context",
+        match_id=None,
+        value_json={"games": 1},
+    )
+    monkeypatch.setattr(
+        "jupr_app.domain.gamification.recompute.compute_candidates_for_club",
+        lambda **_kwargs: [candidate],
+    )
+    supabase = FakeSupabase(storage)
+
+    summary = run_badge_recompute(
+        supabase,
+        club_id="club",
+        mode="append-only",
+        ctx=_build_ctx(),
+        badge_id="participant",
+        allow_strict_global=True,
+    )
+
+    assert summary["new_awards_count"] == 1
+    assert len(storage["player_badges"]) == 2
+    assert {row["context_type"] for row in storage["player_badges"]} == {"league", "overall"}
+
+
+def test_recompute_strict_revokes_missing_with_email_actor_attribution():
     storage = {
         "player_badges": [
             {
@@ -176,6 +220,7 @@ def test_recompute_strict_revokes_missing():
                 "club_id": "club",
                 "player_id": 1,
                 "badge_id": "participant",
+                "context_type": "overall",
                 "context_id": "overall",
             }
         ]
@@ -202,13 +247,65 @@ def test_recompute_strict_revokes_missing():
         ctx=ctx,
         badge_id="participant",
         allow_strict_global=True,
-        created_by="admin",
-        revoke_reason="strict cleanup",
+        created_by="admin@example.com",
+        revoke_reason=f"strict\ncleanup {'x' * 600}",
     )
     row = storage["player_badges"][0]
     assert row.get("revoked_at")
-    assert row.get("revoked_by") == "admin"
+    assert row.get("revoked_by") is None
+    assert "\n" not in row["revoke_reason"]
+    assert row["revoke_reason"].startswith("strict cleanup ")
+    assert row["revoke_reason"].endswith("[actor: admin@example.com]")
+    assert len(row["revoke_reason"]) == 500
+    assert storage["badge_eval_runs"][0]["created_by"] == "admin@example.com"
+
+
+def test_recompute_strict_revokes_missing_with_uuid_actor():
+    actor_id = "550e8400-e29b-41d4-a716-446655440000"
+    storage = {
+        "player_badges": [
+            {
+                "id": "pb-uuid-actor",
+                "club_id": "club",
+                "player_id": 1,
+                "badge_id": "participant",
+                "context_type": "overall",
+                "context_id": "overall",
+            }
+        ]
+    }
+    supabase = FakeSupabase(storage)
+    ctx = SimpleNamespace(
+        supabase=None,
+        club_id="club",
+        df_matches=pd.DataFrame(),
+        df_players_all=pd.DataFrame(),
+        df_leagues=pd.DataFrame(),
+        df_meta=pd.DataFrame(),
+        df_badges=pd.DataFrame([{"badge_id": "participant", "state": "live"}]),
+        df_player_badges=pd.DataFrame(),
+        name_to_id={},
+        id_to_name={},
+        public_mode=False,
+        admin_logged_in=True,
+    )
+
+    run_badge_recompute(
+        supabase,
+        club_id="club",
+        mode="strict",
+        ctx=ctx,
+        badge_id="participant",
+        allow_strict_global=True,
+        created_by=actor_id,
+        revoke_reason="strict cleanup",
+    )
+
+    row = storage["player_badges"][0]
+    assert row.get("revoked_at")
+    assert row.get("revoked_by") == actor_id
     assert row.get("revoke_reason") == "strict cleanup"
+    assert storage["badge_eval_runs"][0]["created_by"] == actor_id
 
 
 def test_recompute_strict_global_blocked_without_scope():
@@ -231,6 +328,7 @@ def test_recompute_append_only_does_not_revoke_stale_rows():
                 "club_id": "club",
                 "player_id": 99,
                 "badge_id": "participant",
+                "context_type": "overall",
                 "context_id": "overall",
                 "revoked_at": None,
             }
@@ -257,6 +355,7 @@ def test_recompute_strict_scoped_to_badge_id_only():
                 "club_id": "club",
                 "player_id": 7,
                 "badge_id": "high_roller",
+                "context_type": "overall",
                 "context_id": "legacy",
                 "revoked_at": None,
             },
@@ -265,6 +364,7 @@ def test_recompute_strict_scoped_to_badge_id_only():
                 "club_id": "club",
                 "player_id": 7,
                 "badge_id": "participant",
+                "context_type": "overall",
                 "context_id": "overall",
                 "revoked_at": None,
             },

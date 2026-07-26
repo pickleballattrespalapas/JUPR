@@ -1,14 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getAdminApiBaseUrl, getAdminMatchLog } from "@/lib/adminMatchLogApi";
-import type { AdminDuplicateGroup, AdminMatchLogMatch, AdminMatchLogResponse } from "@/lib/adminMatchLogApi";
+import type { AdminDuplicateGroup, AdminMatchExclusionOperation, AdminMatchLogMatch, AdminMatchLogResponse } from "@/lib/adminMatchLogApi";
 import { getAdminReplayStatus } from "@/lib/adminReplayApi";
 import type { AdminReplayStatusResponse } from "@/lib/adminReplayApi";
 import { useAdminSession } from "@/lib/useAdminSession";
 import MatchLogApplyPanel from "./MatchLogApplyPanel";
 import MatchLogBulkExcludePanel from "./MatchLogBulkExcludePanel";
+import MatchLogExclusionRecoveryPanel from "./MatchLogExclusionRecoveryPanel";
 import MatchLogQuickReplayPanel from "./MatchLogQuickReplayPanel";
 import MatchLogSocialPanel from "./MatchLogSocialPanel";
 
@@ -55,6 +56,7 @@ function MatchRow({ match }: { match: AdminMatchLogMatch }) {
   return (
     <tr>
       <td>{match.id ?? "—"}</td>
+      <td>{match.row_version ?? "—"}</td>
       <td>{dateLabel(match.date)}</td>
       <td>{match.league || "—"}<br /><span style={{ color: "#64748b" }}>{match.week_tag || "—"}</span></td>
       <td>{match.match_type || "—"}</td>
@@ -108,6 +110,8 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
   const [replayData, setReplayData] = useState<AdminReplayStatusResponse | null>(null);
   const [replayError, setReplayError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const [exclusionOperation, setExclusionOperation] = useState<AdminMatchExclusionOperation | null>(null);
   const selectedFilterParam = searchParams?.filter || "All";
   const matchIdParam = searchParams?.match_id || null;
   const leagueParam = searchParams?.league || null;
@@ -132,6 +136,16 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
     limitParam
   ].join("\u0000");
   const data = dataScope === requestScope ? rawData : null;
+
+  const handleMutationComplete = useCallback(() => {
+    setRawData(null);
+    setDataScope("");
+    setReplayData(null);
+    setError(null);
+    setReplayError(null);
+    setLoading(true);
+    setReloadNonce((current) => current + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -204,6 +218,7 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
     leagueParam,
     limitParam,
     matchIdParam,
+    reloadNonce,
     selectedFilterParam,
     sessionLoading,
     sessionMessage,
@@ -211,6 +226,22 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
     startDateParam,
     weekTagParam
   ]);
+
+  useEffect(() => {
+    if (!data) return;
+    const unresolved = (data.recent_exclusion_operations || []).find(
+      (operation) => operation.status !== "succeeded"
+    ) || null;
+    setExclusionOperation((current) => {
+      if (unresolved) return unresolved;
+      if (current?.status === "succeeded") return null;
+      return current;
+    });
+  }, [data]);
+
+  useEffect(() => {
+    setExclusionOperation(null);
+  }, [clubId]);
 
   const selectedFilter = selectedFilterParam || data?.filters.filter || "All";
   const resolvedDuplicateGroups = data?.resolved_duplicate_groups || [];
@@ -310,6 +341,7 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
                   <thead>
                     <tr style={{ textAlign: "left", background: "#f8fafc" }}>
                       <th style={{ padding: "0.6rem" }}>ID</th>
+                      <th style={{ padding: "0.6rem" }}>Version</th>
                       <th style={{ padding: "0.6rem" }}>Date</th>
                       <th style={{ padding: "0.6rem" }}>League / Week</th>
                       <th style={{ padding: "0.6rem" }}>Type</th>
@@ -373,6 +405,14 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
             </ul>
           </article>
 
+          <MatchLogExclusionRecoveryPanel
+            apiBase={apiBase}
+            clubId={clubId}
+            operation={exclusionOperation}
+            onOperationChange={setExclusionOperation}
+            onMutationComplete={handleMutationComplete}
+          />
+
           <MatchLogApplyPanel
             apiBase={apiBase}
             clubId={clubId}
@@ -382,6 +422,9 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
             duplicateGroups={data.duplicate_groups}
             matches={data.matches}
             recentOperations={data.recent_edit_operations || []}
+            exclusionOperation={exclusionOperation}
+            onExclusionOperationChange={setExclusionOperation}
+            onMutationComplete={handleMutationComplete}
           />
 
           <div style={{ marginTop: "1rem" }}>
@@ -389,7 +432,15 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
           </div>
 
           <div style={{ marginTop: "1rem" }}>
-            <MatchLogBulkExcludePanel apiBase={apiBase} clubId={clubId} enabled={Boolean(data.correction_plan.exclude_endpoint)} matches={data.matches} />
+            <MatchLogBulkExcludePanel
+              apiBase={apiBase}
+              clubId={clubId}
+              enabled={Boolean(data.correction_plan.exclude_endpoint)}
+              matches={data.matches}
+              exclusionOperation={exclusionOperation}
+              onExclusionOperationChange={setExclusionOperation}
+              onMutationComplete={handleMutationComplete}
+            />
           </div>
 
           <div style={{ marginTop: "1rem" }}>
@@ -402,6 +453,7 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
               recommendedTarget={data.duplicate_delete_preview?.recommended_replay_scope || null}
               statusError={replayError}
               warnings={replayData?.warnings || []}
+              onMutationComplete={handleMutationComplete}
             />
           </div>
 

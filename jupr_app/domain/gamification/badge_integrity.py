@@ -9,7 +9,7 @@ def dedupe_player_badges_rows(rows: Iterable[dict]) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if df.empty:
         return df
-    required = ["club_id", "player_id", "badge_id", "context_id"]
+    required = ["club_id", "player_id", "badge_id", "context_type", "context_id"]
     for col in required:
         if col not in df.columns:
             df[col] = None

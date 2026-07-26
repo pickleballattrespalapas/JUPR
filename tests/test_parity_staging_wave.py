@@ -55,6 +55,30 @@ def _match_write_env() -> dict[str, str]:
     }
 
 
+def _match_exclusion_env() -> dict[str, str]:
+    return {
+        **_base_env(),
+        "STAGING_ADMIN_BEARER_TOKEN": "token",
+        "JUPR_MATCH_EXCLUSION_FIXTURE_CLUB_ID": "jupr_parity_mex_fixture",
+        "JUPR_MATCH_EXCLUSION_DUPLICATE_KEEP_ID": "101",
+        "JUPR_MATCH_EXCLUSION_DUPLICATE_TARGET_ID": "102",
+        "JUPR_MATCH_EXCLUSION_DUPLICATE_TARGET_ROW_VERSION": "1",
+        "JUPR_MATCH_EXCLUSION_DISTINCT_MATCH_ID": "103",
+        "JUPR_MATCH_EXCLUSION_DISTINCT_ROW_VERSION": "1",
+        "JUPR_MATCH_EXCLUSION_STALE_IDEMPOTENCY_KEY": (
+            "10000000-0000-4000-8000-000000000001"
+        ),
+        "JUPR_MATCH_EXCLUSION_DUPLICATE_IDEMPOTENCY_KEY": (
+            "10000000-0000-4000-8000-000000000002"
+        ),
+        "JUPR_MATCH_EXCLUSION_DIRECT_IDEMPOTENCY_KEY": (
+            "10000000-0000-4000-8000-000000000003"
+        ),
+        "JUPR_MATCH_EXCLUSION_ALLOW_MUTATION_E2E": "1",
+        "JUPR_PARITY_MUTATION_CONFIRMATION": MUTATION_CONFIRMATION,
+    }
+
+
 def _public_intake_env() -> dict[str, str]:
     return {
         **_base_env(),
@@ -173,10 +197,13 @@ def test_artifact_redaction_scrubs_playwright_call_logs_and_preserves_json() -> 
     assert "[REDACTED:" in redacted
 
 
-def test_environment_guard_uses_exact_origins_and_only_one_mutating_wave() -> None:
+def test_environment_guard_uses_exact_origins_and_route_specific_mutating_waves() -> None:
     env = _base_env()
     assert environment_errors("public-read", env) == []
-    assert MUTATING_WAVES == {"match-rating-writes"}
+    assert MUTATING_WAVES == {
+        "match-rating-writes",
+        "match-exclusion-recovery",
+    }
 
     wrong_ref = dict(env, STAGING_SUPABASE_PROJECT_REF="production-ref")
     assert any("Refusing project" in error for error in environment_errors("public-read", wrong_ref))
@@ -201,6 +228,13 @@ def test_environment_guard_uses_exact_origins_and_only_one_mutating_wave() -> No
     )
 
     assert environment_errors("match-rating-writes", _match_write_env()) == []
+    assert (
+        environment_errors(
+            "match-exclusion-recovery",
+            _match_exclusion_env(),
+        )
+        == []
+    )
     assert environment_errors("public-intake-auth", _public_intake_env()) == []
     assert "STAGING_ADMIN_PASSWORD" not in WAVE_REQUIRED_ENV["public-intake-auth"]
     assert "STAGING_ADMIN_BEARER_TOKEN" in WAVE_REQUIRED_ENV["public-intake-auth"]
@@ -220,6 +254,26 @@ def test_environment_guard_uses_exact_origins_and_only_one_mutating_wave() -> No
     assert any(
         "must not receive" in error
         for error in environment_errors("public-read", read_with_confirmation)
+    )
+    assert (
+        environment_errors(
+            "match-exclusion-recovery",
+            _base_env(),
+            identity_only=True,
+        )
+        == []
+    )
+    assert any(
+        "Identity-only attestation must not receive a mutation confirmation."
+        in error
+        for error in environment_errors(
+            "match-exclusion-recovery",
+            {
+                **_base_env(),
+                "JUPR_PARITY_MUTATION_CONFIRMATION": MUTATION_CONFIRMATION,
+            },
+            identity_only=True,
+        )
     )
 
 
@@ -406,6 +460,59 @@ def test_identity_preflight_queries_the_supplied_immutable_candidate_origin(
     assert requested_headers[1] == {}
 
 
+def test_identity_only_mutating_wave_needs_no_fixture_and_runs_zero_browser_writes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    sha = "a" * 40
+    vercel_id = "dpl_staging123"
+    fly_image = "registry.fly.io/juprleagues-api-staging:deployment-1234567890"
+    immutable_origin = "https://jupr-a1b2c3d4-pickleballattrespalapas1.vercel.app"
+    identity_phases: list[str] = []
+
+    monkeypatch.setattr(staging_wave.os, "environ", _base_env())
+    monkeypatch.setattr(staging_wave, "_head_sha", lambda: sha)
+    monkeypatch.setattr(staging_wave, "manifest_errors", lambda _wave: [])
+
+    def fake_deployment_identity(_env, **kwargs):
+        assert kwargs["expected_write_wave"] == "match-exclusion-recovery"
+        assert kwargs["web_origin"] == immutable_origin
+        assert kwargs["expected_web_origin"] == immutable_origin
+        identity_phases.append(str(kwargs.get("phase") or "preflight"))
+        return {"phase": identity_phases[-1]}, []
+
+    monkeypatch.setattr(
+        staging_wave,
+        "_deployment_identity",
+        fake_deployment_identity,
+    )
+
+    def reject_browser_subprocess(*_args, **_kwargs):
+        raise AssertionError("identity-only attestation must not run Playwright")
+
+    monkeypatch.setattr(staging_wave.subprocess, "run", reject_browser_subprocess)
+
+    errors = staging_wave.run_wave(
+        "match-exclusion-recovery",
+        sha,
+        vercel_id,
+        immutable_origin,
+        fly_image,
+        tmp_path,
+        identity_only=True,
+        expected_write_wave="match-exclusion-recovery",
+    )
+
+    assert errors == []
+    assert identity_phases == ["preflight", "post-wave re-attestation"]
+    summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    assert summary["execution_mode"] == "identity_only"
+    assert summary["business_writes_executed"] is False
+    assert summary["invocations"] == []
+    assert (tmp_path / "deployment-identity.json").is_file()
+    assert (tmp_path / "deployment-identity-post-wave.json").is_file()
+
+
 def test_manifest_is_route_specific_and_generic_mutation_modes_are_absent(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github/workflows/parity-final-evidence.yml").read_text(
@@ -429,6 +536,9 @@ def test_manifest_is_route_specific_and_generic_mutation_modes_are_absent(tmp_pa
     assert "recovery" not in WAVES
     assert REQUIRED_REAL_SPECS["match-rating-writes"] == (
         "e2e/tournament-live.staging.spec.ts",
+    )
+    assert REQUIRED_REAL_SPECS["match-exclusion-recovery"] == (
+        "e2e/match-exclusion-recovery.staging.spec.ts",
     )
     assert not any(
         "writes.staging.spec.ts" in spec
@@ -547,6 +657,12 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     fixture_helper = (
         root / "scripts/prepare_parity_tournament_live_fixture.py"
     ).read_text(encoding="utf-8")
+    exclusion_fixture_helper = (
+        root / "scripts/prepare_parity_match_exclusion_fixture.py"
+    ).read_text(encoding="utf-8")
+    exclusion_spec = (
+        root / "apps/web/e2e/match-exclusion-recovery.staging.spec.ts"
+    ).read_text(encoding="utf-8")
     staging_support = (root / "apps/web/e2e/support/staging.ts").read_text(
         encoding="utf-8"
     )
@@ -575,7 +691,7 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     assert "docs/next_parity_manual_staging_book.md" in workflow
     assert "vercel_deployment_origin:" in workflow
     assert "not the mutable staging alias" in workflow
-    assert workflow.count('--vercel-deployment-origin "$VERCEL_DEPLOYMENT_ORIGIN"') == 3
+    assert workflow.count('--vercel-deployment-origin "$VERCEL_DEPLOYMENT_ORIGIN"') == 4
     assert 'test -n "$(VERCEL_DEPLOYMENT_ORIGIN)"' in makefile
     assert '--vercel-deployment-origin "$(VERCEL_DEPLOYMENT_ORIGIN)"' in makefile
     assert "reversible-admin-writes" not in workflow
@@ -611,11 +727,16 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     assert (
         "if: needs.evidence-contract.outputs.mode == 'public-intake-auth' || "
         "needs.evidence-contract.outputs.mode == 'admin-read-export' || "
-        "needs.evidence-contract.outputs.mode == 'match-rating-writes'"
+        "needs.evidence-contract.outputs.mode == 'match-rating-writes' || "
+        "needs.evidence-contract.outputs.mode == 'match-exclusion-recovery'"
     ) in workflow
     initialize_step = workflow.split(
         "- name: Initialize staging evidence artifact directory", maxsplit=1
     )[1].split("- name: Require complete stacked staging manifest", maxsplit=1)[0]
+    pre_mutation_identity_step = workflow.split(
+        "- name: Pre-attest live deployment identity and write wave without mutations",
+        maxsplit=1,
+    )[1].split("- name: Set up Node", maxsplit=1)[0]
     prepare_step = workflow.split(
         "- name: Prepare authenticated parity staging session", maxsplit=1
     )[1].split(
@@ -623,9 +744,17 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     )[0]
     fixture_prepare_step = workflow.split(
         "- name: Prepare disposable Tournament Live score fixture", maxsplit=1
+    )[1].split("- name: Prepare isolated Match Log exclusion fixture", maxsplit=1)[0]
+    exclusion_fixture_prepare_step = workflow.split(
+        "- name: Prepare isolated Match Log exclusion fixture", maxsplit=1
     )[1].split("- name: Run exact wave and reject skips or flakes", maxsplit=1)[0]
     run_step = workflow.split(
         "- name: Run exact wave and reject skips or flakes", maxsplit=1
+    )[1].split(
+        "- name: Remove isolated Match Log exclusion fixture", maxsplit=1
+    )[0]
+    exclusion_fixture_cleanup_step = workflow.split(
+        "- name: Remove isolated Match Log exclusion fixture", maxsplit=1
     )[1].split(
         "- name: Remove disposable Tournament Live score fixture", maxsplit=1
     )[0]
@@ -655,6 +784,23 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     assert "TOKEN" not in initialize_step
     assert "PASSWORD" not in initialize_step
     assert "SERVICE_ROLE" not in initialize_step
+    assert '"$PARITY_MODE" \\\n' in pre_mutation_identity_step
+    assert "--identity-only" in pre_mutation_identity_step
+    assert (
+        '--expected-write-wave "$REQUIRED_STAGING_WRITE_WAVE"'
+        in pre_mutation_identity_step
+    )
+    assert (
+        "--report-dir parity-staging-artifacts/pre-mutation-identity"
+        in pre_mutation_identity_step
+    )
+    assert "JUPR_PARITY_MUTATION_CONFIRMATION" not in pre_mutation_identity_step
+    assert "STAGING_SUPABASE_ANON_KEY" not in pre_mutation_identity_step
+    assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" not in pre_mutation_identity_step
+    assert "STAGING_ADMIN_BEARER_TOKEN" not in pre_mutation_identity_step
+    assert "prepare_parity_staging_session.py" not in pre_mutation_identity_step
+    assert "prepare_parity_tournament_live_fixture.py" not in pre_mutation_identity_step
+    assert "prepare_parity_match_exclusion_fixture.py" not in pre_mutation_identity_step
     assert (
         "STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}"
         in prepare_step
@@ -679,6 +825,37 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
         "${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}"
     ) in fixture_prepare_step
     assert (
+        "if: needs.evidence-contract.outputs.mode == "
+        "'match-exclusion-recovery'"
+        in exclusion_fixture_prepare_step
+    )
+    assert (
+        "python scripts/prepare_parity_match_exclusion_fixture.py \\\n"
+        "            prepare \\\n"
+        "            --report-dir parity-staging-artifacts \\\n"
+        '            --github-env "$GITHUB_ENV"'
+    ) in exclusion_fixture_prepare_step
+    assert (
+        "STAGING_SUPABASE_SERVICE_ROLE_KEY: "
+        "${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}"
+    ) in exclusion_fixture_prepare_step
+    assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" not in run_step
+    assert (
+        "if: always() && needs.evidence-contract.outputs.mode == "
+        "'match-exclusion-recovery'"
+        in exclusion_fixture_cleanup_step
+    )
+    assert (
+        "python scripts/prepare_parity_match_exclusion_fixture.py \\\n"
+        "            cleanup \\\n"
+        "            --report-dir parity-staging-artifacts"
+    ) in exclusion_fixture_cleanup_step
+    assert (
+        "STAGING_SUPABASE_SERVICE_ROLE_KEY: "
+        "${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}"
+    ) in exclusion_fixture_cleanup_step
+    assert "continue-on-error" not in exclusion_fixture_cleanup_step
+    assert (
         "if: always() && "
         "needs.evidence-contract.outputs.mode == 'match-rating-writes'"
     ) in fixture_cleanup_step
@@ -692,12 +869,13 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
         "${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}"
     ) in fixture_cleanup_step
     assert "continue-on-error" not in fixture_cleanup_step
-    assert workflow.count("STAGING_SUPABASE_SERVICE_ROLE_KEY:") == 3
-    assert workflow.count("${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}") == 3
+    assert workflow.count("STAGING_SUPABASE_SERVICE_ROLE_KEY:") == 5
+    assert workflow.count("${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}") == 5
     assert "if: always()" in cleanup_step
     assert "public-read)" in cleanup_step
     assert (
-        "public-intake-auth|admin-read-export|match-rating-writes)"
+        "public-intake-auth|admin-read-export|match-rating-writes|"
+        "match-exclusion-recovery)"
         in cleanup_step
     )
     assert (
@@ -712,6 +890,8 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
         "                --report-dir parity-staging-artifacts"
     ) in cleanup_step
     assert workflow.index(
+        "- name: Remove isolated Match Log exclusion fixture"
+    ) < workflow.index(
         "- name: Remove disposable Tournament Live score fixture"
     ) < workflow.index(
         "- name: End authenticated parity refresh session"
@@ -721,12 +901,21 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     ) < workflow.index("- name: Retain success and failure evidence")
     assert (
         workflow.index("- name: Initialize staging evidence artifact directory")
+        < workflow.index(
+            "- name: Pre-attest live deployment identity and write wave without mutations"
+        )
         < workflow.index("- name: Prepare authenticated parity staging session")
     )
     assert (
-        workflow.index("- name: Prepare authenticated parity staging session")
+        workflow.index(
+            "- name: Pre-attest live deployment identity and write wave without mutations"
+        )
+        < workflow.index("- name: Set up Node")
+        < workflow.index("- name: Prepare authenticated parity staging session")
         < workflow.index("- name: Prepare disposable Tournament Live score fixture")
+        < workflow.index("- name: Prepare isolated Match Log exclusion fixture")
         < workflow.index("- name: Run exact wave and reject skips or flakes")
+        < workflow.index("- name: Remove isolated Match Log exclusion fixture")
         < workflow.index("- name: Remove disposable Tournament Live score fixture")
     )
     retain_step = workflow.split(
@@ -748,6 +937,13 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     assert "post-wave re-attestation" in runner
     assert "web_origin=candidate_web_origin" in runner
     assert "expected_web_origin=candidate_web_origin" in runner
+    assert "JUPR_MATCH_EXCLUSION_ALLOW_MUTATION_E2E" in exclusion_fixture_helper
+    assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" not in exclusion_spec
+    assert 'clubId === "tres_palapas"' in exclusion_spec
+    assert 'confirmation_text: "DELETE"' in exclusion_spec
+    assert 'confirmation_text: "RECOVER"' in exclusion_spec
+    assert 'code: "MATCH_EXCLUSION_STALE"' in exclusion_spec
+    assert "test.skip" not in exclusion_spec
     assert "if (!attestedDeploymentOrigin)" in staging_support
     assert "remoteBaseUrl !== expectedStagingWebOrigin" in staging_support
     assert "remoteBaseUrl !== attestedDeploymentOrigin" in staging_support

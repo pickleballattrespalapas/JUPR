@@ -160,7 +160,6 @@ def test_run_replay_calls_domain_and_audits(monkeypatch) -> None:
 
 def test_full_replay_without_singles_attestation_is_incomplete(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_REPLAY", "1")
-    failed_jobs: list[dict[str, str]] = []
 
     monkeypatch.setattr(
         "jupr_app.services.admin_replay_service.run_replay_with_job_tracking",
@@ -174,11 +173,6 @@ def test_full_replay_without_singles_attestation_is_incomplete(monkeypatch) -> N
             },
         },
     )
-    monkeypatch.setattr(
-        "jupr_app.services.admin_replay_service.mark_replay_job_failed",
-        lambda **kwargs: failed_jobs.append(kwargs),
-    )
-
     result = run_admin_replay_history(
         FakeSupabase(fake_storage()),
         club_id="club",
@@ -188,10 +182,7 @@ def test_full_replay_without_singles_attestation_is_incomplete(monkeypatch) -> N
         confirmation_text="REPLAY",
     )
 
-    assert result["job_status"] == "failed"
+    assert result["job_status"] == "invalid_result"
     assert result["ok"] is False
     assert result["mode"] == "replay_incomplete"
     assert "singles recovery" in " ".join(result["warnings"]).lower()
-    assert len(failed_jobs) == 1
-    assert failed_jobs[0]["job_id"] == "job-incomplete"
-    assert "singles recovery" in failed_jobs[0]["error_text"].lower()

@@ -162,6 +162,7 @@ def fake_tables():
                 "context_type": None,
                 "context_id": None,
                 "updated_at": None,
+                "row_version": 1,
             },
             {
                 "club_id": "club",
@@ -180,6 +181,7 @@ def fake_tables():
                 "context_type": None,
                 "context_id": None,
                 "updated_at": None,
+                "row_version": 1,
             },
             {
                 "club_id": "club",
@@ -198,6 +200,7 @@ def fake_tables():
                 "context_type": None,
                 "context_id": None,
                 "updated_at": None,
+                "row_version": 1,
             },
             {
                 "club_id": "club",
@@ -216,6 +219,7 @@ def fake_tables():
                 "context_type": None,
                 "context_id": None,
                 "updated_at": "2026-03-03T12:00:00Z",
+                "row_version": 2,
             },
         ],
         "club_people": [
@@ -313,6 +317,41 @@ def test_admin_match_log_duplicate_scan(monkeypatch) -> None:
     }
     assert all(match["id"] != 99 for match in payload["matches"])
     assert payload["warnings"] == []
+    assert payload["duplicate_delete_preview"]["targets"] == [
+        {"match_id": 2, "expected_row_version": 1}
+    ]
+
+
+def test_admin_match_log_surfaces_recent_exclusion_recovery(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    tables = fake_tables()
+    tables["match_exclusion_operations"] = [
+        {
+            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "club_id": "club",
+            "mode": "exclude",
+            "status": "recovery_required",
+            "recovery_stage": "badge_reconcile",
+            "replay_job_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "error_text": "badge worker unavailable",
+            "affected_player_ids": [1, 2],
+            "result_json": {"excluded_ids": [3]},
+            "created_at": "2026-07-26T12:00:00Z",
+            "finished_at": None,
+        }
+    ]
+
+    payload = build_admin_match_log(
+        FakeSupabase(tables),
+        club_id="club",
+        limit=20,
+    )
+
+    operation = payload["recent_exclusion_operations"][0]
+    assert operation["status"] == "recovery_required"
+    assert operation["recovery_stage"] == "badge_reconcile"
+    assert operation["affected_player_ids"] == [1, 2]
+    assert operation["result_json"]["excluded_ids"] == [3]
 
 
 def test_admin_match_log_filters_popup(monkeypatch) -> None:
@@ -524,6 +563,21 @@ def test_admin_match_log_minimal_fallback_still_excludes_soft_deleted_rows(monke
     assert payload["summary"]["scanned_matches"] == 3
     assert all(match["id"] != 99 for match in payload["matches"])
     assert payload["warnings"] == ["Fell back to minimal match columns: RuntimeError"]
+
+
+def test_admin_match_log_remains_read_only_before_row_version_migration(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    tables = fake_tables()
+    for row in tables["matches"]:
+        row.pop("row_version", None)
+    supabase = FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES)
+
+    payload = build_admin_match_log(supabase, club_id="club", limit=20)
+
+    assert payload["summary"]["scanned_matches"] == 3
+    assert all(match["row_version"] is None for match in payload["matches"])
+    assert payload["duplicate_delete_preview"]["targets"] == []
+    assert "Match Log is read-only because matches.row_version is not available yet." in payload["warnings"]
 
 
 def test_admin_match_log_apply_edits(monkeypatch) -> None:
@@ -802,20 +856,104 @@ def test_admin_match_log_duplicate_cleanup(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
     tables = fake_tables()
     supabase = FakeSupabase(tables)
+    calls = []
+    monkeypatch.setattr(
+        "jupr_app.services.admin_match_log_service.apply_atomic_match_exclusions",
+        lambda *_args, **kwargs: calls.append(kwargs)
+        or {
+            "ok": True,
+            "mode": "duplicates_cleaned",
+            "deleted_count": 1,
+            "deleted_ids": [2],
+            "excluded_count": 1,
+            "excluded_ids": [2],
+            "warnings": [],
+        },
+    )
 
     result = apply_admin_match_log_duplicate_cleanup(
         supabase,
         club_id="club",
-        delete_ids=[2],
+        targets=[{"match_id": 2, "expected_row_version": 1}],
         actor_email="admin@example.com",
         actor_role="club_owner",
         confirmation_text="DELETE",
+        idempotency_key="11111111-1111-1111-1111-111111111111",
     )
 
     assert result["ok"] is True
     assert result["deleted_count"] == 1
-    assert [row["id"] for row in tables["matches"]] == [1, 3, 99]
-    assert result["recompute_scope"] == {"standings": True, "ratings": True}
+    assert [row["id"] for row in tables["matches"]] == [1, 2, 3, 99]
+    assert calls[0]["mode"] == "duplicate_cleanup"
+    assert calls[0]["targets"] == [
+        {"match_id": 2, "expected_row_version": 1}
+    ]
+
+
+def test_admin_match_log_duplicate_cleanup_response_loss_retry_skips_fresh_scan(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
+    idempotency_key = "11111111-1111-1111-1111-111111111111"
+    tables = fake_tables()
+    tables["match_exclusion_operations"] = [
+        {
+            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "club_id": "club",
+            "idempotency_key": idempotency_key,
+        }
+    ]
+    next(row for row in tables["matches"] if row["id"] == 2)["deleted_at"] = (
+        "2026-07-26T12:00:00Z"
+    )
+    supabase = FakeSupabase(tables)
+    calls = []
+    monkeypatch.setattr(
+        "jupr_app.services.admin_match_log_service._cleanup_candidate_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("an existing operation retry must not rescan candidates")
+        ),
+    )
+    monkeypatch.setattr(
+        "jupr_app.services.admin_match_log_service.apply_atomic_match_exclusions",
+        lambda *_args, **kwargs: calls.append(kwargs)
+        or {
+            "ok": True,
+            "mode": "duplicates_cleaned",
+            "idempotent": True,
+            "deleted_count": 1,
+            "deleted_ids": [2],
+            "excluded_count": 1,
+            "excluded_ids": [2],
+            "warnings": [],
+        },
+    )
+
+    result = apply_admin_match_log_duplicate_cleanup(
+        supabase,
+        club_id="club",
+        targets=[{"match_id": 2, "expected_row_version": 1}],
+        actor_email="admin@example.com",
+        actor_role="super_admin",
+        confirmation_text="DELETE",
+        idempotency_key=idempotency_key,
+    )
+
+    assert result["ok"] is True
+    assert result["idempotent"] is True
+    assert calls == [
+        {
+            "club_id": "club",
+            "targets": [{"match_id": 2, "expected_row_version": 1}],
+            "actor_email": "admin@example.com",
+            "actor_role": "super_admin",
+            "source": "next_match_log_duplicate_cleanup",
+            "note": "Duplicate cleanup from Next Match Log",
+            "idempotency_key": idempotency_key,
+            "mode": "duplicate_cleanup",
+        }
+    ]
 
 
 def test_admin_match_log_duplicate_no_issue_resolution(monkeypatch) -> None:
@@ -873,10 +1011,11 @@ def test_admin_match_log_cleanup_rejects_no_issue_resolution(monkeypatch) -> Non
         apply_admin_match_log_duplicate_cleanup(
             supabase,
             club_id="club",
-            delete_ids=[2],
+            targets=[{"match_id": 2, "expected_row_version": 1}],
             actor_email="admin@example.com",
             actor_role="club_owner",
             confirmation_text="DELETE",
+            idempotency_key="11111111-1111-1111-1111-111111111111",
         )
     except ValueError as exc:
         assert "not currently active duplicate cleanup candidates" in str(exc)

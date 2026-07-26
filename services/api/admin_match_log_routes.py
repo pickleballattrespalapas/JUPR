@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import date, datetime
 from typing import Any
+from uuid import UUID
 
 import pandas as pd
 from fastapi import HTTPException, Query
@@ -24,15 +25,23 @@ from jupr_app.domain.live_social import (
     restore_social_matches,
     update_social_match_row,
 )
-from jupr_app.domain.match_delete import delete_rated_matches_with_replay
 from jupr_app.services.admin_match_log_service import (
     apply_admin_match_log_duplicate_cleanup,
     apply_admin_match_log_edits,
+    apply_admin_match_log_exclusions,
     build_admin_match_log,
     is_admin_match_log_apply_enabled,
     is_admin_match_log_destructive_enabled,
     is_admin_match_log_enabled,
     resolve_admin_match_log_duplicate_false_positive,
+)
+from jupr_app.services.match_exclusion_durability_service import (
+    MatchExclusionIdempotencyConflict,
+    MatchExclusionRecoveryRequired,
+    MatchExclusionStaleError,
+    MatchExclusionWorkActive,
+    get_match_exclusion_operation,
+    recover_atomic_match_exclusion,
 )
 from jupr_app.services.match_edit_durability_service import MatchEditRecoveryRequired, recover_atomic_match_edit
 from services.api.auth import authenticate_bearer, auth_header
@@ -52,9 +61,19 @@ class AdminMatchLogEditRecoveryRequest(BaseModel):
     source: str = "next_match_log_recovery"
 
 
+class AdminMatchLogExclusionTarget(BaseModel):
+    match_id: int = Field(gt=0)
+    expected_row_version: int = Field(ge=1)
+
+
 class AdminMatchLogDuplicateCleanupRequest(BaseModel):
-    delete_ids: list[int] = Field(default_factory=list)
+    targets: list[AdminMatchLogExclusionTarget] = Field(
+        min_length=1,
+        max_length=100,
+    )
     confirmation_text: str = ""
+    idempotency_key: UUID
+    note: str | None = Field(default=None, max_length=2000)
     source: str = "next_match_log_duplicate_cleanup"
 
 
@@ -67,10 +86,19 @@ class AdminMatchLogDuplicateResolutionRequest(BaseModel):
 
 
 class AdminMatchLogExcludeRequest(BaseModel):
-    match_ids: list[int] = Field(default_factory=list)
+    targets: list[AdminMatchLogExclusionTarget] = Field(
+        min_length=1,
+        max_length=100,
+    )
     confirmation_text: str = ""
-    note: str | None = None
+    idempotency_key: UUID
+    note: str | None = Field(default=None, max_length=2000)
     source: str = "next_match_log_bulk_exclude"
+
+
+class AdminMatchLogExclusionRecoveryRequest(BaseModel):
+    confirmation_text: str = ""
+    source: str = "next_match_log_exclusion_recovery"
 
 
 class AdminMatchLogSocialUpdateRequest(BaseModel):
@@ -168,21 +196,6 @@ def _list_match_log_player_options(supabase: Any, *, club_id: str) -> dict[str, 
     return {"ok": True, "mode": "match_log_player_options", "players": players, "count": len(players)}
 
 
-def _fetch_league_metadata_df(supabase: Any, *, club_id: str) -> pd.DataFrame:
-    try:
-        rows = (
-            supabase.table("leagues_metadata")
-            .select("league_name,k_factor,is_active,status")
-            .eq("club_id", str(club_id))
-            .execute()
-            .data
-            or []
-        )
-    except Exception:
-        return pd.DataFrame(columns=["league_name", "k_factor", "is_active", "status"])
-    return pd.DataFrame([dict(row) for row in rows])
-
-
 def _resolve_role_or_403(
     *,
     supabase: Any,
@@ -190,6 +203,7 @@ def _resolve_role_or_403(
     authorization: str | None,
     permission: str | tuple[str, ...],
     source: str,
+    require_all: bool = False,
 ) -> tuple[str, str]:
     user = authenticate_bearer(authorization)
     try:
@@ -205,10 +219,14 @@ def _resolve_role_or_403(
     except Exception as exc:  # noqa: BLE001 - expose pilot auth configuration errors without opaque 500s
         raise HTTPException(status_code=503, detail=f"Admin role lookup failed: {exc.__class__.__name__}") from exc
     required_permissions = (permission,) if isinstance(permission, str) else permission
-    if not role_resolution.assigned or not any(
+    permission_checks = [
         has_permission(role_resolution.role, required_permission)
         for required_permission in required_permissions
-    ):
+    ]
+    has_required_permissions = (
+        all(permission_checks) if require_all else any(permission_checks)
+    )
+    if not role_resolution.assigned or not has_required_permissions:
         reason = "missing_club_assignment" if not role_resolution.assigned else "insufficient_permission"
         denied_payload = build_activity_payload(
             club_id=str(club_id),
@@ -228,6 +246,81 @@ def _resolve_role_or_403(
         write_admin_activity_log(supabase, denied_payload)
         raise HTTPException(status_code=403, detail="insufficient permission")
     return user.email, role_resolution.role
+
+
+def _require_service_role() -> None:
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Match Log exclusion/recovery requires "
+                "SUPABASE_SERVICE_ROLE_KEY on FastAPI; browser and anonymous "
+                "keys are not accepted."
+            ),
+        )
+
+
+def _exclusion_target_payloads(
+    targets: list[AdminMatchLogExclusionTarget],
+) -> list[dict[str, int]]:
+    return [
+        {
+            "match_id": int(target.match_id),
+            "expected_row_version": int(target.expected_row_version),
+        }
+        for target in targets
+    ]
+
+
+def _raise_match_exclusion_http(exc: Exception) -> None:
+    if isinstance(exc, MatchExclusionStaleError):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "MATCH_EXCLUSION_STALE",
+                "operation_id": exc.operation_id,
+                "message": str(exc),
+            },
+        ) from exc
+    if isinstance(exc, MatchExclusionIdempotencyConflict):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "MATCH_EXCLUSION_IDEMPOTENCY_CONFLICT",
+                "operation_id": exc.operation_id,
+                "message": str(exc),
+            },
+        ) from exc
+    if isinstance(exc, MatchExclusionWorkActive):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "MATCH_EXCLUSION_ACTIVE",
+                "operation_id": exc.operation_id,
+                "replay_job_id": exc.replay_job_id,
+                "recovery_stage": exc.recovery_stage,
+                "operation_status": exc.operation_status,
+                "message": str(exc),
+            },
+        ) from exc
+    if isinstance(exc, MatchExclusionRecoveryRequired):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "MATCH_EXCLUSION_RECOVERY_REQUIRED",
+                "operation_id": exc.operation_id,
+                "replay_job_id": exc.replay_job_id,
+                "recovery_stage": exc.recovery_stage,
+                "message": str(exc),
+            },
+        ) from exc
+    if isinstance(exc, PermissionError):
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, RuntimeError):
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    raise exc
 
 
 def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
@@ -565,30 +658,30 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
                 status_code=403,
                 detail="Next Match Log destructive actions are disabled.",
             )
+        _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(
             supabase=supabase,
             club_id=str(club_id),
             authorization=authorization,
-            permission=PERMISSION_DELETE_MATCHES,
+            permission=(PERMISSION_DELETE_MATCHES, PERMISSION_RUN_REPLAY),
             source=payload.source,
+            require_all=True,
         )
         try:
             return apply_admin_match_log_duplicate_cleanup(
                 supabase,
                 club_id=str(club_id),
-                delete_ids=payload.delete_ids,
+                targets=_exclusion_target_payloads(payload.targets),
                 actor_email=actor_email,
                 actor_role=actor_role,
                 source=payload.source,
                 confirmation_text=payload.confirmation_text,
+                idempotency_key=str(payload.idempotency_key),
+                note=payload.note,
             )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except Exception as exc:
+            _raise_match_exclusion_http(exc)
 
     @app.post("/admin/clubs/{club_id}/match-log/exclude")
     def post_admin_match_log_exclude_matches(
@@ -603,46 +696,102 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
                 status_code=403,
                 detail="Next Match Log destructive actions are disabled.",
             )
-        normalized_confirmation = str(payload.confirmation_text or "").strip().upper()
-        if normalized_confirmation != "DELETE":
-            raise HTTPException(status_code=400, detail="Type DELETE to confirm rated match exclusion.")
-        match_ids = sorted({int(match_id) for match_id in (payload.match_ids or []) if _safe_int(match_id) is not None})
-        if not match_ids:
-            raise HTTPException(status_code=400, detail="Select at least one match to exclude.")
-        if len(match_ids) > 100:
-            raise HTTPException(status_code=400, detail="No more than 100 matches can be excluded at once.")
+        _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(
             supabase=supabase,
             club_id=str(club_id),
             authorization=authorization,
-            permission=PERMISSION_DELETE_MATCHES,
+            permission=(PERMISSION_DELETE_MATCHES, PERMISSION_RUN_REPLAY),
             source=payload.source,
+            require_all=True,
         )
         try:
-            result = delete_rated_matches_with_replay(
-                supabase=supabase,
+            return apply_admin_match_log_exclusions(
+                supabase,
                 club_id=str(club_id),
-                match_ids=match_ids,
-                df_meta=_fetch_league_metadata_df(supabase, club_id=str(club_id)),
-                actor=actor_email,
+                targets=_exclusion_target_payloads(payload.targets),
+                actor_email=actor_email,
                 actor_role=actor_role,
                 source=payload.source,
+                confirmation_text=payload.confirmation_text,
+                idempotency_key=str(payload.idempotency_key),
                 note=payload.note,
-                flagged_for_review=True,
             )
-            if result.get("recovery_required") or result.get("replay_error"):
-                return {
-                    **result,
-                    "ok": False,
-                    "mode": "matches_excluded_recovery_required",
-                    "recovery_required": True,
-                }
-            return {**result, "ok": True, "mode": "matches_excluded"}
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except Exception as exc:
+            _raise_match_exclusion_http(exc)
+
+    @app.get(
+        "/admin/clubs/{club_id}/match-log/exclusions/{operation_id}"
+    )
+    def get_admin_match_log_exclusion_operation(
+        club_id: str,
+        operation_id: str,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_match_log_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Log is disabled.")
+        _require_service_role()
+        supabase = get_supabase_client()
+        _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            permission=(PERMISSION_DELETE_MATCHES, PERMISSION_RUN_REPLAY),
+            source="next_match_log_exclusion_status",
+            require_all=True,
+        )
+        try:
+            return get_match_exclusion_operation(
+                supabase,
+                club_id=str(club_id),
+                operation_id=str(operation_id),
+            )
+        except Exception as exc:
+            _raise_match_exclusion_http(exc)
+
+    @app.post(
+        "/admin/clubs/{club_id}/match-log/exclusions/{operation_id}/recover"
+    )
+    def post_admin_match_log_exclusion_recovery(
+        club_id: str,
+        operation_id: str,
+        payload: AdminMatchLogExclusionRecoveryRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_match_log_apply_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Log apply is disabled.")
+        if not is_admin_match_log_destructive_enabled():
+            raise HTTPException(
+                status_code=403,
+                detail="Next Match Log destructive actions are disabled.",
+            )
+        if str(payload.confirmation_text or "").strip().upper() != "RECOVER":
+            raise HTTPException(
+                status_code=400,
+                detail="Type RECOVER to confirm mandatory exclusion recovery.",
+            )
+        _require_service_role()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            permission=(PERMISSION_DELETE_MATCHES, PERMISSION_RUN_REPLAY),
+            source=payload.source,
+            require_all=True,
+        )
+        try:
+            return recover_atomic_match_exclusion(
+                supabase,
+                club_id=str(club_id),
+                operation_id=str(operation_id),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _raise_match_exclusion_http(exc)
 
     @app.post("/admin/clubs/{club_id}/match-log/duplicates/resolve")
     def post_admin_match_log_duplicate_resolution(

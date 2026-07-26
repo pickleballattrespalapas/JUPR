@@ -15,6 +15,7 @@ type MatchLogQuickReplayPanelProps = {
   recommendedTarget?: string | null;
   statusError?: string | null;
   warnings?: string[];
+  onMutationComplete: () => void;
 };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -49,7 +50,8 @@ export default function MatchLogQuickReplayPanel({
   defaultTarget,
   recommendedTarget,
   statusError,
-  warnings = []
+  warnings = [],
+  onMutationComplete
 }: MatchLogQuickReplayPanelProps) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const replayOptions = useMemo(
@@ -93,7 +95,10 @@ export default function MatchLogQuickReplayPanel({
       if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
       setResult(payload as AdminReplayResultResponse);
       setMessage(replayMessage(payload as AdminReplayResultResponse));
-      if ((payload as AdminReplayResultResponse).job_status === "succeeded") setIdempotencyKey(requestKey());
+      if ((payload as AdminReplayResultResponse).job_status === "succeeded") {
+        setIdempotencyKey(requestKey());
+        onMutationComplete();
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to run replay.");
     } finally {

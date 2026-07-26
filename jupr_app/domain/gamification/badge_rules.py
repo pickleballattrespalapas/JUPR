@@ -43,7 +43,7 @@ def ensure_badges(ctx) -> None:
 
 def compute_badge_awards(
     ctx,
-    existing: set[tuple[str, str, str | None]] | None = None,
+    existing: set[tuple[str, str, str, str | None]] | None = None,
 ) -> tuple[list[BadgeAward], pd.DataFrame]:
     existing = existing or set()
     facts = build_player_match_facts(ctx)
@@ -64,7 +64,12 @@ def compute_badge_awards(
         value_num: float | None = None,
         value_json: dict[str, Any] | None = None,
     ) -> None:
-        key = (str(player_id), badge_id, str(context_id) if context_id is not None else None)
+        key = (
+            str(player_id),
+            badge_id,
+            str(context_type),
+            str(context_id) if context_id is not None else None,
+        )
         if key in existing:
             return
         existing.add(key)
@@ -176,11 +181,11 @@ def _seed_badges(supabase) -> None:
         logger.exception("Failed to seed badges table")
 
 
-def _fetch_existing_badges(supabase, club_id: str) -> set[tuple[str, str, str | None]]:
+def _fetch_existing_badges(supabase, club_id: str) -> set[tuple[str, str, str, str | None]]:
     try:
         resp = (
             supabase.table("player_badges")
-            .select("player_id,badge_id,context_id")
+            .select("player_id,badge_id,context_type,context_id")
             .eq("club_id", club_id)
             .execute()
         )
@@ -192,9 +197,10 @@ def _fetch_existing_badges(supabase, club_id: str) -> set[tuple[str, str, str | 
     for row in resp.data or []:
         player_id = str(row.get("player_id"))
         badge_id = str(row.get("badge_id"))
+        context_type = str(row.get("context_type"))
         context_id = row.get("context_id")
         context_id = str(context_id) if context_id is not None else None
-        existing.add((player_id, badge_id, context_id))
+        existing.add((player_id, badge_id, context_type, context_id))
     return existing
 
 
@@ -221,7 +227,7 @@ def _insert_badges(supabase, club_id: str, awards: list[BadgeAward]) -> None:
     for i in range(0, len(rows), chunk):
         supabase.table("player_badges").upsert(
             rows[i : i + chunk],
-            on_conflict="club_id,player_id,badge_id,context_id",
+            on_conflict="club_id,player_id,badge_id,context_type,context_id",
         ).execute()
 
 
