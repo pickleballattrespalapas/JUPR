@@ -4,12 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       api_base_url:
-        description: "Optional FastAPI base URL. For JUPR use https://api.juprleagues.com; do not use the public web domain. Uses STAGING_JUPR_API_BASE_URL secret when blank."
+        description: "Optional isolated staging FastAPI URL. Must be https://juprleagues-api-staging.fly.dev. Uses STAGING_JUPR_API_BASE_URL when blank."
         required: false
+        default: "https://juprleagues-api-staging.fly.dev"
         type: string
       web_base_url:
-        description: "Optional staging/Vercel web base URL, e.g. https://pickleballclubsandwich.com or https://juprleagues.com. Uses STAGING_WEB_BASE_URL secret when blank."
+        description: "Optional isolated staging web URL. Must be https://jupr-git-staging-pickleballattrespalapas1.vercel.app. Uses STAGING_WEB_BASE_URL when blank."
         required: false
+        default: "https://jupr-git-staging-pickleballattrespalapas1.vercel.app"
         type: string
       club_slug:
         description: "Public club slug to smoke-test."
@@ -24,11 +26,15 @@ on:
       allow_live_unconfigured:
         description: "Allow 503 from /live-sessions while staging live_sessions setup is incomplete."
         required: false
-        default: true
+        default: false
         type: boolean
 
 permissions:
   contents: read
+
+concurrency:
+  group: jupr-staging-api-and-parity-evidence
+  cancel-in-progress: false
 
 jobs:
   public-smoke:
@@ -36,33 +42,143 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     env:
-      STAGING_JUPR_API_BASE_URL: ${{ inputs.api_base_url != '' && inputs.api_base_url || secrets.STAGING_JUPR_API_BASE_URL }}
-      STAGING_WEB_BASE_URL: ${{ inputs.web_base_url != '' && inputs.web_base_url || secrets.STAGING_WEB_BASE_URL }}
       JUPR_SMOKE_CLUB_SLUG: ${{ inputs.club_slug || 'tres-palapas' }}
       JUPR_SMOKE_CLUB_ID: ${{ inputs.club_id || 'tres_palapas' }}
       JUPR_SMOKE_ARGS: ${{ inputs.allow_live_unconfigured && '--allow-live-unconfigured' || '' }}
-      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
       JUPR_EXPECT_PREVIEW_AUTH_ISOLATION: "1"
-      JUPR_EXPECTED_STAGING_API_ORIGIN: ${{ inputs.api_base_url != '' && inputs.api_base_url || secrets.STAGING_JUPR_API_BASE_URL }}
-      JUPR_EXPECTED_STAGING_AUTH_ORIGIN: ${{ secrets.STAGING_SUPABASE_URL }}
+      JUPR_EXPECTED_STAGING_API_ORIGIN: "https://juprleagues-api-staging.fly.dev"
+      JUPR_EXPECTED_STAGING_WEB_ORIGIN: "https://jupr-git-staging-pickleballattrespalapas1.vercel.app"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: staging
+
+      - name: Verify canonical staging workflow provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/staging" ]; then
+            echo "::error title=Source branch rejected::Staging smoke must run from refs/heads/staging."
+            exit 2
+          fi
+          HEAD_SHA="$(git rev-parse HEAD)"
+          STAGING_SHA="$(git rev-parse refs/remotes/origin/staging)"
+          if [ "$HEAD_SHA" != "$GITHUB_SHA" ] || [ "$HEAD_SHA" != "$STAGING_SHA" ]; then
+            echo "::error title=Staging provenance rejected::Checked-out HEAD, GITHUB_SHA, and canonical origin/staging must be identical."
+            exit 2
+          fi
+
+      - name: Validate staging smoke configuration
+        shell: python
+        env:
+          STAGING_JUPR_API_BASE_URL: ${{ inputs.api_base_url != '' && inputs.api_base_url || secrets.STAGING_JUPR_API_BASE_URL }}
+          STAGING_WEB_BASE_URL: ${{ inputs.web_base_url != '' && inputs.web_base_url || secrets.STAGING_WEB_BASE_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          import os
+          from pathlib import Path
+
+          def fail(title: str, message: str) -> None:
+              print(f"::error title={title}::{message}")
+              raise SystemExit(1)
+
+          expected_api = os.environ["JUPR_EXPECTED_STAGING_API_ORIGIN"]
+          expected_web = os.environ["JUPR_EXPECTED_STAGING_WEB_ORIGIN"]
+          api = os.environ.get("STAGING_JUPR_API_BASE_URL", "").strip()
+          web = os.environ.get("STAGING_WEB_BASE_URL", "").strip()
+
+          if not api:
+              fail(
+                  "Missing staging API URL",
+                  "Set the staging environment secret STAGING_JUPR_API_BASE_URL or pass api_base_url.",
+              )
+          if api not in {expected_api, f"{expected_api}/"}:
+              fail(
+                  "Unsafe staging API URL",
+                  f"The staging smoke may target only {expected_api}.",
+              )
+          if not web:
+              fail(
+                  "Missing staging web URL",
+                  "Set the staging environment secret STAGING_WEB_BASE_URL or pass web_base_url.",
+              )
+          if web not in {expected_web, f"{expected_web}/"}:
+              fail(
+                  "Unsafe staging web URL",
+                  f"The staging smoke may target only {expected_web}.",
+              )
+          if not os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", "").strip():
+              fail(
+                  "Missing Vercel automation bypass secret",
+                  "Set VERCEL_AUTOMATION_BYPASS_SECRET in the GitHub staging environment.",
+              )
+
+          # Downstream steps receive canonical allowlisted origins, never raw input.
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env_file:
+              print(f"STAGING_JUPR_API_BASE_URL={expected_api}", file=env_file)
+              print(f"STAGING_WEB_BASE_URL={expected_web}", file=env_file)
 
       - name: Show Python version
         run: python --version
 
       - name: Run public smoke checks
+        env:
+          JUPR_EXPECTED_STAGING_AUTH_ORIGIN: ${{ secrets.STAGING_SUPABASE_URL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: make public-web-smoke
 
-      - name: Require an isolated Vercel staging URL
-        shell: bash
+      - name: Attest exact read-only deployment identity
+        shell: python
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
-          set -euo pipefail
-          if [ -z "${STAGING_WEB_BASE_URL:-}" ]; then
-            echo "::error title=Missing staging web URL::Set the staging environment secret STAGING_WEB_BASE_URL or pass web_base_url."
-            exit 1
-          fi
+          import os
+          import re
+
+          from scripts.run_parity_staging_wave import (
+              EXPECTED_STAGING_API_ORIGIN,
+              EXPECTED_STAGING_WEB_ORIGIN,
+              _get_json,
+              _immutable_vercel_origin,
+              deployment_identity_errors,
+          )
+
+          web = _get_json(
+              f"{EXPECTED_STAGING_WEB_ORIGIN}/api/environment",
+              {"x-vercel-protection-bypass": os.environ["VERCEL_AUTOMATION_BYPASS_SECRET"]},
+          )
+          api = _get_json(f"{EXPECTED_STAGING_API_ORIGIN}/health")
+          web_origin = _immutable_vercel_origin(web.get("vercel_deployment_origin")) if isinstance(web, dict) else None
+          vercel_id = str(web.get("vercel_deployment_id", "")) if isinstance(web, dict) else ""
+          fly_image = str(api.get("fly_image_ref", "")) if isinstance(api, dict) else ""
+          errors = []
+          if not re.fullmatch(r"dpl_[A-Za-z0-9]{8,128}", vercel_id):
+              errors.append("Vercel deployment ID is not canonical.")
+          if not re.fullmatch(
+              r"registry\.fly\.io/juprleagues-api-staging:deployment-[A-Za-z0-9]{10,128}",
+              fly_image,
+          ):
+              errors.append("Fly image reference is not canonical for the staging app.")
+          errors.extend(
+              deployment_identity_errors(
+                  web,
+                  api,
+                  candidate_sha=os.environ["GITHUB_SHA"],
+                  vercel_deployment_id=vercel_id,
+                  fly_image_ref=fly_image,
+                  expected_write_wave="none",
+                  expected_web_origin=web_origin,
+              )
+          )
+          if errors:
+              for error in errors:
+                  print(f"::error title=Staging identity rejected::{error}")
+              raise SystemExit(1)
+          print("Vercel and Fly attest the exact staging SHA with every controlled write flag disabled.")
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -79,9 +195,99 @@ jobs:
         working-directory: apps/web
         run: npx playwright install --with-deps chromium
 
-      - name: Run browser staging smoke
+      - name: Run strict browser public-read smoke
         working-directory: apps/web
-        run: npm run test:e2e:staging
+        env:
+          JUPR_EXPECTED_STAGING_AUTH_ORIGIN: ${{ secrets.STAGING_SUPABASE_URL }}
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/public-read-report.json
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: npm run test:e2e:public-read -- --reporter=list,json
+
+      - name: Reject incomplete browser public-read evidence
+        if: always()
+        shell: python
+        env:
+          EXPECTED_PUBLIC_READ_TESTS: "69"
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.run_parity_staging_wave import report_errors
+
+          report_path = Path("apps/web/test-results/public-read-report.json")
+          if not report_path.is_file():
+              print("::error title=Missing browser evidence::Playwright did not produce the public-read JSON report.")
+              raise SystemExit(1)
+          try:
+              report = json.loads(report_path.read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError):
+              print("::error title=Invalid browser evidence::Playwright produced an unreadable public-read JSON report.")
+              raise SystemExit(1)
+
+          errors = report_errors(report)
+          stats = report.get("stats") if isinstance(report, dict) else None
+          expected_tests = int(os.environ["EXPECTED_PUBLIC_READ_TESTS"])
+          if isinstance(stats, dict) and int(stats.get("expected", 0) or 0) != expected_tests:
+              errors.append(
+                  f"Playwright passed {int(stats.get('expected', 0) or 0)} tests; "
+                  f"the public-read manifest requires exactly {expected_tests}."
+              )
+          if errors:
+              for error in errors:
+                  print(f"::error title=Incomplete browser evidence::{error}")
+              raise SystemExit(1)
+          print(f"Strict public-read browser evidence passed all {expected_tests} tests.")
+
+      - name: Run Tournament Setup guided UI contracts
+        working-directory: apps/web
+        env:
+          JUPR_EXPECTED_STAGING_AUTH_ORIGIN: ${{ secrets.STAGING_SUPABASE_URL }}
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/tournament-setup-report.json
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          npx playwright test e2e/tournament-setup.builder.staging.spec.ts \
+            --retries=0 \
+            --forbid-only \
+            --reporter=list,json
+
+      - name: Reject incomplete Tournament Setup browser evidence
+        if: always()
+        shell: python
+        env:
+          EXPECTED_TOURNAMENT_SETUP_TESTS: "5"
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.run_parity_staging_wave import report_errors
+
+          report_path = Path("apps/web/test-results/tournament-setup-report.json")
+          if not report_path.is_file():
+              print("::error title=Missing Tournament Setup evidence::Playwright did not produce the Tournament Setup JSON report.")
+              raise SystemExit(1)
+          try:
+              report = json.loads(report_path.read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError):
+              print("::error title=Invalid Tournament Setup evidence::Playwright produced an unreadable Tournament Setup JSON report.")
+              raise SystemExit(1)
+
+          errors = report_errors(report)
+          stats = report.get("stats") if isinstance(report, dict) else None
+          expected_tests = int(os.environ["EXPECTED_TOURNAMENT_SETUP_TESTS"])
+          if isinstance(stats, dict) and int(stats.get("expected", 0) or 0) != expected_tests:
+              errors.append(
+                  f"Playwright passed {int(stats.get('expected', 0) or 0)} tests; "
+                  f"the Tournament Setup manifest requires exactly {expected_tests}."
+              )
+          if errors:
+              for error in errors:
+                  print(f"::error title=Incomplete Tournament Setup evidence::{error}")
+              raise SystemExit(1)
+          print(f"Strict Tournament Setup browser evidence passed all {expected_tests} tests.")
 
       - name: Upload browser failure artifacts
         if: failure()
