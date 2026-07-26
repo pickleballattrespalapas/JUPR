@@ -181,12 +181,13 @@ test("challenge ladder: Python eligibility, deep links, rulebook, and status leg
   await expect(completed).toContainText("At challenge: #2");
   await expect(completed).toContainText("Current: #2");
   await expect(completed).toContainText("Current JUPR: 3.053");
-  const defenderCard = completed.getByText("Defender", { exact: true }).locator("..");
-  await expect(defenderCard.getByRole("link", { name: "Devon Dink" })).toBeVisible();
+  const challengerCard = completed.getByText("Challenger", { exact: true }).locator("..");
+  await expect(challengerCard.getByRole("link", { name: "Devon Dink" })).toBeVisible();
   const winnerRow = completed.locator("p").filter({ hasText: /^Winner:/ });
   await expect(winnerRow.getByRole("link", { name: "Devon Dink" })).toBeVisible();
   const playedResult = completed.getByRole("region", { name: "Played challenge result" });
-  await expect(playedResult.getByRole("link", { name: "Devon Dink" })).toBeVisible();
+  const challengerTeam = playedResult.locator("p").filter({ hasText: "Challenger team:" });
+  await expect(challengerTeam.getByRole("link", { name: "Devon Dink" })).toBeVisible();
   await expect(completed.locator('[data-result-details="available"][data-result-completeness="partial"]')).toBeVisible();
   await expect(completed).toContainText("Verified legacy Match A: 22–17");
   await expect(completed).toContainText("Games: 11–8, 11–9");
