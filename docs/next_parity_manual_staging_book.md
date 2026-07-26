@@ -29,9 +29,10 @@ weakening those contracts.
 | Primary operator | — |
 | Witness / reviewer | — |
 
-Keep the formal table above blank until the repair candidate is merged and
-deployed. Historical checkpoints are preserved separately so they cannot be
-mistaken for the final candidate.
+Keep the formal table above blank until the current `staging` head after this
+documentation reconciliation is deployed to both Vercel and Fly and its exact
+identity is recorded. Historical checkpoints are preserved separately so they
+cannot be mistaken for the final candidate.
 
 ### Preserved 2026-07-24 baseline
 
@@ -66,11 +67,27 @@ is diagnostic evidence only.
 | Supabase staging | Project `sijpxjxvdtrehmqvirfi`; 37 migration-ledger entries through `20260720123402_baseline_worker_run_log` |
 | Disposition | Superseded by the singles replay, League Live preview-gate, and recovery-context repair; no result may be copied into the formal table |
 
-After the repair lands, populate the formal table with the new SHA, PR, Vercel
-deployment ID/origin, Fly image, exact connector migration head, and preflight
-artifact as one unit. Do not append final-candidate evidence to either preserved
-checkpoint table. PR `#1022` remains the historical candidate-evidence PR; the
-formal `Final stacked PR` field must identify the actual repair/freeze PR.
+PR `#1037` landed the authenticated Operations Cockpit, shared Tournament Admin
+navigation, richer verified Challenge results, and atomic Challenge publication
+and recovery; PR `#1038` landed the canonical-first Moneyball status query.
+Populate the formal table only after the resulting current `staging` head is
+deployed, using its SHA, PR set, Vercel deployment ID/origin, Fly image, exact
+connector migration head, and preflight artifact as one unit. Do not append
+final-candidate evidence to either preserved checkpoint table. PR `#1022`
+remains the historical candidate-evidence PR; the formal `Final stacked PR`
+field must identify the actual freeze/evidence PR.
+
+### Current staging schema checkpoint
+
+Staging Supabase project `sijpxjxvdtrehmqvirfi` has 39 applied
+migration-ledger entries through connector-assigned head
+`20260726011915_challenge_ladder_public_results`. Post-apply readback verified
+the nullable `public_result_json` column and validated constraint, valid
+active-claim index, five mutation guards, and six invoker RPCs with fixed
+`pg_catalog` search paths and execution granted only to `service_role`; there
+were zero active Challenge operations. This schema checkpoint is not
+candidate-bound application acceptance and does not fill the formal identity
+table.
 
 ### Preserved pre-fix diagnostic runs
 
@@ -137,7 +154,7 @@ the guard in SQL or the browser.
 3. Exact-candidate restoration: reconcile every affected resource, deploy a
    same-candidate `write_wave=none` release, attest the all-false controlled-write
    projection and `JUPR_EMAIL_MODE=dry_run`, then run canonical Staging Smoke.
-   The final-candidate run must pass the 56-test strict public-read manifest and
+   The final-candidate run must pass the 69-test strict public-read manifest and
    the separate five-test guided Tournament Setup manifest without skips or flakes.
 
 For deferred manual recovery, use the authoritative route-specific GET readback
@@ -372,7 +389,7 @@ or Tournament Live writes unless both the Order-27 guard surface and the Order-2
 | `migration:legacy-top-performer-seed` | `supabase/migrations/20260720014744_seed_top_performer_badges.sql`; verify `4/4` IDs, any present `_v2` columns aligned, and existing customized rows preserved | — | — | Close Awards write; do not remove definitions or minted evidence | — |
 | `migration:baseline-worker-log` | `supabase/migrations/20260720123402_baseline_worker_run_log.sql` (canonical forward repair for the historical `20260511170000` prerequisite) | — | — | Stop email workers and close player-update gates | — |
 | `migration:singles-replay-recovery` | `supabase/migrations/20260725181500_singles_replay_recovery.sql`; verify player baselines, replay-managed match marker, service-role-only bulk update RPC, and atomic Tournament Operations CAS publish preservation | — | — | Keep direct uploader singles and destructive Match Log gates closed; preserve baselines and managed history for a reviewed forward repair | — |
-| `migration:challenge-ladder-public-results` | `supabase/migrations/20260725231000_challenge_ladder_public_results.sql`; verify nullable public-result relations, exact-operation receipts, atomic two-match publish, service-role-only grants, RLS, and mutation guards | — | — | Keep Challenge Ladder writes closed; preserve the exact receipt and linked result matches for idempotent recovery | — |
+| `migration:challenge-ladder-public-results` | `supabase/migrations/20260725231000_challenge_ladder_public_results.sql`; verify nullable public-result relations, exact-operation receipts, atomic two-match publish, service-role-only grants, RLS, and mutation guards | Applied | Connector ledger `20260726011915_challenge_ladder_public_results`; schema/index/constraint, five-trigger, six-RPC grant/search-path, and zero-active-operation probes verified | Keep Challenge Ladder writes closed; preserve the exact receipt and linked result matches for idempotent recovery | Staging preparation |
 | `migration:baseline-registration-player` | `supabase/migrations/20261020000000_tournament_registrations_player_id_postgrest_reload.sql` | — | — | Close tournament registration/admin writes | — |
 | `migration:legacy-league-awards-schema` | Reviewed canonical equivalent of `migrations/20260701_league_manager_end_wizard_columns.sql` | — | — | Close League Manager/Awards writes; restore candidate | — |
 

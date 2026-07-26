@@ -14,11 +14,13 @@ Data API grants. The forward worker-ledger baseline creates the durable pre-run
 marker if the historical migration is absent, enables RLS, revokes browser-role
 access, and preserves service-role access.
 
-The final repair candidate additionally requires the reviewed 39-name migration
-inventory, including `singles_replay_recovery` and
-`challenge_ladder_public_results`, even though neither migration alters
-communications tables. Record the connector-assigned staging ledger head after
-application; do not infer it from the repository filename.
+Staging now has the reviewed 39-name migration inventory, including
+`singles_replay_recovery` and `challenge_ladder_public_results`, even though
+neither migration alters communications tables. The connector-assigned head is
+`20260726011915_challenge_ladder_public_results`; post-apply probes verified the
+Challenge relation/constraint/index, five mutation triggers, and six
+service-role-only RPCs. Keep using connector readback rather than inferring a
+remote version from the repository filename.
 
 FastAPI staging requires:
 

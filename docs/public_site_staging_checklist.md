@@ -81,7 +81,7 @@ The evidence-grade gate is the manually dispatched GitHub Actions workflow
 been restored to `write_wave=none` and `/health` reports every controlled write
 flag false. Vercel and Fly must attest the same SHA, deployment identity, staging
 Supabase/Auth origin, and immutable Vercel candidate. The workflow rejects skips,
-flakes, or count drift across its 56-test public-read manifest and its five-test
+flakes, or count drift across its 69-test public-read manifest and its five-test
 guided Tournament Setup browser contract.
 
 This local command is useful for diagnosis after FastAPI and Vercel are deployed,
@@ -122,7 +122,7 @@ Review these pages on staging and the primary public domain:
 | Match Explorer | `/clubs/tres-palapas/match-explorer` | Player selectors and preview errors. |
 | League Results | `/clubs/tres-palapas/league-results` | Standings, summaries, empty states. |
 | Badge Codex | `/clubs/tres-palapas/badge-codex` | Badge list, earners, load-more state. |
-| Challenge Ladder | `/clubs/tres-palapas/challenge-ladder` | Ladder tiers and rules copy. |
+| Challenge Ladder | `/clubs/tres-palapas/challenge-ladder` | Ladder tiers, rules copy, and full/legacy-partial completed-result details. |
 | Weekly Recap | `/clubs/tres-palapas/weekly-recap` | Published recap, print view, PDF link. |
 | Tournament Registration | `/clubs/tres-palapas/tournament-registration` | Intake form, edit-link request, closed/open states. |
 | Registration Confirmation | `/clubs/tres-palapas/tournament-registration/confirmation` | Confirmation copy and missing-id state. |
@@ -176,12 +176,13 @@ authorizes the corresponding route, the possible checks are:
 
 ## Remaining deployment tasks
 
-- Immediately before merge, apply/verify the additive Challenge Ladder repair
-  against staging and record the reviewed 39-name inventory including
-  `singles_replay_recovery` and `challenge_ladder_public_results`; then merge
-  and deploy the exact repair candidate and rerun the
-  exact-SHA public/admin read evidence. The superseded `7cedb81` artifacts are
-  diagnostic only.
+- PRs `#1037` and `#1038` are merged. Staging has the reviewed 39-name migration
+  inventory through connector head
+  `20260726011915_challenge_ladder_public_results`; its Challenge relation,
+  constraint/index, five triggers, six service-role-only RPCs, and zero active
+  operations were verified. For the freeze, require the exact current `staging`
+  head on both Vercel and Fly before rerunning exact-SHA public/admin read
+  evidence. The superseded `7cedb81` artifacts are diagnostic only.
 - Add and verify both `www` aliases in Vercel/DNS; the two apex domains are
   currently served, while the `www` hosts returned HTTP 502 on 2026-07-24.
 - Reconfirm FastAPI CORS at cutover. Read-only preflight checks passed for the
