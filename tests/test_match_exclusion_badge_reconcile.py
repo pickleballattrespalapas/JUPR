@@ -197,6 +197,32 @@ def test_pre_mutation_resolver_intersects_frozen_ids_with_current_catalog(
     assert resolved == ["first_win"]
 
 
+def test_pre_mutation_resolver_accepts_the_complete_seeded_live_catalog(
+    monkeypatch,
+):
+    ctx = _safe_ctx(
+        badges=[
+            {
+                "badge_id": badge_id,
+                "state": "live",
+                "is_active": True,
+                "eval_triggers": ["match_recorded", "match_updated"],
+                "badge_status": "live",
+                "badge_award_timing": "live",
+            }
+            for badge_id in MATCH_EXCLUSION_BADGE_IDS
+        ]
+    )
+    monkeypatch.setattr(
+        "jupr_app.domain.gamification.match_exclusion_reconcile._load_reconciliation_context",
+        lambda *_args, **_kwargs: ctx,
+    )
+
+    resolved = resolve_match_exclusion_badge_ids(object(), club_id="club")
+
+    assert resolved == list(MATCH_EXCLUSION_BADGE_IDS)
+
+
 def test_canonical_context_refuses_exact_count_mismatch():
     with pytest.raises(RuntimeError, match="incomplete or truncated"):
         _assert_complete_active_match_load(

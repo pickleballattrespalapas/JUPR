@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-readonly-2026-07-26",
-  "repository_migration_content_sha256": "72e64b241ec5395f82e38309a8b8168a143f58e7fc47935293f775ca36ce8f92",
+  "repository_migration_content_sha256": "ae9b8e5efb0cc7f38c4a522f9061c06654224fab6e4351c4afc5c9bfb4958c42",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -35,6 +35,7 @@
     "replay_job_idempotency",
     "restore_matches_soft_delete_contract",
     "revoke_legacy_public_privileges",
+    "seed_live_badge_catalog",
     "seed_top_performer_badges",
     "selection_relationship_update_lock_scope",
     "selection_update_transaction_guards",

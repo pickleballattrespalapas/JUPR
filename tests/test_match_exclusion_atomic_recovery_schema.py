@@ -16,7 +16,7 @@ def test_match_exclusion_migration_is_in_canonical_inventory() -> None:
     assert MIGRATION.is_file()
     inventory = INVENTORY.read_text(encoding="utf-8")
     assert MIGRATION.name in inventory
-    assert "41 SQL files: 40 deployable migrations" in inventory
+    assert "42 SQL files: 41 deployable migrations" in inventory
 
 
 def test_matches_have_immutable_row_version_and_exact_cas_targets() -> None:
