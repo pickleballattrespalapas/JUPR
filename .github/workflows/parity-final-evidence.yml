@@ -126,10 +126,12 @@ jobs:
               -H "X-GitHub-Api-Version: 2026-03-10" \
               "/repos/$GITHUB_REPOSITORY/actions/runs/$ORCHESTRATION_RUN_ID"
           )"
+          # The run API projects run-name into .name, so bind the immutable
+          # controller workflow ID as well as its exact protected paths.
           jq -e \
             'select(
               .id == (env.ORCHESTRATION_RUN_ID | tonumber) and
-              .name == "Automated Staging Evidence" and
+              .workflow_id == 320947530 and
               (
                 .path == ".github/workflows/staging-evidence-automation.yml" or
                 .path == ".github/workflows/staging-evidence-automation.yml@rollback-feb8"
