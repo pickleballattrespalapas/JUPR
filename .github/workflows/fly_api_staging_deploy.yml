@@ -205,7 +205,10 @@ jobs:
             'select(
               .id == (env.ORCHESTRATION_RUN_ID | tonumber) and
               .name == "Automated Staging Evidence" and
-              .path == ".github/workflows/staging-evidence-automation.yml@rollback-feb8" and
+              (
+                .path == ".github/workflows/staging-evidence-automation.yml" or
+                .path == ".github/workflows/staging-evidence-automation.yml@rollback-feb8"
+              ) and
               .event == "issues" and
               .status == "in_progress" and
               .run_attempt == 1 and
