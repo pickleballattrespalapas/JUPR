@@ -9,6 +9,10 @@ NONRETRYABLE_CONFLICT_MIGRATION = Path(
     "supabase/migrations/"
     "20260726204954_match_exclusion_nonretryable_conflicts.sql"
 )
+REPLAY_PROJECTION_CONFLICT_MIGRATION = Path(
+    "supabase/migrations/"
+    "20260726212447_replay_projection_nonretryable_conflicts.sql"
+)
 INVENTORY = Path("docs/migrations.md")
 
 
@@ -18,6 +22,12 @@ def _source() -> str:
 
 def _nonretryable_conflict_source() -> str:
     return NONRETRYABLE_CONFLICT_MIGRATION.read_text(
+        encoding="utf-8"
+    ).lower()
+
+
+def _replay_projection_conflict_source() -> str:
+    return REPLAY_PROJECTION_CONFLICT_MIGRATION.read_text(
         encoding="utf-8"
     ).lower()
 
@@ -33,10 +43,12 @@ def _function_block(source: str, function_name: str) -> str:
 def test_match_exclusion_migration_is_in_canonical_inventory() -> None:
     assert MIGRATION.is_file()
     assert NONRETRYABLE_CONFLICT_MIGRATION.is_file()
+    assert REPLAY_PROJECTION_CONFLICT_MIGRATION.is_file()
     inventory = INVENTORY.read_text(encoding="utf-8")
     assert MIGRATION.name in inventory
     assert NONRETRYABLE_CONFLICT_MIGRATION.name in inventory
-    assert "43 SQL files: 42 deployable migrations" in inventory
+    assert REPLAY_PROJECTION_CONFLICT_MIGRATION.name in inventory
+    assert "44 SQL files: 43 deployable migrations" in inventory
 
 
 def test_expected_match_conflicts_use_nonretryable_sqlstate() -> None:
@@ -93,6 +105,69 @@ def test_expected_match_conflicts_use_nonretryable_sqlstate() -> None:
     assert "from public, anon, authenticated" in correction
     assert "to service_role" in correction
     assert "notify pgrst, 'reload schema'" in correction
+
+
+def test_replay_projection_batches_use_durable_numeric_precision() -> None:
+    original = _function_block(
+        _source(),
+        "apply_replay_write_batch_atomic",
+    )
+    correction_source = _replay_projection_conflict_source()
+    corrected = _function_block(
+        correction_source,
+        "apply_replay_write_batch_atomic",
+    )
+
+    numeric_fields = (
+        "rating",
+        "starting_rating",
+        "elo_delta",
+        "t1_p1_r",
+        "t1_p2_r",
+        "t2_p1_r",
+        "t2_p2_r",
+        "t1_p1_r_end",
+        "t1_p2_r_end",
+        "t2_p1_r_end",
+        "t2_p2_r_end",
+    )
+    normalized = corrected
+    for field in numeric_fields:
+        normalized = normalized.replace(
+            f"{field} numeric(10,4)",
+            f"{field} numeric",
+        )
+    normalized = normalized.replace(
+        "errcode = 'p0001'",
+        "errcode = '40001'",
+    )
+
+    assert normalized == original
+    assert corrected.count("numeric(10,4)") == 29
+    assert corrected.count("singles_rating double precision") == 3
+    assert corrected.count("errcode = 'p0001'") == 1
+    assert "errcode = '40001'" not in corrected
+    assert "jupr_replay_write_batch_incomplete" in corrected
+
+    for field in numeric_fields:
+        assert re.search(
+            rf"\b{field} numeric(?:,|\n)",
+            corrected,
+        ) is None
+
+    assert "security invoker" in corrected
+    assert "set search_path = ''" in corrected
+    assert (
+        "revoke all on function public.apply_replay_write_batch_atomic("
+        in correction_source
+    )
+    assert (
+        "grant execute on function public.apply_replay_write_batch_atomic("
+        in correction_source
+    )
+    assert "from public, anon, authenticated" in correction_source
+    assert "to service_role" in correction_source
+    assert "notify pgrst, 'reload schema'" in correction_source
 
 
 def test_matches_have_immutable_row_version_and_exact_cas_targets() -> None:
