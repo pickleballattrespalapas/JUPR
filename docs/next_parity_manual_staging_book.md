@@ -237,19 +237,26 @@ then requires `candidate_sha` to equal `origin/staging`. For authenticated read
 and Tournament Live modes, a server-only preparation step uses the staging
 service role to require exactly one eligible existing admin assignment bound to
 an Auth user. It verifies that identity, calls Supabase Admin `generate_link`,
-exchanges the returned token hash directly without sending email, validates the
-short-lived session against club-scoped FastAPI capabilities, and discovers only
-the allowlisted fixtures. The browser step receives short-lived session material,
-never the service-role key, and a mandatory cleanup step fails the job unless the
-refreshable session is ended or already inactive. The access JWT must be bound to
-the exact issuer, user, session, and authenticated audience with a maximum
-one-hour lifetime. Supabase logout ends refreshability but may not invalidate
-that JWT before its `exp` claim, so cleanup clears every exported credential and
-records that remaining lifetime explicitly. Retained Playwright output redacts
-the JWT, operator email, and Vercel bypass value. The workflow does not create or
-delete an Auth user, change an admin role assignment, or mutate application
-business data. `generate_link`, token verification, and logout intentionally
-create and consume bounded staging Auth link-token, session, and audit metadata.
+exchanges the returned token hash directly without sending email, and validates
+the short-lived session against club-scoped FastAPI capabilities. For
+`match-rating-writes`, a separate server-only step creates a uniquely owned,
+unpublished null-player score fixture and exports only its IDs and score values.
+The browser step receives short-lived session material and fixture identifiers,
+never the service-role key. Always-run cleanup first refuses an official-match
+link and removes only that manifest-owned core fixture, then fails the job unless
+the refreshable session is ended or already inactive. The access JWT must be
+bound to the exact issuer, user, session, and authenticated audience with a
+maximum one-hour lifetime. Supabase logout ends refreshability but may not
+invalidate that JWT before its `exp` claim, so cleanup clears every exported
+credential and records that remaining lifetime explicitly. Retained Playwright
+output redacts the JWT, operator email, and Vercel bypass value. The workflow
+does not create or delete an Auth user or change an admin role assignment.
+Outside the explicitly confirmed Tournament Live mode, it does not mutate
+application business data. The Tournament Live fixture and score are disposable
+business-data writes; operation/audit evidence is retained while core fixture
+rows are deleted after verified score restoration. `generate_link`, token
+verification, and logout intentionally create and consume bounded staging Auth
+link-token, session, and audit metadata.
 A run can supersede an unused staging magic/recovery link for that same account,
 so do not run an automated authenticated wave concurrently with manual
 password-recovery or inbox acceptance. No admin email, password, bearer token,

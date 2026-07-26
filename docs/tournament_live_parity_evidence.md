@@ -147,11 +147,17 @@ exact award recipients, atomic award drift refusal, and refusal to unlock
 partial/duplicate/changed official publishing or match rows without the exact
 post-processor completion receipt.
 
-The browser suite is opt-in. Read-only and stale/no-write cases require the
-staging admin token plus disposable tournament/draw/game IDs. The mutation case
-additionally requires `JUPR_TOURNAMENT_LIVE_ALLOW_MUTATION_E2E=1`, distinct
-exercise scores, and recorded original scores; its `finally` block restores the
-original result and fails loudly if cleanup cannot be verified.
+The browser suite is opt-in. In the candidate-bound workflow, a server-only
+preparation step creates a uniquely owned DRAFT tournament, draw, four
+null-player teams, and one unpublished round-robin game, then exports only its
+IDs and score values to the browser step. No fixture IDs are stored as repository
+variables. The mutation case requires
+`JUPR_TOURNAMENT_LIVE_ALLOW_MUTATION_E2E=1`; its `finally` block restores the
+original result and fails loudly if that readback cannot be verified. An
+always-run server-side cleanup refuses to proceed if any official match links to
+the fixture, deletes only the manifest-owned core rows, and proves they are gone.
+Operation and audit evidence is intentionally retained. This automated case does
+not publish an official match or exercise rating writes.
 
 ## Manual staging book
 

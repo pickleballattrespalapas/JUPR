@@ -544,6 +544,9 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     )
     makefile = (root / "Makefile").read_text(encoding="utf-8")
     runner = (root / "scripts/run_parity_staging_wave.py").read_text(encoding="utf-8")
+    fixture_helper = (
+        root / "scripts/prepare_parity_tournament_live_fixture.py"
+    ).read_text(encoding="utf-8")
     staging_support = (root / "apps/web/e2e/support/staging.ts").read_text(
         encoding="utf-8"
     )
@@ -581,7 +584,8 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     assert "JUPR_TOURNAMENT_OPS_ALLOW_MUTATION_E2E" not in workflow
     assert "JUPR_RUN_LIVE_LADDER_MUTATION_E2E" not in workflow
     assert "JUPR_RUN_PUBLIC_LIVE_WRITE_E2E" not in workflow
-    assert "JUPR_TOURNAMENT_LIVE_ALLOW_MUTATION_E2E" in workflow
+    assert "JUPR_TOURNAMENT_LIVE_ALLOW_MUTATION_E2E" in fixture_helper
+    assert "${{ vars.JUPR_TOURNAMENT_LIVE_" not in workflow
     assert 'STAGING_SUPABASE_PROJECT_REF: "sijpxjxvdtrehmqvirfi"' in workflow
     assert (
         'STAGING_SUPABASE_URL: "https://sijpxjxvdtrehmqvirfi.supabase.co"'
@@ -614,9 +618,19 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     )[1].split("- name: Require complete stacked staging manifest", maxsplit=1)[0]
     prepare_step = workflow.split(
         "- name: Prepare authenticated parity staging session", maxsplit=1
+    )[1].split(
+        "- name: Prepare disposable Tournament Live score fixture", maxsplit=1
+    )[0]
+    fixture_prepare_step = workflow.split(
+        "- name: Prepare disposable Tournament Live score fixture", maxsplit=1
     )[1].split("- name: Run exact wave and reject skips or flakes", maxsplit=1)[0]
     run_step = workflow.split(
         "- name: Run exact wave and reject skips or flakes", maxsplit=1
+    )[1].split(
+        "- name: Remove disposable Tournament Live score fixture", maxsplit=1
+    )[0]
+    fixture_cleanup_step = workflow.split(
+        "- name: Remove disposable Tournament Live score fixture", maxsplit=1
     )[1].split("- name: End authenticated parity refresh session", maxsplit=1)[0]
     cleanup_step = workflow.split(
         "- name: End authenticated parity refresh session", maxsplit=1
@@ -650,8 +664,36 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
         "${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}"
     ) in prepare_step
     assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" not in run_step
-    assert workflow.count("STAGING_SUPABASE_SERVICE_ROLE_KEY:") == 1
-    assert workflow.count("${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}") == 1
+    assert (
+        "if: needs.evidence-contract.outputs.mode == 'match-rating-writes'"
+        in fixture_prepare_step
+    )
+    assert (
+        "python scripts/prepare_parity_tournament_live_fixture.py \\\n"
+        "            prepare \\\n"
+        "            --report-dir parity-staging-artifacts \\\n"
+        '            --github-env "$GITHUB_ENV"'
+    ) in fixture_prepare_step
+    assert (
+        "STAGING_SUPABASE_SERVICE_ROLE_KEY: "
+        "${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}"
+    ) in fixture_prepare_step
+    assert (
+        "if: always() && "
+        "needs.evidence-contract.outputs.mode == 'match-rating-writes'"
+    ) in fixture_cleanup_step
+    assert (
+        "python scripts/prepare_parity_tournament_live_fixture.py \\\n"
+        "            cleanup \\\n"
+        "            --report-dir parity-staging-artifacts"
+    ) in fixture_cleanup_step
+    assert (
+        "STAGING_SUPABASE_SERVICE_ROLE_KEY: "
+        "${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}"
+    ) in fixture_cleanup_step
+    assert "continue-on-error" not in fixture_cleanup_step
+    assert workflow.count("STAGING_SUPABASE_SERVICE_ROLE_KEY:") == 3
+    assert workflow.count("${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}") == 3
     assert "if: always()" in cleanup_step
     assert "public-read)" in cleanup_step
     assert (
@@ -670,11 +712,22 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
         "                --report-dir parity-staging-artifacts"
     ) in cleanup_step
     assert workflow.index(
+        "- name: Remove disposable Tournament Live score fixture"
+    ) < workflow.index(
+        "- name: End authenticated parity refresh session"
+    )
+    assert workflow.index(
         "- name: End authenticated parity refresh session"
     ) < workflow.index("- name: Retain success and failure evidence")
     assert (
         workflow.index("- name: Initialize staging evidence artifact directory")
         < workflow.index("- name: Prepare authenticated parity staging session")
+    )
+    assert (
+        workflow.index("- name: Prepare authenticated parity staging session")
+        < workflow.index("- name: Prepare disposable Tournament Live score fixture")
+        < workflow.index("- name: Run exact wave and reject skips or flakes")
+        < workflow.index("- name: Remove disposable Tournament Live score fixture")
     )
     retain_step = workflow.split(
         "- name: Retain success and failure evidence", maxsplit=1

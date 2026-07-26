@@ -66,4 +66,5 @@ jobs:
             tests/test_next_parity_matrix.py \
             tests/test_parity_closure_program.py \
             tests/test_parity_manual_book.py \
-            tests/test_parity_staging_wave.py
+            tests/test_parity_staging_wave.py \
+            tests/test_prepare_parity_tournament_live_fixture.py
