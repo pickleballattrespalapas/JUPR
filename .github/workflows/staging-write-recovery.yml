@@ -250,12 +250,18 @@ jobs:
               "- Business writes: disabled" \
               "- Safe restore: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RESTORE_RUN_ID"
           )"
-          gh api \
-            --method POST \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "/repos/$GITHUB_REPOSITORY/issues/1062/comments" \
-            -f body="$STATUS" \
-            --silent
+          printf '%s\n' "$STATUS" >> "$GITHUB_STEP_SUMMARY"
+          if ! gh api \
+              --method POST \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/$GITHUB_REPOSITORY/issues/1062/comments" \
+              -f body="$STATUS" \
+              --silent
+          then
+            echo "::warning::Protected issue comment unavailable; status is preserved in the workflow summary."
+            echo "- Issue comment: unavailable; protected issue remains locked." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
           gh api \
             --method PATCH \
             -H "X-GitHub-Api-Version: 2026-03-10" \
