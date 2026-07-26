@@ -1,4 +1,6 @@
 name: Parity Final Evidence
+run-name: >-
+  Parity final evidence · ${{ inputs.mode }} · ${{ inputs.candidate_sha }}
 
 on:
   workflow_dispatch:
@@ -34,20 +36,31 @@ on:
         description: "For a mutating wave, enter: RUN DISPOSABLE STAGING WRITES"
         required: false
         type: string
+      orchestration_run_id:
+        description: "Reserved controller run ID; leave empty for standalone use"
+        required: false
+        default: ""
+        type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
   # This lock is shared with fly_api_staging_deploy.yml so a deployment cannot
-  # replace the candidate while evidence is being collected.
-  group: jupr-staging-api-and-parity-evidence
+  # replace the candidate while evidence is being collected. A verified
+  # controller owns that outer lock for automated runs.
+  group: >-
+    ${{ inputs.orchestration_run_id != ''
+      && format('jupr-staging-orchestration-child-{0}', inputs.orchestration_run_id)
+      || 'jupr-staging-api-and-parity-evidence' }}
   cancel-in-progress: false
 
 jobs:
   evidence-contract:
     name: Pending-safe evidence contract
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       candidate_sha: ${{ steps.validate-inputs.outputs.candidate_sha }}
       fly_image_ref: ${{ steps.validate-inputs.outputs.fly_image_ref }}
@@ -95,6 +108,37 @@ jobs:
               exit 2
               ;;
           esac
+
+      - name: Verify automated controller delegation
+        if: inputs.orchestration_run_id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORCHESTRATION_RUN_ID: ${{ inputs.orchestration_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$ORCHESTRATION_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]; then
+            echo "orchestration_run_id must be a positive Actions run ID" >&2
+            exit 2
+          fi
+          RUN_JSON="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/$GITHUB_REPOSITORY/actions/runs/$ORCHESTRATION_RUN_ID"
+          )"
+          jq -e \
+            'select(
+              .id == (env.ORCHESTRATION_RUN_ID | tonumber) and
+              .name == "Automated Staging Evidence" and
+              .path == ".github/workflows/staging-evidence-automation.yml@rollback-feb8" and
+              .event == "issues" and
+              .status == "in_progress" and
+              .run_attempt == 1 and
+              .head_branch == "rollback-feb8" and
+              .actor.id == 250933369 and
+              .triggering_actor.id == 250933369 and
+              .repository.id == 1120897513
+            ) | .id' <<<"$RUN_JSON" >/dev/null
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -230,6 +274,7 @@ jobs:
     if: needs.evidence-contract.outputs.mode != 'complete-book'
     needs: evidence-contract
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     environment: staging
     env:
       JUPR_EXPECT_PREVIEW_AUTH_ISOLATION: "1"
@@ -416,6 +461,7 @@ jobs:
     if: needs.evidence-contract.outputs.mode == 'complete-book'
     needs: evidence-contract
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: staging
     steps:
       - name: Check out exact application candidate

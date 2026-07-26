@@ -208,6 +208,18 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
     assert "--expect-full-next-admin" in workflow
     assert "--write-wave \"$JUPR_STAGING_WRITE_WAVE\"" in workflow
     assert "scripts/staging_write_waves.py" in workflow
+    assert "expected_candidate_sha:" in workflow
+    assert "orchestration_run_id:" in workflow
+    assert "jupr-staging-orchestration-child-{0}" in workflow
+    assert "Automated Staging Evidence" in workflow
+    assert (
+        ".github/workflows/staging-evidence-automation.yml@rollback-feb8"
+        in workflow
+    )
+    assert ".actor.id == 250933369" in workflow
+    assert ".repository.id == 1120897513" in workflow
+    assert "expected_candidate_sha must equal canonical staging HEAD" in workflow
+    assert "timeout-minutes: 45" in workflow
     assert 'JUPR_REQUIRE_WORKER_RUN_LOG: "1"' in workflow
     for staged_safety_value in (
         '"JUPR_ENV=staging"',

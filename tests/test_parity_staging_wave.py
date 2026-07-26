@@ -668,8 +668,18 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     )
     assert "workflow_dispatch:" in workflow
     assert "pull_request:" not in workflow
-    assert "permissions:\n  contents: read" in workflow
+    assert "permissions:\n  actions: read\n  contents: read" in workflow
     assert "environment: staging" in workflow
+    assert "orchestration_run_id:" in workflow
+    assert "jupr-staging-orchestration-child-{0}" in workflow
+    assert "Automated Staging Evidence" in workflow
+    assert (
+        ".github/workflows/staging-evidence-automation.yml@rollback-feb8"
+        in workflow
+    )
+    assert ".actor.id == 250933369" in workflow
+    assert ".repository.id == 1120897513" in workflow
+    assert "timeout-minutes: 60" in workflow
     assert "ref: staging" in workflow
     assert 'refs/heads/staging)' in workflow
     assert 'refs/heads/rollback-feb8)' in workflow

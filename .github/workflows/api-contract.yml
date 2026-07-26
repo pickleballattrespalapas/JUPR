@@ -47,6 +47,8 @@ jobs:
             tests/test_admin_action_token_guards_static.py \
             tests/test_authenticated_auto_load_contract.py \
             tests/test_ci_safety_contracts.py \
+            tests/test_staging_evidence_automation.py \
+            tests/test_staging_evidence_automation_workflow.py \
             tests/test_league_awards_static_contract.py \
             tests/test_league_core_static_contract.py \
             tests/test_league_live_domain_static_contract.py \
