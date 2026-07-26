@@ -35,6 +35,15 @@ export const ADMIN_SESSION_STORAGE_KEY = "jupr_admin_session_v1";
 const RECOVERY_SESSION_KEY = "jupr_admin_recovery_session_v1";
 const RECOVERY_PKCE_KEY = "jupr_admin_recovery_pkce_v1";
 const RECOVERY_PKCE_MAX_AGE_MS = 60 * 60 * 1000;
+const adminSessionRestoreRequests = new Map<
+  string,
+  Promise<AdminSession | null>
+>();
+
+type AdminSessionMutationOptions = {
+  dispatchChange?: boolean;
+  changeSource?: string;
+};
 
 export function adminSessionStorageEventIsRelevant(key: string | null): boolean {
   return key === null || key === ADMIN_SESSION_STORAGE_KEY;
@@ -213,18 +222,35 @@ export function loadAdminSession(): AdminSession | null {
   }
 }
 
-export function saveAdminSession(session: AdminSession): void {
+export function saveAdminSession(
+  session: AdminSession,
+  options: AdminSessionMutationOptions = {}
+): void {
   if (!canUseBrowserStorage() || !session.access_token || session.recovery) return;
   const serialized = JSON.stringify(session);
   if (window.localStorage.getItem(ADMIN_SESSION_STORAGE_KEY) === serialized) return;
   window.localStorage.setItem(ADMIN_SESSION_STORAGE_KEY, serialized);
-  window.dispatchEvent(new CustomEvent("jupr-admin-session-change"));
+  if (options.dispatchChange !== false) {
+    window.dispatchEvent(
+      new CustomEvent("jupr-admin-session-change", {
+        detail: { source: options.changeSource || null }
+      })
+    );
+  }
 }
 
-export function clearAdminSession(): void {
+export function clearAdminSession(
+  options: AdminSessionMutationOptions = {}
+): void {
   if (!canUseBrowserStorage()) return;
   window.localStorage.removeItem(ADMIN_SESSION_STORAGE_KEY);
-  window.dispatchEvent(new CustomEvent("jupr-admin-session-change"));
+  if (options.dispatchChange !== false) {
+    window.dispatchEvent(
+      new CustomEvent("jupr-admin-session-change", {
+        detail: { source: options.changeSource || null }
+      })
+    );
+  }
 }
 
 export function loadRecoverySession(): AdminSession | null {
@@ -395,7 +421,6 @@ export async function refreshAdminSession(session = loadAdminSession()): Promise
   if (!session?.access_token) return null;
   if (adminSessionIsFresh(session)) return session;
   if (!session.refresh_token) {
-    clearAdminSession();
     throw new Error("Your session is invalid or expired. Sign in again.");
   }
   const config = getAdminAuthConfig();
@@ -416,27 +441,62 @@ export async function refreshAdminSession(session = loadAdminSession()): Promise
   }
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    clearAdminSession();
     throw new Error("Your session is invalid or expired. Sign in again.");
   }
   const refreshed = normalizeSession((payload || {}) as Record<string, unknown>, {
     fallbackRefreshToken: session.refresh_token
   });
   if (!refreshed.access_token) {
-    clearAdminSession();
     throw new Error("Your session is invalid or expired. Sign in again.");
   }
   return refreshed;
 }
 
 export async function restoreAuthorizedAdminSession(
-  requestedClubId = getDefaultAdminClubId()
+  requestedClubId = getDefaultAdminClubId(),
+  options: { changeSource?: string } = {}
 ): Promise<AdminSession | null> {
+  if (!canUseBrowserStorage()) return null;
+  const storageSnapshot = window.localStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
   const current = loadAdminSession();
   if (!current) return null;
-  const refreshed = await refreshAdminSession(current);
-  if (!refreshed) return null;
-  return authorizeAndSaveAdminSession(refreshed, requestedClubId, { preserveOnUnavailable: true });
+  const restoreKey = `${requestedClubId}\u0000${storageSnapshot}`;
+  const existingRestore = adminSessionRestoreRequests.get(restoreKey);
+  if (existingRestore) return existingRestore;
+  const storageIsUnchanged = () =>
+    window.localStorage.getItem(ADMIN_SESSION_STORAGE_KEY) === storageSnapshot;
+  if (!storageIsUnchanged()) return null;
+
+  const restoreRequest = (async (): Promise<AdminSession | null> => {
+    let refreshed: AdminSession | null = null;
+    try {
+      refreshed = await refreshAdminSession(current);
+      if (!refreshed || !storageIsUnchanged()) return null;
+      const authorized = await authorizeAdminSession(refreshed, requestedClubId);
+      if (!storageIsUnchanged()) return null;
+      saveAdminSession(authorized, { changeSource: options.changeSource });
+      return authorized;
+    } catch (error) {
+      if (!storageIsUnchanged()) return null;
+      const message = error instanceof Error ? error.message : "";
+      const denied =
+        message.includes("invalid or expired") ||
+        message.includes("not authorized");
+      if (denied) {
+        clearAdminSession({ changeSource: options.changeSource });
+        await revokeAdminSession(refreshed || current);
+      }
+      throw error;
+    }
+  })();
+  adminSessionRestoreRequests.set(restoreKey, restoreRequest);
+  try {
+    return await restoreRequest;
+  } finally {
+    if (adminSessionRestoreRequests.get(restoreKey) === restoreRequest) {
+      adminSessionRestoreRequests.delete(restoreKey);
+    }
+  }
 }
 
 async function revokeAdminSession(session: AdminSession | null): Promise<void> {

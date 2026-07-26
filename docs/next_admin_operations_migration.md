@@ -21,11 +21,20 @@ These boundaries stay in place even when production-write pilot mode is enabled:
 
 ## Pilot mode
 
-The API status endpoint exposes the current posture:
+The protected API status endpoint exposes the current posture only after
+Supabase JWT verification and a matching club-scoped admin assignment. An
+assignment with `user_id` is accepted only for that exact JWT subject:
 
 ```text
-GET /admin/operations/status
+GET /admin/operations/status?club_id=tres_palapas
+Authorization: Bearer <short-lived Supabase access token>
 ```
+
+The Next `/admin` page is a data-free server shell. Its client gate restores
+and capability-checks the staff session before it requests status, clears
+previous status on logout or scope changes, rechecks authorization every minute
+and on focus/visibility return, and never lists protected admin tools in the
+public site map or XML sitemap.
 
 Closed-club production-write pilot mode is controlled by the FastAPI runtime flag:
 

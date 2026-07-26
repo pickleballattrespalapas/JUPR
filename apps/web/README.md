@@ -78,7 +78,19 @@ emails use it to generate tokenized Next `/email-preferences` links. The API
 fails the individual outbox send closed when no unsubscribe token is available;
 it never falls back to a public subscription ID.
 
-The `/admin` cockpit reads `GET /admin/operations/status` from FastAPI. Its workflow flags live on the API deployment, not in Vercel. `/admin/match-log` reads `GET /admin/clubs/{club_id}/match-log` and shows fallback instructions until `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` is enabled on FastAPI. When apply mode is enabled, guided and bulk edits carry stable idempotency keys; rating-affecting edits expose their durable Replay History job and block further editing when mandatory recovery is required.
+The `/admin` route renders no cockpit data until the browser restores a
+capability-checked staff session. It then reads
+`GET /admin/operations/status?club_id=...` with the Supabase bearer token and
+`cache: no-store`; logout, token rotation, scope changes, and authorization
+denials clear the rendered posture. The session is rechecked every minute and
+when the tab regains focus or visibility so an expiry or revoked assignment
+cannot leave the cockpit visible indefinitely. Workflow flags live on the API deployment,
+not in Vercel. `/admin/match-log` reads
+`GET /admin/clubs/{club_id}/match-log` and shows fallback instructions until
+`JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` is enabled on FastAPI. When apply mode is
+enabled, guided and bulk edits carry stable idempotency keys; rating-affecting
+edits expose their durable Replay History job and block further editing when
+mandatory recovery is required.
 
 League Awards has a separate API-only `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE` gate. It must never be mirrored into a browser variable. The page persists freeze/preview/override/mint/archive recovery state through FastAPI, blocks mint while any required badge definition is missing, and reports mint success only after FastAPI verifies all expected badge rows.
 

@@ -78,5 +78,7 @@ jobs:
             --outDir "$RUNNER_TEMP/admin-auth-client"
           JUPR_ADMIN_AUTH_CLIENT_MODULE="$RUNNER_TEMP/admin-auth-client/adminAuthClient.js" \
             node lib/adminAuthClient.storage.test.mjs
+      - name: Test Challenge Ladder full-result rendering
+        run: npm run test:component
       - name: Build Next app
         run: npm run build

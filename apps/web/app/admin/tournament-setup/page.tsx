@@ -1,4 +1,5 @@
 import Link from "next/link";
+import TournamentAdminNav from "@/components/TournamentAdminNav";
 import TournamentSetupPanel from "./TournamentSetupPanel";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -25,15 +26,18 @@ export default async function TournamentSetupPage() {
   const clubId = "tres_palapas";
   const { data: status, error } = await loadStatus(clubId);
   return (
-    <section>
-      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Tournament Setup</p>
-      <h1 style={{ marginTop: 0 }}>Tournament Setup Manager</h1>
-      <p style={{ color: "#334155", maxWidth: "860px" }}>
-        Dedicated setup workspace for registration settings, registration days, event/division options, builder drafts, publish-impact review, and guarded publishing. Tournament Ops remains the draw/scoring workspace after setup is published.
-      </p>
-      {error ? <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>Tournament Setup status unavailable. {error}</article> : null}
-      <TournamentSetupPanel apiBase={apiBase()} clubId={clubId} status={status} />
-      <p style={{ marginTop: "1rem" }}><Link href="/admin/tournaments">Tournament Admin</Link> · <Link href="/admin/tournaments/ops">Tournament Ops</Link> · <Link href="/admin/tournament-live">Tournament Live</Link> · <Link href="/admin">Operations cockpit</Link>{status?.streamlit_fallback_url ? <> · <a href={status.streamlit_fallback_url} target="_blank" rel="noreferrer">Open Streamlit Tournament Setup fallback</a></> : null}</p>
-    </section>
+    <>
+      <TournamentAdminNav />
+      <section>
+        <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Tournament Setup</p>
+        <h1 style={{ marginTop: 0 }}>Tournament Setup Manager</h1>
+        <p style={{ color: "#334155", maxWidth: "860px" }}>
+          Dedicated setup workspace for registration settings, registration days, event/division options, builder drafts, publish-impact review, and guarded publishing. Tournament Ops remains the draw/scoring workspace after setup is published.
+        </p>
+        {error ? <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>Tournament Setup status unavailable. {error}</article> : null}
+        <TournamentSetupPanel apiBase={apiBase()} clubId={clubId} status={status} />
+        <p style={{ marginTop: "1rem" }}><Link href="/admin">Operations cockpit</Link>{status?.streamlit_fallback_url ? <> · <a href={status.streamlit_fallback_url} target="_blank" rel="noreferrer">Open Streamlit Tournament Setup fallback</a></> : null}</p>
+      </section>
+    </>
   );
 }

@@ -78,7 +78,12 @@ Never put `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-on
 
 ## Admin operations migration flags
 
-`GET /admin/operations/status` powers the Next `/admin` cockpit. It is status-only and public-safe: it returns environment, pilot mode, enabled workflow keys, safety gates, and boolean backend readiness, but not credentials.
+`GET /admin/operations/status?club_id=...` powers the Next `/admin` cockpit.
+It requires a verified Supabase bearer token and at least one matching,
+club-scoped `admin_role_assignments` row before building or returning
+operational posture. Existing email-only assignments remain compatible; when a
+row has `user_id`, it must exactly match the JWT subject. Anonymous,
+wrong-club, and mismatched-user requests fail closed.
 
 Closed-club production-write pilot mode is controlled by:
 
@@ -95,6 +100,7 @@ Individual workflow flags are intentionally separate:
 - `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE=1` enables only the persisted League Awards mutations and additionally requires `SUPABASE_SERVICE_ROLE_KEY` on FastAPI. Mint still fails closed until all four top-performer badge definitions from `supabase/migrations/20260720014744_seed_top_performer_badges.sql` are readable; the seed also aligns present legacy `_v2` compatibility columns on newly inserted rows. Keep it off in production until the manual staging gate passes.
 - `JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER=1`
 - `JUPR_ENABLE_STAGING_NEXT_ADMIN_CHALLENGE_LADDER_WRITES=1` permits Challenge Ladder mutations only when `JUPR_ENV=staging`.
+  Played-result publish additionally requires `supabase/migrations/20260725231000_challenge_ladder_public_results.sql`; its service-role-only operation-bound RPC atomically inserts both matches, applies the exact reviewed player/league rating plan, performs the collision-safe rank change, completes the challenge, records two exact public match IDs, and writes the response-loss receipt. Recoverable badge/update post-processors never replay that core. Legacy/imported and forfeit rows remain nullable and are never assigned inferred match or rating relations.
 - `JUPR_ENABLE_NEXT_ADMIN_MONEYBALL=1` enables the Python-authoritative Moneyball preview/settlement surface.
 - `JUPR_ENABLE_STAGING_NEXT_ADMIN_MONEYBALL_WRITES=1` permits Moneyball official publish only when `JUPR_ENV=staging`.
 - `JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE=1` enables one-off JUPR Live administration; Tournament Live remains separate.
@@ -114,7 +120,7 @@ Do not enable high-risk workflow flags broadly until the workflow has server-sid
 ## Endpoints
 
 - `GET /health`
-- `GET /admin/operations/status`
+- `GET /admin/operations/status?club_id=...` guarded by Supabase JWT plus a bound admin assignment
 - `GET /admin/clubs/{club_id}/match-log`
 - `PATCH /admin/clubs/{club_id}/match-log/edits` guarded by `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY` plus Supabase JWT role authorization
 - `POST /admin/clubs/{club_id}/match-log/edits/{operation_id}/recover` guarded replay recovery for an atomically committed edit

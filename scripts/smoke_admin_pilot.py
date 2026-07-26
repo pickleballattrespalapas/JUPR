@@ -163,7 +163,14 @@ def _request(check: PilotCheck, *, api_base_url: str, admin_token: str | None, t
 def _build_checks(club_id: str) -> list[PilotCheck]:
     return [
         PilotCheck("api: health", "GET", "/health", (200,), required_json_paths=(("ok", True),)),
-        PilotCheck("pilot: operations mode", "GET", "/admin/operations/status", (200,), required_json_paths=(("write_pilot_enabled", True),)),
+        PilotCheck(
+            "pilot: operations mode",
+            "GET",
+            f"/admin/operations/status?club_id={urllib.parse.quote(club_id)}",
+            (200,),
+            require_admin_token=True,
+            required_json_paths=(("write_pilot_enabled", True),),
+        ),
         PilotCheck("pilot: match log enabled", "GET", f"/admin/clubs/{club_id}/match-log?limit=25", (200,), required_json_paths=(("enabled", True), ("apply_enabled", True))),
         PilotCheck("pilot: replay enabled", "GET", f"/admin/clubs/{club_id}/replay-history", (200,), required_json_paths=(("enabled", True),)),
         PilotCheck(

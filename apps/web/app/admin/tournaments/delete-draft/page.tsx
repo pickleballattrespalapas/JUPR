@@ -32,8 +32,6 @@ export default async function AdminTournamentDeleteDraftPage() {
       ) : null}
 
       <p style={{ marginTop: "1rem", display: "flex", gap: "1rem", flexWrap: "wrap" }}>
-        <Link href="/admin/tournaments">Tournament Admin</Link>
-        <Link href="/admin/tournaments/status">Status actions</Link>
         <Link href="/admin">Operations cockpit</Link>
       </p>
     </section>

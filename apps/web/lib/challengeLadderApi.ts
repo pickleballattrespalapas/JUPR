@@ -34,6 +34,49 @@ export type PublicLadderTier = {
 export type PublicLadderChallengeSide = {
   player_id?: string | number | null;
   player_name: string;
+  rank_at_create?: number | null;
+  current_rank?: number | null;
+  current_rating_jupr?: number | null;
+};
+
+export type PublicLadderResultPlayer = {
+  player_id?: string | number | null;
+  player_name: string;
+};
+
+export type PublicLadderResultRatingChange = PublicLadderResultPlayer & {
+  before_jupr?: number | null;
+  after_jupr?: number | null;
+  delta_jupr?: number | null;
+};
+
+export type PublicLadderResultRankChange = PublicLadderResultPlayer & {
+  before: number;
+  after: number;
+  delta: number;
+};
+
+export type PublicLadderResultDetails = {
+  version: 1;
+  completeness: "full" | "partial";
+  rank_change?: {
+    swapped: boolean;
+    challenger: PublicLadderResultRankChange;
+    defender: PublicLadderResultRankChange;
+  } | null;
+  matches: Array<{
+    slot: "a" | "b";
+    match_id?: string | number | null;
+    date?: string | null;
+    score_challenger_team: number;
+    score_defender_team: number;
+    games?: Array<{ game: number; challenger: number; defender: number }>;
+    challenger_partner?: PublicLadderResultPlayer | null;
+    defender_partner?: PublicLadderResultPlayer | null;
+    rating_changes: PublicLadderResultRatingChange[];
+  }>;
+  notice?: string | null;
+  warnings?: string[];
 };
 
 export type PublicLadderChallenge = {
@@ -48,6 +91,7 @@ export type PublicLadderChallenge = {
   accept_by?: string | null;
   play_by?: string | null;
   completed_at?: string | null;
+  result_details?: PublicLadderResultDetails | null;
 };
 
 export type PublicLadderChallengeSection = {
@@ -120,7 +164,9 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
-    const response = await fetch(url, { next: { revalidate: 60 } });
+    // Completed challenges and eligibility can change immediately after an
+    // operator action. Do not let a prior public page render mask that update.
+    const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
     return { data: (await response.json()) as T, error: null };
   } catch (error) {

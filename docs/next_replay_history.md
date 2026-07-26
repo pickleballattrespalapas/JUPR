@@ -39,8 +39,9 @@ replay**; there is no typed-confirmation field.
   player's legacy singles aggregate as a baseline. New singles rows can then be
   marked `singles_replay_managed`; full reset rebuilds their rating, W/L/match
   count, last-game timestamp, and match snapshots from that baseline. The
-  migration is in the candidate repository but is not yet formally applied and
-  accepted in staging.
+  migration is applied in staging as connector ledger entry
+  `20260725193213_singles_replay_recovery`; formal exact-candidate acceptance
+  remains pending.
 - Match Log refuses to exclude a legacy singles row that cannot be recovered
   deterministically. Its duplicate-cleanup and bulk-exclusion subflows are
   implemented but remain `Blocked` behind
@@ -56,10 +57,10 @@ replay**; there is no typed-confirmation field.
 
 ## Next step
 
-Apply and verify the singles replay migration in staging, then validate the
-Tournament Operations compare-and-swap official-singles publisher without
-claiming manual recovery acceptance while destructive Match Log exclusion is
-dormant. Direct Match Uploader singles stays `Blocked` behind
+Retain the applied singles replay schema and validate the Tournament Operations
+compare-and-swap official-singles publisher without claiming manual recovery
+acceptance while destructive Match Log exclusion is dormant. Direct Match
+Uploader singles stays `Blocked` behind
 `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES=0` until its writer is atomic.
 Preserve the rated/unrated submit→exact-exclude→full-replay protocol for a later
 candidate after both gates are reviewed and enabled. Durable replay job history

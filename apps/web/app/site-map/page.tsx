@@ -47,39 +47,10 @@ const routeGroups = [
     ]
   },
   {
-    heading: "Staff operations shell",
+    heading: "Staff access",
     routes: [
-      ["Operations cockpit", "/admin"],
-      ["Operations guide", "/admin/guide"],
-      ["Theme QA", "/admin/theme-qa"],
       ["Staff sign-in", "/admin/login"],
-      ["Reset password", "/admin/reset-password"],
-      ["Match Log", "/admin/match-log"],
-      ["Replay History", "/admin/replay-history"],
-      ["Match Uploader", "/admin/match-uploader"],
-      ["Player Editor", "/admin/players"],
-      ["Player Updates", "/admin/player-updates"],
-      ["Verified Requests", "/admin/player-updates/verified-requests"],
-      ["Support Requests", "/admin/support-requests"],
-      ["League Manager", "/admin/league-manager"],
-      ["League Live", "/admin/league-manager/live"],
-      ["League Awards", "/admin/league-manager/awards"],
-      ["League Print", "/admin/league-manager/print"],
-      ["Top Players Printable", "/admin/top-players-printable"],
-      ["Tournament Setup", "/admin/tournament-setup"],
-      ["Tournament Admin", "/admin/tournaments"],
-      ["Tournament Bulk Actions", "/admin/tournaments/bulk"],
-      ["Tournament Ops", "/admin/tournaments/ops"],
-      ["Tournament Status", "/admin/tournaments/status"],
-      ["Delete Draft Tournament", "/admin/tournaments/delete-draft"],
-      ["Tournament Live", "/admin/tournament-live"],
-      ["Weekly Recap Admin", "/admin/weekly-recap"],
-      ["Badge Diagnostics", "/admin/badges"],
-      ["Moneyball", "/admin/moneyball"],
-      ["JUPR Live Admin", "/admin/jupr-live"],
-      ["Challenge Ladder Admin", "/admin/challenge-ladder"],
-      ["Match Canonical Audit", "/admin/match-canonical-audit"],
-      ["Admin Tools", "/admin/tools"]
+      ["Reset password", "/admin/reset-password"]
     ]
   }
 ];
@@ -92,7 +63,9 @@ export default function SiteMapPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Pickleball Club Sandwich route map</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        A click-through map for public pages, tournament pages, support routes, and the full staff staging surface. Admin routes require staff sign-in and workflow-specific FastAPI authorization before writes are accepted.
+        A click-through map for public pages, tournament pages, support routes,
+        and staff sign-in. Protected administrative tools are intentionally not
+        listed on the public route map.
       </p>
       <div style={{ display: "grid", gap: "1.25rem" }}>
         {routeGroups.map((group) => (

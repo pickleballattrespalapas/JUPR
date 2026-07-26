@@ -60,6 +60,8 @@ WAVES: dict[str, tuple[dict[str, object], ...]] = {
                 "e2e/league-results.parity.spec.ts",
                 "e2e/players.staging.spec.ts",
                 "e2e/public-explorer-recap.spec.ts",
+                "e2e/admin-operations-auth.spec.ts",
+                "e2e/tournament-admin-navigation.spec.ts",
             ),
         },
     ),

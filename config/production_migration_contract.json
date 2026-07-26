@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-readonly-2026-07-25",
-  "repository_migration_content_sha256": "506c17fe4c1ac5867ea84a2158c41e3d387c6d6559031077e5c44cfa49aec41b",
+  "repository_migration_content_sha256": "9ef49886fc9a524e2697aeb3ab9a58a41fc1f98e895cc5737db78a6c112bbcc9",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -17,6 +17,7 @@
     "badge_eval_queue_atomic_club_claim",
     "baseline_worker_run_log",
     "canonicalize_server_only_tables",
+    "challenge_ladder_public_results",
     "communications_outbox_stale_guards",
     "enforce_next_schema_contract",
     "fix_public_function_search_paths",

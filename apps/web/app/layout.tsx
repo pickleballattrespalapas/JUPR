@@ -76,7 +76,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <Link href="/clubs/tres-palapas/tournament-roster">Roster</Link>
               <Link href="/clubs/tres-palapas/tournament-partner-board">Partner Board</Link>
               <Link href="/clubs/tres-palapas/players">Players</Link>
-              <Link href="/admin">Admin</Link>
+              <Link href="/admin/login">Staff sign in</Link>
             </nav>
           </header>
           <main>{children}</main>

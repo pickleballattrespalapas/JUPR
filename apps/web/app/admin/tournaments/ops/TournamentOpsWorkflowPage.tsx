@@ -41,8 +41,6 @@ export default async function TournamentOpsWorkflowPage({ workflow, kicker, titl
       ) : null}
 
       <p style={{ marginTop: "1rem", display: "flex", gap: "1rem", flexWrap: "wrap" }}>
-        <Link href="/admin/tournaments">Tournament Admin</Link>
-        <Link href="/admin/tournaments/bulk">Bulk registration actions</Link>
         <Link href="/admin">Operations cockpit</Link>
       </p>
     </section>

@@ -114,9 +114,10 @@ Direct Match Uploader singles is implemented but `Blocked` behind
 Match Log duplicate cleanup and bulk exclusion are implemented but `Blocked`
 behind `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=0` until their recovery is
 atomic and idempotent. Both flags are dormant in every staging wave and in
-production. The singles replay migration is reviewed in the repository but has
-not yet been formally applied and accepted in staging. Tournament Operations
-official singles publishing is a separate, automated-ready CAS path; its manual
+production. The singles replay migration is applied in staging as connector
+ledger entry `20260725193213_singles_replay_recovery`, but formal
+exact-candidate acceptance remains pending. Tournament Operations official
+singles publishing is a separate, automated-ready CAS path; its manual
 exclude/replay evidence is still deferred while destructive exclusion is off.
 
 ## Page-level closure contracts
@@ -183,7 +184,7 @@ Before any page moves to `Done`:
 - The full Next production build passes.
 - The Next build runs the Tournament Setup payload-builder contract on its pinned
   Node 20 runtime.
-- The isolated staging smoke passes all 56 strict public-read tests and all five
+- The isolated staging smoke passes all 69 strict public-read tests and all five
   guided Tournament Setup browser tests with zero skips, failures, or flakes.
 - Authenticated tests use only the staging Supabase project and staging-only users.
 - Mutating tests use isolated fixtures and include a verified cleanup or recovery step.

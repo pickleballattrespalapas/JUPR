@@ -41,13 +41,13 @@ const featureGroups = [
   },
   {
     title: "Help and operations",
-    description: "Public help pages and the read-only admin migration shell provide clear paths while Streamlit fallback remains available.",
+    description: "Public help pages and a separate staff sign-in keep member support easy to find while administrative tools remain protected.",
     links: [
       ["Ratings explainer", "/how-ratings-work"],
       ["FAQ", "/faq"],
       ["Support", "/support"],
       ["Data corrections", "/data-corrections"],
-      ["Admin cockpit", "/admin"],
+      ["Staff sign-in", "/admin/login"],
       ["Site Map", "/site-map"]
     ]
   }

@@ -135,7 +135,7 @@ same-candidate restoration to `none`. The workflow:
    non-selected write flag off;
 5. waits for health; and
 6. verifies the complete schema inventory, deployment identity, selected wave,
-   and public-safe admin status surface.
+   and that the admin operations status surface rejects anonymous access.
 
 Default staging API URL:
 

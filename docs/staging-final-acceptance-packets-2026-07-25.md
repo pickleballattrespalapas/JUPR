@@ -22,7 +22,7 @@ deliberate book-only completion path.
 | Fly app | `juprleagues-api-staging` |
 | Final none-wave Fly image | `Pending — record the exact-SHA none release` |
 | Supabase project | `sijpxjxvdtrehmqvirfi` |
-| Migration inventory | `Pending — require the reviewed 38-name inventory, including singles_replay_recovery, and record the connector ledger head` |
+| Migration inventory | `Pending — require the reviewed 39-name inventory, including singles_replay_recovery and challenge_ladder_public_results, and record the connector ledger head` |
 | Email policy | `dry_run`; live player-update email disabled |
 | Streamlit fallback | `https://juprtrespalapas.streamlit.app` |
 
@@ -74,11 +74,13 @@ cutover approval.
 Run one transition at a time. GitHub permits only one running and one pending run
 in the shared staging concurrency group, so do not queue the whole sequence.
 
-1. Merge the repair PR, record the exact `staging` SHA, apply and verify the new
-   staging-only singles replay migration, and record the connector-assigned
-   38-name migration ledger head. Do not infer that head from the repository
-   filename.
-2. Confirm Vercel serves that exact SHA, then deploy Fly from the same SHA with
+1. Immediately before merging the repair PR, apply and verify the additive
+   staging-only `challenge_ladder_public_results` migration and record the
+   connector-assigned 39-name migration ledger head. Do not infer that head from
+   the repository filename. Keep the current staging release at
+   `write_wave=none`; the old API does not depend on the new nullable schema.
+2. Merge the repair PR and record the exact `staging` SHA. Confirm Vercel serves
+   that exact SHA, then deploy Fly from the same SHA with
    `write_wave=none`. Capture its image and re-attest health, OpenAPI,
    environment, staging Supabase identity, migration inventory, and the all-false
    controlled-write projection.
@@ -558,7 +560,7 @@ called `Done`, and Streamlit cannot be retired, until this complete book passes.
    `dry_run`.
 5. Recheck Supabase health, migration head, Auth/API/PostgreSQL logs, and
    security/performance advisors. Record handled compatibility probes accurately.
-6. Run canonical `Staging Smoke`; require all 56 public-read and five guided
+6. Run canonical `Staging Smoke`; require all 69 public-read and five guided
    Tournament Setup checks with zero skips, failures, or flakes.
 7. If any row remains blocked or incomplete, leave it `Pending` or `Blocked` and
    stop after recording the safe restored state. Only after all 45 page rows and

@@ -692,13 +692,6 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Tournament Ops</h2>
         <p style={{ color: "#475569" }}>Operations visibility plus guarded writes for creating draws, importing or maintaining teams, generating/scoring games, podiums, trophies, and official rating match publication.</p>
-        <nav aria-label="Tournament operations workflows" style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-          <Link href="/admin/tournaments/ops/draws">Draws and scoring</Link>
-          <Link href="/admin/tournaments/ops/import">Team imports</Link>
-          <Link href="/admin/tournaments/ops/results">Results CSV</Link>
-          <Link href="/admin/tournaments/ops/publish">Official publish</Link>
-          {workflow !== "all" ? <Link href="/admin/tournaments/ops">All operations</Link> : null}
-        </nav>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to load guarded tournament operations data." : sessionLoading ? "Checking admin session…" : "Sign in before loading ops data."}</p>

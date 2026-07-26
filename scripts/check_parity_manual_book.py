@@ -125,6 +125,7 @@ EXPECTED_MIGRATION_KEYS = {
     "order-28-tournament-live",
     "order-25-public-live",
     "singles-replay-recovery",
+    "challenge-ladder-public-results",
 }
 RECOVERY_REQUIRED_KEYS = {
     "match_canonical_audit",

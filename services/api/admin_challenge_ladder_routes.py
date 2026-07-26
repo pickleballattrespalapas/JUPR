@@ -29,8 +29,10 @@ from jupr_app.services.admin_challenge_ladder_service import (
     get_admin_challenge_ladder_tier_movement_review,
     is_admin_challenge_ladder_enabled,
     move_admin_challenge_ladder_roster_player,
+    prepare_admin_challenge_ladder_result_atomic_plan,
     preview_admin_challenge_ladder_result_for_challenge,
     preview_admin_challenge_ladder_tier_roster_replacement,
+    recover_admin_challenge_ladder_operation_result,
     record_admin_challenge_ladder_forfeit,
     record_admin_challenge_ladder_pass,
     record_admin_challenge_ladder_result,
@@ -43,7 +45,6 @@ from jupr_app.services.admin_live_ladder_operation_service import (
     LiveLadderConflictError,
     LiveLadderPersistenceError,
     LiveLadderUncertainError,
-    deterministic_match_context_id,
     deterministic_operation_key,
     get_durable_admin_operation,
     operation_recovery_handoff,
@@ -215,6 +216,25 @@ def _model_payload(model: BaseModel) -> dict[str, Any]:
     return model.dict()
 
 
+def _build_challenge_recovery_callback(
+    supabase: Any,
+    *,
+    actor_email: str,
+    actor_role: str,
+    source: str,
+):
+    def recover(operation: dict[str, Any]) -> dict[str, Any] | None:
+        return recover_admin_challenge_ladder_operation_result(
+            supabase,
+            operation=operation,
+            actor_email=actor_email,
+            actor_role=actor_role,
+            source=source,
+        )
+
+    return recover
+
+
 def _run_ladder_operation(
     supabase: Any,
     *,
@@ -227,6 +247,8 @@ def _run_ladder_operation(
     source: str,
     mutate,
     match_context_ids: list[str] | None = None,
+    stored_request_json: dict[str, Any] | None = None,
+    recover_incomplete=None,
 ) -> dict[str, Any]:
     current_version = str(get_admin_challenge_ladder_dashboard(supabase, club_id=str(club_id)).get("state_version") or "")
     return run_durable_admin_operation(
@@ -239,6 +261,7 @@ def _run_ladder_operation(
         expected_version=payload.expected_version,
         current_version=current_version,
         request_payload=_model_payload(payload),
+        stored_request_json=stored_request_json,
         recovery=operation_recovery_handoff(surface="challenge_ladder", entity_id=str(entity_id), match_context_ids=match_context_ids),
         actor_email=actor_email,
         actor_role=actor_role,
@@ -247,6 +270,7 @@ def _run_ladder_operation(
         current_version_resolver=lambda: str(
             get_admin_challenge_ladder_dashboard(supabase, club_id=str(club_id)).get("state_version") or ""
         ),
+        recover_incomplete=recover_incomplete,
     )
 
 
@@ -402,6 +426,34 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
             raise HTTPException(status_code=403, detail="Next Challenge Ladder Admin is disabled.")
         supabase, actor_email, actor_role = _prepare_write(get_supabase_client, club_id=str(club_id), authorization=authorization, source=payload.source, confirmation_text=payload.confirmation_text, expected_confirmation=CONFIRM_FORFEIT)
         try:
+            recover_incomplete = _build_challenge_recovery_callback(
+                supabase,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+            )
+            replay = replay_durable_admin_operation_if_present(
+                supabase,
+                club_id=str(club_id),
+                surface="challenge_ladder",
+                operation_type="record_forfeit",
+                entity_id=str(challenge_id),
+                idempotency_key=payload.idempotency_key,
+                request_payload=_model_payload(payload),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+                recover_incomplete=recover_incomplete,
+            )
+            if replay is not None:
+                return replay
+            operation_key = deterministic_operation_key(
+                club_id=str(club_id),
+                surface="challenge_ladder",
+                operation_type="record_forfeit",
+                entity_id=str(challenge_id),
+                idempotency_key=payload.idempotency_key,
+            )
             return _run_ladder_operation(
                 supabase,
                 club_id=str(club_id),
@@ -411,7 +463,8 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
                 actor_email=actor_email,
                 actor_role=actor_role,
                 source=payload.source,
-                mutate=lambda: record_admin_challenge_ladder_forfeit(supabase, club_id=str(club_id), challenge_id=int(challenge_id), forfeited_by_id=payload.forfeited_by_id, admin_note=payload.admin_note, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source),
+                recover_incomplete=recover_incomplete,
+                mutate=lambda: record_admin_challenge_ladder_forfeit(supabase, club_id=str(club_id), challenge_id=int(challenge_id), forfeited_by_id=payload.forfeited_by_id, admin_note=payload.admin_note, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, operation_key=operation_key, source=payload.source),
             )
         except Exception as exc:
             _handle(exc)
@@ -591,6 +644,12 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
             raise HTTPException(status_code=403, detail="Next Challenge Ladder Admin is disabled.")
         supabase, actor_email, actor_role = _prepare_write(get_supabase_client, club_id=str(club_id), authorization=authorization, source=payload.source, confirmation_text=payload.confirmation_text, expected_confirmation=CONFIRM_RESULT)
         try:
+            recover_incomplete = _build_challenge_recovery_callback(
+                supabase,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+            )
             replay = replay_durable_admin_operation_if_present(
                 supabase,
                 club_id=str(club_id),
@@ -602,6 +661,7 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
                 actor_email=actor_email,
                 actor_role=actor_role,
                 source=payload.source,
+                recover_incomplete=recover_incomplete,
             )
             if replay is not None:
                 return replay
@@ -628,14 +688,26 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
                 entity_id=str(challenge_id),
                 idempotency_key=payload.idempotency_key,
             )
-            contexts = (
-                [
-                    deterministic_match_context_id(operation_key=operation_key, slot="a"),
-                    deterministic_match_context_id(operation_key=operation_key, slot="b"),
-                ]
-                if payload.publish_official_matches
-                else []
+            prepared_plan = prepare_admin_challenge_ladder_result_atomic_plan(
+                supabase,
+                club_id=str(club_id),
+                challenge_id=int(challenge_id),
+                partner_a_challenger_id=payload.partner_a_challenger_id,
+                partner_a_defender_id=payload.partner_a_defender_id,
+                partner_b_challenger_id=payload.partner_b_challenger_id,
+                partner_b_defender_id=payload.partner_b_defender_id,
+                match_a_games=payload.match_a_games,
+                match_b_games=payload.match_b_games,
+                match_date=payload.match_date,
+                winner_override=payload.winner_override,
+                publish_official_matches=payload.publish_official_matches,
+                expected_preview_fingerprint=payload.preview_fingerprint,
+                operation_key=operation_key,
             )
+            atomic_core = dict(prepared_plan["atomic_core"])
+            contexts = [
+                str(value) for value in (atomic_core.get("match_context_ids") or [])
+            ]
             return _run_ladder_operation(
                 supabase,
                 club_id=str(club_id),
@@ -646,6 +718,11 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
                 actor_role=actor_role,
                 source=payload.source,
                 match_context_ids=contexts,
+                stored_request_json={
+                    "client_request": _model_payload(payload),
+                    "atomic_core": atomic_core,
+                },
+                recover_incomplete=recover_incomplete,
                 mutate=lambda: record_admin_challenge_ladder_result(
                     supabase,
                     club_id=str(club_id),
@@ -664,6 +741,7 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
                     confirmation_text=payload.confirmation_text,
                     expected_preview_fingerprint=payload.preview_fingerprint,
                     publish_context_prefix=operation_key,
+                    atomic_core=atomic_core,
                     source=payload.source,
                 ),
             )
@@ -754,6 +832,12 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
                 confirmation_text=payload.confirmation_text,
                 expected_confirmation=CONFIRM_RECONCILE_LADDER,
                 source=payload.source,
+                recover_incomplete=_build_challenge_recovery_callback(
+                    supabase,
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    source=payload.source,
+                ),
             )
         except Exception as exc:
             _handle(exc)

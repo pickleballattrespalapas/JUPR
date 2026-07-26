@@ -1,6 +1,7 @@
 import Link from "next/link";
+import ChallengeLadderResultDetails from "@/components/ChallengeLadderResultDetails";
 import { getClubChallengeLadder } from "@/lib/challengeLadderApi";
-import type { PublicLadderChallenge, PublicLadderPlayer, PublicLadderTier } from "@/lib/challengeLadderApi";
+import type { PublicLadderChallenge, PublicLadderChallengeSide, PublicLadderPlayer, PublicLadderTier } from "@/lib/challengeLadderApi";
 
 type ChallengeLadderPageProps = {
   params: { clubSlug: string };
@@ -20,7 +21,7 @@ const cardStyle = {
 
 const sectionLabels: Record<SectionKey, string> = {
   ladder: "Ladder",
-  challenges: "Active challenges",
+  challenges: "Challenges & results",
   rules: "Quick rules"
 };
 
@@ -149,24 +150,69 @@ function TierCard({ tier, clubSlug, selectedPlayerId, q }: { tier: PublicLadderT
   );
 }
 
-function ChallengeCard({ challenge, clubSlug, selected }: { challenge: PublicLadderChallenge; clubSlug: string; selected: boolean }) {
+function ChallengeParticipant({
+  label,
+  player,
+  clubSlug
+}: {
+  label: string;
+  player: PublicLadderChallengeSide;
+  clubSlug: string;
+}) {
+  const facts = [
+    player.rank_at_create == null ? null : `At challenge: #${player.rank_at_create}`,
+    player.current_rank == null ? null : `Current: #${player.current_rank}`,
+    player.current_rating_jupr == null ? null : `Current JUPR: ${juprLabel(player.current_rating_jupr)}`
+  ].filter((value): value is string => Boolean(value));
+
   return (
-    <article id={challengeAnchor(challenge.id)} style={{ ...cardStyle, marginBottom: "0.75rem", borderColor: selected ? "#2563eb" : "#e2e8f0", boxShadow: selected ? "0 0 0 3px rgba(37,99,235,0.12)" : "none" }}>
+    <div style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.7rem" }}>
+      <div style={{ color: "#64748b", fontSize: "0.75rem", fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>{label}</div>
+      <strong><Link href={playerHref(clubSlug, player.player_id)}>{player.player_name}</Link></strong>
+      {facts.length ? <div style={{ color: "#475569", fontSize: "0.82rem", marginTop: "0.2rem" }}>{facts.join(" · ")}</div> : null}
+    </div>
+  );
+}
+
+function ChallengeCard({ challenge, clubSlug, selected }: { challenge: PublicLadderChallenge; clubSlug: string; selected: boolean }) {
+  const isCompleted = challenge.bucket === "Recently Completed" || challenge.status === "COMPLETED" || challenge.status === "FORFEITED";
+  const anchor = challengeAnchor(challenge.id);
+  const headingId = `${anchor}-heading`;
+  return (
+    <article id={anchor} aria-labelledby={headingId} style={{ ...cardStyle, marginBottom: "0.75rem", borderColor: selected ? "#2563eb" : "#e2e8f0", boxShadow: selected ? "0 0 0 3px rgba(37,99,235,0.12)" : "none" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
-        <strong><Link href={pageHref({ clubSlug, section: "challenges", challenge: challenge.id, anchor: challengeAnchor(challenge.id) })}>Challenge #{challenge.id ?? "—"}</Link></strong>
+        <h4 id={headingId} style={{ margin: 0, fontSize: "1rem" }}><Link href={pageHref({ clubSlug, section: "challenges", challenge: challenge.id, anchor })}>Challenge #{challenge.id ?? "—"}</Link></h4>
         <span style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.12rem 0.45rem", fontSize: "0.78rem" }}>{challenge.status}</span>
       </div>
-      <p style={{ margin: "0.5rem 0" }}>
-        <Link href={playerHref(clubSlug, challenge.challenger.player_id)}>{challenge.challenger.player_name}</Link>
-        <span style={{ color: "#64748b" }}> vs </span>
-        <Link href={playerHref(clubSlug, challenge.defender.player_id)}>{challenge.defender.player_name}</Link>
-      </p>
-      {challenge.winner ? <p style={{ margin: "0.35rem 0", color: "#475569" }}>Winner: {challenge.winner.player_name}</p> : null}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.65rem", margin: "0.75rem 0" }}>
+        <ChallengeParticipant label="Challenger" player={challenge.challenger} clubSlug={clubSlug} />
+        <ChallengeParticipant label="Defender" player={challenge.defender} clubSlug={clubSlug} />
+      </div>
+      {challenge.winner ? (
+        <p style={{ margin: "0.35rem 0", color: "#475569" }}>
+          Winner: <Link href={playerHref(clubSlug, challenge.winner.player_id)}>{challenge.winner.player_name}</Link>
+        </p>
+      ) : null}
       <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.4rem", margin: 0, color: "#475569", fontSize: "0.86rem" }}>
         <div><dt style={{ fontWeight: 700 }}>Created</dt><dd style={{ margin: 0 }}>{dateLabel(challenge.created_at)}</dd></div>
-        <div><dt style={{ fontWeight: 700 }}>Accept by</dt><dd style={{ margin: 0 }}>{dateLabel(challenge.accept_by)}</dd></div>
-        <div><dt style={{ fontWeight: 700 }}>Play by</dt><dd style={{ margin: 0 }}>{dateLabel(challenge.play_by)}</dd></div>
+        {challenge.accept_by ? <div><dt style={{ fontWeight: 700 }}>Accept by</dt><dd style={{ margin: 0 }}>{dateLabel(challenge.accept_by)}</dd></div> : null}
+        {challenge.play_by ? <div><dt style={{ fontWeight: 700 }}>Play by</dt><dd style={{ margin: 0 }}>{dateLabel(challenge.play_by)}</dd></div> : null}
+        {isCompleted ? <div><dt style={{ fontWeight: 700 }}>Completed</dt><dd style={{ margin: 0 }}>{dateLabel(challenge.completed_at)}</dd></div> : null}
       </dl>
+      {isCompleted ? (
+        <>
+          <p style={{ margin: "0.65rem 0 0", color: "#64748b", fontSize: "0.82rem" }}>
+            Current positions and ratings are live ladder values; they do not by themselves attribute a rank or rating change to this challenge.
+          </p>
+          {challenge.result_details ? <ChallengeLadderResultDetails challenge={challenge} details={challenge.result_details} clubSlug={clubSlug} /> : (
+            <p data-result-details="unavailable" style={{ margin: "0.4rem 0 0", color: "#64748b", fontSize: "0.82rem" }}>
+              {challenge.status === "FORFEITED"
+                ? "Resolved by forfeit; played-match scores, swing partners, rating changes, and match links are not expected."
+                : "Detailed scores, swing partners, rating changes, and match links are unavailable for this result. Older or imported records may not have linked match details."}
+            </p>
+          )}
+        </>
+      ) : null}
     </article>
   );
 }
@@ -228,7 +274,7 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
       </p>
       <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} challenge ladder</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Public ladder standings, player status, active challenge buckets, and quick rules. Challenge creation, notices, score entry, forfeits, passes, and rank changes remain staff-managed.
+        Public ladder standings, player status, challenge activity, recent results, and quick rules. Challenge creation, notices, score entry, forfeits, passes, and rank changes remain staff-managed.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Challenge Ladder is temporarily unavailable. {error}</p> : null}
@@ -279,7 +325,7 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
 
           {section === "challenges" ? (
             <>
-              <h2>Active challenges</h2>
+              <h2>Challenges & results</h2>
               {!hasChallenges ? <p style={{ color: "#64748b" }}>No public challenge activity yet.</p> : null}
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
                 <Link href={pageHref({ clubSlug, section: "challenges", challenge: selectedChallengeId })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: !selectedStatus ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: !selectedStatus ? 800 : 600 }}>All buckets</Link>

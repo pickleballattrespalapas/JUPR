@@ -283,3 +283,14 @@ def test_public_match_detail_includes_rating_snapshot_without_raw_columns():
     assert detail["rating_snapshot"]["team_1"][0]["start_rating"] == 1595.0
     assert detail["rating_snapshot"]["team_1"][0]["end_rating"] == 1600.0
     assert "t1_p1_r" not in detail
+
+
+def test_soft_deleted_matches_are_suppressed_from_all_public_match_reads():
+    supabase = FakeSupabase()
+    supabase.rows_by_table["matches"][0]["deleted_at"] = "2026-07-10T00:00:00Z"
+
+    assert get_public_match_detail(supabase, club_id="club-1", match_id=99) is None
+    assert all(
+        match["id"] != 99
+        for match in get_public_matches(supabase, club_id="club-1")
+    )

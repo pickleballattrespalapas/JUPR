@@ -31,14 +31,10 @@ export default async function AdminTournamentRegistrationManagementPage() {
         </>
       ) : null}
 
-      <nav aria-label="Tournament administration" style={{ marginTop: "1rem", display: "flex", gap: "1rem", flexWrap: "wrap" }}>
-        <Link href="/admin/tournaments">Tournament Admin</Link>
-        <Link href="/admin/tournaments/bulk">Bulk registration status/payment</Link>
-        <Link href="/admin/tournaments/status">Tournament status actions</Link>
-        <Link href="/admin/tournaments/ops">Guarded operations import</Link>
+      <p style={{ marginTop: "1rem", display: "flex", gap: "1rem", flexWrap: "wrap" }}>
         {data?.streamlit_fallback_url ? <a href={data.streamlit_fallback_url} target="_blank" rel="noreferrer">Streamlit registration recovery</a> : null}
         <Link href="/admin">Operations cockpit</Link>
-      </nav>
+      </p>
     </section>
   );
 }

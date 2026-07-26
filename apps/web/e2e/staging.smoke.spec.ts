@@ -31,7 +31,6 @@ const publicSurfaces: Surface[] = [
 ];
 
 const adminSurfaces: Surface[] = [
-  { name: "operations cockpit", path: "/admin", expected: /operations cockpit/i },
   { name: "admin login", path: "/admin/login", expected: /admin login/i },
   { name: "match log", path: "/admin/match-log", expected: /match log/i },
   { name: "replay history", path: "/admin/replay-history", expected: /replay history/i },
@@ -172,6 +171,23 @@ test("challenge ladder: Python eligibility, deep links, rulebook, and status leg
   await playerLink.click();
   await expect(page.locator('[data-python-eligibility="python"]')).toBeVisible();
   await expect(page.getByText(/Python ladder policy/i)).toBeVisible();
+
+  response = await page.goto(`/clubs/${clubSlug}/challenge-ladder?section=challenges&status=Recently%20Completed`, { waitUntil: "domcontentloaded" });
+  expect(response?.status()).toBeLessThan(400);
+  const completed = page.locator("#ladder-challenge-990001");
+  await expect(completed).toBeVisible();
+  await expect(completed).toContainText("Completed");
+  await expect(completed).toContainText("2026-07-05 19:00 UTC");
+  await expect(completed).toContainText("At challenge: #2");
+  await expect(completed).toContainText("Current: #2");
+  await expect(completed).toContainText("Current JUPR: 3.053");
+  await expect(completed.getByRole("link", { name: "Devon Dink" })).toHaveCount(2);
+  await expect(completed.locator('[data-result-details="available"][data-result-completeness="partial"]')).toBeVisible();
+  await expect(completed).toContainText("Verified legacy Match A: 22–17");
+  await expect(completed).toContainText("Games: 11–8, 11–9");
+  await expect(completed.getByRole("link", { name: "Blake Baseline" })).toBeVisible();
+  await expect(completed).toContainText("1 of 2 verified legacy match records");
+  await expect(completed).toContainText(/partner assignment that conflicts/i);
 });
 
 for (const surface of adminSurfaces) {
@@ -179,3 +195,21 @@ for (const surface of adminSurfaces) {
     await expectHealthySurface(page, surface);
   });
 }
+
+test("admin operations cockpit is hidden until staff authentication", async ({ page }) => {
+  const response = await page.goto("/admin", { waitUntil: "domcontentloaded" });
+  expect(response?.status()).toBeLessThan(400);
+  await expect(
+    page.getByRole("heading", { name: /admin sign-in required/i })
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: /open admin login/i })).toBeVisible();
+  await expect(page.getByText("Environment", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Workflow flags", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("API service role", { exact: true })).toHaveCount(0);
+
+  const apiResponse = await page.request.get(
+    `${expectedApiOrigin}/admin/operations/status`,
+    { failOnStatusCode: false }
+  );
+  expect(apiResponse.status()).toBe(401);
+});
