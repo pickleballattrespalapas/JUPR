@@ -6,6 +6,8 @@ from pathlib import Path
 CONTROLLER_PATH = ".github/workflows/staging-evidence-automation.yml"
 RECOVERY_PATH = ".github/workflows/staging-write-recovery.yml"
 HELPER_PATH = "scripts/staging_evidence_automation.py"
+PARITY_HELPER_PATH = "scripts/run_parity_staging_wave.py"
+WRITE_WAVES_PATH = "scripts/staging_write_waves.py"
 FLY_CHILD_PATH = ".github/workflows/fly_api_staging_deploy.yml"
 PARITY_CHILD_PATH = ".github/workflows/parity-final-evidence.yml"
 
@@ -92,6 +94,8 @@ def test_authorization_is_secretless_and_byte_syncs_the_registry() -> None:
         CONTROLLER_PATH,
         RECOVERY_PATH,
         HELPER_PATH,
+        PARITY_HELPER_PATH,
+        WRITE_WAVES_PATH,
     ):
         assert registry_path in authorize
 
@@ -253,6 +257,8 @@ def test_recovery_is_automatic_and_can_only_dispatch_fixed_none() -> None:
     assert "ref: rollback-feb8" in recovery
     assert "cmp --silent" in recovery
     assert '<(git show "refs/remotes/origin/staging:$path")' in recovery
+    assert PARITY_HELPER_PATH in recovery
+    assert WRITE_WAVES_PATH in recovery
 
 
 def test_automation_surfaces_have_only_staging_deployment_targets() -> None:

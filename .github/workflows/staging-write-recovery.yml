@@ -68,7 +68,9 @@ jobs:
           fi
           for path in \
             .github/workflows/fly_api_staging_deploy.yml \
-            scripts/staging_evidence_automation.py
+            scripts/staging_evidence_automation.py \
+            scripts/run_parity_staging_wave.py \
+            scripts/staging_write_waves.py
           do
             if ! cmp --silent \
               "$path" \
