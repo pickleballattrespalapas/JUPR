@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from copy import deepcopy
 
 from jupr_app.services.admin_moneyball_service import (
+    build_admin_moneyball_status,
     build_moneyball_preview,
     build_moneyball_settlement_preview,
     compute_moneyball_settlement,
@@ -10,13 +11,18 @@ from jupr_app.services.admin_moneyball_service import (
 
 
 class FakeQuery:
-    def __init__(self, storage, table_name):
+    def __init__(self, storage, table_name, select_calls, missing_player_columns):
         self.storage = storage
         self.table_name = table_name
+        self.select_calls = select_calls
+        self.missing_player_columns = missing_player_columns
+        self.selected_columns = set()
         self.filters = []
         self.limit_value = None
 
-    def select(self, *_args, **_kwargs):
+    def select(self, columns, *_args, **_kwargs):
+        self.select_calls.append((self.table_name, columns))
+        self.selected_columns = {column.strip() for column in str(columns).split(",")}
         return self
 
     def eq(self, key, value):
@@ -31,6 +37,8 @@ class FakeQuery:
         return self
 
     def execute(self):
+        if self.table_name == "players" and self.selected_columns & self.missing_player_columns:
+            raise RuntimeError("selected player column does not exist")
         rows = list(self.storage.get(self.table_name, []))
         for key, expected in self.filters:
             rows = [row for row in rows if str(row.get(key)) == str(expected)]
@@ -40,7 +48,9 @@ class FakeQuery:
 
 
 class FakeSupabase:
-    def __init__(self):
+    def __init__(self, *, missing_player_columns=None):
+        self.select_calls = []
+        self.missing_player_columns = set(missing_player_columns or [])
         self.storage = {
             "players": [{"club_id": "club", "id": i, "name": f"Player {i}", "rating": 1200 + i * 10, "active": True} for i in range(1, 9)],
             "league_ratings": [],
@@ -48,7 +58,33 @@ class FakeSupabase:
         }
 
     def table(self, name):
-        return FakeQuery(self.storage, name)
+        return FakeQuery(self.storage, name, self.select_calls, self.missing_player_columns)
+
+
+def test_moneyball_status_uses_canonical_player_active_column_without_retry(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MONEYBALL", "1")
+    supabase = FakeSupabase(missing_player_columns={"is_active"})
+    supabase.storage["players"][0]["active"] = False
+
+    payload = build_admin_moneyball_status(supabase, club_id="club")
+
+    player_calls = [columns for table, columns in supabase.select_calls if table == "players"]
+    assert player_calls == ["id,name,rating,active"]
+    assert payload["players"][0]["is_active"] is False
+
+
+def test_moneyball_status_keeps_legacy_player_active_fallback(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MONEYBALL", "1")
+    supabase = FakeSupabase(missing_player_columns={"active"})
+    for row in supabase.storage["players"]:
+        row.pop("active")
+        row["is_active"] = row["id"] != 1
+
+    payload = build_admin_moneyball_status(supabase, club_id="club")
+
+    player_calls = [columns for table, columns in supabase.select_calls if table == "players"]
+    assert player_calls == ["id,name,rating,active", "id,name,rating,is_active"]
+    assert payload["players"][0]["is_active"] is False
 
 
 def test_moneyball_preview_requires_exactly_8_unique_players(monkeypatch):

@@ -70,9 +70,12 @@ def expected_scoreline_from_share(p: float, goal_points: int = 11) -> tuple[int,
 
 def _players(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
     try:
-        rows = _safe_rows(supabase.table("players").select("id,name,rating,active,is_active").eq("club_id", str(club_id)).order("name", desc=False).execute())
+        rows = _safe_rows(supabase.table("players").select("id,name,rating,active").eq("club_id", str(club_id)).order("name", desc=False).execute())
     except Exception:
-        rows = _safe_rows(supabase.table("players").select("id,name,rating").eq("club_id", str(club_id)).execute())
+        try:
+            rows = _safe_rows(supabase.table("players").select("id,name,rating,is_active").eq("club_id", str(club_id)).order("name", desc=False).execute())
+        except Exception:
+            rows = _safe_rows(supabase.table("players").select("id,name,rating").eq("club_id", str(club_id)).execute())
     result = []
     for row in rows:
         pid = _safe_int(row.get("id"))
