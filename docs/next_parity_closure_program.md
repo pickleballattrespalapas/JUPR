@@ -103,10 +103,10 @@ The later exact-read candidate
 `7cedb81ca251023806b0953db996a6e7b80c381a` is also historical. Its public and
 authenticated read suites passed, but the fixture/recovery audit found managed
 singles replay, League Live preview gating, and recovery-context defects. The
-repair candidate adds a replay baseline/managed marker, a preview-only Match
+subsequent repair added a replay baseline/managed marker, a preview-only Match
 Uploader dependency for League Live, and exact Match Log context filtering while
-keeping Replay global. All candidate-bound evidence must be rerun after that
-repair; the `7cedb81` artifacts cannot close a row.
+keeping Replay global. The `7cedb81` artifacts cannot close a row; every later
+candidate still needs its own candidate-bound evidence.
 
 The repair also makes two incomplete high-risk subflows explicitly fail closed.
 Direct Match Uploader singles is implemented but `Blocked` behind
@@ -119,6 +119,20 @@ ledger entry `20260725193213_singles_replay_recovery`, but formal
 exact-candidate acceptance remains pending. Tournament Operations official
 singles publishing is a separate, automated-ready CAS path; its manual
 exclude/replay evidence is still deferred while destructive exclusion is off.
+
+PR `#1037` has since landed the data-free authenticated Operations Cockpit,
+shared Tournament Admin navigation, richer verified Challenge Ladder results,
+and atomic/idempotent Challenge result publication and recovery. PR `#1038`
+then removed the noisy legacy-first Moneyball status probe by querying canonical
+`players.active` first. Staging now has 39 applied migration-ledger entries
+through connector-assigned head
+`20260726011915_challenge_ladder_public_results`; readback verified the nullable
+JSON relation and validated constraint, active-claim index, five mutation
+triggers, six invoker functions with fixed `pg_catalog` search paths and
+service-role-only execution, and zero active Challenge operations. These are
+implemented/automated-ready outcomes, not manual acceptance. Before any
+`Partial` row can move to `Done`, bind the then-current `staging` head to exact
+Vercel/Fly identities and fresh candidate-bound evidence.
 
 ## Page-level closure contracts
 
