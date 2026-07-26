@@ -211,7 +211,7 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
     assert "expected_candidate_sha:" in workflow
     assert "orchestration_run_id:" in workflow
     assert "jupr-staging-orchestration-child-{0}" in workflow
-    assert "Automated Staging Evidence" in workflow
+    assert ".workflow_id == 320947530" in workflow
     assert (
         ".github/workflows/staging-evidence-automation.yml@rollback-feb8"
         in workflow
