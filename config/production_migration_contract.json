@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-readonly-2026-07-26",
-  "repository_migration_content_sha256": "8ef40ecad49160e477d62cddc83b73b378937741e0a112ca29c83244f2715f84",
+  "repository_migration_content_sha256": "8e22f1b0028fb7d91886f6926e77e58e28402e0b7ce3911ddd1fa1b66e37e7fa",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -34,6 +34,7 @@
     "reharden_staging_feature_objects",
     "repair_next_staging_schema_contract",
     "replay_job_idempotency",
+    "replay_projection_nonretryable_conflicts",
     "restore_matches_soft_delete_contract",
     "revoke_legacy_public_privileges",
     "seed_live_badge_catalog",

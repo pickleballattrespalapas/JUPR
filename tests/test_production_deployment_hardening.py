@@ -215,17 +215,17 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 42
+    assert len(versions) == 43
     assert versions[-5:] == (
-        "20260725231000",
         "20260726143742",
         "20260726183000",
         "20260726204954",
+        "20260726212447",
         "20261020000000",
     )
-    assert len(names) == 42
+    assert len(names) == 43
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 42
+    assert len(contract["required_ledger_names"]) == 43
     assert contract["allow_additional_ledger_names"] is False
     assert contract["schema_contract_only_repository_migrations"] == (
         "tournament_registrations_player_id_postgrest_reload",
