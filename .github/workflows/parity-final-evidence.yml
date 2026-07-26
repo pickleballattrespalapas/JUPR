@@ -1,4 +1,6 @@
 name: Parity Final Evidence
+run-name: >-
+  Parity final evidence · ${{ inputs.mode }} · ${{ inputs.candidate_sha }}
 
 on:
   workflow_dispatch:
@@ -12,6 +14,7 @@ on:
           - public-intake-auth
           - admin-read-export
           - match-rating-writes
+          - match-exclusion-recovery
           - complete-book
       candidate_sha:
         description: "Exact 40-character Git SHA deployed to Vercel and Fly"
@@ -33,20 +36,31 @@ on:
         description: "For a mutating wave, enter: RUN DISPOSABLE STAGING WRITES"
         required: false
         type: string
+      orchestration_run_id:
+        description: "Reserved controller run ID; leave empty for standalone use"
+        required: false
+        default: ""
+        type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
   # This lock is shared with fly_api_staging_deploy.yml so a deployment cannot
-  # replace the candidate while evidence is being collected.
-  group: jupr-staging-api-and-parity-evidence
+  # replace the candidate while evidence is being collected. A verified
+  # controller owns that outer lock for automated runs.
+  group: >-
+    ${{ inputs.orchestration_run_id != ''
+      && format('jupr-staging-orchestration-child-{0}', inputs.orchestration_run_id)
+      || 'jupr-staging-api-and-parity-evidence' }}
   cancel-in-progress: false
 
 jobs:
   evidence-contract:
     name: Pending-safe evidence contract
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       candidate_sha: ${{ steps.validate-inputs.outputs.candidate_sha }}
       fly_image_ref: ${{ steps.validate-inputs.outputs.fly_image_ref }}
@@ -95,6 +109,37 @@ jobs:
               ;;
           esac
 
+      - name: Verify automated controller delegation
+        if: inputs.orchestration_run_id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORCHESTRATION_RUN_ID: ${{ inputs.orchestration_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$ORCHESTRATION_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]; then
+            echo "orchestration_run_id must be a positive Actions run ID" >&2
+            exit 2
+          fi
+          RUN_JSON="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/$GITHUB_REPOSITORY/actions/runs/$ORCHESTRATION_RUN_ID"
+          )"
+          jq -e \
+            'select(
+              .id == (env.ORCHESTRATION_RUN_ID | tonumber) and
+              .name == "Automated Staging Evidence" and
+              .path == ".github/workflows/staging-evidence-automation.yml@rollback-feb8" and
+              .event == "issues" and
+              .status == "in_progress" and
+              .run_attempt == 1 and
+              .head_branch == "rollback-feb8" and
+              .actor.id == 250933369 and
+              .triggering_actor.id == 250933369 and
+              .repository.id == 1120897513
+            ) | .id' <<<"$RUN_JSON" >/dev/null
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -132,7 +177,7 @@ jobs:
             exit 2
           fi
           case "$PARITY_MODE" in
-            public-read|public-intake-auth|admin-read-export|match-rating-writes|complete-book) ;;
+            public-read|public-intake-auth|admin-read-export|match-rating-writes|match-exclusion-recovery|complete-book) ;;
             *)
               echo "mode is not one of the supported evidence modes" >&2
               exit 2
@@ -148,9 +193,12 @@ jobs:
             match-rating-writes)
               WRITE_WAVE="tournament-live"
               ;;
+            match-exclusion-recovery)
+              WRITE_WAVE="match-exclusion-recovery"
+              ;;
           esac
           case "$PARITY_MODE" in
-            match-rating-writes)
+            match-rating-writes|match-exclusion-recovery)
               if [ "$MUTATION_CONFIRMATION" != "RUN DISPOSABLE STAGING WRITES" ]; then
                 echo "mutating evidence modes require the exact mutation confirmation" >&2
                 exit 2
@@ -226,6 +274,7 @@ jobs:
     if: needs.evidence-contract.outputs.mode != 'complete-book'
     needs: evidence-contract
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     environment: staging
     env:
       JUPR_EXPECT_PREVIEW_AUTH_ISOLATION: "1"
@@ -239,14 +288,6 @@ jobs:
       JUPR_SMOKE_CLUB_SLUG: ${{ vars.JUPR_SMOKE_CLUB_SLUG }}
       STAGING_CLUB_SLUG: ${{ vars.JUPR_SMOKE_CLUB_SLUG }}
       JUPR_TOURNAMENT_REGISTRATION_FIXTURE_SLUG: ${{ vars.JUPR_TOURNAMENT_REGISTRATION_FIXTURE_SLUG }}
-      JUPR_TOURNAMENT_LIVE_TOURNAMENT_ID: ${{ vars.JUPR_TOURNAMENT_LIVE_TOURNAMENT_ID }}
-      JUPR_TOURNAMENT_LIVE_DRAW_ID: ${{ vars.JUPR_TOURNAMENT_LIVE_DRAW_ID }}
-      JUPR_TOURNAMENT_LIVE_GAME_ID: ${{ vars.JUPR_TOURNAMENT_LIVE_GAME_ID }}
-      JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_A: ${{ vars.JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_A }}
-      JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_B: ${{ vars.JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_B }}
-      JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_A: ${{ vars.JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_A }}
-      JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_B: ${{ vars.JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_B }}
-      JUPR_TOURNAMENT_LIVE_ALLOW_MUTATION_E2E: ${{ needs.evidence-contract.outputs.mode == 'match-rating-writes' && needs.evidence-contract.outputs.mutation_confirmation == 'RUN DISPOSABLE STAGING WRITES' && '1' || '0' }}
     steps:
       - name: Check out exact application candidate
         uses: actions/checkout@v4
@@ -272,6 +313,26 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Pre-attest live deployment identity and write wave without mutations
+        env:
+          CANDIDATE_SHA: ${{ needs.evidence-contract.outputs.candidate_sha }}
+          FLY_IMAGE_REF: ${{ needs.evidence-contract.outputs.fly_image_ref }}
+          PARITY_MODE: ${{ needs.evidence-contract.outputs.mode }}
+          REQUIRED_STAGING_WRITE_WAVE: ${{ needs.evidence-contract.outputs.write_wave }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          VERCEL_DEPLOYMENT_ID: ${{ needs.evidence-contract.outputs.vercel_deployment_id }}
+          VERCEL_DEPLOYMENT_ORIGIN: ${{ needs.evidence-contract.outputs.vercel_deployment_origin }}
+        run: |
+          python scripts/run_parity_staging_wave.py \
+            "$PARITY_MODE" \
+            --identity-only \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --vercel-deployment-id "$VERCEL_DEPLOYMENT_ID" \
+            --vercel-deployment-origin "$VERCEL_DEPLOYMENT_ORIGIN" \
+            --fly-image-ref "$FLY_IMAGE_REF" \
+            --expected-write-wave "$REQUIRED_STAGING_WRITE_WAVE" \
+            --report-dir parity-staging-artifacts/pre-mutation-identity
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -288,7 +349,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Prepare authenticated parity staging session
-        if: needs.evidence-contract.outputs.mode == 'public-intake-auth' || needs.evidence-contract.outputs.mode == 'admin-read-export' || needs.evidence-contract.outputs.mode == 'match-rating-writes'
+        if: needs.evidence-contract.outputs.mode == 'public-intake-auth' || needs.evidence-contract.outputs.mode == 'admin-read-export' || needs.evidence-contract.outputs.mode == 'match-rating-writes' || needs.evidence-contract.outputs.mode == 'match-exclusion-recovery'
         env:
           PARITY_MODE: ${{ needs.evidence-contract.outputs.mode }}
           STAGING_API_BASE_URL: "https://juprleagues-api-staging.fly.dev"
@@ -300,6 +361,30 @@ jobs:
           python scripts/prepare_parity_staging_session.py \
             "$PARITY_MODE" \
             --report-dir parity-staging-artifacts
+
+      - name: Prepare disposable Tournament Live score fixture
+        if: needs.evidence-contract.outputs.mode == 'match-rating-writes'
+        env:
+          CANDIDATE_SHA: ${{ needs.evidence-contract.outputs.candidate_sha }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          test -n "$GITHUB_ENV"
+          python scripts/prepare_parity_tournament_live_fixture.py \
+            prepare \
+            --report-dir parity-staging-artifacts \
+            --github-env "$GITHUB_ENV"
+
+      - name: Prepare isolated Match Log exclusion fixture
+        if: needs.evidence-contract.outputs.mode == 'match-exclusion-recovery'
+        env:
+          CANDIDATE_SHA: ${{ needs.evidence-contract.outputs.candidate_sha }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          test -n "$GITHUB_ENV"
+          python scripts/prepare_parity_match_exclusion_fixture.py \
+            prepare \
+            --report-dir parity-staging-artifacts \
+            --github-env "$GITHUB_ENV"
 
       - name: Run exact wave and reject skips or flakes
         env:
@@ -321,6 +406,25 @@ jobs:
             --expected-write-wave "$REQUIRED_STAGING_WRITE_WAVE" \
             --report-dir parity-staging-artifacts
 
+      - name: Remove isolated Match Log exclusion fixture
+        if: always() && needs.evidence-contract.outputs.mode == 'match-exclusion-recovery'
+        env:
+          CANDIDATE_SHA: ${{ needs.evidence-contract.outputs.candidate_sha }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python scripts/prepare_parity_match_exclusion_fixture.py \
+            cleanup \
+            --report-dir parity-staging-artifacts
+
+      - name: Remove disposable Tournament Live score fixture
+        if: always() && needs.evidence-contract.outputs.mode == 'match-rating-writes'
+        env:
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python scripts/prepare_parity_tournament_live_fixture.py \
+            cleanup \
+            --report-dir parity-staging-artifacts
+
       - name: End authenticated parity refresh session
         if: always()
         env:
@@ -332,7 +436,7 @@ jobs:
             public-read)
               echo "No authenticated staging session was prepared for public-read."
               ;;
-            public-intake-auth|admin-read-export|match-rating-writes)
+            public-intake-auth|admin-read-export|match-rating-writes|match-exclusion-recovery)
               python scripts/prepare_parity_staging_session.py \
                 cleanup \
                 --report-dir parity-staging-artifacts
@@ -357,6 +461,7 @@ jobs:
     if: needs.evidence-contract.outputs.mode == 'complete-book'
     needs: evidence-contract
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: staging
     steps:
       - name: Check out exact application candidate
