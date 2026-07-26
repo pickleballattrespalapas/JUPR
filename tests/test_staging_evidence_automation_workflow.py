@@ -180,6 +180,10 @@ def test_controller_children_use_verified_dynamic_locks() -> None:
             '@rollback-feb8"'
             in child
         )
+        assert (
+            '.path == ".github/workflows/staging-evidence-automation.yml" or'
+            in child
+        )
         assert ".actor.id == 250933369" in child
         assert ".triggering_actor.id == 250933369" in child
         assert ".run_attempt == 1" in child
