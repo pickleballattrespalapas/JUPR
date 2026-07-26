@@ -271,13 +271,20 @@ def test_response_loss_retry_reuses_stored_badge_contract_before_rpc(
 
 
 @pytest.mark.parametrize(
-    ("error_message", "expected_exception"),
+    ("error_code", "error_message", "expected_exception"),
     [
         (
+            "P0001",
             "JUPR_MATCH_EXCLUSION_STALE: match 7 changed.",
             service.MatchExclusionStaleError,
         ),
         (
+            "40001",
+            "JUPR_MATCH_EXCLUSION_STALE: match 7 changed.",
+            service.MatchExclusionStaleError,
+        ),
+        (
+            "23505",
             "JUPR_MATCH_EXCLUSION_IDEMPOTENCY_CONFLICT: changed body.",
             service.MatchExclusionIdempotencyConflict,
         ),
@@ -285,6 +292,7 @@ def test_response_loss_retry_reuses_stored_badge_contract_before_rpc(
 )
 def test_atomic_rpc_conflicts_are_typed(
     monkeypatch,
+    error_code,
     error_message,
     expected_exception,
 ):
@@ -293,7 +301,7 @@ def test_atomic_rpc_conflicts_are_typed(
     supabase = FakeSupabase(
         rpc_handlers={
             "apply_match_exclusions_atomic": Exception(
-                {"code": "40001", "message": error_message}
+                {"code": error_code, "message": error_message}
             )
         }
     )
@@ -318,7 +326,7 @@ def test_postgrest_stale_detail_is_typed(monkeypatch):
         rpc_handlers={
             "apply_match_exclusions_atomic": APIError(
                 {
-                    "code": "40001",
+                    "code": "P0001",
                     "message": "Database transaction failed.",
                     "details": (
                         "JUPR_MATCH_EXCLUSION_STALE: match 7 expected "
