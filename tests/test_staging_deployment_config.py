@@ -43,7 +43,7 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
     assert "STAGING_SUPABASE_URL" in workflow
     assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" in workflow
     assert "STAGING_SUPABASE_PROJECT_REF" in workflow
-    assert 'if [ "$FLY_APP_NAME" = "juprleagues-api" ]' in workflow
+    assert 'if [ "$FLY_APP_NAME_INPUT" != "juprleagues-api-staging" ]' in workflow
     assert "--require-supabase-isolation" in workflow
     assert "--expect-full-next-admin" in workflow
     assert "fly.staging.toml" in workflow

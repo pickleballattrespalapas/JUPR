@@ -1,0 +1,184 @@
+name: Staging Write Safety Recovery
+run-name: Staging no-write recovery · ${{ github.event_name }}
+
+on:
+  workflow_run:
+    workflows:
+      - Automated Staging Evidence
+    types:
+      - completed
+  schedule:
+    - cron: "7,37 * * * *"
+
+permissions: {}
+
+concurrency:
+  group: jupr-staging-write-safety-recovery
+  cancel-in-progress: false
+
+jobs:
+  restore-if-needed:
+    name: Re-attest or restore no-write mode
+    if: >-
+      github.event_name == 'schedule' ||
+      (
+        github.event.workflow_run.repository.id == 1120897513 &&
+        github.event.workflow_run.event == 'issues' &&
+        github.event.workflow_run.head_branch == 'rollback-feb8' &&
+        (
+          github.event.workflow_run.path ==
+            '.github/workflows/staging-evidence-automation.yml' ||
+          github.event.workflow_run.path ==
+            '.github/workflows/staging-evidence-automation.yml@rollback-feb8'
+        ) &&
+        github.event.workflow_run.run_attempt == 1 &&
+        github.event.workflow_run.actor.id == 250933369 &&
+        github.event.workflow_run.triggering_actor.id == 250933369 &&
+        contains(
+          fromJSON(
+            '["Staging evidence control #1046","Staging evidence control #1047","Staging evidence control #1048","Staging evidence control #1049","Staging evidence control #1050","Staging evidence control #1051"]'
+          ),
+          github.event.workflow_run.display_title
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Check out protected default safety helper
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: rollback-feb8
+
+      - name: Verify trusted helper and staging workflow registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            +refs/heads/rollback-feb8:refs/remotes/origin/rollback-feb8 \
+            +refs/heads/staging:refs/remotes/origin/staging
+          if [ "$(git rev-parse HEAD)" != \
+               "$(git rev-parse refs/remotes/origin/rollback-feb8)" ]; then
+            echo "Recovery helper must execute from current protected default." >&2
+            exit 2
+          fi
+          for path in \
+            .github/workflows/fly_api_staging_deploy.yml \
+            scripts/staging_evidence_automation.py
+          do
+            if ! cmp --silent \
+              "$path" \
+              <(git show "refs/remotes/origin/staging:$path"); then
+              echo "Safety registry is not synchronized with staging: $path" >&2
+              exit 2
+            fi
+          done
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve current staging candidate
+        id: candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/staging_evidence_automation.py candidate-sha \
+            > "$RUNNER_TEMP/current-staging.json"
+          CANDIDATE_SHA="$(jq -r '.candidate_sha' "$RUNNER_TEMP/current-staging.json")"
+          if [ "$(git rev-parse refs/remotes/origin/staging)" != "$CANDIDATE_SHA" ]; then
+            echo "GitHub API and fetched canonical staging ref disagree." >&2
+            exit 2
+          fi
+          printf 'sha=%s\n' "$CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether recovery is required
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A cancelled controller can leave its already-dispatched Fly child
+          # alive. Always enqueue a later no-write deployment after any
+          # controller completion. The Fly job's common mutex guarantees that
+          # recovery finishes after that surviving child.
+          if [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
+            echo "required=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if python scripts/staging_evidence_automation.py fly-health \
+               > "$RUNNER_TEMP/fly-safety-check.json" && \
+             python scripts/staging_evidence_automation.py verify-final-none \
+               --fly-json "$RUNNER_TEMP/fly-safety-check.json"; then
+            echo "required=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "required=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch canonical no-write recovery
+        id: restore
+        if: steps.check.outputs.required == 'true'
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/staging_evidence_automation.py dispatch \
+            --workflow fly_api_staging_deploy.yml \
+            --input write_wave=none \
+            --input "expected_candidate_sha=$CANDIDATE_SHA" \
+            > "$RUNNER_TEMP/fly-safety-restore-dispatch.json"
+          RESTORE_RUN_ID="$(
+            jq -r '.workflow_run_id' "$RUNNER_TEMP/fly-safety-restore-dispatch.json"
+          )"
+          printf 'run_id=%s\n' "$RESTORE_RUN_ID" >> "$GITHUB_OUTPUT"
+          python scripts/staging_evidence_automation.py wait-run \
+            --workflow fly_api_staging_deploy.yml \
+            --run-id "$RESTORE_RUN_ID" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --timeout-seconds 7200
+
+      - name: Verify final no-write state
+        if: steps.check.outputs.required == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 6); do
+            if python scripts/staging_evidence_automation.py fly-health \
+              > "$RUNNER_TEMP/fly-safety-final.json"; then
+              break
+            fi
+            if [ "$attempt" = "6" ]; then
+              exit 2
+            fi
+            sleep 10
+          done
+          python scripts/staging_evidence_automation.py verify-final-none \
+            --fly-json "$RUNNER_TEMP/fly-safety-final.json"
+
+      - name: Record recovery result
+        if: always()
+        shell: bash
+        env:
+          RECOVERY_REQUIRED: ${{ steps.check.outputs.required }}
+          RESTORE_RUN_ID: ${{ steps.restore.outputs.run_id }}
+        run: |
+          {
+            echo "### Staging write safety"
+            echo
+            if [ "$RECOVERY_REQUIRED" = "true" ]; then
+              echo "- No-write recovery dispatched."
+              echo "- Restore run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RESTORE_RUN_ID"
+            elif [ "$RECOVERY_REQUIRED" = "false" ]; then
+              echo "- Staging was already safely at \`write_wave=none\`."
+            else
+              echo "- Recovery check did not complete; the next scheduled run will retry."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

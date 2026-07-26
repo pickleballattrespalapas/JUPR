@@ -1,4 +1,8 @@
 name: Deploy FastAPI staging to Fly
+run-name: >-
+  Fly staging ·
+  ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'none' }} ·
+  ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.expected_candidate_sha || github.sha }}
 
 on:
   push:
@@ -36,6 +40,7 @@ on:
           - public-intake-auth
           - communications
           - match-player
+          - match-exclusion-recovery
           - support-requests
           - league-manager
           - league-awards
@@ -55,20 +60,43 @@ on:
           - tournament-email-handoff
           - tournament-live
           - tournament-live-official-publish
+      expected_candidate_sha:
+        description: "Optional controller-bound canonical staging SHA"
+        required: false
+        default: ""
+        type: string
+      orchestration_run_id:
+        description: "Reserved controller run ID; leave empty for standalone use"
+        required: false
+        default: ""
+        type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
   # Shared with parity-final-evidence.yml so evidence cannot run across a
-  # staging deployment boundary.
-  group: jupr-staging-api-and-parity-evidence
+  # staging deployment boundary. A verified controller owns that outer lock,
+  # so its children use a private run-scoped lock instead.
+  group: >-
+    ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.orchestration_run_id != ''
+      && format('jupr-staging-orchestration-child-{0}', github.event.inputs.orchestration_run_id)
+      || 'jupr-staging-api-and-parity-evidence' }}
   cancel-in-progress: false
 
 jobs:
   deploy-staging:
     name: Deploy and verify isolated staging API
+    # This second lock serializes every Fly staging deployment, including
+    # controller children that use a private workflow-level lock. A recovery
+    # run therefore finishes after any child left alive by controller
+    # cancellation.
+    concurrency:
+      group: jupr-staging-fly-deploy
+      cancel-in-progress: false
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     environment: staging
     env:
       EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
@@ -134,6 +162,8 @@ jobs:
 
       - name: Verify canonical staging workflow provenance
         shell: bash
+        env:
+          EXPECTED_CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.expected_candidate_sha || '' }}
         run: |
           set -euo pipefail
           if [ "$GITHUB_REF" != "refs/heads/staging" ]; then
@@ -146,12 +176,51 @@ jobs:
             echo "::error title=Staging provenance rejected::Checked-out HEAD, GITHUB_SHA, and canonical origin/staging must be identical."
             exit 2
           fi
+          if [ -n "$EXPECTED_CANDIDATE_SHA" ]; then
+            if [[ ! "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || \
+               [ "$EXPECTED_CANDIDATE_SHA" != "$HEAD_SHA" ]; then
+              echo "::error title=Controller candidate rejected::expected_candidate_sha must equal canonical staging HEAD."
+              exit 2
+            fi
+          fi
+
+      - name: Verify automated controller delegation
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.orchestration_run_id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORCHESTRATION_RUN_ID: ${{ github.event.inputs.orchestration_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$ORCHESTRATION_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]; then
+            echo "::error title=Controller delegation rejected::orchestration_run_id must be a positive Actions run ID."
+            exit 2
+          fi
+          RUN_JSON="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/$GITHUB_REPOSITORY/actions/runs/$ORCHESTRATION_RUN_ID"
+          )"
+          jq -e \
+            'select(
+              .id == (env.ORCHESTRATION_RUN_ID | tonumber) and
+              .name == "Automated Staging Evidence" and
+              .path == ".github/workflows/staging-evidence-automation.yml@rollback-feb8" and
+              .event == "issues" and
+              .status == "in_progress" and
+              .run_attempt == 1 and
+              .head_branch == "rollback-feb8" and
+              .actor.id == 250933369 and
+              .triggering_actor.id == 250933369 and
+              .repository.id == 1120897513
+            ) | .id' <<<"$RUN_JSON" >/dev/null
 
       - name: Configure one least-privilege staging write wave
         shell: bash
         env:
           # Every automatic staging-branch deploy is forced to the no-write
-          # projection. Named write waves remain manual-only.
+          # projection. Named write waves require an explicit dispatch, either
+          # standalone or through the protected controller.
           SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'none' }}
         run: |
           set -euo pipefail
