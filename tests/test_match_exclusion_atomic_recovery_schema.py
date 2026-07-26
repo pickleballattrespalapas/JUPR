@@ -5,6 +5,10 @@ import re
 MIGRATION = Path(
     "supabase/migrations/20260726143742_match_exclusion_atomic_recovery.sql"
 )
+NONRETRYABLE_CONFLICT_MIGRATION = Path(
+    "supabase/migrations/"
+    "20260726204954_match_exclusion_nonretryable_conflicts.sql"
+)
 INVENTORY = Path("docs/migrations.md")
 
 
@@ -12,11 +16,83 @@ def _source() -> str:
     return MIGRATION.read_text(encoding="utf-8").lower()
 
 
+def _nonretryable_conflict_source() -> str:
+    return NONRETRYABLE_CONFLICT_MIGRATION.read_text(
+        encoding="utf-8"
+    ).lower()
+
+
+def _function_block(source: str, function_name: str) -> str:
+    start = source.index(
+        f"create or replace function public.{function_name}("
+    )
+    end = source.index("$function$;", start) + len("$function$;")
+    return source[start:end]
+
+
 def test_match_exclusion_migration_is_in_canonical_inventory() -> None:
     assert MIGRATION.is_file()
+    assert NONRETRYABLE_CONFLICT_MIGRATION.is_file()
     inventory = INVENTORY.read_text(encoding="utf-8")
     assert MIGRATION.name in inventory
-    assert "42 SQL files: 41 deployable migrations" in inventory
+    assert NONRETRYABLE_CONFLICT_MIGRATION.name in inventory
+    assert "43 SQL files: 42 deployable migrations" in inventory
+
+
+def test_expected_match_conflicts_use_nonretryable_sqlstate() -> None:
+    original = _source()
+    correction = _nonretryable_conflict_source()
+
+    original_bump = _function_block(original, "bump_match_row_version")
+    corrected_bump = _function_block(correction, "bump_match_row_version")
+    assert original_bump.count("errcode = '40001'") == 1
+    assert corrected_bump == original_bump.replace(
+        "errcode = '40001'",
+        "errcode = 'p0001'",
+    )
+
+    original_apply = _function_block(
+        original,
+        "apply_match_exclusions_atomic",
+    )
+    corrected_apply = _function_block(
+        correction,
+        "apply_match_exclusions_atomic",
+    )
+    assert original_apply.count("errcode = '40001'") == 3
+    assert corrected_apply == original_apply.replace(
+        "errcode = '40001'",
+        "errcode = 'p0001'",
+    )
+
+    assert correction.count("errcode = 'p0001'") == 4
+    assert "errcode = '40001'" not in correction
+    for marker in (
+        "jupr_match_row_version_immutable",
+        "jupr_match_exclusion_stale",
+        "jupr_match_exclusion_duplicate_keeper_stale",
+    ):
+        assert marker in correction
+
+    assert (
+        "revoke all on function public.bump_match_row_version()"
+        in correction
+    )
+    assert (
+        "grant execute on function public.bump_match_row_version()"
+        in correction
+    )
+    assert (
+        "revoke all on function public.apply_match_exclusions_atomic("
+        in correction
+    )
+    assert (
+        "grant execute on function public.apply_match_exclusions_atomic("
+        in correction
+    )
+    assert "from public, anon, authenticated" in correction
+    assert "to service_role" in correction
+    assert "notify pgrst, 'reload schema'" in correction
 
 
 def test_matches_have_immutable_row_version_and_exact_cas_targets() -> None:

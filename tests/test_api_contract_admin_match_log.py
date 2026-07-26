@@ -1027,6 +1027,66 @@ def test_admin_match_log_exclusion_stale_maps_to_structured_409(monkeypatch):
     assert response.json()["detail"]["code"] == "MATCH_EXCLUSION_STALE"
 
 
+def test_admin_match_log_nonretryable_rpc_stale_maps_to_structured_409(
+    monkeypatch,
+):
+    from postgrest.exceptions import APIError
+
+    from tests.test_match_exclusion_durability_service import (
+        FakeSupabase as RpcFakeSupabase,
+    )
+
+    supabase = RpcFakeSupabase(
+        rpc_handlers={
+            "apply_match_exclusions_atomic": APIError(
+                {
+                    "code": "P0001",
+                    "message": (
+                        "JUPR_MATCH_EXCLUSION_STALE: match 3 expected "
+                        "row_version 2 but is 1."
+                    ),
+                    "details": None,
+                    "hint": None,
+                }
+            )
+        }
+    )
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_REPLAY", "1")
+    _patch_admin_auth(monkeypatch, supabase, role="super_admin")
+    monkeypatch.setattr(
+        (
+            "jupr_app.domain.gamification.match_exclusion_reconcile."
+            "resolve_match_exclusion_badge_ids"
+        ),
+        lambda *_args, **_kwargs: ["first_win"],
+    )
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/exclude",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "confirmation_text": "DELETE",
+            "idempotency_key": "67676767-6767-6767-6767-676767676767",
+            "targets": [{"match_id": 3, "expected_row_version": 2}],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "MATCH_EXCLUSION_STALE",
+        "operation_id": None,
+        "message": (
+            "JUPR_MATCH_EXCLUSION_STALE: match 3 expected "
+            "row_version 2 but is 1."
+        ),
+    }
+    assert [name for name, _params in supabase.rpc_calls] == [
+        "apply_match_exclusions_atomic"
+    ]
+
+
 def test_admin_match_log_exclusion_status_and_recovery_contract(monkeypatch):
     operation_id = "77777777-7777-7777-7777-777777777777"
     tables = fake_tables()
