@@ -148,6 +148,78 @@ def test_open_advance_close_are_candidate_bound_and_fail_closed() -> None:
     assert "-f state=closed" in apply_job
 
 
+def test_locked_issue_comments_are_summary_mirrors_and_never_block() -> None:
+    workflow = _read(WORKFLOW_PATH)
+    recovery = _read(RECOVERY_PATH)
+    evidence = _read(EVIDENCE_PATH)
+
+    for source, expected_comments in (
+        (workflow, 5),
+        (recovery, 1),
+    ):
+        assert source.count("/comments") == expected_comments
+        assert source.count("if ! gh api \\") == expected_comments
+        assert (
+            source.count(
+                'printf \'%s\\n\' "$STATUS" >> "$GITHUB_STEP_SUMMARY"'
+            )
+            == expected_comments
+        )
+        assert (
+            source.count(
+                "::warning::Protected issue comment unavailable; "
+                "status is preserved in the workflow summary."
+            )
+            == expected_comments
+        )
+
+    assert "/comments" not in evidence
+    assert "github.event.sender.id == 250933369" in workflow
+
+
+def test_comment_tolerance_never_weakens_strict_issue_close() -> None:
+    workflow = _read(WORKFLOW_PATH)
+    recovery = _read(RECOVERY_PATH)
+    evidence = _read(EVIDENCE_PATH)
+
+    session_close_steps = (
+        _between(
+            workflow,
+            "      - name: Record safe close and close control issue\n",
+            "\n      - name: Restore none after any failed transition\n",
+        ),
+        _between(
+            workflow,
+            "      - name: Record failed command and close control issue\n",
+            "\n  wait-for-lease:\n",
+        ),
+        workflow[
+            workflow.index(
+                "      - name: Close only the unchanged expired control\n"
+            ) :
+        ],
+    )
+    recovery_close = _between(
+        recovery,
+        "      - name: Close invalid or recovered write-session control\n",
+        "\n      - name: Record recovery result\n",
+    )
+
+    for close_step in (*session_close_steps, recovery_close):
+        comment_index = close_step.index("/comments")
+        wrapper_end = close_step.index("\n          fi", comment_index)
+        patch_index = close_step.index("--method PATCH", wrapper_end)
+        assert comment_index < wrapper_end < patch_index
+        assert "continue-on-error" not in close_step
+        assert "|| true" not in close_step
+
+    assert "/comments" not in evidence
+    assert "--method PATCH" in evidence
+    assert "-f state=closed" in evidence
+    assert "continue-on-error" not in evidence
+    assert "|| true" not in evidence
+
+
 def test_lease_wait_does_not_hold_lock_and_expiry_rechecks_nonce() -> None:
     workflow = _read(WORKFLOW_PATH)
     waiter = _between(

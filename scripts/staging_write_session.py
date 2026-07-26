@@ -313,8 +313,29 @@ def authorize_event(
         )
 
     event_command = parse_session_command(issue.get("body"))
-    if event_command.command == "open" and action != "reopened":
-        raise ContractError("open requires an owner reopen event.")
+    if event_command.command == "open":
+        if action == "edited":
+            changes = payload.get("changes")
+            if (
+                not isinstance(changes, dict)
+                or not isinstance(changes.get("body"), dict)
+                or "from" not in changes["body"]
+            ):
+                raise ContractError("open requires an owner reopen event.")
+            previous_command = parse_session_command(
+                changes["body"].get("from")
+            )
+            if previous_command.command != "close":
+                raise ContractError(
+                    "An edited open companion must follow a close command."
+                )
+            return {
+                "authorized": False,
+                "superseded": True,
+                "issue_number": CONTROL_ISSUE_NUMBER,
+            }
+        if action != "reopened":
+            raise ContractError("open requires an owner reopen event.")
     if event_command.command in {"advance", "close"}:
         changes = payload.get("changes")
         if (

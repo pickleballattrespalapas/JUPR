@@ -14,7 +14,14 @@ body and either reopens the issue for `open` or edits the already-open issue for
 
 Joe does not edit this issue. He asks for the next test window in ChatGPT; the
 agent resolves the current staging candidate, writes the exact command, and
-reports the controller's status comment.
+reports the controller's workflow status.
+
+A connector update that changes a closed command body and reopens the issue can
+emit both `reopened` and `edited` events. The exact owner `reopened` event is the
+only event that can authorize `open`. Its companion `edited` event is a
+successful no-op only when `changes.body.from` is itself an exact valid `close`
+command. An edited `open` from an active or malformed prior command remains a
+fail-closed rejection.
 
 An `open` body is:
 
@@ -127,14 +134,20 @@ dry-run-email contract must match whichever state is current. Otherwise it resto
 closes the issue. A failed or cancelled controller run always requests
 restoration; the Fly mutex puts that recovery after any surviving deployment.
 
-## Status comments
+## Status records
 
-The workflow comments these milestones on issue `#1062`:
+The workflow writes every milestone to its GitHub Actions step summary and
+attempts the same text as a best-effort comment on issue `#1062`:
 
 - command accepted;
 - write session ready, with wave, candidate, expiry, and deployment run;
 - close or expiry restored to `none`;
 - failed transition restored safely, or a retry is required.
+
+The issue remains locked as a control-plane invariant. GitHub can therefore
+return `403` for a comment attempt. That response is recorded as a warning but
+cannot block activation, close, failure recovery, or expiry restoration. The
+workflow summary is authoritative when a comment is unavailable.
 
 No token, password, service-role value, user email, or fixture payload is
 included.

@@ -173,12 +173,18 @@ jobs:
               "- Candidate: \`$CANDIDATE_SHA\`" \
               "- Controller: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           )"
-          gh api \
-            --method POST \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
-            -f body="$STATUS" \
-            --silent
+          printf '%s\n' "$STATUS" >> "$GITHUB_STEP_SUMMARY"
+          if ! gh api \
+              --method POST \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
+              -f body="$STATUS" \
+              --silent
+          then
+            echo "::warning::Protected issue comment unavailable; status is preserved in the workflow summary."
+            echo "- Issue comment: unavailable; protected issue remains locked." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Resolve exact Vercel candidate before opening writes
         if: env.COMMAND != 'close'
@@ -348,12 +354,18 @@ jobs:
               "- Activation: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$ACTIVE_RUN_ID" \
               "${NONE_RUN_ID:+- Intermediate safe restore: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$NONE_RUN_ID}"
           )"
-          gh api \
-            --method POST \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
-            -f body="$STATUS" \
-            --silent
+          printf '%s\n' "$STATUS" >> "$GITHUB_STEP_SUMMARY"
+          if ! gh api \
+              --method POST \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
+              -f body="$STATUS" \
+              --silent
+          then
+            echo "::warning::Protected issue comment unavailable; status is preserved in the workflow summary."
+            echo "- Issue comment: unavailable; protected issue remains locked." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Record safe close and close control issue
         if: env.COMMAND == 'close'
@@ -373,12 +385,18 @@ jobs:
               "- Email: \`dry_run\`" \
               "- Safe restore: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$NONE_RUN_ID"
           )"
-          gh api \
-            --method POST \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
-            -f body="$STATUS" \
-            --silent
+          printf '%s\n' "$STATUS" >> "$GITHUB_STEP_SUMMARY"
+          if ! gh api \
+              --method POST \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
+              -f body="$STATUS" \
+              --silent
+          then
+            echo "::warning::Protected issue comment unavailable; status is preserved in the workflow summary."
+            echo "- Issue comment: unavailable; protected issue remains locked." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
           gh api \
             --method PATCH \
             -H "X-GitHub-Api-Version: 2026-03-10" \
@@ -434,12 +452,18 @@ jobs:
               "- Recovery: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RESTORE_RUN_ID" \
               "- Retry by issuing a fresh owner command after recovery completes."
           )"
-          gh api \
-            --method POST \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
-            -f body="$STATUS" \
-            --silent
+          printf '%s\n' "$STATUS" >> "$GITHUB_STEP_SUMMARY"
+          if ! gh api \
+              --method POST \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
+              -f body="$STATUS" \
+              --silent
+          then
+            echo "::warning::Protected issue comment unavailable; status is preserved in the workflow summary."
+            echo "- Issue comment: unavailable; protected issue remains locked." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
           gh api \
             --method PATCH \
             -H "X-GitHub-Api-Version: 2026-03-10" \
@@ -602,12 +626,18 @@ jobs:
               "- Business writes: disabled" \
               "- Safe restore: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RESTORE_RUN_ID"
           )"
-          gh api \
-            --method POST \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
-            -f body="$STATUS" \
-            --silent
+          printf '%s\n' "$STATUS" >> "$GITHUB_STEP_SUMMARY"
+          if ! gh api \
+              --method POST \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" \
+              -f body="$STATUS" \
+              --silent
+          then
+            echo "::warning::Protected issue comment unavailable; status is preserved in the workflow summary."
+            echo "- Issue comment: unavailable; protected issue remains locked." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
           gh api \
             --method PATCH \
             -H "X-GitHub-Api-Version: 2026-03-10" \
