@@ -20,7 +20,10 @@ const allowMutationEvidence = /^(1|true|yes|on)$/i.test(
 const fixtureSource = "staging_parity_match_exclusion_recovery";
 const fullReset = "ALL (Full System Reset)";
 const maxResponseBytes = 512 * 1024;
+const maxDiagnosticCharacters = 2_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const sensitiveKeyPattern =
+  /(^|_)(authorization|token|secret|cookie|password|api_key|service_role_key)($|_)/i;
 
 type JsonObject = Record<string, unknown>;
 
@@ -110,6 +113,21 @@ async function boundedJson(response: APIResponse, label: string): Promise<JsonOb
     throw new Error(`${label} did not return a JSON object.`);
   }
   return payload as JsonObject;
+}
+
+function diagnosticJson(payload: JsonObject): string {
+  const serialized = JSON.stringify(payload, (key, value: unknown) => {
+    const normalizedKey = key
+      .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+      .replace(/[-.\s]+/g, "_")
+      .toLowerCase();
+    if (sensitiveKeyPattern.test(normalizedKey)) return "[redacted]";
+    if (typeof value !== "string") return value;
+    return value
+      .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+      .replace(/\beyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\b/g, "[redacted-token]");
+  });
+  return serialized.slice(0, maxDiagnosticCharacters);
 }
 
 async function loadActiveMatches(request: APIRequestContext): Promise<JsonObject[]> {
@@ -238,8 +256,11 @@ test.describe("atomic Match Log exclusion/recovery staging evidence", () => {
         source: fixtureSource
       }
     });
-    expect(staleResponse.status(), "Stale match exclusion was not rejected").toBe(409);
     const stalePayload = await boundedJson(staleResponse, "Stale match exclusion");
+    expect(
+      staleResponse.status(),
+      `Stale match exclusion was not rejected. Response: ${diagnosticJson(stalePayload)}`
+    ).toBe(409);
     expect(stalePayload.detail).toEqual(
       expect.objectContaining({ code: "MATCH_EXCLUSION_STALE" })
     );
