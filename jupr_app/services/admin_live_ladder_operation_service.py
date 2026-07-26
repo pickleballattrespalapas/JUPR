@@ -324,6 +324,11 @@ def _operation_response(row: dict[str, Any], *, idempotent_replay: bool) -> dict
     }
 
 
+def _requires_surface_receipt_recovery(row: dict[str, Any]) -> bool:
+    result = row.get("result_json")
+    return isinstance(result, dict) and result.get("core_committed") is True
+
+
 def replay_durable_admin_operation_if_present(
     supabase: Any,
     *,
@@ -336,6 +341,7 @@ def replay_durable_admin_operation_if_present(
     actor_email: str,
     actor_role: str,
     source: str,
+    recover_incomplete: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any] | None:
     """Recover an exact prior operation before rerunning mutable previews."""
     ensure_live_ladder_operation_schema_ready(supabase)
@@ -355,9 +361,31 @@ def replay_durable_admin_operation_if_present(
             "This idempotency key was already used with a different request. Reload and use a new key."
         )
     status = str(existing.get("status") or "")
-    if status == "completed":
+    if status == "completed" and not _requires_surface_receipt_recovery(existing):
         return _operation_response(existing, idempotent_replay=True)
+    if recover_incomplete is not None:
+        recovered_result = recover_incomplete(existing)
+        if recovered_result is not None:
+            completed = _complete_recovered_domain_result(
+                supabase,
+                operation=existing,
+                result=recovered_result,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=source,
+            )
+            return _operation_response(completed, idempotent_replay=True)
+    if status == "completed":
+        raise LiveLadderUncertainError(
+            "The operation was marked completed with only a database core receipt; "
+            "verified surface recovery is still required."
+        )
     if status in {"mutated", "recovery_required"} and existing.get("result_json"):
+        if _requires_surface_receipt_recovery(existing):
+            raise LiveLadderUncertainError(
+                "The database core committed, but this surface receipt still requires "
+                "verified recovery before the operation can be completed."
+            )
         completed = _complete_operation_audit(
             supabase,
             operation=existing,
@@ -424,6 +452,39 @@ def _complete_operation_audit(
     )
 
 
+def _complete_recovered_domain_result(
+    supabase: Any,
+    *,
+    operation: dict[str, Any],
+    result: dict[str, Any],
+    actor_email: str,
+    actor_role: str,
+    source: str,
+) -> dict[str, Any]:
+    """Persist a surface-verified recovery result before completing its audit."""
+
+    mutated = _update_operation(
+        supabase,
+        club_id=str(operation.get("club_id") or ""),
+        operation_key=str(operation.get("operation_key") or ""),
+        patch={
+            "status": "mutated",
+            "result_json": _json_safe(result),
+            "error_text": None,
+            "completed_at": operation.get("completed_at") or _now_iso(),
+            "updated_by": str(actor_email or ""),
+        },
+    )
+    return _complete_operation_audit(
+        supabase,
+        operation=mutated,
+        actor_email=actor_email,
+        actor_role=actor_role,
+        source=source,
+        recovered=True,
+    )
+
+
 def run_durable_admin_operation(
     supabase: Any,
     *,
@@ -435,12 +496,14 @@ def run_durable_admin_operation(
     expected_version: str,
     current_version: str,
     request_payload: dict[str, Any],
+    stored_request_json: dict[str, Any] | None = None,
     recovery: dict[str, Any],
     actor_email: str,
     actor_role: str,
     source: str,
     mutate: Callable[[], dict[str, Any]],
     current_version_resolver: Callable[[], str] | None = None,
+    recover_incomplete: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Run one FastAPI-authoritative write behind a durable, replayable intent."""
 
@@ -465,14 +528,36 @@ def run_durable_admin_operation(
                 "This idempotency key was already used with a different request. Reload and use a new key."
             )
         status = str(existing.get("status") or "")
-        if status == "completed":
+        if status == "completed" and not _requires_surface_receipt_recovery(existing):
             return _operation_response(existing, idempotent_replay=True)
         if status == "failed":
             raise LiveLadderConflictError(
                 "This operation was rejected before domain mutation because its authoritative version became stale. "
                 "Reload the Python state and use a new idempotency key."
             )
+        if recover_incomplete is not None:
+            recovered_result = recover_incomplete(existing)
+            if recovered_result is not None:
+                completed = _complete_recovered_domain_result(
+                    supabase,
+                    operation=existing,
+                    result=recovered_result,
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    source=source,
+                )
+                return _operation_response(completed, idempotent_replay=True)
+        if status == "completed":
+            raise LiveLadderUncertainError(
+                "The operation was marked completed with only a database core receipt; "
+                "verified surface recovery is still required."
+            )
         if status in {"mutated", "recovery_required"} and existing.get("result_json"):
+            if _requires_surface_receipt_recovery(existing):
+                raise LiveLadderUncertainError(
+                    "The database core committed, but this surface receipt still requires "
+                    "verified recovery before the operation can be completed."
+                )
             completed = _complete_operation_audit(
                 supabase,
                 operation=existing,
@@ -522,7 +607,11 @@ def run_durable_admin_operation(
         "request_fingerprint": fingerprint,
         "expected_version": clean_expected,
         "status": "intent",
-        "request_json": _json_safe(request_payload),
+        "request_json": _json_safe(
+            stored_request_json
+            if stored_request_json is not None
+            else request_payload
+        ),
         "result_json": {},
         "recovery_json": recovery_payload,
         "error_text": None,
@@ -537,8 +626,28 @@ def run_durable_admin_operation(
     except Exception as exc:
         raced = _get_operation(supabase, club_id=str(club_id), operation_key=operation_key)
         if raced and str(raced.get("request_fingerprint") or "") == fingerprint:
-            if str(raced.get("status") or "") == "completed":
+            if (
+                str(raced.get("status") or "") == "completed"
+                and not _requires_surface_receipt_recovery(raced)
+            ):
                 return _operation_response(raced, idempotent_replay=True)
+            if recover_incomplete is not None:
+                recovered_result = recover_incomplete(raced)
+                if recovered_result is not None:
+                    completed = _complete_recovered_domain_result(
+                        supabase,
+                        operation=raced,
+                        result=recovered_result,
+                        actor_email=actor_email,
+                        actor_role=actor_role,
+                        source=source,
+                    )
+                    return _operation_response(completed, idempotent_replay=True)
+            if str(raced.get("status") or "") == "completed":
+                raise LiveLadderUncertainError(
+                    "The concurrent operation was marked completed with only a database "
+                    "core receipt; verified surface recovery is still required."
+                )
             raise LiveLadderUncertainError(
                 "A concurrent request owns this operation. Reload its durable status instead of retrying."
             ) from exc
@@ -747,6 +856,7 @@ def reconcile_durable_admin_operation(
     confirmation_text: str,
     expected_confirmation: str,
     source: str,
+    recover_incomplete: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     if str(confirmation_text or "").strip().upper() != str(expected_confirmation).upper():
         raise ValueError(f"Type {expected_confirmation} to reconcile this interrupted operation.")
@@ -754,9 +864,34 @@ def reconcile_durable_admin_operation(
     row = _get_operation(supabase, club_id=str(club_id), operation_key=str(operation_key))
     if row is None or str(row.get("surface") or "") != str(surface):
         raise ValueError("durable operation not found")
-    if str(row.get("status") or "") == "completed":
+    if (
+        str(row.get("status") or "") == "completed"
+        and not _requires_surface_receipt_recovery(row)
+    ):
         return _operation_response(row, idempotent_replay=True)
+    if recover_incomplete is not None:
+        recovered_result = recover_incomplete(row)
+        if recovered_result is not None:
+            completed = _complete_recovered_domain_result(
+                supabase,
+                operation=row,
+                result=recovered_result,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=source,
+            )
+            return _operation_response(completed, idempotent_replay=True)
+    if str(row.get("status") or "") == "completed":
+        raise LiveLadderUncertainError(
+            "The operation was marked completed with only a database core receipt; "
+            "verified surface recovery is still required."
+        )
     if row.get("result_json"):
+        if _requires_surface_receipt_recovery(row):
+            raise LiveLadderUncertainError(
+                "The database core committed, but this surface receipt still requires "
+                "verified recovery before the operation can be completed."
+            )
         completed = _complete_operation_audit(
             supabase,
             operation=row,

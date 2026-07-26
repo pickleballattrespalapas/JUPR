@@ -15,11 +15,14 @@ builds on the partner-link tables provisioned by
 `migrations/20261019_tournament_registration_partner_links.sql` and the canonical
 selection lock protocol already captured under `supabase/migrations/`.
 
-## Current inventory (as of 2026-07-20)
+## Current inventory (as of 2026-07-25)
 
 Inventory below reflects files currently present in this repository.
 
 ### `supabase/migrations/` (canonical)
+
+This directory contains 40 SQL files: 39 deployable migrations with numeric
+versions plus one deliberately non-deployable `2026XX` schema placeholder.
 
 - `20260420000000_verified_player_updates_foundation.sql`
 - `20260424_matches_soft_delete.sql`
@@ -49,7 +52,16 @@ Inventory below reflects files currently present in this repository.
 - `20260719190954_league_live_publish_reconciliation.sql`
 - `20260719193000_admin_player_merge_transactions.sql`
 - `20260719194500_public_partner_pairing_lifecycle.sql`
+- `20260719201500_live_ladder_admin_operations.sql`
+- `20260719203000_tournament_admin_operations.sql`
+- `20260719204500_admin_diagnostics_guarded_operations.sql`
+- `20260719204700_tournament_operations_guard_surface.sql`
+- `20260719205000_tournament_live_operations.sql`
+- `20260719220000_public_live_durability.sql`
+- `20260720014744_seed_top_performer_badges.sql`
 - `20260720123402_baseline_worker_run_log.sql`
+- `20260725181500_singles_replay_recovery.sql`
+- `20260725231000_challenge_ladder_public_results.sql`
 - `20261020000000_tournament_registrations_player_id_postgrest_reload.sql`
 - `2026XX_backport_tournament_engine.sql`
 

@@ -224,7 +224,7 @@ def _fetch_league_ratings(supabase: Any, club_id: str, player_id: int | str | No
 
 def _fetch_recent_matches(supabase: Any, club_id: str, *, limit: int = 300) -> list[dict[str, Any]]:
     try:
-        return _safe_rows(
+        rows = _safe_rows(
             supabase.table("matches")
             .select(MATCH_SELECT)
             .eq("club_id", club_id)
@@ -232,9 +232,10 @@ def _fetch_recent_matches(supabase: Any, club_id: str, *, limit: int = 300) -> l
             .limit(int(limit))
             .execute()
         )
+        return [row for row in rows if not row.get("deleted_at")]
     except Exception:
         try:
-            return _safe_rows(
+            rows = _safe_rows(
                 supabase.table("matches")
                 .select(MATCH_SELECT)
                 .eq("club_id", club_id)
@@ -242,13 +243,14 @@ def _fetch_recent_matches(supabase: Any, club_id: str, *, limit: int = 300) -> l
                 .limit(int(limit))
                 .execute()
             )
+            return [row for row in rows if not row.get("deleted_at")]
         except Exception:
             return []
 
 
 def _fetch_match(supabase: Any, club_id: str, match_id: int | str) -> dict[str, Any] | None:
     try:
-        return _safe_first(
+        row = _safe_first(
             supabase.table("matches")
             .select(MATCH_SELECT)
             .eq("club_id", club_id)
@@ -256,6 +258,7 @@ def _fetch_match(supabase: Any, club_id: str, match_id: int | str) -> dict[str, 
             .limit(1)
             .execute()
         )
+        return row if row and not row.get("deleted_at") else None
     except Exception:
         return None
 

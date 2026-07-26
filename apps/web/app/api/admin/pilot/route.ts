@@ -41,8 +41,19 @@ async function readJson(response: Response): Promise<Record<string, unknown> | n
   }
 }
 
-async function getJsonCheck(base: string, name: string, path: string, predicate: (payload: Record<string, unknown>) => string | null): Promise<CheckResult> {
-  const response = await fetch(apiUrl(base, path), { cache: "no-store", headers: { accept: "application/json" } });
+async function getJsonCheck(
+  base: string,
+  name: string,
+  path: string,
+  predicate: (payload: Record<string, unknown>) => string | null,
+  accessToken?: string
+): Promise<CheckResult> {
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  const response = await fetch(apiUrl(base, path), {
+    cache: "no-store",
+    headers
+  });
   const payload = await readJson(response);
   if (!response.ok || !payload) {
     return { name, ok: false, status: response.status, detail: (payload ? String(payload.detail || payload.error || payload.message || "") : "") || `HTTP ${response.status}` };
@@ -95,8 +106,8 @@ export async function POST(request: Request) {
   }
 
   const results: CheckResult[] = [];
-  results.push(await safeCheck("Operations pilot mode", () => getJsonCheck(base, "Operations pilot mode", "/admin/operations/status", (apiPayload) => apiPayload.write_pilot_enabled === true ? null : "Write pilot flag is not enabled.")));
-  results.push(await safeCheck("Match Log flags", () => getJsonCheck(base, "Match Log flags", `/admin/clubs/${encodeURIComponent(clubId)}/match-log?limit=25`, (apiPayload) => apiPayload.enabled === true && apiPayload.apply_enabled === true ? null : "Match Log read/apply flags are not both enabled.")));
+  results.push(await safeCheck("Operations pilot mode", () => getJsonCheck(base, "Operations pilot mode", `/admin/operations/status?club_id=${encodeURIComponent(clubId)}`, (apiPayload) => apiPayload.write_pilot_enabled === true ? null : "Write pilot flag is not enabled.", token)));
+  results.push(await safeCheck("Match Log flags", () => getJsonCheck(base, "Match Log flags", `/admin/clubs/${encodeURIComponent(clubId)}/match-log?limit=25`, (apiPayload) => apiPayload.enabled === true && apiPayload.apply_enabled === true ? null : "Match Log read/apply flags are not both enabled.", token)));
   results.push(await safeCheck("Replay flag", () => getJsonCheck(base, "Replay flag", `/admin/clubs/${encodeURIComponent(clubId)}/replay-history`, (apiPayload) => apiPayload.enabled === true ? null : "Replay flag is not enabled.")));
   results.push(await safeCheck("Match Log auth", () => authValidationCheck(base, token, "Match Log auth", "PATCH", `/admin/clubs/${encodeURIComponent(clubId)}/match-log/edits`, { patches: [], confirmation_text: "APPLY", correction_note: "pilot browser validation", source: "next_admin_pilot_browser_validation" }, "No patches provided")));
   results.push(await safeCheck("Replay auth", () => authValidationCheck(base, token, "Replay auth", "POST", `/admin/clubs/${encodeURIComponent(clubId)}/replay-history`, { target_reset: "ALL (Full System Reset)", confirmation_text: "NOT_REPLAY", source: "next_admin_pilot_browser_validation" }, "Type REPLAY")));

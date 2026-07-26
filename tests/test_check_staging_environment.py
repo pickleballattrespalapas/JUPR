@@ -203,6 +203,8 @@ def test_mocked_api_checks(monkeypatch):
     monkeypatch.setenv("JUPR_ENV", "staging")
 
     def fake_get(url: str):
+        if url.endswith("/admin/operations/status"):
+            return 401, None, "HTTP 401"
         if url.endswith("/health"):
             return 200, {"ok": True}, None
         if url.endswith("/leaderboards"):
@@ -216,6 +218,10 @@ def test_mocked_api_checks(monkeypatch):
     assert rc == 0
     assert summary["checked_endpoints"]["/health"]["status"] == "ok"
     assert "/admin/operations/status" in summary["checked_endpoints"]
+    assert (
+        summary["checked_endpoints"]["/admin/operations/status"]["protected"]
+        is True
+    )
     assert "/admin/clubs/tres_palapas/tools/status" in summary["checked_endpoints"]
     assert "/admin/clubs/tres_palapas/tournaments/setup/status" in summary["checked_endpoints"]
     assert "/admin/clubs/tres_palapas/match-canonical-audit/status" in summary["checked_endpoints"]
@@ -241,17 +247,6 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
         monkeypatch.setenv(name, "1" if enabled else "0")
     for name in cse.ALWAYS_DISABLED_FLAGS:
         monkeypatch.setenv(name, "0")
-
-    workflow_flags = {
-        "replay_history": "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
-        "score_entry": "JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY",
-        "match_uploader": "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER",
-        "player_editor": "JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR",
-        "player_updates": "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES",
-        "support_requests": "JUPR_ENABLE_NEXT_ADMIN_SUPPORT_REQUESTS",
-        "weekly_recap_admin": "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
-        "admin_tools": "JUPR_ENABLE_NEXT_ADMIN_TOOLS",
-    }
 
     def expected_surface_flag(flag: str) -> bool:
         return expected_gates.get(flag, flag in cse.FULL_NEXT_ADMIN_FLAGS)
@@ -367,20 +362,7 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
                 },
             }, None
         if url.endswith("/admin/operations/status"):
-            return 200, {
-                "environment": "staging",
-                "write_pilot_enabled": False,
-                "strict_audit_required": True,
-                "service_role_configured": True,
-                "jwt_verification_configured": True,
-                "jwt_verification_mode": "jwks",
-                "jwt_verification_project_ref": project_ref,
-                "enabled_workflows": [],
-                "workflows": [
-                    {"key": key, "enabled": expected_surface_flag(flag)}
-                    for key, flag in workflow_flags.items()
-                ] + [{"key": "match_log", "apply_enabled": False}],
-            }, None
+            return 401, None, "HTTP 401"
         if "/admin/clubs/" in url and url.endswith("/status"):
             return 200, status_payload(url), None
         if url.endswith("/health/live-sessions"):
@@ -405,6 +387,10 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
         )
     )
     assert rc == 0
+    assert (
+        summary["checked_endpoints"]["/admin/operations/status"]["protected"]
+        is True
+    )
     assert all(
         summary["checked_endpoints"][template.format(club_id="tres_palapas")]["status"] == "ok"
         for template in cse.ADMIN_STATUS_PATHS

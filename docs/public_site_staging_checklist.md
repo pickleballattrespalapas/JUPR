@@ -176,8 +176,10 @@ authorizes the corresponding route, the possible checks are:
 
 ## Remaining deployment tasks
 
-- Merge and deploy the repair candidate, apply/verify the reviewed 38-name
-  staging migration inventory including `singles_replay_recovery`, and rerun the
+- Immediately before merge, apply/verify the additive Challenge Ladder repair
+  against staging and record the reviewed 39-name inventory including
+  `singles_replay_recovery` and `challenge_ladder_public_results`; then merge
+  and deploy the exact repair candidate and rerun the
   exact-SHA public/admin read evidence. The superseded `7cedb81` artifacts are
   diagnostic only.
 - Add and verify both `www` aliases in Vercel/DNS; the two apex domains are

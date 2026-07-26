@@ -116,7 +116,13 @@ Before enabling Next.js admin score entry for rated workflows, future implementa
 - A Supabase session is not persisted as an admin session until FastAPI verifies its JWT and finds a matching `admin_role_assignments` row for the requested club. User-editable metadata is never used for authorization.
 - `GET /admin/auth/capabilities` is the server boundary for that check. It returns only the authenticated email plus the caller's club/role/permission projection; missing, mismatched-user, and wrong-club assignments fail closed.
 - `next` redirects accept only same-site `/admin` and `/clubs/<slug>/admin` paths. Absolute, protocol-relative, control-character, backslash, login-loop, and reset-loop targets fall back to `/admin`.
-- The admin operations cockpit shows whether the current browser has a stored admin session.
+- The `/admin` server shell contains no cockpit posture. Its client gate first
+  restores and capability-checks the stored session, then requests the
+  club-scoped operations status with the bearer token. Anonymous visitors see
+  only the sign-in gate; logout, token rotation, wrong-club denial, or expired
+  authorization clears any previously rendered status. Capability checks repeat
+  every minute and whenever the tab regains focus or visibility, so a revoked
+  assignment is removed from view without waiting for a navigation.
 - Runtime configuration required on Vercel:
   - `NEXT_PUBLIC_SUPABASE_URL`
   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`

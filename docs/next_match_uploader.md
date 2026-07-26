@@ -66,8 +66,9 @@ The implemented direct singles path still uses the Python singles rating
 authority, and its request/response and replay-managed-row contracts have
 automated coverage. The reviewed
 `20260725181500_singles_replay_recovery` migration adds the preserved baseline
-and managed marker needed for deterministic replay, but it has not yet been
-formally applied and accepted in staging. More importantly, the direct writer
+and managed marker needed for deterministic replay. It is applied in staging as
+connector ledger entry `20260725193213_singles_replay_recovery`; formal
+exact-candidate acceptance remains pending. More importantly, the direct writer
 must be made atomic before its dormant gate can be reviewed for enablement.
 
 Tournament Operations official singles publishing is a separate path. Its
@@ -89,9 +90,9 @@ If the browser loses the response, the outcome is treated as unknown: check Matc
 ## Follow-up slices
 
 - Pilot every round-robin format against production-like staging player sets.
-- Replace direct singles persistence with one atomic writer, apply and verify
-  the singles replay migration in staging, and only then review a bounded
-  enablement of `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES`.
+- Replace direct singles persistence with one atomic writer, retain the applied
+  singles replay schema, and only then review a bounded enablement of
+  `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES`.
 - Preserve the future direct-singles protocol: submit one rated and one unrated
   disposable row, verify exact managed-history readback and zero aggregate
   change for the unrated row, then exclude only the returned IDs and require a

@@ -396,6 +396,24 @@ def _check_api(
 
     for path, url in endpoints.items():
         status, payload, err = _http_get_json(url)
+        if path == "/admin/operations/status":
+            if status == 401:
+                results[path] = {
+                    "status": "ok",
+                    "http_status": status,
+                    "protected": True,
+                }
+            else:
+                results[path] = {
+                    "status": "error",
+                    "http_status": status,
+                    "protected": False,
+                    "detail": err,
+                }
+                summary["errors"].append(
+                    "Admin operations status must reject unauthenticated requests."
+                )
+            continue
         if err:
             results[path] = {"status": "error", "http_status": status, "detail": err}
             summary["errors"].append(f"API check failed: {path}")
@@ -483,69 +501,6 @@ def _check_api(
                 if expected_write_wave in REGISTRATION_SECRET_WAVES:
                     require_bool(path, payload, "registration_edit_secret_configured", True)
                     require_bool(path, payload, "registration_confirmation_secret_configured", True)
-        if path == "/admin/operations/status" and isinstance(payload, dict):
-            enabled = payload.get("enabled_workflows") or []
-            results[path]["enabled_workflows"] = enabled
-            results[path]["environment"] = payload.get("environment")
-            results[path]["write_pilot_enabled"] = payload.get("write_pilot_enabled")
-            if expect_full_next_admin and payload.get("environment") != "staging":
-                results[path]["status"] = "error"
-                summary["errors"].append("Admin operations status is not reporting environment=staging.")
-            expected_pilot = expected_gates["JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT"]
-            if expect_full_next_admin and payload.get("write_pilot_enabled") is not expected_pilot:
-                results[path]["status"] = "error"
-                summary["errors"].append(
-                    f"Admin operations status is not reporting write_pilot_enabled={expected_pilot}."
-                )
-            if expect_full_next_admin:
-                require_bool(path, payload, "strict_audit_required", True)
-                require_bool(path, payload, "service_role_configured", True)
-                require_bool(path, payload, "jwt_verification_configured", True)
-                jwt_mode = str(payload.get("jwt_verification_mode") or "").strip().lower()
-                results[path]["jwt_verification_mode"] = jwt_mode or None
-                if not jwt_mode or jwt_mode == "unconfigured":
-                    results[path]["status"] = "error"
-                    summary["errors"].append(
-                        "Admin operations status does not attest a configured JWT verification mode."
-                    )
-                expected_jwt_ref = str(expected_supabase_project_ref or "").strip().lower()
-                actual_jwt_ref = str(payload.get("jwt_verification_project_ref") or "").strip().lower()
-                results[path]["jwt_verification_project_ref"] = actual_jwt_ref or None
-                if not expected_jwt_ref or actual_jwt_ref != expected_jwt_ref:
-                    results[path]["status"] = "error"
-                    summary["errors"].append(
-                        "Admin operations JWT verification project does not match isolated staging Supabase."
-                    )
-                workflows = {
-                    str(item.get("key")): item
-                    for item in (payload.get("workflows") or [])
-                    if isinstance(item, dict)
-                }
-                for workflow_key, flag_name in {
-                    "replay_history": "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
-                    "score_entry": "JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY",
-                    "match_uploader": "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER",
-                    "player_editor": "JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR",
-                    "player_updates": "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES",
-                    "support_requests": "JUPR_ENABLE_NEXT_ADMIN_SUPPORT_REQUESTS",
-                    "weekly_recap_admin": "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
-                    "admin_tools": "JUPR_ENABLE_NEXT_ADMIN_TOOLS",
-                }.items():
-                    projected = workflows.get(workflow_key) or {}
-                    actual = projected.get("enabled")
-                    expected = expected_surface_flag(flag_name)
-                    results[path][f"workflow.{workflow_key}.enabled"] = actual
-                    if actual is not expected:
-                        results[path]["status"] = "error"
-                        summary["errors"].append(
-                            f"Admin operations workflow status mismatch for {workflow_key}: expected enabled={expected}."
-                        )
-                match_log = workflows.get("match_log") or {}
-                if match_log.get("apply_enabled") is not expected_gates[
-                    "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY"
-                ]:
-                    results[path]["status"] = "error"
-                    summary["errors"].append("Admin operations Match Log apply gate mismatch.")
         if (
             path == "/health/live-sessions"
             and expect_full_next_admin

@@ -217,12 +217,54 @@ def test_durable_key_derivation_cannot_repopulate_logout_state() -> None:
 def test_admin_session_ignores_unrelated_storage_events() -> None:
     auth = _source("apps/web/lib/adminAuthClient.ts")
     hook = _source("apps/web/lib/useAdminSession.ts")
-    card = _source("apps/web/app/admin/AdminSessionCard.tsx")
 
     assert 'export const ADMIN_SESSION_STORAGE_KEY = "jupr_admin_session_v1";' in auth
     assert "key === null || key === ADMIN_SESSION_STORAGE_KEY" in auth
     assert "adminSessionStorageEventIsRelevant(event.key)" in hook
     assert 'window.addEventListener("storage", handleStorage);' in hook
     assert 'window.addEventListener("storage", load);' not in hook
-    assert "adminSessionStorageEventIsRelevant(event.key)" in card
-    assert 'window.addEventListener("storage", handleStorage);' in card
+
+
+def test_admin_operations_cockpit_is_client_gated_and_bearer_authorized() -> None:
+    page = _source("apps/web/app/admin/page.tsx")
+    cockpit = _source("apps/web/app/admin/AdminOperationsCockpit.tsx")
+    api = _source("apps/web/lib/adminOperationsApi.ts")
+
+    assert "getAdminOperationsStatus" not in page
+    assert "AdminOperationsCockpit" in page
+    assert '"use client";' in cockpit
+    assert "useAdminSession()" in cockpit
+    assert "useAuthenticatedAutoLoad(accessToken, loadStatus, clubId)" in cockpit
+    assert "useLatestRequestGuard" in cockpit
+    assert "if (sessionLoading || !accessToken || !session)" in cockpit
+    assert "setData(null)" in cockpit
+    assert "Authorization: `Bearer ${accessToken}`" in api
+    assert 'cache: "no-store"' in api
+    assert "club_id" in api
+
+
+def test_admin_pilot_match_log_readiness_forwards_the_bearer_token() -> None:
+    route = _source("apps/web/app/api/admin/pilot/route.ts")
+    match_log_check = next(
+        line for line in route.splitlines() if '"Match Log flags"' in line
+    )
+
+    assert "getJsonCheck(" in match_log_check
+    assert "match-log?limit=25" in match_log_check
+    assert match_log_check.rstrip().endswith(", token)));")
+
+
+def test_public_navigation_does_not_advertise_protected_admin_tools() -> None:
+    layout = _source("apps/web/app/layout.tsx")
+    home = _source("apps/web/app/page.tsx")
+    route_map = _source("apps/web/app/site-map/page.tsx")
+    sitemap = _source("apps/web/app/sitemap.ts")
+    admin_layout = _source("apps/web/app/admin/layout.tsx")
+
+    assert '<Link href="/admin/login">Staff sign in</Link>' in layout
+    assert '["Staff sign-in", "/admin/login"]' in home
+    assert '["Operations cockpit", "/admin"]' not in route_map
+    assert '["Admin Tools", "/admin/tools"]' not in route_map
+    assert '"/admin"' not in sitemap
+    assert "index: false" in admin_layout
+    assert "follow: false" in admin_layout

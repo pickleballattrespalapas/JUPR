@@ -11,13 +11,24 @@ from jupr_app.domain.notifications.player_profile_update_repo import queue_playe
 logger = logging.getLogger(__name__)
 
 
-def run_badge_side_effects(*, supabase, club_id: str, has_badge_eligible_match: bool, affected_players: set[int], db_matches: list[dict[str, Any]], match_payloads: list[dict[str, Any]]) -> dict[str, Any]:
+def run_badge_side_effects(
+    *,
+    supabase,
+    club_id: str,
+    has_badge_eligible_match: bool,
+    affected_players: set[int],
+    db_matches: list[dict[str, Any]],
+    match_payloads: list[dict[str, Any]],
+    dedupe_match_id: str | None = None,
+) -> dict[str, Any]:
     badge_summary: dict[str, Any] = {"mode": "skipped", "awarded_count": 0, "candidate_count": 0, "badge_ids": []}
     if not (supabase is not None and has_badge_eligible_match):
         return badge_summary
     enqueue_result = enqueue_badge_eval(
         supabase, club_id=str(club_id), event_type="match_recorded",
-        player_ids=sorted(affected_players), payload={"match_count": len(db_matches), "matches": match_payloads[:10]},
+        player_ids=sorted(affected_players),
+        match_id=str(dedupe_match_id) if dedupe_match_id else None,
+        payload={"match_count": len(db_matches), "matches": match_payloads[:10]},
     )
     should_fallback = not bool(enqueue_result.get("queued"))
     if not should_fallback:

@@ -1,3 +1,5 @@
+import { getAdminApiBaseUrl } from "@/lib/adminAuthClient";
+
 export type AdminWorkflowStatus = {
   key: string;
   label: string;
@@ -34,11 +36,11 @@ export type AdminOperationsStatusResponse = {
   workflows: AdminWorkflowStatus[];
 };
 
-type ApiResult<T> = { data: T | null; error: string | null };
-
-function baseUrl(): string | null {
-  return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
-}
+export type AdminOperationsApiResult<T> = {
+  data: T | null;
+  error: string | null;
+  status: number | null;
+};
 
 async function apiErrorMessage(response: Response): Promise<string> {
   const fallback = `API error (${response.status}).`;
@@ -60,19 +62,62 @@ async function apiErrorMessage(response: Response): Promise<string> {
   return `${fallback} ${bodyText.slice(0, 240)}`;
 }
 
-async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
-  const apiBase = baseUrl();
-  if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
+async function fetchJson<T>(
+  path: string,
+  accessToken: string
+): Promise<AdminOperationsApiResult<T>> {
+  const apiBase = getAdminApiBaseUrl();
+  if (!apiBase) {
+    return {
+      data: null,
+      error: "JUPR admin API configuration is missing.",
+      status: null
+    };
+  }
+  if (!accessToken) {
+    return {
+      data: null,
+      error: "Admin sign-in is required.",
+      status: 401
+    };
+  }
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
-    const response = await fetch(url, { next: { revalidate: 30 } });
-    if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
-    return { data: (await response.json()) as T, error: null };
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        accept: "application/json",
+        Authorization: `Bearer ${accessToken}`
+      }
+    });
+    if (!response.ok) {
+      return {
+        data: null,
+        error: await apiErrorMessage(response),
+        status: response.status
+      };
+    }
+    return {
+      data: (await response.json()) as T,
+      error: null,
+      status: response.status
+    };
   } catch (error) {
-    return { data: null, error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}` };
+    return {
+      data: null,
+      error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}`,
+      status: null
+    };
   }
 }
 
-export async function getAdminOperationsStatus(): Promise<ApiResult<AdminOperationsStatusResponse>> {
-  return fetchJson<AdminOperationsStatusResponse>("/admin/operations/status");
+export async function getAdminOperationsStatus(
+  accessToken: string,
+  clubId: string
+): Promise<AdminOperationsApiResult<AdminOperationsStatusResponse>> {
+  const params = new URLSearchParams({ club_id: clubId });
+  return fetchJson<AdminOperationsStatusResponse>(
+    `/admin/operations/status?${params.toString()}`,
+    accessToken
+  );
 }

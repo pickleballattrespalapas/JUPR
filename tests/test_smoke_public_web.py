@@ -149,6 +149,12 @@ def test_api_check_table_tracks_current_auth_and_tournament_contracts():
     assert match_log.url.endswith("/admin/clubs/tres_palapas/match-log")
     assert match_log.expected_statuses == (401,)
 
+    operations = checks[
+        "api: unauthenticated admin operations status blocked"
+    ]
+    assert operations.url.endswith("/admin/operations/status")
+    assert operations.expected_statuses == (401,)
+
     tournament = checks["api: admin tournament"]
     assert tournament.url.endswith("/admin/clubs/tres_palapas/tournaments/admin/status")
     assert tournament.expected_statuses == (200,)

@@ -22,17 +22,18 @@ test.describe("order-26 Tournament Admin staging evidence", () => {
     await page.goto("/admin/tournament-setup", { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { name: "Tournament Setup Manager" })).toBeVisible();
     await expect(page.getByText(/settings, registration days, event\/division options, builder drafts, publish-impact review/i)).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Tournament administration" }).getByRole("link", { name: "Setup", exact: true })).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("link", { name: /Streamlit Tournament Setup fallback/i })).toBeVisible();
 
     await page.goto("/admin/tournaments", { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { name: /Tournament registration management/i })).toBeVisible();
-    await expect(page.getByRole("link", { name: /bulk registration actions/i })).toBeVisible();
-    await expect(page.getByRole("link", { name: /status actions/i })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Tournament administration" }).getByRole("link", { name: "Bulk actions", exact: true })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Tournament administration" }).getByRole("link", { name: "Status", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: /Streamlit tournament recovery fallback/i })).toBeVisible();
 
     await page.goto("/admin/tournaments/registrations", { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { name: /Registration management and reporting/i })).toBeVisible();
-    await expect(page.getByRole("link", { name: /Guarded operations import/i })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Tournament administration" }).getByRole("link", { name: "Operations", exact: true })).toBeVisible();
     await expect(page.getByText(/cannot create registrations, update entries, or send email|never writes draw teams/i)).toBeVisible();
   });
 

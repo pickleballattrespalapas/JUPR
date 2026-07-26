@@ -17,13 +17,6 @@ export default async function AdminTournamentsPage() {
       <p style={{ color: "#334155", maxWidth: "860px" }}>
         Read-foundation for moving Streamlit tournament registration management to Next/Vercel. This view is guarded by the stored admin session and FastAPI tournament permissions.
       </p>
-      <p style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
-        <Link href="/admin/tournaments/registrations">Open registration reporting</Link>
-        <Link href="/admin/tournaments/bulk">Open bulk registration actions</Link>
-        <Link href="/admin/tournaments/ops">Open Tournament Ops snapshot</Link>
-        <Link href="/admin/tournaments/status">Open status actions</Link>
-        <Link href="/admin/tournaments/delete-draft">Delete empty draft</Link>
-      </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Tournament Admin status is temporarily unavailable. {error}</p> : null}
 

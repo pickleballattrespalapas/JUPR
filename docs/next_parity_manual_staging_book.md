@@ -105,11 +105,11 @@ Record the identity artifact in the exact form
 - [ ] Production write flags remain off; staging is `write_wave=none` at rest and enables only one approved workflow while it is under test.
 - [ ] No "enable all" configuration is used; a distinct final Fly release restores `none`, `business_data_write_wave_active=false`, and every controlled write flag false.
 - [ ] Email mode is `dry_run` or `staging_redirect`, with the redirect inbox visibly identified.
-- [ ] The reviewed 38-name migration inventory is applied, including `singles_replay_recovery`; the connector-assigned ledger head, private grants, and RLS are verified without assuming the repository filename is the remote version.
+- [ ] The reviewed 39-name migration inventory is applied, including `singles_replay_recovery` and `challenge_ladder_public_results`; the connector-assigned ledger head, private grants, and RLS are verified without assuming the repository filename is the remote version.
 - [ ] Order-27 migration `20260719204700_tournament_operations_guard_surface.sql` and its Operations, official-publish, and email-handoff gates are integrated and verified.
 - [ ] Disposable fixture IDs, exact resource refs, route-supported idempotency keys, and cleanup/recovery owners are recorded before any write.
 - [ ] Match Log, Replay History, audit log, provider log, and Streamlit fallback links are open before high-risk writes.
-- [ ] The reviewed singles replay migration is formally applied and accepted in staging; League Live waves expose only the exact Match Uploader preview dependency; context recovery links filter Match Log exactly; and Replay is visibly global.
+- [ ] The already-applied singles replay migration is formally accepted against the exact candidate; League Live waves expose only the exact Match Uploader preview dependency; context recovery links filter Match Log exactly; and Replay is visibly global.
 - [ ] `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES=0` and `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=0` are attested in every current wave. Direct uploader singles, duplicate cleanup, bulk exclusion, and every manual match-producing case that depends on destructive exclusion remain outside the active operator session.
 - [ ] Public, auth, admin-read, and write waves pass their automated route-specific suites against this exact candidate.
 
@@ -372,6 +372,7 @@ or Tournament Live writes unless both the Order-27 guard surface and the Order-2
 | `migration:legacy-top-performer-seed` | `supabase/migrations/20260720014744_seed_top_performer_badges.sql`; verify `4/4` IDs, any present `_v2` columns aligned, and existing customized rows preserved | — | — | Close Awards write; do not remove definitions or minted evidence | — |
 | `migration:baseline-worker-log` | `supabase/migrations/20260720123402_baseline_worker_run_log.sql` (canonical forward repair for the historical `20260511170000` prerequisite) | — | — | Stop email workers and close player-update gates | — |
 | `migration:singles-replay-recovery` | `supabase/migrations/20260725181500_singles_replay_recovery.sql`; verify player baselines, replay-managed match marker, service-role-only bulk update RPC, and atomic Tournament Operations CAS publish preservation | — | — | Keep direct uploader singles and destructive Match Log gates closed; preserve baselines and managed history for a reviewed forward repair | — |
+| `migration:challenge-ladder-public-results` | `supabase/migrations/20260725231000_challenge_ladder_public_results.sql`; verify nullable public-result relations, exact-operation receipts, atomic two-match publish, service-role-only grants, RLS, and mutation guards | — | — | Keep Challenge Ladder writes closed; preserve the exact receipt and linked result matches for idempotent recovery | — |
 | `migration:baseline-registration-player` | `supabase/migrations/20261020000000_tournament_registrations_player_id_postgrest_reload.sql` | — | — | Close tournament registration/admin writes | — |
 | `migration:legacy-league-awards-schema` | Reviewed canonical equivalent of `migrations/20260701_league_manager_end_wizard_columns.sql` | — | — | Close League Manager/Awards writes; restore candidate | — |
 
@@ -511,7 +512,7 @@ are later finish lines and do not belong in this completion gate.
 - [ ] The final Fly ledger row is a same-candidate `write_wave=none` release and its `/health` evidence proves `business_data_write_wave_active=false` plus every controlled write flag false.
 - [ ] Both dormant high-risk blocker rows are `Cleared` by candidate-bound atomicity, idempotency, migration, recovery, and exact-readback evidence; neither is bypassed by an enabled broader wave.
 - [ ] Canonical `Staging Smoke` ran only after that final `none` release and passed
-      all 56 public-read plus five guided Tournament Setup checks without skips or
+      all 69 public-read plus five guided Tournament Setup checks without skips or
       flakes; `public-web-smoke` evidence is labeled diagnostic/noncanonical.
 - [ ] The manually dispatched `complete-book` job passes the complete-book checker with the exact candidate SHA, Vercel deployment ID, immutable Vercel deployment origin, and Fly image ref, then passes identity-only live re-attestation.
 - [ ] Only then does the final evidence PR reconcile eligible matrix rows from `Partial` to `Done`.

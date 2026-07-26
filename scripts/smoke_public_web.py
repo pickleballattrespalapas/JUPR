@@ -3,8 +3,8 @@
 
 The script is intentionally dependency-free so it can run from a laptop,
 GitHub Actions, or a deployment shell before a Vercel/custom-domain cutover.
-It checks public/read-only routes, public-safe admin status routes, and the guard
-that unauthenticated admin writes remain blocked.
+It checks public/read-only routes and the guards that unauthenticated admin
+reads and writes remain blocked.
 """
 
 from __future__ import annotations
@@ -215,7 +215,11 @@ def _api_get_checks(api_base_url: str, club_slug: str, club_id: str, *, allow_li
     live_statuses = (200, 503) if allow_live_unconfigured else (200,)
     paths = [
         ("api: health", "/health", (200,)),
-        ("api: admin operations status", "/admin/operations/status", (200,)),
+        (
+            "api: unauthenticated admin operations status blocked",
+            "/admin/operations/status",
+            (401,),
+        ),
         ("api: unauthenticated admin match log read blocked", f"/admin/clubs/{club_id}/match-log", (401,)),
         ("api: admin replay", f"/admin/clubs/{club_id}/replay-history", (200,)),
         ("api: admin match uploader", f"/admin/clubs/{club_id}/match-uploader/status", (200,)),

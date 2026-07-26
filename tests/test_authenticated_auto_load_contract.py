@@ -278,11 +278,22 @@ def test_league_live_clears_stale_session_state_before_detail_reads() -> None:
 
 def test_admin_session_revalidation_fails_closed_and_ignores_older_restores() -> None:
     source = _read("apps/web/lib/useAdminSession.ts")
+    auth = _read("apps/web/lib/adminAuthClient.ts")
 
     assert "let loadGeneration = 0;" in source
     assert "const generation = ++loadGeneration;" in source
+    assert "let queuedBackground: boolean | null = null;" in source
+    assert "queuedBackground =" in source
+    assert "void load({ background: nextBackground });" in source
     assert "setSession(null);" in source
     assert source.count("generation === loadGeneration") >= 3
+    assert "const storageSnapshot =" in auth
+    assert "const storageIsUnchanged =" in auth
+    assert auth.count("if (!storageIsUnchanged()) return null;") >= 3
+    assert "saveAdminSession(authorized, { changeSource: options.changeSource });" in auth
+    assert "clearAdminSession({ changeSource: options.changeSource });" in auth
+    assert "const changeSource = `use-admin-session-${++adminSessionHookSequence}`;" in source
+    assert "if (eventSource === changeSource) return;" in source
 
 
 def test_secondary_reports_actions_and_recap_writes_ignore_old_token_responses() -> None:

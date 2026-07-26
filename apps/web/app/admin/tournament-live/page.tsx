@@ -1,4 +1,5 @@
 import Link from "next/link";
+import TournamentAdminNav from "@/components/TournamentAdminNav";
 import { getAdminTournamentApiBaseUrl, getAdminTournamentLiveStatus } from "@/lib/adminTournamentApi";
 import TournamentLivePanel from "./TournamentLivePanel";
 
@@ -9,25 +10,28 @@ export default async function AdminTournamentLivePage() {
   const { data: status, error: statusError } = await getAdminTournamentLiveStatus(clubId);
 
   return (
-    <section>
-      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        Tournament Live
-      </p>
-      <h1 style={{ marginTop: 0 }}>Tournament Live runner</h1>
-      <p style={{ color: "#334155", maxWidth: "880px" }}>
-        A draw-scoped control room for running a prepared tournament during play. FastAPI/Python owns scoring and progression; the browser submits reviewed commands and displays durable recovery evidence. This is explicitly separate from the one-off JUPR Live product.
-      </p>
+    <>
+      <TournamentAdminNav />
+      <section>
+        <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
+          Tournament Live
+        </p>
+        <h1 style={{ marginTop: 0 }}>Tournament Live runner</h1>
+        <p style={{ color: "#334155", maxWidth: "880px" }}>
+          A draw-scoped control room for running a prepared tournament during play. FastAPI/Python owns scoring and progression; the browser submits reviewed commands and displays durable recovery evidence. This is explicitly separate from the one-off JUPR Live product.
+        </p>
 
-      {statusError ? <p style={{ color: "#b91c1c" }}>Tournament Admin status is unavailable. {statusError}</p> : null}
-      {!status ? (
-        <article style={cardStyle}>Tournament Live status is temporarily unavailable. Use the Streamlit fallback and do not attempt a write.</article>
-      ) : (
-        <TournamentLivePanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={status} />
-      )}
+        {statusError ? <p style={{ color: "#b91c1c" }}>Tournament Admin status is unavailable. {statusError}</p> : null}
+        {!status ? (
+          <article style={cardStyle}>Tournament Live status is temporarily unavailable. Use the Streamlit fallback and do not attempt a write.</article>
+        ) : (
+          <TournamentLivePanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={status} />
+        )}
 
-      <p style={{ marginTop: "1rem" }}>
-        <Link href="/admin/tournaments/ops">Tournament Ops setup</Link> · <Link href="/admin/tournaments">Tournament Admin</Link> · <Link href="/admin/player-updates">Player Updates</Link> · <Link href="/admin">Operations cockpit</Link>
-      </p>
-    </section>
+        <p style={{ marginTop: "1rem" }}>
+          <Link href="/admin/player-updates">Player Updates</Link> · <Link href="/admin">Operations cockpit</Link>
+        </p>
+      </section>
+    </>
   );
 }

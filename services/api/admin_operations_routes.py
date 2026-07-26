@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from fastapi import HTTPException, Query
+
 from jupr_app.services.admin_operations_service import build_admin_operations_status
-from services.api.admin_auth_routes import install_admin_auth_routes
+from services.api.admin_auth_routes import (
+    install_admin_auth_routes,
+    require_admin_assignments,
+)
 from services.api.admin_badge_diagnostics_routes import install_admin_badge_diagnostics_routes
 from services.api.admin_challenge_ladder_routes import install_admin_challenge_ladder_routes
 from services.api.admin_jupr_live_routes import install_admin_jupr_live_routes
@@ -22,13 +27,27 @@ from services.api.admin_tournament_live_routes import install_admin_tournament_l
 from services.api.admin_tournament_setup_routes import install_admin_tournament_setup_routes
 from services.api.admin_verified_updates_routes import install_admin_verified_updates_routes
 from services.api.admin_weekly_recap_routes import install_admin_weekly_recap_routes
+from services.api.auth import auth_header
 
 
 def install_admin_operations_routes(app, *, get_supabase_client=None) -> None:
     """Register admin operations status and guarded planning/write routes."""
 
     @app.get("/admin/operations/status")
-    def get_admin_operations_status() -> dict[str, Any]:
+    def get_admin_operations_status(
+        club_id: str | None = Query(default=None),
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if get_supabase_client is None:
+            raise HTTPException(
+                status_code=503,
+                detail="admin access check unavailable",
+            )
+        require_admin_assignments(
+            get_supabase_client=get_supabase_client,
+            authorization=authorization,
+            requested_club_id=club_id,
+        )
         return build_admin_operations_status()
 
     if get_supabase_client is not None:

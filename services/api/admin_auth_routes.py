@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import HTTPException, Query
 
@@ -37,6 +37,44 @@ def _matching_assignments(
     return sorted(assignments, key=lambda item: (item["club_id"], item["role"]))
 
 
+def require_admin_assignments(
+    *,
+    get_supabase_client: Callable[[], Any],
+    authorization: str | None,
+    requested_club_id: str | None = None,
+) -> tuple[Any, list[dict[str, Any]]]:
+    """Verify a Supabase JWT and require at least one bound JUPR admin role.
+
+    This is the shared read boundary for admin surfaces that are not tied to a
+    single permission. It deliberately preserves generic denial and backend
+    failure messages so role, club, and user-assignment details are not leaked.
+    """
+
+    user = authenticate_bearer(authorization)
+    normalized_club_id = str(requested_club_id or "").strip() or None
+    try:
+        rows = (
+            get_supabase_client()
+            .table("admin_role_assignments")
+            .select("club_id,role,user_id")
+            .eq("email", user.email)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed without leaking backend details
+        raise HTTPException(status_code=503, detail="admin access check unavailable") from exc
+
+    assignments = _matching_assignments(rows=list(rows), user_id=user.user_id)
+    if normalized_club_id:
+        assignments = [
+            row for row in assignments if row["club_id"] == normalized_club_id
+        ]
+    if not assignments:
+        raise _admin_access_denied()
+    return user, assignments
+
+
 def install_admin_auth_routes(app, *, get_supabase_client) -> None:
     """Install the verified JWT -> JUPR capability boundary used by admin login."""
 
@@ -45,27 +83,12 @@ def install_admin_auth_routes(app, *, get_supabase_client) -> None:
         club_id: str | None = Query(default=None),
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        user = authenticate_bearer(authorization)
         requested_club_id = str(club_id or "").strip() or None
-
-        try:
-            rows = (
-                get_supabase_client()
-                .table("admin_role_assignments")
-                .select("club_id,role,user_id")
-                .eq("email", user.email)
-                .execute()
-                .data
-                or []
-            )
-        except Exception as exc:  # noqa: BLE001 - fail closed without leaking backend details
-            raise HTTPException(status_code=503, detail="admin access check unavailable") from exc
-
-        assignments = _matching_assignments(rows=list(rows), user_id=user.user_id)
-        if requested_club_id:
-            assignments = [row for row in assignments if row["club_id"] == requested_club_id]
-        if not assignments:
-            raise _admin_access_denied()
+        user, assignments = require_admin_assignments(
+            get_supabase_client=get_supabase_client,
+            authorization=authorization,
+            requested_club_id=requested_club_id,
+        )
 
         return {
             "authorized": True,
