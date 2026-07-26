@@ -6,6 +6,7 @@ import hashlib
 import json
 from types import SimpleNamespace
 from typing import Any, Iterable
+from uuid import UUID
 
 import pandas as pd
 
@@ -13,6 +14,10 @@ from jupr_app.data.load import load_data
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_club
 from jupr_app.domain.gamification.badges_repo import upsert_player_badges
+
+
+_REVOKE_REASON_MAX_CHARS = 500
+_REVOKE_ACTOR_MAX_CHARS = 254
 
 
 def run_badge_recompute(
@@ -85,8 +90,14 @@ def run_badge_recompute(
             badge_id=badge_id,
             context_id=context_id,
         )
-        existing_keys = {(row["player_id"], row["badge_id"], row["context_id"]) for row in existing_rows}
-        computed_keys = {(c.player_id, str(c.badge_id), str(c.context_id)) for c in computed}
+        existing_keys = {
+            (row["player_id"], row["badge_id"], row["context_type"], row["context_id"])
+            for row in existing_rows
+        }
+        computed_keys = {
+            (c.player_id, str(c.badge_id), str(c.context_type), str(c.context_id))
+            for c in computed
+        }
 
         rule_version = rule_version or _compute_rule_version()
         active_existing_keys = {row["key"] for row in existing_rows if row.get("revoked_at") is None}
@@ -122,7 +133,10 @@ def run_badge_recompute(
         revoked_count = 0
         unrevoked_count = 0
         if mode == "strict":
-            revoke_reason = revoke_reason or "strict recompute"
+            revoked_by, stored_revoke_reason = _build_revocation_metadata(
+                created_by=created_by,
+                revoke_reason=revoke_reason or "strict recompute",
+            )
             for row in existing_rows:
                 if row["key"] in computed_keys:
                     if row.get("revoked_at"):
@@ -130,7 +144,12 @@ def run_badge_recompute(
                         unrevoked_count += 1
                     continue
                 if row.get("revoked_at") is None:
-                    _mark_revoked(supabase, row["id"], created_by, revoke_reason)
+                    _mark_revoked(
+                        supabase,
+                        row["id"],
+                        revoked_by,
+                        stored_revoke_reason,
+                    )
                     revoked_count += 1
 
         summary["revoked_count"] = revoked_count
@@ -237,7 +256,7 @@ def _fetch_existing_awards(
 ) -> list[dict[str, Any]]:
     query = (
         supabase.table("player_badges")
-        .select("id,player_id,badge_id,context_id,revoked_at")
+        .select("id,player_id,badge_id,context_type,context_id,revoked_at")
         .eq("club_id", club_id)
     )
     if player_id is not None:
@@ -249,8 +268,26 @@ def _fetch_existing_awards(
     resp = query.execute()
     rows = []
     for row in resp.data or []:
-        key = (int(row.get("player_id")), str(row.get("badge_id")), str(row.get("context_id")))
-        rows.append({**row, "key": key})
+        player_id_value = int(row.get("player_id"))
+        badge_id_value = str(row.get("badge_id"))
+        context_type_value = str(row.get("context_type"))
+        context_id_value = str(row.get("context_id"))
+        key = (
+            player_id_value,
+            badge_id_value,
+            context_type_value,
+            context_id_value,
+        )
+        rows.append(
+            {
+                **row,
+                "player_id": player_id_value,
+                "badge_id": badge_id_value,
+                "context_type": context_type_value,
+                "context_id": context_id_value,
+                "key": key,
+            }
+        )
     return rows
 
 
@@ -262,6 +299,37 @@ def _mark_revoked(supabase: Any, row_id: str, revoked_by: str | None, revoke_rea
             "revoke_reason": revoke_reason,
         }
     ).eq("id", row_id).execute()
+
+
+def _build_revocation_metadata(
+    *,
+    created_by: str | None,
+    revoke_reason: str,
+) -> tuple[str | None, str]:
+    actor = _bounded_single_line(created_by, limit=_REVOKE_ACTOR_MAX_CHARS)
+    reason = _bounded_single_line(revoke_reason, limit=_REVOKE_REASON_MAX_CHARS) or "strict recompute"
+    revoked_by = _parse_uuid(actor)
+    if revoked_by is not None or not actor:
+        return revoked_by, reason
+
+    actor_suffix = f" [actor: {actor}]"
+    reason_limit = _REVOKE_REASON_MAX_CHARS - len(actor_suffix)
+    bounded_reason = reason[:reason_limit].rstrip()
+    return None, f"{bounded_reason}{actor_suffix}" if bounded_reason else actor_suffix.strip()
+
+
+def _parse_uuid(value: str) -> str | None:
+    if not value:
+        return None
+    try:
+        return str(UUID(value))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _bounded_single_line(value: Any, *, limit: int) -> str:
+    printable = "".join(character if character.isprintable() else " " for character in str(value or ""))
+    return " ".join(printable.split())[:limit].strip()
 
 
 def _clear_revocation(supabase: Any, row_id: str) -> None:

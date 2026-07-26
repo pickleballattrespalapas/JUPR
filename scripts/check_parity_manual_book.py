@@ -27,6 +27,7 @@ EXPECTED_WAVES = {
     "admin-read-export",
     "reversible-admin-writes",
     "match-rating-writes",
+    "match-exclusion-recovery",
     "recovery",
 }
 EXPECTED_MANUAL_MUTATIONS = {
@@ -61,6 +62,7 @@ EXPECTED_FIXTURE_SCOPES = {
     "registration-pairing",
     "league-awards-live",
     "match-player-replay",
+    "match-exclusion-recovery",
     "ladder-moneyball-live",
     "tournament-admin-ops-live",
     "recap-subscription-outbox",

@@ -7,10 +7,7 @@ import pandas as pd
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.replay_history import FULL_RESET_LABEL
-from jupr_app.services.replay_service import (
-    mark_replay_job_failed,
-    run_replay_with_job_tracking,
-)
+from jupr_app.services.replay_service import run_replay_with_job_tracking
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 
@@ -71,7 +68,10 @@ def _recent_replay_jobs(supabase: Any, *, club_id: str, limit: int = 20) -> tupl
     try:
         rows = _safe_rows(
             supabase.table("replay_jobs")
-            .select("id,target_reset,status,actor_email,source,created_at,started_at,finished_at,error_text")
+            .select(
+                "id,target_reset,status,actor_email,source,created_at,started_at,"
+                "finished_at,error_text,attempt_count,lease_expires_at"
+            )
             .eq("club_id", str(club_id))
             .order("created_at", desc=True)
             .limit(max(1, min(int(limit), 50)))
@@ -90,6 +90,8 @@ def _recent_replay_jobs(supabase: Any, *, club_id: str, limit: int = 20) -> tupl
             "started_at": row.get("started_at"),
             "finished_at": row.get("finished_at"),
             "error_text": _clean_text(row.get("error_text"), limit=500),
+            "attempt_count": int(row.get("attempt_count") or 0),
+            "lease_expires_at": row.get("lease_expires_at"),
         }
         for row in rows
     ], None
@@ -149,7 +151,7 @@ def build_admin_replay_status(
 def _safety_rules() -> list[str]:
     return [
         "Replay runs server-side through FastAPI and the Python replay_history domain function.",
-        "Every replay creates a durable replay_jobs record and client retries reuse an idempotency key.",
+        "Every replay creates a durable replay_jobs record; client retries reuse an idempotency key and workers hold expiring leases.",
         "League replay rewrites snapshots and rebuilds league_ratings for the selected league.",
         "Full reset updates overall player aggregates and rebuilds replay-managed singles rows from their preserved legacy baseline.",
         "Replay requires Supabase JWT authorization with run_replay permission.",
@@ -168,6 +170,9 @@ def run_admin_replay_history(
     confirmation_text: str = "",
     idempotency_key: str | None = None,
     retry_failed: bool = False,
+    worker_id: str | None = None,
+    lease_seconds: int = 1800,
+    replay_job_id: str | None = None,
 ) -> dict[str, Any]:
     if not is_admin_replay_enabled():
         raise PermissionError("Next replay is disabled.")
@@ -186,6 +191,9 @@ def run_admin_replay_history(
         idempotency_key=idempotency_key,
         source=source,
         retry_failed=retry_failed,
+        worker_id=worker_id,
+        lease_seconds=lease_seconds,
+        replay_job_id=replay_job_id,
     )
     result = dict(tracked.get("result") or {})
     tracked_status = str(tracked.get("job_status"))
@@ -200,22 +208,10 @@ def run_admin_replay_history(
             "Full replay did not attest replay-managed singles recovery. "
             "Treat this job as incomplete and keep the prior recovery path available."
         )
-        job_id = str(tracked.get("job_id") or "").strip()
-        if not job_id:
-            raise RuntimeError(
-                "Incomplete full replay returned no durable job identity."
-            )
-        try:
-            mark_replay_job_failed(
-                supabase=supabase,
-                job_id=job_id,
-                error_text=incomplete_message,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                "Incomplete full replay could not be persisted as failed."
-            ) from exc
-        tracked_status = "failed"
+        # The leased replay service validates this before its compare-and-set
+        # finish. This branch is defensive for alternate/test implementations;
+        # never rewrite a completed job without the lease that produced it.
+        tracked_status = "invalid_result"
         job_succeeded = False
         warnings.append(incomplete_message)
     audit_payload = build_activity_payload(

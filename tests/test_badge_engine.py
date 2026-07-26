@@ -165,7 +165,13 @@ def test_ensure_badges_is_idempotent():
     ensure_badges(ctx)
     ensure_badges(ctx)
     assert len(storage.get("player_badges", [])) == len(
-        {tuple(row.get(k) for k in ["club_id", "player_id", "badge_id", "context_id"]) for row in storage["player_badges"]}
+        {
+            tuple(
+                row.get(k)
+                for k in ["club_id", "player_id", "badge_id", "context_type", "context_id"]
+            )
+            for row in storage["player_badges"]
+        }
     )
 
 

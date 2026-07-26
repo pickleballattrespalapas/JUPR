@@ -18,6 +18,7 @@ from services.api.main import app
 def _patch_admin_auth(monkeypatch, supabase: FakeSupabase, role: str = "club_owner") -> None:
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
     monkeypatch.setattr(
         "services.api.admin_match_log_routes.authenticate_bearer",
@@ -558,11 +559,19 @@ def test_admin_match_log_apply_disabled_before_auth(monkeypatch):
     [
         (
             "/admin/clubs/club/match-log/duplicates/cleanup",
-            {"confirmation_text": "DELETE", "delete_ids": [2]},
+            {
+                "confirmation_text": "DELETE",
+                "idempotency_key": "11111111-1111-1111-1111-111111111111",
+                "targets": [{"match_id": 2, "expected_row_version": 1}],
+            },
         ),
         (
             "/admin/clubs/club/match-log/exclude",
-            {"confirmation_text": "DELETE", "match_ids": [3]},
+            {
+                "confirmation_text": "DELETE",
+                "idempotency_key": "22222222-2222-2222-2222-222222222222",
+                "targets": [{"match_id": 3, "expected_row_version": 1}],
+            },
         ),
     ],
 )
@@ -723,19 +732,44 @@ def test_admin_match_log_duplicate_cleanup_contract(monkeypatch):
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
-    _patch_admin_auth(monkeypatch, supabase)
+    _patch_admin_auth(monkeypatch, supabase, role="super_admin")
+    called = {}
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.apply_admin_match_log_duplicate_cleanup",
+        lambda *_args, **kwargs: called.update(kwargs)
+        or {
+            "ok": True,
+            "mode": "duplicates_cleaned",
+            "atomic": True,
+            "operation_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "operation_status": "succeeded",
+            "excluded_count": 1,
+            "excluded_ids": [2],
+            "deleted_count": 1,
+            "deleted_ids": [2],
+        },
+    )
 
     response = TestClient(app).post(
         "/admin/clubs/club/match-log/duplicates/cleanup",
         headers={"Authorization": "Bearer local"},
-        json={"confirmation_text": "DELETE", "delete_ids": [2]},
+        json={
+            "confirmation_text": "DELETE",
+            "idempotency_key": "11111111-1111-1111-1111-111111111111",
+            "targets": [{"match_id": 2, "expected_row_version": 1}],
+        },
     )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
+    assert payload["atomic"] is True
     assert payload["deleted_count"] == 1
-    assert [row["id"] for row in tables["matches"]] == [1, 3, 99]
+    assert called["targets"] == [
+        {"match_id": 2, "expected_row_version": 1}
+    ]
+    assert called["actor_email"] == "admin@example.com"
+    assert called["actor_role"] == "super_admin"
 
 
 def test_admin_match_log_bulk_exclude_contract(monkeypatch):
@@ -744,39 +778,53 @@ def test_admin_match_log_bulk_exclude_contract(monkeypatch):
     called = {}
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
-    _patch_admin_auth(monkeypatch, supabase)
+    _patch_admin_auth(monkeypatch, supabase, role="super_admin")
 
-    def fake_delete_rated_matches_with_replay(**kwargs):
+    def fake_atomic_exclusion(_supabase, **kwargs):
         called.update(kwargs)
         return {
-            "deleted_count": len(kwargs["match_ids"]),
-            "deleted_ids": list(kwargs["match_ids"]),
+            "ok": True,
+            "mode": "matches_excluded",
+            "atomic": True,
+            "operation_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "operation_status": "succeeded",
+            "excluded_count": len(kwargs["targets"]),
+            "excluded_ids": [target["match_id"] for target in kwargs["targets"]],
             "affected_player_ids": [1, 2],
-            "replay_result": {"matches_scanned_total": 3, "matches_rewritten": 2, "league_ratings_rows": 4, "skipped_incomplete": 0},
-            "warning": None,
-            "error": None,
-            "replay_error": None,
-            "recovery_required": False,
-            "actor": kwargs["actor"],
+            "replay_job_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+            "replay_status": "succeeded",
+            "badge_reconcile": {"ok": True},
+            "warnings": [],
         }
 
-    monkeypatch.setattr("services.api.admin_match_log_routes.delete_rated_matches_with_replay", fake_delete_rated_matches_with_replay)
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.apply_admin_match_log_exclusions",
+        fake_atomic_exclusion,
+    )
 
     response = TestClient(app).post(
         "/admin/clubs/club/match-log/exclude",
         headers={"Authorization": "Bearer local"},
-        json={"confirmation_text": "DELETE", "match_ids": [3], "note": "wrong test row"},
+        json={
+            "confirmation_text": "DELETE",
+            "idempotency_key": "22222222-2222-2222-2222-222222222222",
+            "targets": [{"match_id": 3, "expected_row_version": 1}],
+            "note": "wrong test row",
+        },
     )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
     assert payload["mode"] == "matches_excluded"
-    assert payload["deleted_ids"] == [3]
-    assert called["actor"] == "admin@example.com"
-    assert called["actor_role"] == "club_owner"
+    assert payload["excluded_ids"] == [3]
+    assert called["actor_email"] == "admin@example.com"
+    assert called["actor_role"] == "super_admin"
     assert called["note"] == "wrong test row"
     assert called["source"] == "next_match_log_bulk_exclude"
+    assert called["targets"] == [
+        {"match_id": 3, "expected_row_version": 1}
+    ]
 
 
 def test_admin_match_log_committed_exclusion_recovery_failure_is_not_ok(
@@ -786,39 +834,243 @@ def test_admin_match_log_committed_exclusion_recovery_failure_is_not_ok(
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
-    _patch_admin_auth(monkeypatch, supabase)
+    _patch_admin_auth(monkeypatch, supabase, role="super_admin")
 
-    def fake_delete_rated_matches_with_replay(**kwargs):
-        return {
-            "deleted_count": len(kwargs["match_ids"]),
-            "deleted_ids": list(kwargs["match_ids"]),
-            "affected_player_ids": [1, 2],
-            "replay_result": None,
-            "warning": None,
-            "error": None,
-            "replay_error": "Rating replay failed after match exclusion: unavailable",
-            "recovery_required": True,
-            "actor": kwargs["actor"],
-        }
+    from jupr_app.services.match_exclusion_durability_service import (
+        MatchExclusionRecoveryRequired,
+    )
 
     monkeypatch.setattr(
-        "services.api.admin_match_log_routes.delete_rated_matches_with_replay",
-        fake_delete_rated_matches_with_replay,
+        "services.api.admin_match_log_routes.apply_admin_match_log_exclusions",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            MatchExclusionRecoveryRequired(
+                "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                "Rating replay failed after match exclusion: unavailable",
+                replay_job_id="eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+                recovery_stage="replay",
+            )
+        ),
     )
 
     response = TestClient(app).post(
         "/admin/clubs/club/match-log/exclude",
         headers={"Authorization": "Bearer local"},
-        json={"confirmation_text": "DELETE", "match_ids": [3]},
+        json={
+            "confirmation_text": "DELETE",
+            "idempotency_key": "33333333-3333-3333-3333-333333333333",
+            "targets": [{"match_id": 3, "expected_row_version": 1}],
+        },
     )
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["ok"] is False
-    assert payload["mode"] == "matches_excluded_recovery_required"
-    assert payload["recovery_required"] is True
-    assert payload["deleted_ids"] == [3]
-    assert "Rating replay failed" in payload["replay_error"]
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "MATCH_EXCLUSION_RECOVERY_REQUIRED"
+    assert detail["operation_id"] == "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    assert detail["replay_job_id"] == "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    assert detail["recovery_stage"] == "replay"
+    assert "Rating replay failed" in detail["message"]
+
+
+@pytest.mark.parametrize(
+    ("recovery_stage", "operation_status", "replay_job_id"),
+    [
+        (
+            "replay",
+            "pending_replay",
+            "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        ),
+        (
+            "badge_reconcile",
+            "pending_badge_reconcile",
+            "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        ),
+    ],
+)
+def test_admin_match_log_active_work_is_a_non_mutating_conflict(
+    monkeypatch,
+    recovery_stage,
+    operation_status,
+    replay_job_id,
+):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
+    _patch_admin_auth(monkeypatch, supabase, role="super_admin")
+
+    from jupr_app.services.match_exclusion_durability_service import (
+        MatchExclusionWorkActive,
+    )
+
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.apply_admin_match_log_exclusions",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            MatchExclusionWorkActive(
+                "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                "The operation already has healthy leased work.",
+                replay_job_id=replay_job_id,
+                recovery_stage=recovery_stage,
+                operation_status=operation_status,
+            )
+        ),
+    )
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/exclude",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "confirmation_text": "DELETE",
+            "idempotency_key": "33333333-3333-3333-3333-333333333333",
+            "targets": [{"match_id": 3, "expected_row_version": 1}],
+        },
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail == {
+        "code": "MATCH_EXCLUSION_ACTIVE",
+        "operation_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        "replay_job_id": replay_job_id,
+        "recovery_stage": recovery_stage,
+        "operation_status": operation_status,
+        "message": "The operation already has healthy leased work.",
+    }
+
+
+def test_admin_match_log_exclusion_requires_service_role_before_auth(
+    monkeypatch,
+):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
+    _patch_admin_auth(monkeypatch, supabase, role="super_admin")
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    called = {"auth": False}
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.authenticate_bearer",
+        lambda *_args, **_kwargs: called.update(auth=True),
+    )
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/exclude",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "confirmation_text": "DELETE",
+            "idempotency_key": "44444444-4444-4444-4444-444444444444",
+            "targets": [{"match_id": 3, "expected_row_version": 1}],
+        },
+    )
+
+    assert response.status_code == 503
+    assert "SUPABASE_SERVICE_ROLE_KEY" in response.json()["detail"]
+    assert called == {"auth": False}
+
+
+def test_admin_match_log_exclusion_requires_delete_and_replay_permissions(
+    monkeypatch,
+):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
+    _patch_admin_auth(monkeypatch, supabase, role="club_owner")
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.apply_admin_match_log_exclusions",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("service must not run")
+        ),
+    )
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/exclude",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "confirmation_text": "DELETE",
+            "idempotency_key": "55555555-5555-5555-5555-555555555555",
+            "targets": [{"match_id": 3, "expected_row_version": 1}],
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "insufficient permission"
+
+
+def test_admin_match_log_exclusion_stale_maps_to_structured_409(monkeypatch):
+    from jupr_app.services.match_exclusion_durability_service import (
+        MatchExclusionStaleError,
+    )
+
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
+    _patch_admin_auth(monkeypatch, supabase, role="super_admin")
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.apply_admin_match_log_exclusions",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            MatchExclusionStaleError("Match 3 changed.")
+        ),
+    )
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/exclude",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "confirmation_text": "DELETE",
+            "idempotency_key": "66666666-6666-6666-6666-666666666666",
+            "targets": [{"match_id": 3, "expected_row_version": 1}],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "MATCH_EXCLUSION_STALE"
+
+
+def test_admin_match_log_exclusion_status_and_recovery_contract(monkeypatch):
+    operation_id = "77777777-7777-7777-7777-777777777777"
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
+    _patch_admin_auth(monkeypatch, supabase, role="super_admin")
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.get_match_exclusion_operation",
+        lambda *_args, **kwargs: {
+            "ok": False,
+            "operation_id": kwargs["operation_id"],
+            "operation_status": "recovery_required",
+            "recovery_stage": "badge_reconcile",
+            "replay_job_id": "88888888-8888-8888-8888-888888888888",
+        },
+    )
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.recover_atomic_match_exclusion",
+        lambda *_args, **kwargs: {
+            "ok": True,
+            "mode": "match_exclusion_recovered",
+            "operation_id": kwargs["operation_id"],
+            "operation_status": "succeeded",
+        },
+    )
+    client = TestClient(app)
+
+    status = client.get(
+        f"/admin/clubs/club/match-log/exclusions/{operation_id}",
+        headers={"Authorization": "Bearer local"},
+    )
+    recovered = client.post(
+        f"/admin/clubs/club/match-log/exclusions/{operation_id}/recover",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "RECOVER"},
+    )
+
+    assert status.status_code == 200
+    assert status.json()["recovery_stage"] == "badge_reconcile"
+    assert recovered.status_code == 200
+    assert recovered.json()["mode"] == "match_exclusion_recovered"
+    assert recovered.json()["operation_status"] == "succeeded"
 
 
 def test_admin_match_log_duplicate_no_issue_contract(monkeypatch):

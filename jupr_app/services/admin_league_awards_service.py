@@ -766,14 +766,17 @@ def _expected_badge_rows(*, club_id: str, league_name: str, awards: list[dict[st
         ended_at=ended_at,
         override_notes=override_notes,
     )
-    expected: dict[tuple[int, str, str], dict[str, Any]] = {}
+    expected: dict[tuple[int, str, str, str], dict[str, Any]] = {}
     for candidate in candidates:
         row = {
             "player_id": int(candidate.player_id),
             "badge_id": str(candidate.badge_id),
+            "context_type": str(candidate.context_type),
             "context_id": str(candidate.context_id),
         }
-        expected[(row["player_id"], row["badge_id"], row["context_id"])] = row
+        expected[
+            (row["player_id"], row["badge_id"], row["context_type"], row["context_id"])
+        ] = row
     return list(expected.values())
 
 
@@ -783,26 +786,52 @@ def _verify_badge_rows(supabase: Any, *, club_id: str, expected: list[dict[str, 
     badge_ids = sorted({str(row["badge_id"]) for row in expected})
     rows = _safe_rows(
         supabase.table("player_badges")
-        .select("player_id,badge_id,context_id")
+        .select("player_id,badge_id,context_type,context_id")
         .eq("club_id", str(club_id))
         .in_("badge_id", badge_ids)
         .execute()
     )
-    found: dict[tuple[int, str, str], dict[str, Any]] = {}
+    found: dict[tuple[int, str, str, str], dict[str, Any]] = {}
     for row in rows:
         try:
-            badge_key = (int(row.get("player_id")), str(row.get("badge_id")), str(row.get("context_id")))
+            badge_key = (
+                int(row.get("player_id")),
+                str(row.get("badge_id")),
+                str(row.get("context_type")),
+                str(row.get("context_id")),
+            )
         except Exception:
             continue
-        found[badge_key] = {"player_id": badge_key[0], "badge_id": badge_key[1], "context_id": badge_key[2]}
+        found[badge_key] = {
+            "player_id": badge_key[0],
+            "badge_id": badge_key[1],
+            "context_type": badge_key[2],
+            "context_id": badge_key[3],
+        }
     missing = [
         row
         for row in expected
-        if (int(row["player_id"]), str(row["badge_id"]), str(row["context_id"])) not in found
+        if (
+            int(row["player_id"]),
+            str(row["badge_id"]),
+            str(row["context_type"]),
+            str(row["context_id"]),
+        )
+        not in found
     ]
     if missing:
         raise RuntimeError(f"Badge mint verification found {len(expected) - len(missing)} of {len(expected)} expected rows.")
-    return [found[(int(row["player_id"]), str(row["badge_id"]), str(row["context_id"]))] for row in expected]
+    return [
+        found[
+            (
+                int(row["player_id"]),
+                str(row["badge_id"]),
+                str(row["context_type"]),
+                str(row["context_id"]),
+            )
+        ]
+        for row in expected
+    ]
 
 
 def mint_admin_league_awards(

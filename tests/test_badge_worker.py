@@ -16,6 +16,9 @@ from jupr_app.domain.gamification.badge_queue import (
     enqueue_badge_eval,
 )
 from jupr_app.domain.gamification.badge_worker import (
+    _resolve_context,
+    _update_incremental_facts,
+    load_live_badge_data,
     process_badge_eval_queue,
     process_badge_eval_queue_until_empty,
 )
@@ -40,6 +43,10 @@ class FakeTable:
 
     def in_(self, column, values):
         self.filters.append(("in", column, set(values)))
+        return self
+
+    def is_(self, column, value):
+        self.filters.append(("is", column, value))
         return self
 
     def order(self, column, desc=False):
@@ -93,6 +100,8 @@ class FakeTable:
                 data = [row for row in data if str(row.get(column)) == str(value)]
             elif op == "in":
                 data = [row for row in data if row.get(column) in value]
+            elif op == "is" and value is None:
+                data = [row for row in data if row.get(column) is None]
         if self.sort_key:
             data = sorted(data, key=lambda row: row.get(self.sort_key), reverse=self.sort_desc)
         if self.limit_count is not None:
@@ -227,6 +236,58 @@ def test_worker_dedupes_duplicate_events():
     ctx = _build_ctx()
     process_badge_eval_queue(supabase, "club", max_jobs=2, time_budget_seconds=2, ctx=ctx)
     assert len(storage.get("player_badges", [])) == 1
+
+
+def test_worker_direct_load_excludes_soft_deleted_matches():
+    storage = {
+        "matches": [
+            {"id": "active", "club_id": "club", "deleted_at": None},
+            {
+                "id": "deleted",
+                "club_id": "club",
+                "deleted_at": "2026-07-26T00:00:00Z",
+            },
+        ]
+    }
+    loaded = load_live_badge_data(FakeSupabase(storage), "club")
+    assert loaded[3]["id"].tolist() == ["active"]
+
+
+def test_worker_supplied_context_excludes_soft_deleted_matches():
+    ctx = _build_ctx()
+    ctx.df_matches = pd.concat(
+        [
+            ctx.df_matches.assign(deleted_at=None),
+            ctx.df_matches.assign(id="deleted", deleted_at="2026-07-26T00:00:00Z"),
+        ],
+        ignore_index=True,
+    )
+
+    resolved = _resolve_context(ctx, object(), "club", 5000)
+
+    assert resolved is not ctx
+    assert resolved.df_matches["id"].tolist() == ["m1"]
+    assert ctx.df_matches["id"].tolist() == ["m1", "deleted"]
+
+
+def test_match_updated_does_not_increment_matches_seen():
+    storage = {}
+    supabase = FakeSupabase(storage)
+    job = {"club_id": "club", "event_type": "match_updated"}
+
+    _update_incremental_facts(supabase, job, [1], "overall")
+
+    assert storage.get("player_badge_facts") is None
+
+
+def test_match_recorded_still_increments_matches_seen():
+    storage = {}
+    supabase = FakeSupabase(storage)
+    job = {"club_id": "club", "event_type": "match_recorded"}
+
+    _update_incremental_facts(supabase, job, [1], "overall")
+
+    assert storage["player_badge_facts"][0]["fact_value_num"] == 1
 
 
 def test_worker_error_marks_queue(monkeypatch):

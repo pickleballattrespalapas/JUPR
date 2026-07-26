@@ -33,6 +33,11 @@ STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
         "JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR",
         "JUPR_ENABLE_STAGING_NEXT_ADMIN_MATCH_CANONICAL_NORMALIZE_WRITES",
     ),
+    "match-exclusion-recovery": _admin_wave(
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY",
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE",
+        "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
+    ),
     "support-requests": _admin_wave(
         "JUPR_ENABLE_NEXT_ADMIN_SUPPORT_REQUESTS",
     ),
@@ -102,10 +107,6 @@ STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
 }
 
 DORMANT_STAGING_WRITE_FLAGS = (
-    # Match Log duplicate cleanup and rated-match bulk exclusion are not
-    # response-loss safe yet. Keep both destructive routes unavailable even
-    # when the broader match-player apply wave is open.
-    "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE",
     # Direct singles upload currently inserts the match before separate player
     # aggregate updates. Keep it unavailable even when the broader uploader
     # wave is open until that path is one transactional operation.
@@ -154,8 +155,6 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/match-log/social/delete"),
         ("PATCH", "/admin/clubs/{club_id}/match-log/edits"),
         ("POST", "/admin/clubs/{club_id}/match-log/edits/{operation_id}/recover"),
-        ("POST", "/admin/clubs/{club_id}/match-log/duplicates/cleanup"),
-        ("POST", "/admin/clubs/{club_id}/match-log/exclude"),
         ("POST", "/admin/clubs/{club_id}/match-log/duplicates/resolve"),
         ("POST", "/admin/clubs/{club_id}/replay-history"),
         ("POST", "/admin/clubs/{club_id}/matches/batch"),
@@ -174,6 +173,11 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("PATCH", "/admin/clubs/{club_id}/players/editor/players/{player_id}/league-ratings/{league_rating_id}"),
         ("POST", "/admin/clubs/{club_id}/match-canonical-audit/run"),
         ("POST", "/admin/clubs/{club_id}/match-canonical-audit/normalize"),
+    ),
+    "match-exclusion-recovery": (
+        ("POST", "/admin/clubs/{club_id}/match-log/duplicates/cleanup"),
+        ("POST", "/admin/clubs/{club_id}/match-log/exclude"),
+        ("POST", "/admin/clubs/{club_id}/match-log/exclusions/{operation_id}/recover"),
     ),
     "support-requests": (
         ("PATCH", "/admin/clubs/{club_id}/support-requests/{request_id}"),

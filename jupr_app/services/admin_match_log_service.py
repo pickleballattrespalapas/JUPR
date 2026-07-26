@@ -9,20 +9,34 @@ from jupr_app.domain.admin_activity_log import build_activity_payload, write_adm
 from jupr_app.domain.bulk_match_editor import compute_recompute_scope
 from jupr_app.domain.dupes import canonical_dup_key
 from jupr_app.services.match_edit_durability_service import apply_atomic_match_edits
+from jupr_app.services.match_exclusion_durability_service import (
+    apply_atomic_match_exclusions,
+    find_match_exclusion_operation_by_idempotency_key,
+)
 
 MATCH_LOG_SELECT = (
     "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,"
-    "score_t1,score_t2,notes,deleted_at,context_type,context_id,updated_at"
+    "score_t1,score_t2,notes,deleted_at,context_type,context_id,updated_at,row_version"
 )
-MATCH_LOG_MINIMAL_SELECT = "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,deleted_at"
+MATCH_LOG_MINIMAL_SELECT = (
+    "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,"
+    "score_t1,score_t2,deleted_at,row_version"
+)
 MATCH_LOG_RECOVERY_SELECT = (
     f"{MATCH_LOG_MINIMAL_SELECT},context_type,context_id"
+)
+MATCH_LOG_LEGACY_MINIMAL_SELECT = (
+    "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,"
+    "score_t1,score_t2,deleted_at"
+)
+MATCH_LOG_LEGACY_RECOVERY_SELECT = (
+    f"{MATCH_LOG_LEGACY_MINIMAL_SELECT},context_type,context_id"
 )
 DUPLICATE_RESOLUTIONS_TABLE = "admin_match_log_duplicate_resolutions"
 MAX_FETCH_ROWS = 5000
 MAX_RETURN_ROWS = 1000
 MAX_PATCHES = 100
-MAX_CLEANUP_IDS = 500
+MAX_CLEANUP_IDS = 100
 MAX_RESOLUTION_IDS = 20
 MAX_CONTEXT_IDS = 200
 MAX_CONTEXT_ID_LENGTH = 200
@@ -163,6 +177,24 @@ def _fetch_match_rows(
         rows = _safe_rows(_query(fallback_columns))
         return rows, warnings
     except Exception as exc:
+        warnings.append(
+            "Versioned match columns are unavailable until the atomic "
+            f"exclusion migration is applied: {exc.__class__.__name__}"
+        )
+
+    legacy_columns = (
+        MATCH_LOG_LEGACY_RECOVERY_SELECT
+        if requested_context_type or requested_context_ids
+        else MATCH_LOG_LEGACY_MINIMAL_SELECT
+    )
+    try:
+        rows = _safe_rows(_query(legacy_columns))
+        warnings.append(
+            "Match Log is read-only because matches.row_version is not "
+            "available yet."
+        )
+        return rows, warnings
+    except Exception as exc:
         warnings.append(f"Could not load matches: {exc.__class__.__name__}")
         return [], warnings
 
@@ -265,6 +297,7 @@ def _match_payload(row: dict[str, Any], *, club_id: str, names: dict[int, str]) 
     dup_key = canonical_dup_key(row, str(club_id))
     return {
         "id": _safe_int(row.get("id")),
+        "row_version": _safe_int(row.get("row_version")),
         "date": _json_safe(row.get("date")),
         "league": _clean_text(row.get("league"), limit=120),
         "week_tag": _clean_text(row.get("week_tag"), limit=80),
@@ -343,6 +376,56 @@ def _recent_match_edit_operations(supabase: Any, *, club_id: str) -> tuple[list[
     ], None
 
 
+def _recent_match_exclusion_operations(
+    supabase: Any,
+    *,
+    club_id: str,
+) -> tuple[list[dict[str, Any]], str | None]:
+    try:
+        rows = _safe_rows(
+            supabase.table("match_exclusion_operations")
+            .select(
+                "id,mode,status,recovery_stage,replay_job_id,error_text,"
+                "affected_player_ids,result_json,created_at,finished_at"
+            )
+            .eq("club_id", str(club_id))
+            .order("created_at", desc=True)
+            .limit(20)
+            .execute()
+        )
+    except Exception as exc:
+        return (
+            [],
+            "Durable match exclusion operation history is unavailable: "
+            f"{exc.__class__.__name__}",
+        )
+    return [
+        {
+            "id": str(row.get("id") or ""),
+            "mode": _clean_text(row.get("mode") or "exclude", limit=40),
+            "status": _clean_text(
+                row.get("status") or "unknown",
+                limit=40,
+            ),
+            "recovery_stage": _clean_text(
+                row.get("recovery_stage"),
+                limit=40,
+            )
+            or None,
+            "replay_job_id": str(row.get("replay_job_id") or "") or None,
+            "error_text": _clean_text(row.get("error_text"), limit=500)
+            or None,
+            "affected_player_ids": [
+                int(value) for value in row.get("affected_player_ids") or []
+            ],
+            "created_at": row.get("created_at"),
+            "finished_at": row.get("finished_at"),
+            "result_json": dict(row.get("result_json") or {}),
+        }
+        for row in rows
+    ], None
+
+
 def _duplicate_scan(
     rows: list[dict[str, Any]],
     *,
@@ -373,12 +456,22 @@ def _duplicate_scan(
         resolution = resolved_lookup.get(_resolution_lookup_key(dup_key=key, match_ids=group_ids))
         keep_id = int(_safe_int(group_rows[0].get("id")) or 0)
         group_delete_ids = [int(_safe_int(row.get("id")) or 0) for row in group_rows[1:] if _safe_int(row.get("id")) is not None]
+        group_delete_targets = [
+            {
+                "match_id": int(row["id"]),
+                "expected_row_version": int(row["row_version"]),
+            }
+            for row in group_rows[1:]
+            if _safe_int(row.get("id")) is not None
+            and _safe_int(row.get("row_version")) is not None
+        ]
         sample = _match_payload(group_rows[0], club_id=str(club_id), names=names)
         group_payload = {
             "dup_key": key,
             "dup_count": len(group_rows),
             "keep_id": keep_id,
             "delete_ids": group_delete_ids,
+            "delete_targets": group_delete_targets,
             "ids": group_ids,
             "league": sample.get("league"),
             "week_tag": sample.get("week_tag"),
@@ -412,10 +505,26 @@ def _duplicate_scan(
 
     delete_preview = None
     if delete_ids:
+        rows_by_id = {
+            int(row["id"]): row
+            for row in rows
+            if _safe_int(row.get("id")) is not None
+        }
+        delete_targets = [
+            {
+                "match_id": int(match_id),
+                "expected_row_version": int(rows_by_id[match_id]["row_version"]),
+            }
+            for match_id in sorted(delete_ids)
+            if match_id in rows_by_id
+            and _safe_int(rows_by_id[match_id].get("row_version")) is not None
+        ]
         delete_preview = {
             "mode": "planning_only",
             "keep_ids": keep_ids,
             "delete_ids": sorted(delete_ids),
+            "targets": delete_targets,
+            "delete_targets": delete_targets,
             "delete_count": len(delete_ids),
             "affected_leagues": sorted(affected_leagues),
             "affected_player_ids": sorted(affected_players),
@@ -454,6 +563,16 @@ def _correction_plan() -> dict[str, Any]:
             if destructive_enabled
             else None
         ),
+        "exclusion_status_endpoint": (
+            "/admin/clubs/{club_id}/match-log/exclusions/{operation_id}"
+            if destructive_enabled
+            else None
+        ),
+        "exclusion_recovery_endpoint": (
+            "/admin/clubs/{club_id}/match-log/exclusions/{operation_id}/recover"
+            if destructive_enabled
+            else None
+        ),
         "duplicate_no_issue_endpoint": "/admin/clubs/{club_id}/match-log/duplicates/resolve" if apply_enabled else None,
         "future_apply_endpoint": "/admin/clubs/{club_id}/match-log/edits",
         "editable_fields_planned": [
@@ -478,10 +597,11 @@ def _correction_plan() -> dict[str, Any]:
             "Rated-match removal uses the guarded soft-exclude workflow, not guided field edits.",
             "League/date changes auto-clear week_tag unless explicitly set.",
             "Player and score changes require rating replay review before broad use.",
-            "Duplicate cleanup keeps the oldest row and recommends replay history afterward.",
+            "Duplicate cleanup keeps the oldest row and completes mandatory rating replay before success is reported.",
             "False-positive duplicate groups can be resolved as no issue without deleting rows.",
             "Writes use FastAPI audit attribution and Python domain services.",
             "Match edits are committed through one service-role-only transaction; rating-affecting edits create and complete a mandatory replay job before success is reported.",
+            "Rated-match exclusion and duplicate cleanup require exact row versions, a UUID idempotency key, leased full replay, and narrow match-trigger badge reconciliation.",
         ],
     }
 
@@ -540,6 +660,7 @@ def build_admin_match_log(
             "duplicate_delete_preview": None,
             "resolved_duplicate_groups": [],
             "recent_edit_operations": [],
+            "recent_exclusion_operations": [],
             "correction_plan": _correction_plan(),
             "warnings": ["Next Match Log is disabled. Use Streamlit Match Log until JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG is enabled for the pilot."],
         }
@@ -578,6 +699,14 @@ def build_admin_match_log(
     recent_operations, operations_warning = _recent_match_edit_operations(supabase, club_id=str(club_id))
     if operations_warning:
         warnings.append(operations_warning)
+    recent_exclusion_operations, exclusion_operations_warning = (
+        _recent_match_exclusion_operations(
+            supabase,
+            club_id=str(club_id),
+        )
+    )
+    if exclusion_operations_warning:
+        warnings.append(exclusion_operations_warning)
     duplicate_payload = _duplicate_scan(visible_rows, club_id=str(club_id), names=names, resolved_lookup=resolved_lookup)
     matches = [_match_payload(row, club_id=str(club_id), names=names) for row in visible_rows]
     duplicate_delete_count = len((duplicate_payload.get("delete_preview") or {}).get("delete_ids") or [])
@@ -601,6 +730,7 @@ def build_admin_match_log(
         "duplicate_delete_preview": duplicate_payload["delete_preview"],
         "resolved_duplicate_groups": duplicate_payload["resolved_duplicate_groups"],
         "recent_edit_operations": recent_operations,
+        "recent_exclusion_operations": recent_exclusion_operations,
         "correction_plan": _correction_plan(),
         "warnings": warnings,
     }
@@ -671,11 +801,13 @@ def apply_admin_match_log_duplicate_cleanup(
     supabase: Any,
     *,
     club_id: str,
-    delete_ids: list[int],
+    targets: list[dict[str, Any]],
     actor_email: str,
     actor_role: str,
     source: str = "next_match_log_duplicate_cleanup",
     confirmation_text: str = "",
+    idempotency_key: str = "",
+    note: str | None = None,
 ) -> dict[str, Any]:
     if not is_admin_match_log_apply_enabled():
         raise PermissionError("Next Match Log apply is disabled.")
@@ -683,86 +815,111 @@ def apply_admin_match_log_duplicate_cleanup(
         raise PermissionError("Next Match Log destructive actions are disabled.")
     if str(confirmation_text or "").strip().upper() != "DELETE":
         raise ValueError("Type DELETE to confirm duplicate cleanup.")
-    requested_ids = sorted({int(match_id) for match_id in (delete_ids or []) if _safe_int(match_id) is not None})
+    clean_targets = [
+        dict(target) for target in (targets or []) if isinstance(target, dict)
+    ]
+    requested_ids = sorted(
+        {
+            int(target["match_id"])
+            for target in clean_targets
+            if _safe_int(target.get("match_id")) is not None
+        }
+    )
     if not requested_ids:
-        raise ValueError("No duplicate IDs were provided.")
+        raise ValueError("No duplicate targets were provided.")
+    if len(clean_targets) != len(requested_ids):
+        raise ValueError(
+            "Each duplicate cleanup target must be unique and include an exact "
+            "row version."
+        )
     if len(requested_ids) > MAX_CLEANUP_IDS:
         raise ValueError(f"No more than {MAX_CLEANUP_IDS} duplicate IDs can be cleaned up at once.")
 
-    duplicate_payload, all_rows, scan_warnings = _cleanup_candidate_payload(supabase, club_id=str(club_id), suppress_resolved=True)
-    preview = duplicate_payload.get("delete_preview") or {}
-    allowed_ids = {int(match_id) for match_id in (preview.get("delete_ids") or [])}
-    invalid_ids = [match_id for match_id in requested_ids if match_id not in allowed_ids]
-    if invalid_ids:
-        raise ValueError(f"Some requested IDs are not currently active duplicate cleanup candidates: {invalid_ids[:10]}")
-
-    rows_by_id = {int(_safe_int(row.get("id")) or 0): dict(row) for row in all_rows if _safe_int(row.get("id")) is not None}
-    rows_to_remove = [rows_by_id[match_id] for match_id in requested_ids if match_id in rows_by_id]
-    if len(rows_to_remove) != len(requested_ids):
-        missing = [match_id for match_id in requested_ids if match_id not in rows_by_id]
-        raise ValueError(f"Some requested IDs could not be loaded for this club: {missing[:10]}")
-
-    affected_players: set[int] = set()
-    affected_leagues: set[str] = set()
-    for row in rows_to_remove:
-        if row.get("league"):
-            affected_leagues.add(str(row.get("league")))
-        for col in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
-            pid = _safe_int(row.get(col))
-            if pid is not None:
-                affected_players.add(int(pid))
-
-    supabase.table("matches").delete().eq("club_id", str(club_id)).in_("id", requested_ids).execute()
-    warnings: list[str] = list(scan_warnings)
-    try:
-        from jupr_app.domain.player_activity import recompute_last_game_at_for_players
-
-        if affected_players:
-            recompute_last_game_at_for_players(
-                supabase=supabase,
-                club_id=str(club_id),
-                player_ids=affected_players,
-            )
-    except Exception:
-        warnings.append("Unable to recompute last_game_at for affected players automatically. Run replay/history maintenance if needed.")
-
-    audit_payload = build_activity_payload(
+    stored_operation = find_match_exclusion_operation_by_idempotency_key(
+        supabase,
         club_id=str(club_id),
+        idempotency_key=idempotency_key,
+    )
+    scan_warnings: list[str] = []
+    if stored_operation is None:
+        duplicate_payload, _all_rows, scan_warnings = _cleanup_candidate_payload(
+            supabase,
+            club_id=str(club_id),
+            suppress_resolved=True,
+        )
+        preview = duplicate_payload.get("delete_preview") or {}
+        allowed_ids = {int(match_id) for match_id in (preview.get("delete_ids") or [])}
+        invalid_ids = [match_id for match_id in requested_ids if match_id not in allowed_ids]
+        if invalid_ids:
+            raise ValueError(f"Some requested IDs are not currently active duplicate cleanup candidates: {invalid_ids[:10]}")
+        expected_targets = {
+            int(target["match_id"]): int(target["expected_row_version"])
+            for target in (preview.get("targets") or [])
+            if _safe_int(target.get("match_id")) is not None
+            and _safe_int(target.get("expected_row_version")) is not None
+        }
+        for target in clean_targets:
+            match_id = int(target["match_id"])
+            expected_version = _safe_int(target.get("expected_row_version"))
+            if expected_version is None:
+                raise ValueError(
+                    "Each duplicate cleanup target requires expected_row_version."
+                )
+            if expected_targets.get(match_id) != int(expected_version):
+                raise ValueError(
+                    "Duplicate cleanup preview is stale. Refresh Match Log and "
+                    "select the rows again."
+                )
+
+    result = apply_atomic_match_exclusions(
+        supabase,
+        club_id=str(club_id),
+        targets=clean_targets,
         actor_email=str(actor_email or ""),
         actor_role=str(actor_role or ""),
-        action_type="match_duplicate_cleanup",
-        entity_type="match",
-        entity_id="bulk",
-        before_json=rows_to_remove,
-        after_json={
-            "source_client": "fastapi/nextjs",
-            "source_page": source,
-            "deleted_ids": requested_ids,
-            "affected_leagues": sorted(affected_leagues),
-            "affected_player_ids": sorted(affected_players),
-            "recommended_replay_scope": "ALL",
-        },
-        note="Duplicate cleanup from Next Match Log",
-        source_page=source,
-        flagged_for_review=True,
+        source=source,
+        note=note or "Duplicate cleanup from Next Match Log",
+        idempotency_key=idempotency_key,
+        mode="duplicate_cleanup",
     )
-    audit_result = write_admin_activity_log(supabase, audit_payload)
-    if audit_result.warning:
-        warnings.append(audit_result.warning)
-    if not audit_result.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
-        raise RuntimeError("audit log write required but unavailable")
+    result["warnings"] = [
+        *list(scan_warnings),
+        *list(result.get("warnings") or []),
+    ]
+    return result
 
-    return {
-        "ok": True,
-        "mode": "duplicates_cleaned",
-        "deleted_count": len(requested_ids),
-        "deleted_ids": requested_ids,
-        "affected_leagues": sorted(affected_leagues),
-        "affected_player_ids": sorted(affected_players),
-        "recompute_scope": {"standings": True, "ratings": True},
-        "recommended_replay_scope": "ALL",
-        "warnings": warnings,
-    }
+
+def apply_admin_match_log_exclusions(
+    supabase: Any,
+    *,
+    club_id: str,
+    targets: list[dict[str, Any]],
+    actor_email: str,
+    actor_role: str,
+    source: str = "next_match_log_bulk_exclude",
+    confirmation_text: str = "",
+    idempotency_key: str = "",
+    note: str | None = None,
+) -> dict[str, Any]:
+    if not is_admin_match_log_apply_enabled():
+        raise PermissionError("Next Match Log apply is disabled.")
+    if not is_admin_match_log_destructive_enabled():
+        raise PermissionError("Next Match Log destructive actions are disabled.")
+    if str(confirmation_text or "").strip().upper() != "DELETE":
+        raise ValueError("Type DELETE to confirm rated match exclusion.")
+    return apply_atomic_match_exclusions(
+        supabase,
+        club_id=str(club_id),
+        targets=[
+            dict(target) for target in (targets or []) if isinstance(target, dict)
+        ],
+        actor_email=str(actor_email or ""),
+        actor_role=str(actor_role or ""),
+        source=source,
+        note=note,
+        idempotency_key=idempotency_key,
+        mode="exclude",
+    )
 
 
 def resolve_admin_match_log_duplicate_false_positive(

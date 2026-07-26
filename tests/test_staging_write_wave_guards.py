@@ -164,6 +164,11 @@ def test_wave_matching_is_exact_and_unknown_or_none_never_allows_writes() -> Non
     round_robin_preview_path = (
         "/admin/clubs/tres_palapas/match-uploader/round-robin/preview"
     )
+    exclusion_path = "/admin/clubs/fixture/match-log/exclude"
+    recovery_path = (
+        "/admin/clubs/fixture/match-log/exclusions/"
+        "00000000-0000-4000-8000-000000000001/recover"
+    )
 
     assert wave_allows_request("public-intake-auth", "POST", intake_path)
     assert not wave_allows_request("public-intake-auth", "POST", f"{intake_path}/extra")
@@ -181,6 +186,16 @@ def test_wave_matching_is_exact_and_unknown_or_none_never_allows_writes() -> Non
     )
     assert not wave_allows_request(
         NO_WRITE_WAVE, "POST", round_robin_preview_path
+    )
+    assert not wave_allows_request("match-player", "POST", exclusion_path)
+    assert wave_allows_request(
+        "match-exclusion-recovery", "POST", exclusion_path
+    )
+    assert wave_allows_request(
+        "match-exclusion-recovery", "POST", recovery_path
+    )
+    assert not wave_allows_request(
+        "match-exclusion-recovery", "POST", f"{recovery_path}/extra"
     )
     for uploader_write in ("singles", "batch", "players"):
         uploader_write_path = (
@@ -218,13 +233,25 @@ def test_direct_singles_uploader_gate_stays_dormant_in_every_wave() -> None:
     ).read_text(encoding="utf-8")
 
 
-def test_match_log_destructive_gate_stays_dormant_in_every_wave() -> None:
+def test_match_log_destructive_gate_opens_only_in_atomic_recovery_wave() -> None:
     flag = "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE"
 
     assert len(ALL_STAGING_WRITE_FLAGS) == 32
-    assert flag in DORMANT_STAGING_WRITE_FLAGS
-    assert all(flag not in flags for flags in STAGING_WRITE_WAVES.values())
+    assert flag not in DORMANT_STAGING_WRITE_FLAGS
+    assert {
+        wave for wave, flags in STAGING_WRITE_WAVES.items() if flag in flags
+    } == {"match-exclusion-recovery"}
     assert expected_write_flags("match-player")[flag] is False
+    assert expected_write_flags("match-exclusion-recovery") == {
+        name: name
+        in {
+            "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT",
+            "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY",
+            "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE",
+            "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
+        }
+        for name in ALL_STAGING_WRITE_FLAGS
+    }
     assert f'{flag} = "0"' in (ROOT / "fly.staging.toml").read_text(
         encoding="utf-8"
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import copy
 from datetime import datetime, timezone
 import time
 import traceback
@@ -197,7 +198,7 @@ def _process_job(
 
 def _resolve_context(ctx: Any | None, supabase: Any, club_id: str, match_limit: int) -> Any:
     if ctx is not None and str(getattr(ctx, "club_id", "") or "") == str(club_id):
-        return ctx
+        return _without_soft_deleted_matches(ctx)
     (
         df_players_all,
         df_players_active,
@@ -211,23 +212,44 @@ def _resolve_context(ctx: Any | None, supabase: Any, club_id: str, match_limit: 
         schema_degraded,
         schema_degraded_reason,
     ) = load_live_badge_data(supabase, club_id, match_limit=match_limit)
-    return SimpleNamespace(
-        supabase=supabase,
-        club_id=club_id,
-        df_players_all=df_players_all,
-        df_players_active=df_players_active,
-        df_leagues=df_leagues,
-        df_matches=df_matches,
-        df_meta=df_meta,
-        df_badges=df_badges,
-        df_player_badges=df_player_badges,
-        name_to_id=name_to_id,
-        id_to_name=id_to_name,
-        public_mode=False,
-        admin_logged_in=True,
-        schema_degraded=schema_degraded,
-        schema_degraded_reason=schema_degraded_reason,
+    return _without_soft_deleted_matches(
+        SimpleNamespace(
+            supabase=supabase,
+            club_id=club_id,
+            df_players_all=df_players_all,
+            df_players_active=df_players_active,
+            df_leagues=df_leagues,
+            df_matches=df_matches,
+            df_meta=df_meta,
+            df_badges=df_badges,
+            df_player_badges=df_player_badges,
+            name_to_id=name_to_id,
+            id_to_name=id_to_name,
+            public_mode=False,
+            admin_logged_in=True,
+            schema_degraded=schema_degraded,
+            schema_degraded_reason=schema_degraded_reason,
+        )
     )
+
+
+def _without_soft_deleted_matches(ctx: Any) -> Any:
+    """Return a shallow context copy whose match frame contains active rows only."""
+
+    df_matches = getattr(ctx, "df_matches", None)
+    if (
+        not isinstance(df_matches, pd.DataFrame)
+        or df_matches.empty
+        or "deleted_at" not in df_matches.columns
+    ):
+        return ctx
+    deleted_at = df_matches["deleted_at"]
+    active_mask = deleted_at.isna() | deleted_at.astype(str).str.strip().eq("")
+    if bool(active_mask.all()):
+        return ctx
+    filtered_ctx = copy(ctx)
+    setattr(filtered_ctx, "df_matches", df_matches.loc[active_mask].copy())
+    return filtered_ctx
 
 
 def load_live_badge_data(supabase: Any, club_id: str, *, match_limit: int = 5000) -> tuple[Any, ...]:
@@ -256,6 +278,7 @@ def load_live_badge_data(supabase: Any, club_id: str, *, match_limit: int = 5000
         supabase.table("matches")
         .select("*")
         .eq("club_id", club_id)
+        .is_("deleted_at", None)
         .order("id", desc=True)
         .limit(int(match_limit))
         .execute()
@@ -383,7 +406,7 @@ def _update_incremental_facts(
     if supabase is None:
         return
     event_type = str(job.get("event_type") or "")
-    if event_type not in {"match_recorded", "match_updated"}:
+    if event_type != "match_recorded":
         return
     for pid in player_ids:
         _increment_fact(supabase, job, pid, context_id, "matches_seen", 1)

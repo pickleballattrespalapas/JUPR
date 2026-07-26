@@ -47,6 +47,7 @@ SUPPORTED_MODES = (
     "public-intake-auth",
     "admin-read-export",
     "match-rating-writes",
+    "match-exclusion-recovery",
 )
 REQUIRED_PERMISSIONS = frozenset(
     {

@@ -55,6 +55,7 @@ def test_dedupe_player_badges_rows_keeps_earliest():
             "club_id": "club",
             "player_id": 9,
             "badge_id": "giant_slayer",
+            "context_type": "match",
             "context_id": "match:1",
             "earned_at": "2024-01-05T00:00:00Z",
         },
@@ -63,6 +64,7 @@ def test_dedupe_player_badges_rows_keeps_earliest():
             "club_id": "club",
             "player_id": 9,
             "badge_id": "giant_slayer",
+            "context_type": "match",
             "context_id": "match:1",
             "earned_at": "2024-01-06T00:00:00Z",
         },
@@ -71,13 +73,23 @@ def test_dedupe_player_badges_rows_keeps_earliest():
             "club_id": "club",
             "player_id": 9,
             "badge_id": "first_win",
+            "context_type": "overall",
             "context_id": "overall",
             "earned_at": "2024-01-02T00:00:00Z",
         },
+        {
+            "id": "4",
+            "club_id": "club",
+            "player_id": 9,
+            "badge_id": "giant_slayer",
+            "context_type": "tournament",
+            "context_id": "match:1",
+            "earned_at": "2024-01-07T00:00:00Z",
+        },
     ]
     deduped = dedupe_player_badges_rows(rows)
-    assert len(deduped) == 2
-    assert set(deduped["id"]) == {"1", "3"}
+    assert len(deduped) == 3
+    assert set(deduped["id"]) == {"1", "3", "4"}
 
 
 def test_badge_awards_insert_uses_upsert_conflict():
@@ -94,7 +106,7 @@ def test_badge_awards_insert_uses_upsert_conflict():
         )
     ]
     upsert_player_badges(supabase, "club", candidates)
-    assert supabase.table_ref.on_conflict == "club_id,player_id,badge_id,context_id"
+    assert supabase.table_ref.on_conflict == "club_id,player_id,badge_id,context_type,context_id"
 
 
 def test_participation_insert_uses_upsert_conflict():
@@ -111,7 +123,7 @@ def test_participation_insert_uses_upsert_conflict():
         )
     ]
     upsert_player_badges(supabase, "club", candidates)
-    assert supabase.table_ref.on_conflict == "club_id,player_id,badge_id,context_id"
+    assert supabase.table_ref.on_conflict == "club_id,player_id,badge_id,context_type,context_id"
 
 
 def test_upsert_rejects_missing_context_id():

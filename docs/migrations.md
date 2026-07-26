@@ -15,13 +15,13 @@ builds on the partner-link tables provisioned by
 `migrations/20261019_tournament_registration_partner_links.sql` and the canonical
 selection lock protocol already captured under `supabase/migrations/`.
 
-## Current inventory (as of 2026-07-25)
+## Current inventory (as of 2026-07-26)
 
 Inventory below reflects files currently present in this repository.
 
 ### `supabase/migrations/` (canonical)
 
-This directory contains 40 SQL files: 39 deployable migrations with numeric
+This directory contains 41 SQL files: 40 deployable migrations with numeric
 versions plus one deliberately non-deployable `2026XX` schema placeholder.
 
 - `20260420000000_verified_player_updates_foundation.sql`
@@ -62,6 +62,7 @@ versions plus one deliberately non-deployable `2026XX` schema placeholder.
 - `20260720123402_baseline_worker_run_log.sql`
 - `20260725181500_singles_replay_recovery.sql`
 - `20260725231000_challenge_ladder_public_results.sql`
+- `20260726143742_match_exclusion_atomic_recovery.sql`
 - `20261020000000_tournament_registrations_player_id_postgrest_reload.sql`
 - `2026XX_backport_tournament_engine.sql`
 

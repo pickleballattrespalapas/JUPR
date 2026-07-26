@@ -36,6 +36,7 @@ EXPECTED_WRITE_WAVE_BY_EVIDENCE_MODE = {
     "public-intake-auth": "public-intake-auth",
     "admin-read-export": "none",
     "match-rating-writes": "tournament-live",
+    "match-exclusion-recovery": "match-exclusion-recovery",
 }
 IMMUTABLE_VERCEL_HOST_RE = re.compile(
     r"[a-z0-9](?:[a-z0-9-]{0,180}[a-z0-9])?-[a-z0-9]{8,64}"
@@ -48,6 +49,9 @@ IMMUTABLE_VERCEL_HOST_RE = re.compile(
 REQUIRED_REAL_SPECS: dict[str, tuple[str, ...]] = {
     "public-intake-auth": ("e2e/admin-auth.real.staging.spec.ts",),
     "match-rating-writes": ("e2e/tournament-live.staging.spec.ts",),
+    "match-exclusion-recovery": (
+        "e2e/match-exclusion-recovery.staging.spec.ts",
+    ),
 }
 
 WAVES: dict[str, tuple[dict[str, object], ...]] = {
@@ -119,6 +123,12 @@ WAVES: dict[str, tuple[dict[str, object], ...]] = {
             "specs": REQUIRED_REAL_SPECS["match-rating-writes"],
         },
     ),
+    "match-exclusion-recovery": (
+        {
+            "name": "atomic-match-exclusion-replay-badge-recovery",
+            "specs": REQUIRED_REAL_SPECS["match-exclusion-recovery"],
+        },
+    ),
 }
 
 COMMON_REQUIRED_ENV = {
@@ -157,8 +167,21 @@ WAVE_REQUIRED_ENV: dict[str, set[str]] = {
         "JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_B",
         "JUPR_TOURNAMENT_LIVE_ALLOW_MUTATION_E2E",
     },
+    "match-exclusion-recovery": {
+        "STAGING_ADMIN_BEARER_TOKEN",
+        "JUPR_MATCH_EXCLUSION_FIXTURE_CLUB_ID",
+        "JUPR_MATCH_EXCLUSION_DUPLICATE_KEEP_ID",
+        "JUPR_MATCH_EXCLUSION_DUPLICATE_TARGET_ID",
+        "JUPR_MATCH_EXCLUSION_DUPLICATE_TARGET_ROW_VERSION",
+        "JUPR_MATCH_EXCLUSION_DISTINCT_MATCH_ID",
+        "JUPR_MATCH_EXCLUSION_DISTINCT_ROW_VERSION",
+        "JUPR_MATCH_EXCLUSION_STALE_IDEMPOTENCY_KEY",
+        "JUPR_MATCH_EXCLUSION_DUPLICATE_IDEMPOTENCY_KEY",
+        "JUPR_MATCH_EXCLUSION_DIRECT_IDEMPOTENCY_KEY",
+        "JUPR_MATCH_EXCLUSION_ALLOW_MUTATION_E2E",
+    },
 }
-MUTATING_WAVES = {"match-rating-writes"}
+MUTATING_WAVES = {"match-rating-writes", "match-exclusion-recovery"}
 SENSITIVE_ARTIFACT_ENV_NAMES = (
     "STAGING_ADMIN_BEARER_TOKEN",
     "JUPR_STAGING_ADMIN_ACCESS_TOKEN",
@@ -233,9 +256,18 @@ def _immutable_vercel_origin(value: object) -> str | None:
     return canonical
 
 
-def environment_errors(wave: str, env: Mapping[str, str]) -> list[str]:
+def environment_errors(
+    wave: str,
+    env: Mapping[str, str],
+    *,
+    identity_only: bool = False,
+) -> list[str]:
     errors: list[str] = []
-    required = COMMON_REQUIRED_ENV | WAVE_REQUIRED_ENV.get(wave, set())
+    required = (
+        COMMON_REQUIRED_ENV
+        if identity_only
+        else COMMON_REQUIRED_ENV | WAVE_REQUIRED_ENV.get(wave, set())
+    )
     missing = sorted(name for name in required if not str(env.get(name, "")).strip())
     if missing:
         errors.append("Missing required staging environment values: " + ", ".join(missing))
@@ -260,10 +292,16 @@ def environment_errors(wave: str, env: Mapping[str, str]) -> list[str]:
         )
 
     confirmation = str(env.get("JUPR_PARITY_MUTATION_CONFIRMATION", ""))
-    if wave in MUTATING_WAVES and confirmation != MUTATION_CONFIRMATION:
-        errors.append(f"Wave {wave} requires exact confirmation: {MUTATION_CONFIRMATION}")
-    elif wave not in MUTATING_WAVES and confirmation:
-        errors.append(f"Wave {wave} must not receive a mutation confirmation.")
+    if identity_only:
+        if confirmation:
+            errors.append(
+                "Identity-only attestation must not receive a mutation confirmation."
+            )
+    else:
+        if wave in MUTATING_WAVES and confirmation != MUTATION_CONFIRMATION:
+            errors.append(f"Wave {wave} requires exact confirmation: {MUTATION_CONFIRMATION}")
+        elif wave not in MUTATING_WAVES and confirmation:
+            errors.append(f"Wave {wave} must not receive a mutation confirmation.")
     return errors
 
 
@@ -560,7 +598,7 @@ def run_wave(
     expected_write_wave: str | None = None,
 ) -> list[str]:
     report_dir.mkdir(parents=True, exist_ok=True)
-    errors = environment_errors(wave, os.environ)
+    errors = environment_errors(wave, os.environ, identity_only=identity_only)
     errors.extend(candidate_errors(candidate_sha, _head_sha()))
     errors.extend(manifest_errors(wave))
     required_write_wave = EXPECTED_WRITE_WAVE_BY_EVIDENCE_MODE[wave]
@@ -583,8 +621,11 @@ def run_wave(
         "vercel_deployment_origin": vercel_deployment_origin,
         "fly_image_ref": fly_image_ref,
         "staging_supabase_project_ref": EXPECTED_STAGING_PROJECT_REF,
+        "execution_mode": "identity_only" if identity_only else "wave",
         "invocations": [],
     }
+    if identity_only:
+        summary["business_writes_executed"] = False
     if errors:
         summary["preflight_errors"] = errors
         _write_summary(report_dir, summary)

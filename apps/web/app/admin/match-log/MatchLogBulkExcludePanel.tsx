@@ -1,10 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import type { AdminMatchLogMatch } from "@/lib/adminMatchLogApi";
+import type {
+  AdminMatchExclusionOperation,
+  AdminMatchExclusionTarget,
+  AdminMatchLogMatch,
+  AdminMatchLogWriteResult
+} from "@/lib/adminMatchLogApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type MatchLogBulkExcludePanelProps = {
@@ -12,23 +16,9 @@ type MatchLogBulkExcludePanelProps = {
   clubId: string;
   enabled: boolean;
   matches: AdminMatchLogMatch[];
-};
-
-type ExcludeResult = {
-  ok?: boolean;
-  mode?: string;
-  deleted_count?: number;
-  deleted_ids?: number[];
-  affected_player_ids?: number[];
-  replay_result?: {
-    matches_scanned_total?: number;
-    matches_rewritten?: number;
-    league_ratings_rows?: number;
-    skipped_incomplete?: number;
-  } | null;
-  warning?: string | null;
-  replay_error?: string | null;
-  recovery_required?: boolean;
+  exclusionOperation: AdminMatchExclusionOperation | null;
+  onExclusionOperationChange: (operation: AdminMatchExclusionOperation | null) => void;
+  onMutationComplete: () => void;
 };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -38,6 +28,14 @@ const secondaryButtonStyle = { ...buttonStyle, background: "white", color: "#0f1
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
+}
+
+function requestKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (token) => {
+    const value = Math.floor(Math.random() * 16);
+    return (token === "x" ? value : (value & 0x3) | 0x8).toString(16);
+  });
 }
 
 function dateLabel(value?: string | null): string {
@@ -51,29 +49,71 @@ function playerNames(players: Array<{ id: number | null; name: string }>): strin
   return players.map((player) => player.name || (player.id ? `#${player.id}` : "—")).join(" / ");
 }
 
-function resultSummary(result: ExcludeResult | null): string | null {
-  if (!result) return null;
-  const deleted = result.deleted_count ?? 0;
-  if (result.recovery_required || result.mode === "matches_excluded_recovery_required") {
-    const detail = result.replay_error ? ` ${result.replay_error}` : "";
-    return `Excluded ${deleted} match(es), but recovery did not complete. Do not retry the exclusion; run Replay History immediately.${detail}`;
-  }
-  if (result.replay_error) return `Excluded ${deleted} match(es), but Replay ALL failed. Run Replay History immediately. ${result.replay_error}`;
-  if (result.replay_result) return `Excluded ${deleted} match(es) and Replay ALL completed.`;
-  return `Excluded ${deleted} match(es).`;
+function operationFromPayload(payload: unknown): AdminMatchExclusionOperation | null {
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  const detail = record.detail && typeof record.detail === "object"
+    ? record.detail as Record<string, unknown>
+    : record;
+  const nested = detail.operation && typeof detail.operation === "object"
+    ? detail.operation as Record<string, unknown>
+    : detail;
+  const id = nested.id || nested.operation_id;
+  if (!id) return null;
+  return {
+    ...nested,
+    id: String(id),
+    status: String(nested.status || nested.operation_status || "recovery_required"),
+    recovery_stage: nested.recovery_stage == null ? null : String(nested.recovery_stage),
+    replay_job_id: nested.replay_job_id == null ? null : String(nested.replay_job_id),
+    error_text: nested.error_text == null
+      ? (nested.message == null ? null : String(nested.message))
+      : String(nested.error_text)
+  };
 }
 
-export default function MatchLogBulkExcludePanel({ apiBase, clubId, enabled, matches }: MatchLogBulkExcludePanelProps) {
-  const router = useRouter();
+function errorMessage(payload: unknown, fallback: string): string {
+  if (!payload || typeof payload !== "object") return fallback;
+  const detail = (payload as { detail?: unknown }).detail;
+  if (detail && typeof detail === "object") {
+    const record = detail as Record<string, unknown>;
+    return String(record.message || record.code || fallback);
+  }
+  return detail ? String(detail) : fallback;
+}
+
+function resultSummary(result: AdminMatchLogWriteResult | null): string | null {
+  if (!result) return null;
+  const excluded = result.excluded_count ?? result.deleted_count ?? 0;
+  const status = result.status || result.operation_status || result.operation?.status;
+  if (status && status !== "succeeded") {
+    return `Soft-excluded ${excluded} match(es); durable recovery is ${status.replace(/_/g, " ")}. Resume the exact operation instead of submitting again.`;
+  }
+  return `Soft-excluded ${excluded} match(es), completed Replay ALL, and reconciled the affected live match badges.`;
+}
+
+export default function MatchLogBulkExcludePanel({
+  apiBase,
+  clubId,
+  enabled,
+  matches,
+  exclusionOperation,
+  onExclusionOperationChange,
+  onMutationComplete
+}: MatchLogBulkExcludePanelProps) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [note, setNote] = useState("");
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [result, setResult] = useState<ExcludeResult | null>(null);
+  const [result, setResult] = useState<AdminMatchLogWriteResult | null>(null);
+  const [idempotencyKey, setIdempotencyKey] = useState(requestKey);
 
-  const selectableMatches = matches.filter((match) => match.id != null).slice(0, 100);
+  const selectableMatches = matches.filter(
+    (match) => match.id != null && Number(match.row_version || 0) > 0
+  ).slice(0, 100);
   const selectedSet = new Set(selectedIds);
+  const exclusionBlocked = Boolean(exclusionOperation && exclusionOperation.status !== "succeeded");
 
   function toggleMatch(matchId: number) {
     setSelectedIds((current) => current.includes(matchId) ? current.filter((id) => id !== matchId) : [...current, matchId].sort((a, b) => a - b));
@@ -94,8 +134,18 @@ export default function MatchLogBulkExcludePanel({ apiBase, clubId, enabled, mat
       setMessage("Select at least one match to exclude.");
       return;
     }
+    if (exclusionBlocked) {
+      setMessage(`Recover exclusion operation ${exclusionOperation?.id} before starting another.`);
+      return;
+    }
     setPending(true);
     try {
+      const targets: AdminMatchExclusionTarget[] = selectedIds.map((matchId) => {
+        const match = selectableMatches.find((candidate) => Number(candidate.id) === matchId);
+        const rowVersion = Number(match?.row_version || 0);
+        if (!match || rowVersion < 1) throw new Error(`Match #${matchId} has no current row version. Refresh Match Log.`);
+        return { match_id: matchId, expected_row_version: rowVersion };
+      });
       const response = await fetch(apiUrl(apiBase, `/admin/clubs/${encodeURIComponent(clubId)}/match-log/exclude`), {
         method: "POST",
         headers: {
@@ -103,19 +153,28 @@ export default function MatchLogBulkExcludePanel({ apiBase, clubId, enabled, mat
           Authorization: `Bearer ${accessToken}`
         },
         body: JSON.stringify({
-          match_ids: selectedIds,
+          targets,
+          idempotency_key: idempotencyKey,
           confirmation_text: confirmationText,
           note,
           source: "next_match_log_bulk_exclude_panel"
         })
       });
-      const payload = await response.json().catch(() => null) as ExcludeResult | { detail?: unknown } | null;
-      if (!response.ok) throw new Error(String((payload as { detail?: unknown } | null)?.detail || `API error (${response.status})`));
-      const typed = payload as ExcludeResult;
+      const payload = await response.json().catch(() => null);
+      const durableOperation = operationFromPayload(payload);
+      if (durableOperation) onExclusionOperationChange(durableOperation);
+      if (!response.ok) throw new Error(errorMessage(payload, `API error (${response.status})`));
+      const typed = payload as AdminMatchLogWriteResult;
       setResult(typed);
       setMessage(resultSummary(typed));
-      setSelectedIds([]);
-      router.refresh();
+      const status = typed.status || typed.operation_status || typed.operation?.status;
+      if (typed.ok && (!status || status === "succeeded")) {
+        setSelectedIds([]);
+        setNote("");
+        setIdempotencyKey(requestKey());
+        onExclusionOperationChange(null);
+        onMutationComplete();
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to exclude selected matches.");
     } finally {
@@ -138,8 +197,13 @@ export default function MatchLogBulkExcludePanel({ apiBase, clubId, enabled, mat
     <article style={cardStyle}>
       <h2 style={{ marginTop: 0 }}>Exclude rated matches</h2>
       <p style={{ color: "#475569" }}>
-        Streamlit parity for the rated-match delete flow. This soft-excludes selected rated matches, writes audit attribution, recomputes player activity, then runs Replay ALL through FastAPI.
+        This atomically soft-excludes exact reviewed row versions, creates one durable recovery operation, recomputes player activity, runs Replay ALL, and strictly reconciles only affected live match-trigger badges.
       </p>
+      {exclusionBlocked ? (
+        <p role="alert" style={{ color: "#991b1b" }}>
+          New exclusions are disabled until operation <code>{exclusionOperation?.id}</code> succeeds in the recovery panel above.
+        </p>
+      ) : null}
       <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
         <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
         <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>
@@ -155,6 +219,7 @@ export default function MatchLogBulkExcludePanel({ apiBase, clubId, enabled, mat
             <tr style={{ textAlign: "left", background: "#f8fafc" }}>
               <th style={{ padding: "0.55rem" }}>Exclude</th>
               <th style={{ padding: "0.55rem" }}>ID</th>
+              <th style={{ padding: "0.55rem" }}>Version</th>
               <th style={{ padding: "0.55rem" }}>Date</th>
               <th style={{ padding: "0.55rem" }}>League / Week</th>
               <th style={{ padding: "0.55rem" }}>Team 1</th>
@@ -169,6 +234,7 @@ export default function MatchLogBulkExcludePanel({ apiBase, clubId, enabled, mat
                 <tr key={id}>
                   <td style={{ padding: "0.55rem" }}><input type="checkbox" checked={selectedSet.has(id)} onChange={() => toggleMatch(id)} /></td>
                   <td style={{ padding: "0.55rem" }}>#{id}</td>
+                  <td style={{ padding: "0.55rem" }}>{match.row_version}</td>
                   <td style={{ padding: "0.55rem" }}>{dateLabel(match.date)}</td>
                   <td style={{ padding: "0.55rem" }}>{match.league || "—"}<br /><span style={{ color: "#64748b" }}>{match.week_tag || "—"}</span></td>
                   <td style={{ padding: "0.55rem" }}>{playerNames(match.team1)}</td>
@@ -182,6 +248,7 @@ export default function MatchLogBulkExcludePanel({ apiBase, clubId, enabled, mat
       </div>
       {!selectableMatches.length ? <p style={{ color: "#475569" }}>No matches are available in the current filtered view.</p> : null}
       <p style={{ color: "#64748b" }}>Selected: {selectedIds.length} / {selectableMatches.length}. The table uses the current filtered Match Log view and caps the bulk action at 100 visible rows.</p>
+      <p style={{ color: "#64748b" }}>Reviewed request UUID: <code>{idempotencyKey}</code>. It is preserved after timeouts or recovery errors.</p>
       <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         <button type="button" onClick={() => setSelectedIds(selectableMatches.map((match) => Number(match.id)).filter(Number.isFinite))} disabled={pending || !selectableMatches.length} style={secondaryButtonStyle}>Select all visible</button>
         <button type="button" onClick={() => setSelectedIds([])} disabled={pending || !selectedIds.length} style={secondaryButtonStyle}>Clear selection</button>
@@ -191,23 +258,23 @@ export default function MatchLogBulkExcludePanel({ apiBase, clubId, enabled, mat
         <ConfirmAction
           triggerLabel={`Exclude ${selectedIds.length || "selected"} rated match(es)`}
           title={`Exclude ${selectedIds.length || "the selected"} rated match(es)?`}
-          description={<>This will soft-exclude the selected rated matches, write an audit record, recompute player activity, and run Replay ALL. This changes official rating history.</>}
+          description={<>This will soft-exclude the exact selected match IDs and row versions, then finish their durable Replay and narrow badge recovery. This changes official rating history.</>}
           confirmLabel="Yes, exclude and replay"
           confirmationText="DELETE"
           tone="danger"
-          disabled={pending || !accessToken || !selectedIds.length}
+          disabled={pending || !accessToken || !selectedIds.length || exclusionBlocked}
           busy={pending}
           onConfirm={submitExclude}
         />
       </p>
-      {message ? <p style={{ color: result?.ok && !result?.replay_error ? "#166534" : "#b91c1c" }}>{message}</p> : null}
-      {result?.warning ? <p style={{ color: "#92400e" }}>{result.warning}</p> : null}
+      {message ? <p style={{ color: result?.ok ? "#166534" : "#b91c1c" }}>{message}</p> : null}
+      {result?.warnings?.length ? <ul style={{ color: "#92400e" }}>{result.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
       {result?.replay_result ? (
         <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", margin: 0 }}>
-          <div><dt style={{ fontWeight: 700 }}>Matches scanned</dt><dd style={{ margin: 0 }}>{result.replay_result.matches_scanned_total ?? "—"}</dd></div>
-          <div><dt style={{ fontWeight: 700 }}>Matches rewritten</dt><dd style={{ margin: 0 }}>{result.replay_result.matches_rewritten ?? "—"}</dd></div>
-          <div><dt style={{ fontWeight: 700 }}>League ratings rows</dt><dd style={{ margin: 0 }}>{result.replay_result.league_ratings_rows ?? "—"}</dd></div>
-          <div><dt style={{ fontWeight: 700 }}>Skipped incomplete</dt><dd style={{ margin: 0 }}>{result.replay_result.skipped_incomplete ?? "—"}</dd></div>
+          <div><dt style={{ fontWeight: 700 }}>Matches scanned</dt><dd style={{ margin: 0 }}>{String(result.replay_result.matches_scanned_total ?? "—")}</dd></div>
+          <div><dt style={{ fontWeight: 700 }}>Matches rewritten</dt><dd style={{ margin: 0 }}>{String(result.replay_result.matches_rewritten ?? "—")}</dd></div>
+          <div><dt style={{ fontWeight: 700 }}>League ratings rows</dt><dd style={{ margin: 0 }}>{String(result.replay_result.league_ratings_rows ?? "—")}</dd></div>
+          <div><dt style={{ fontWeight: 700 }}>Skipped incomplete</dt><dd style={{ margin: 0 }}>{String(result.replay_result.skipped_incomplete ?? "—")}</dd></div>
         </dl>
       ) : null}
     </article>

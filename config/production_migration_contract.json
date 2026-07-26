@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "profile": "next-fastapi-readonly-2026-07-25",
-  "repository_migration_content_sha256": "9ef49886fc9a524e2697aeb3ab9a58a41fc1f98e895cc5737db78a6c112bbcc9",
+  "profile": "next-fastapi-readonly-2026-07-26",
+  "repository_migration_content_sha256": "72e64b241ec5395f82e38309a8b8168a143f58e7fc47935293f775ca36ce8f92",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -25,6 +25,7 @@
     "league_live_domain_contract",
     "league_live_publish_reconciliation",
     "live_ladder_admin_operations",
+    "match_exclusion_atomic_recovery",
     "public_live_durability",
     "public_partner_pairing_lifecycle",
     "public_registration_edit_transaction",

@@ -51,6 +51,10 @@ class _Query:
         self._filters.append(("in", col, set(vals)))
         return self
 
+    def is_(self, col, val):
+        self._filters.append(("is", col, val))
+        return self
+
     def order(self, col, desc=False):
         self._order = (col, desc)
         return self
@@ -97,6 +101,8 @@ class _Supabase:
                 data = [r for r in data if str(r.get(col)) == str(val)]
             elif op == "in":
                 data = [r for r in data if r.get(col) in val]
+            elif op == "is" and val is None:
+                data = [r for r in data if r.get(col) is None]
 
         if q._order:
             col, desc = q._order

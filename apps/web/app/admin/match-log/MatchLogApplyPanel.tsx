@@ -1,10 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import type { AdminDuplicateDeletePreview, AdminDuplicateGroup, AdminMatchEditOperation, AdminMatchLogMatch, AdminMatchLogPlayer, AdminMatchLogWriteResult } from "@/lib/adminMatchLogApi";
+import type {
+  AdminDuplicateDeletePreview,
+  AdminDuplicateGroup,
+  AdminMatchEditOperation,
+  AdminMatchExclusionOperation,
+  AdminMatchExclusionTarget,
+  AdminMatchLogMatch,
+  AdminMatchLogPlayer,
+  AdminMatchLogWriteResult
+} from "@/lib/adminMatchLogApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type MatchLogApplyPanelProps = {
@@ -16,6 +24,9 @@ type MatchLogApplyPanelProps = {
   duplicateGroups?: AdminDuplicateGroup[];
   matches?: AdminMatchLogMatch[];
   recentOperations?: AdminMatchEditOperation[];
+  exclusionOperation: AdminMatchExclusionOperation | null;
+  onExclusionOperationChange: (operation: AdminMatchExclusionOperation | null) => void;
+  onMutationComplete: () => void;
 };
 
 type MatchPatch = {
@@ -54,25 +65,67 @@ const secondaryButtonStyle = { ...buttonStyle, background: "white", color: "#0f1
 
 class ApiCallError extends Error {
   operationId: string | null;
+  operation: AdminMatchExclusionOperation | null;
 
-  constructor(message: string, operationId: string | null = null) {
+  constructor(
+    message: string,
+    operationId: string | null = null,
+    operation: AdminMatchExclusionOperation | null = null
+  ) {
     super(message);
     this.operationId = operationId;
+    this.operation = operation;
   }
 }
 
 function requestKey(): string {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `match-edit-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (token) => {
+    const value = Math.floor(Math.random() * 16);
+    return (token === "x" ? value : (value & 0x3) | 0x8).toString(16);
+  });
 }
 
-function apiErrorDetail(payload: unknown, fallback: string): { message: string; operationId: string | null } {
-  if (!payload || typeof payload !== "object") return { message: fallback, operationId: null };
+function exclusionOperationFromPayload(payload: unknown): AdminMatchExclusionOperation | null {
+  if (!payload || typeof payload !== "object") return null;
+  const root = payload as Record<string, unknown>;
+  const detail = root.detail && typeof root.detail === "object"
+    ? root.detail as Record<string, unknown>
+    : root;
+  const nested = detail.operation && typeof detail.operation === "object"
+    ? detail.operation as Record<string, unknown>
+    : detail;
+  const id = nested.id || nested.operation_id;
+  if (!id) return null;
+  return {
+    ...nested,
+    id: String(id),
+    status: String(nested.status || nested.operation_status || "recovery_required"),
+    recovery_stage: nested.recovery_stage == null ? null : String(nested.recovery_stage),
+    replay_job_id: nested.replay_job_id == null ? null : String(nested.replay_job_id),
+    error_text: nested.error_text == null
+      ? (nested.message == null ? null : String(nested.message))
+      : String(nested.error_text)
+  };
+}
+
+function apiErrorDetail(payload: unknown, fallback: string): {
+  message: string;
+  operationId: string | null;
+  operation: AdminMatchExclusionOperation | null;
+} {
+  if (!payload || typeof payload !== "object") return { message: fallback, operationId: null, operation: null };
   const detail = (payload as { detail?: unknown }).detail;
   if (detail && typeof detail === "object") {
-    const record = detail as { message?: unknown; operation_id?: unknown };
-    return { message: String(record.message || fallback), operationId: record.operation_id ? String(record.operation_id) : null };
+    const record = detail as { message?: unknown; code?: unknown; operation_id?: unknown };
+    const operation = exclusionOperationFromPayload(payload);
+    return {
+      message: String(record.message || record.code || fallback),
+      operationId: record.operation_id ? String(record.operation_id) : null,
+      operation
+    };
   }
-  return { message: detail ? String(detail) : fallback, operationId: null };
+  return { message: detail ? String(detail) : fallback, operationId: null, operation: null };
 }
 
 function apiUrl(apiBase: string, path: string): string {
@@ -81,7 +134,10 @@ function apiUrl(apiBase: string, path: string): string {
 
 function resultSummary(result: AdminMatchLogWriteResult | null): string | null {
   if (!result) return null;
-  if (result.mode === "duplicates_cleaned") return `Cleaned ${result.deleted_count ?? 0} duplicate row(s). Replay scope: ${result.recommended_replay_scope ?? "ALL"}.`;
+  if (result.mode === "duplicates_cleaned" || result.mode === "matches_excluded") {
+    const count = result.excluded_count ?? result.deleted_count ?? 0;
+    return `Soft-excluded ${count} duplicate row(s), rebuilt ratings, and reconciled affected live match badges.`;
+  }
   if (result.mode === "duplicate_no_issue") return `Marked match IDs ${(result.match_ids ?? []).join(", ") || "selected group"} as no issue.`;
   if (result.mode === "applied_and_replayed") return `Atomically applied ${result.updated_count ?? 0} match edit(s) and completed replay job ${result.replay_job_id || "—"}.`;
   if (result.mode === "replay_in_progress") return `Applied ${result.updated_count ?? 0} match edit(s); replay job ${result.replay_job_id || "—"} is still in progress.`;
@@ -245,8 +301,19 @@ function MatchSummary({ match }: { match: AdminMatchLogMatch }) {
   );
 }
 
-export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, duplicateCleanupEnabled, duplicatePreview, duplicateGroups = [], matches = [], recentOperations = [] }: MatchLogApplyPanelProps) {
-  const router = useRouter();
+export default function MatchLogApplyPanel({
+  apiBase,
+  clubId,
+  applyEnabled,
+  duplicateCleanupEnabled,
+  duplicatePreview,
+  duplicateGroups = [],
+  matches = [],
+  recentOperations = [],
+  exclusionOperation,
+  onExclusionOperationChange,
+  onMutationComplete
+}: MatchLogApplyPanelProps) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const firstMatch = matches.find((match) => match.id != null) || null;
   const [selectedMatchId, setSelectedMatchId] = useState(firstMatch?.id == null ? "" : String(firstMatch.id));
@@ -260,6 +327,7 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
   const [message, setMessage] = useState<string | null>(null);
   const [result, setResult] = useState<AdminMatchLogWriteResult | null>(null);
   const [idempotencyKey, setIdempotencyKey] = useState(requestKey);
+  const [duplicateIdempotencyKey, setDuplicateIdempotencyKey] = useState(requestKey);
   const [recoveryOperationId, setRecoveryOperationId] = useState<string | null>(() => recentOperations.find((operation) => operation.status === "recovery_required")?.id || null);
   const [bulkIds, setBulkIds] = useState<string[]>([]);
   const [bulkLeague, setBulkLeague] = useState("");
@@ -275,6 +343,7 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
   const visiblePlayerOptions = collectVisiblePlayers(matches);
   const playerOptions = rosterPlayers.length ? rosterPlayers : visiblePlayerOptions;
   const scope = patchScope(stagedPatches);
+  const exclusionBlocked = Boolean(exclusionOperation && exclusionOperation.status !== "succeeded");
 
   useEffect(() => {
     let cancelled = false;
@@ -333,7 +402,7 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
       const detail = apiErrorDetail(payload, `API error (${response.status})`);
-      throw new ApiCallError(detail.message, detail.operationId);
+      throw new ApiCallError(detail.message, detail.operationId, detail.operation);
     }
     return payload as AdminMatchLogWriteResult;
   }
@@ -419,8 +488,8 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
         setStagedPatches([]);
         setRecoveryOperationId(null);
         setIdempotencyKey(requestKey());
+        onMutationComplete();
       }
-      router.refresh();
     } catch (error) {
       if (error instanceof ApiCallError && error.operationId) setRecoveryOperationId(error.operationId);
       setMessage(error instanceof Error ? error.message : "Unable to apply match edits.");
@@ -439,11 +508,13 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
         source: "next_match_log_recovery"
       });
       setResult(payload);
-      setMessage(`Recovery completed for operation ${recoveryOperationId}.`);
-      setRecoveryOperationId(null);
-      setStagedPatches([]);
-      setIdempotencyKey(requestKey());
-      router.refresh();
+      setMessage(resultSummary(payload));
+      if (payload.ok) {
+        setRecoveryOperationId(null);
+        setStagedPatches([]);
+        setIdempotencyKey(requestKey());
+        onMutationComplete();
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to complete replay recovery.");
     } finally {
@@ -458,15 +529,46 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
     setResult(null);
     try {
       if (!deleteIds.length) throw new Error("No duplicate cleanup IDs are available in the current preview.");
+      if (exclusionBlocked) {
+        throw new Error(`Recover exclusion operation ${exclusionOperation?.id} before starting another cleanup.`);
+      }
+      const suppliedTargets = duplicatePreview?.targets || duplicatePreview?.delete_targets || [];
+      const targets: AdminMatchExclusionTarget[] = deleteIds.map((matchId) => {
+        const supplied = suppliedTargets.find((target) => Number(target.match_id) === Number(matchId));
+        if (supplied && Number(supplied.expected_row_version) > 0) {
+          return {
+            match_id: Number(supplied.match_id),
+            expected_row_version: Number(supplied.expected_row_version)
+          };
+        }
+        const match = matches.find((candidate) => Number(candidate.id) === Number(matchId));
+        const rowVersion = Number(match?.row_version || 0);
+        if (rowVersion < 1) {
+          throw new Error(`Duplicate match #${matchId} has no current row version. Refresh the preview.`);
+        }
+        return { match_id: Number(matchId), expected_row_version: rowVersion };
+      });
       const payload = await callApi(`/admin/clubs/${encodeURIComponent(clubId)}/match-log/duplicates/cleanup`, "POST", {
-        delete_ids: deleteIds,
+        targets,
+        idempotency_key: duplicateIdempotencyKey,
         confirmation_text: confirmationText,
+        note: correctionNote,
         source: "next_match_log_duplicate_cleanup_panel"
       });
       setResult(payload);
       setMessage(resultSummary(payload));
-      router.refresh();
+      const operation = exclusionOperationFromPayload(payload);
+      if (operation) onExclusionOperationChange(operation);
+      const status = payload.status || payload.operation_status || payload.operation?.status;
+      if (payload.ok && (!status || status === "succeeded")) {
+        setDuplicateIdempotencyKey(requestKey());
+        onExclusionOperationChange(null);
+        onMutationComplete();
+      }
     } catch (error) {
+      if (error instanceof ApiCallError && error.operation) {
+        onExclusionOperationChange(error.operation);
+      }
       setMessage(error instanceof Error ? error.message : "Unable to clean duplicates.");
     } finally {
       setBusy(false);
@@ -487,8 +589,10 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
       });
       setResult(payload);
       setMessage(resultSummary(payload));
-      setNoIssueReason("");
-      router.refresh();
+      if (payload.ok) {
+        setNoIssueReason("");
+        onMutationComplete();
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to mark duplicate group as no issue.");
     } finally {
@@ -701,17 +805,25 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
       {duplicateCleanupEnabled ? (
         <>
           <p style={{ color: "#475569" }}>
-            Current preview would remove {duplicatePreview?.delete_count ?? 0} duplicate row(s): {(duplicatePreview?.delete_ids ?? []).join(", ") || "none"}.
+            Current preview would soft-exclude and rebuild {duplicatePreview?.delete_count ?? 0} duplicate row(s): {(duplicatePreview?.delete_ids ?? []).join(", ") || "none"}.
           </p>
+          <p style={{ color: "#64748b" }}>
+            Reviewed request UUID: <code>{duplicateIdempotencyKey}</code>. It and the exact row-version targets are preserved until authoritative success.
+          </p>
+          {exclusionBlocked ? (
+            <p role="alert" style={{ color: "#991b1b" }}>
+              New duplicate cleanup is disabled until operation <code>{exclusionOperation?.id}</code> succeeds.
+            </p>
+          ) : null}
           <p>
             <ConfirmAction
-              triggerLabel="Clean duplicate rows from preview"
-              title={`Delete ${duplicatePreview?.delete_count ?? 0} duplicate row(s)?`}
-              description={<>This will delete the exact duplicate row IDs from the current preview: {(duplicatePreview?.delete_ids ?? []).join(", ") || "none"}. Recovery may require Replay History.</>}
-              confirmLabel="Yes, delete duplicate rows"
+              triggerLabel="Soft-exclude duplicate rows"
+              title={`Soft-exclude and rebuild ${duplicatePreview?.delete_count ?? 0} duplicate row(s)?`}
+              description={<>This atomically soft-excludes the exact IDs and row versions from this preview, then completes durable Replay and narrow badge recovery: {(duplicatePreview?.delete_ids ?? []).join(", ") || "none"}.</>}
+              confirmLabel="Yes, soft-exclude and rebuild"
               confirmationText="DELETE"
               tone="danger"
-              disabled={busy || !accessToken || !(duplicatePreview?.delete_ids?.length)}
+              disabled={busy || !accessToken || exclusionBlocked || !(duplicatePreview?.delete_ids?.length)}
               busy={busy}
               onConfirm={cleanupDuplicates}
             />
@@ -719,7 +831,7 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
         </>
       ) : (
         <p style={{ color: "#475569" }}>
-          Destructive duplicate cleanup is disabled. Match edits and duplicate no-issue resolution remain available.
+          Atomic duplicate soft-exclusion is disabled. Match edits and duplicate no-issue resolution remain available.
         </p>
       )}
 

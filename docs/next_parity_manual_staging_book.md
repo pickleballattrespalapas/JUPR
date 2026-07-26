@@ -122,12 +122,12 @@ Record the identity artifact in the exact form
 - [ ] Production write flags remain off; staging is `write_wave=none` at rest and enables only one approved workflow while it is under test.
 - [ ] No "enable all" configuration is used; a distinct final Fly release restores `none`, `business_data_write_wave_active=false`, and every controlled write flag false.
 - [ ] Email mode is `dry_run` or `staging_redirect`, with the redirect inbox visibly identified.
-- [ ] The reviewed 39-name migration inventory is applied, including `singles_replay_recovery` and `challenge_ladder_public_results`; the connector-assigned ledger head, private grants, and RLS are verified without assuming the repository filename is the remote version.
+- [ ] The reviewed 40-name migration inventory is applied, including `singles_replay_recovery`, `challenge_ladder_public_results`, and `match_exclusion_atomic_recovery`; the connector-assigned ledger head, private grants, and RLS are verified without assuming the repository filename is the remote version.
 - [ ] Order-27 migration `20260719204700_tournament_operations_guard_surface.sql` and its Operations, official-publish, and email-handoff gates are integrated and verified.
 - [ ] Disposable fixture IDs, exact resource refs, route-supported idempotency keys, and cleanup/recovery owners are recorded before any write.
 - [ ] Match Log, Replay History, audit log, provider log, and Streamlit fallback links are open before high-risk writes.
 - [ ] The already-applied singles replay migration is formally accepted against the exact candidate; League Live waves expose only the exact Match Uploader preview dependency; context recovery links filter Match Log exactly; and Replay is visibly global.
-- [ ] `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES=0` and `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=0` are attested in every current wave. Direct uploader singles, duplicate cleanup, bulk exclusion, and every manual match-producing case that depends on destructive exclusion remain outside the active operator session.
+- [ ] `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES=0` is attested in every wave. `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=1` is permitted only in the exact isolated `match-exclusion-recovery` wave; it is `0` at rest, in every other wave, and in production. Direct uploader singles and every combined/manual writer session remain outside that isolated operator session.
 - [ ] Public, auth, admin-read, and write waves pass their automated route-specific suites against this exact candidate.
 
 ## Stop conditions
@@ -217,8 +217,8 @@ non-allowlisted web, API, or auth origin, and verify live Vercel/Fly identity
 attestations before any browser request can mutate staging. The workflow requires
 the candidate's immutable Vercel deployment origin, verifies that the endpoint
 attests the same origin and deployment ID, pins the browser to it, and re-attests
-both deployments after the suite. It requires exact mutation confirmation only for the
-Tournament Live write wave, writes one JSON report per invocation, and fails on
+both deployments after the suite. It requires exact mutation confirmation for
+each route-specific mutating wave, writes one JSON report per invocation, and fails on
 any missing real spec, skipped, flaky, unexpected, or zero-test result. Generic
 JSON mutation/recovery plans are deliberately not executable in Order 29.
 The `complete-book` dispatch independently re-attests both live deployments in
@@ -233,28 +233,38 @@ GitHub lists the workflow from the repository default branch
 (`rollback-feb8`). Its checkout and provenance contract still execute the exact
 canonical `origin/staging` candidate. A dispatch from either `staging` or
 `rollback-feb8` must match that branch's current event SHA; every executable wave
-then requires `candidate_sha` to equal `origin/staging`. For authenticated read
-and Tournament Live modes, a server-only preparation step uses the staging
+then requires `candidate_sha` to equal `origin/staging`. For authenticated
+modes, a server-only preparation step uses the staging
 service role to require exactly one eligible existing admin assignment bound to
 an Auth user. It verifies that identity, calls Supabase Admin `generate_link`,
 exchanges the returned token hash directly without sending email, and validates
 the short-lived session against club-scoped FastAPI capabilities. For
 `match-rating-writes`, a separate server-only step creates a uniquely owned,
 unpublished null-player score fixture and exports only its IDs and score values.
+For `match-exclusion-recovery`, another server-only step creates a unique,
+inactive staging-only club, one temporary super-admin assignment for the already
+bound operator, four players with explicit singles replay baselines, and three
+rated doubles matches: one canonical duplicate pair plus one distinct match. It
+exports only isolated fixture identifiers and row versions.
 The browser step receives short-lived session material and fixture identifiers,
-never the service-role key. Always-run cleanup first refuses an official-match
-link and removes only that manifest-owned core fixture, then fails the job unless
-the refreshable session is ended or already inactive. The access JWT must be
-bound to the exact issuer, user, session, and authenticated audience with a
-maximum one-hour lifetime. Supabase logout ends refreshability but may not
-invalidate that JWT before its `exp` claim, so cleanup clears every exported
-credential and records that remaining lifetime explicitly. Retained Playwright
-output redacts the JWT, operator email, and Vercel bypass value. The workflow
-does not create or delete an Auth user or change an admin role assignment.
-Outside the explicitly confirmed Tournament Live mode, it does not mutate
-application business data. The Tournament Live fixture and score are disposable
-business-data writes; operation/audit evidence is retained while core fixture
-rows are deleted after verified score restoration. `generate_link`, token
+never the service-role key. The always-run Tournament Live cleanup refuses an
+official-match link and removes only its manifest-owned core fixture. The
+match-exclusion fixture temporarily adds exactly one manifest-owned role
+assignment inside its isolated club; its always-run cleanup requires terminal
+operation, full-replay, and complete badge-reconciliation readbacks before
+removing exact fixture rows. Both fixture cleanups run before session cleanup,
+and the job fails unless the refreshable session is ended or already inactive.
+The access JWT must be bound to the exact issuer, user, session, and authenticated
+audience with a maximum one-hour lifetime. Supabase logout ends refreshability
+but may not invalidate that JWT before its `exp` claim, so cleanup clears every
+exported credential and records that remaining lifetime explicitly. Retained
+Playwright output redacts the JWT, operator email, and Vercel bypass value. The
+session helper does not create or delete an Auth user or change an admin role
+assignment. Outside the two explicitly confirmed mutating modes, the workflow
+does not mutate application business data. Tournament Live scores and Match Log
+exclusion fixtures are disposable business-data writes; operation/audit/replay
+evidence is retained while core fixture rows are removed after verified terminal
+state. `generate_link`, token
 verification, and logout intentionally create and consume bounded staging Auth
 link-token, session, and audit metadata.
 A run can supersede an unused staging magic/recovery link for that same account,
@@ -273,7 +283,8 @@ component/browser contract coverage, while password entry and recovery/inbox
 acceptance remain manual.
 
 Configure only the route-specific staging variables named by the workflow.
-Tournament Live is the sole automated mutation opt-in. Keep every other mutation
+Tournament Live and atomic Match Log exclusion/recovery are the only automated
+mutation opt-ins. Keep every other mutation
 flag off and execute the deferred cases from the page and fixture ledgers below,
 recording the exact route, method, JSON-bearing 2xx status, positive response/readback
 projection, resource ID, restoration action, post-restoration state, operator, and
@@ -290,6 +301,7 @@ committed book.
 | `admin-read-export` | Workflow mode `admin-read-export`; local equivalent uses the same runner | Server-only exact-one bound-admin lookup, no-email token-hash exchange, capability validation, exact unpublished recap plus tournament/draw fixture validation, confirmed refresh-session termination, and a maximum one-hour access-JWT lifetime | `Pending` | — | — |
 | `reversible-admin-writes` | Manual-only deferred procedure; no workflow mode | Exact per-page route/resource plan, captured pre-state, truthful inverse, positive write/readback/restore projections, named operator, and a separate human witness | `Pending` | — | — |
 | `match-rating-writes` | Workflow mode `match-rating-writes` for Tournament Live only; all other cases manual-only | Tournament Live disposable game/version fixture, dynamic fingerprints, distinct idempotency keys, exact mutation confirmation, and `finally` restore/re-read | `Pending` | — | — |
+| `match-exclusion-recovery` | Workflow mode `match-exclusion-recovery`; local equivalent uses the same runner | Unique inactive fixture club, exact bound-operator identity, four disposable players, three rated doubles rows, CAS versions, three request UUIDs, full replay, badge reconciliation, exact-key retry, completed-operation recovery, exact mutation confirmation, and always-run terminal cleanup | `Pending` | — | — |
 | `recovery` | Manual-only route-specific reconciliation; no workflow mode | Exact affected resource IDs, authoritative GET routes, JSON-bearing 2xx statuses, positive state/audit projections, Match Log/Replay handoff evidence, all mutation flags off | `Pending` | — | — |
 
 ## Deferred manual mutation ledger
@@ -415,9 +427,9 @@ Never open two rows together and never synthesize an "enable all" deployment.
 | `flag:public-intake-auth` | Only this wave sets `JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES=1`; `JUPR_REGISTRATION_EDIT_SECRET` and `JUPR_REGISTRATION_CONFIRMATION_SECRET` remain server-side | Secrets absent from Vercel/browser; no production test writes | Set public-intake writes `0`, restore `write_wave=none`, and close registration/support intake at API routing layer | — | — |
 | `flag:admin-read` | `JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS=1`; `JUPR_ENABLE_NEXT_ADMIN_MATCH_CANONICAL_AUDIT=1`; `JUPR_ENABLE_NEXT_ADMIN_TOOLS=1`; `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1`; `JUPR_ENABLE_NEXT_ADMIN_REPLAY=1` | Apply/write gates remain `0` | Close the affected visibility gate | — | — |
 | `flag:communications` | At rest, the read surfaces remain available with `JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=1`, `JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=1`, `JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS=0`, and `write_wave=none`. Only the isolated `communications` wave may set `JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS=1`; `JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS=1` is separate and only for the redirected-email wave. | Production read and mutation flags remain `0`; live-email gate remains `0` | Set communications mutations and auto-email to `0`; restore `write_wave=none`; stop worker; reconcile outbox | — | — |
-| `flag:match-player` | Only this wave opens the admin pilot plus `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY=1`, `JUPR_ENABLE_NEXT_ADMIN_REPLAY=1`, `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1`, `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER=1`, `JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR=1`, and `JUPR_ENABLE_STAGING_NEXT_ADMIN_MATCH_CANONICAL_NORMALIZE_WRITES=1`. Both dormant high-risk gates remain `0`; this wave does not authorize direct singles, duplicate cleanup, or bulk exclusion. | All production match-write gates remain `0` | Close uploader/apply/replay/editor/normalize gates; reconcile only independently recoverable actions | — | — |
+| `flag:match-player` | Only this wave opens the admin pilot plus `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY=1`, `JUPR_ENABLE_NEXT_ADMIN_REPLAY=1`, `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1`, `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER=1`, `JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR=1`, and `JUPR_ENABLE_STAGING_NEXT_ADMIN_MATCH_CANONICAL_NORMALIZE_WRITES=1`. Direct singles and Match Log destructive writes remain `0`; this wave does not authorize duplicate cleanup or bulk exclusion. | All production match-write gates remain `0` | Close uploader/apply/replay/editor/normalize gates; reconcile only independently recoverable actions | — | — |
 | `flag:direct-singles` | `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES=0` in `none` and every named staging wave, including `match-player` | Production value remains `0` | Keep forced off until the direct writer is atomic and the migration plus future rated/unrated protocol are accepted | — | — |
-| `flag:match-log-destructive` | `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=0` in `none` and every named staging wave, including `match-player` | Production value remains `0` | Keep forced off until duplicate cleanup and bulk exclusion have atomic idempotent recovery and candidate-bound evidence | — | — |
+| `flag:match-log-destructive` | `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=1` only in the dedicated `match-exclusion-recovery` wave together with Match Log apply and tracked Replay; its API route allowlist contains only exact duplicate cleanup, bulk exclusion, and exclusion recovery. It remains `0` in `none`, `match-player`, and every other wave. | Production value remains `0`; legacy direct replay callers remain unfenced, so broad or combined writer enablement is prohibited | Restore `write_wave=none`; verify the destructive/apply/replay gates are false; retain terminal operation/audit evidence and delete only the validated isolated fixture IDs | — | — |
 | `flag:league` | Projections are isolated, never additive: `league-manager` opens only the admin pilot plus `JUPR_ENABLE_STAGING_NEXT_ADMIN_LEAGUE_MANAGER_WRITES`; `league-awards` opens only the pilot plus `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE`; `league-live-domain` opens only the pilot, `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_PREVIEW`, and `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN`; `league-live-submit` additionally opens `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT`. Full `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER` remains off in both Live waves, and only the exact round-robin preview uploader route is allowlisted. | Every production League/Awards/Live/Match Uploader write gate remains `0` | Restore `write_wave=none`; verify every listed gate false; reconcile rounds before closing recovery | — | — |
 | `flag:live-ladder-admin` | Visibility gates `JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER=1`, `JUPR_ENABLE_NEXT_ADMIN_MONEYBALL=1`, `JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE=1`; open only matching `JUPR_ENABLE_STAGING_NEXT_ADMIN_CHALLENGE_LADDER_WRITES=1`, `JUPR_ENABLE_STAGING_NEXT_ADMIN_MONEYBALL_WRITES=1`, or `JUPR_ENABLE_STAGING_NEXT_ADMIN_JUPR_LIVE_WRITES=1` | All three staging-only write flags remain `0` | Close affected staging write flag; reconcile operation ledger | — | — |
 | `flag:public-live` | `JUPR_ENABLE_PUBLIC_LIVE_WRITES=1` only for disposable staging sessions | `JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION=0` | Set public-live writes `0`; preserve recovery rows | — | — |
@@ -429,15 +441,16 @@ Never open two rows together and never synthesize an "enable all" deployment.
 ## Dormant high-risk gate ledger
 
 These are formal completion blockers, not optional follow-up notes. A normal
-candidate must attest both gates disabled. The complete-book path must continue
-to fail until each blocker is replaced by reviewed enablement evidence from a
-later candidate. Do not add a separate direct-singles manual action or copy a
-future protocol into Joe's active packet while either row is `Blocked`.
+candidate must attest direct singles disabled and Match Log destructive writes
+disabled outside their exact isolated recovery wave. The complete-book path
+must continue to fail until each blocker is replaced by reviewed candidate-bound
+evidence. Do not add a separate direct-singles action or combine Match Log
+destructive recovery with another writer while either row is `Blocked`.
 
 | Blocker key | Forced-off gate | Current status | Future enablement / acceptance evidence |
 |---|---|---|---|
 | `blocker:direct-uploader-singles` | `JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES=0` in every staging wave and production | `Blocked` | Atomic direct writer, formally accepted staging migration, rated and unrated payload/readback equivalence, exact managed IDs, and full-replay restoration are required |
-| `blocker:match-log-destructive` | `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=0` in every staging wave and production | `Blocked` | Atomic idempotent duplicate-cleanup and bulk-exclusion recovery, retry/unknown-outcome tests, exact readback, and restored-baseline evidence are required |
+| `blocker:match-log-destructive` | `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE=0` at rest, in every non-recovery staging wave, and in production; only the candidate-bound isolated `match-exclusion-recovery` wave may set it to `1` | `Blocked` | Pass the atomic idempotent duplicate-cleanup and bulk-exclusion wave with retry/unknown-outcome tests, exact readback, terminal tracked replay, all-player activity/badge recovery, and validated fixture cleanup |
 
 Tournament Operations official singles publishing remains automated-ready
 through its atomic CAS RPC; it is not the direct-uploader path. Its manual
@@ -456,7 +469,8 @@ For completion, every cleanup cell must use `Verified: <evidence>`.
 | `fixture:support-intake` | No current request ID; use only the short `Test` / `test@x.invalid` / `smoke` / `staging only` payload after the 24-hour fingerprint and hourly-cap precheck | Owner and exact request IDs pending | General/privacy dismissal and no-op correction resolution are retained forward finalizers; audit IDs pending | `Pending` |
 | `fixture:registration-pairing` | No approved open event, registration IDs, confirmation/edit tokens, or pairing-board keys recorded | Staging-redirect inbox and owner pending | Registrations/team link are retained; full notification/private-field evidence pending | `Pending` |
 | `fixture:league-awards-live` | Readable `Summer Social` / `Spring League` records are not approved write fixtures | Exact disposable league, roster, versions, baseline export, and owner pending | Configuration restore plus Live exclusion/replay/compensation; Awards terminal rows retained | `Pending` |
-| `fixture:match-player-replay` | Synthetic player IDs `990001`–`990008` identified; current doubles/singles baselines and versions must be reread | Exact per-row player allocation and recovery owner pending | Direct singles and every exact-ID exclusion/full-Replay case remain future protocols while the dormant gates are off; legacy singles must fail closed; merge compensation pending | `Blocked` |
+| `fixture:match-player-replay` | Synthetic player IDs `990001`–`990008` identified; current doubles/singles baselines and versions must be reread | Exact per-row player allocation and recovery owner pending | Direct singles and combined match-player plus exclusion/full-Replay cases remain future protocols; the separate isolated exclusion fixture below is the only automated destructive path; legacy singles must fail closed; merge compensation pending | `Blocked` |
+| `fixture:match-exclusion-recovery` | Workflow-generated unique inactive club, temporary role ID, four player IDs, three rated match IDs/versions, and three request UUIDs; no `tres_palapas` business match is eligible | `prepare_parity_match_exclusion_fixture.py` manifest plus the already-bound staging operator | Cleanup requires succeeded exclusion operations, full-replay jobs, and badge progress plus exact ownership readbacks, then removes only fixture badges/ratings/matches/players/role/club; retained operation/audit evidence is allowed | `Pending` |
 | `fixture:ladder-moneyball-live` | Synthetic ladder roster using player IDs `990001`–`990008` identified; current ranks/flags/ratings not yet frozen | Per-surface allocation, state versions, operation keys, and owner pending | Context-filtered Match Log, exact-ID exclusion/Replay, full-tier preview/restore, and retained operations pending | `Pending` |
 | `fixture:tournament-admin-ops-live` | Read fixtures: tournaments `93000000-0000-4000-8000-000000000001` / `93000000-0000-4000-8000-000000000002`, draw `94000000-0000-4000-8000-000000000001`, game `96000000-0000-4000-8000-000000000001`; none approved for writes; no empty Live draw prepared | Disposable DRAFT/registration/draw fixtures, versions, operation keys, and owner pending | Score inverse, official-publish Match Log/Replay, or explicit retained terminal evidence pending | `Pending` |
 | `fixture:recap-subscription-outbox` | Recap week `2099-01-05` exists and must be reloaded for its fresh row version; no isolated active subscription or outbox row is prepared | Redirect inbox, subscription/outbox fixture, and owner pending | Recap unpublish; pending outbox delete; delivery/subscription history retained | `Pending` |

@@ -7,6 +7,12 @@ MATCH_BULK_EXCLUDE_PANEL = Path(
 )
 MATCH_PAGE = Path("apps/web/app/admin/match-log/page.tsx")
 MATCH_API = Path("apps/web/lib/adminMatchLogApi.ts")
+MATCH_EXCLUSION_RECOVERY = Path(
+    "apps/web/app/admin/match-log/MatchLogExclusionRecoveryPanel.tsx"
+)
+MATCH_QUICK_REPLAY_PANEL = Path(
+    "apps/web/app/admin/match-log/MatchLogQuickReplayPanel.tsx"
+)
 REPLAY_FORM = Path("apps/web/app/admin/replay-history/ReplayHistoryForm.tsx")
 REPLAY_PAGE = Path("apps/web/app/admin/replay-history/page.tsx")
 
@@ -79,8 +85,63 @@ def test_match_log_destructive_controls_follow_endpoint_availability() -> None:
         "enabled={Boolean(data.correction_plan.exclude_endpoint)}" in page
     )
     assert "duplicateCleanupEnabled ? (" in panel
-    assert "Destructive duplicate cleanup is disabled." in panel
+    assert "Atomic duplicate soft-exclusion is disabled." in panel
     assert "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE" in bulk_exclude
+
+
+def test_match_exclusion_ui_retains_exact_targets_and_operation_recovery() -> None:
+    panel = MATCH_PANEL.read_text(encoding="utf-8")
+    bulk_exclude = MATCH_BULK_EXCLUDE_PANEL.read_text(encoding="utf-8")
+    recovery = MATCH_EXCLUSION_RECOVERY.read_text(encoding="utf-8")
+    page = MATCH_PAGE.read_text(encoding="utf-8")
+    api = MATCH_API.read_text(encoding="utf-8")
+
+    assert "row_version?: number | null;" in api
+    assert "AdminMatchExclusionTarget" in api
+    assert "expected_row_version" in bulk_exclude
+    assert "idempotency_key: idempotencyKey" in bulk_exclude
+    assert "setIdempotencyKey(requestKey())" in bulk_exclude
+    assert "targets," in panel
+    assert "idempotency_key: duplicateIdempotencyKey" in panel
+    assert "setDuplicateIdempotencyKey(requestKey())" in panel
+    assert "Soft-exclude duplicate rows" in panel
+    assert "Yes, delete duplicate rows" not in panel
+    assert (
+        "match-log/exclusions/${encodeURIComponent(activeOperation.id)}/recover"
+        in recovery
+    )
+    assert 'confirmationText="RECOVER"' in recovery
+    assert "It never repeats the soft exclusion." in recovery
+    assert "recent_exclusion_operations" in page
+    assert "exclusionOperation={exclusionOperation}" in page
+
+
+def test_successful_match_log_mutations_refetch_parent_owned_data() -> None:
+    page = MATCH_PAGE.read_text(encoding="utf-8")
+    panel = MATCH_PANEL.read_text(encoding="utf-8")
+    bulk_exclude = MATCH_BULK_EXCLUDE_PANEL.read_text(encoding="utf-8")
+    recovery = MATCH_EXCLUSION_RECOVERY.read_text(encoding="utf-8")
+    quick_replay = MATCH_QUICK_REPLAY_PANEL.read_text(encoding="utf-8")
+
+    assert "const [reloadNonce, setReloadNonce] = useState(0);" in page
+    assert "const handleMutationComplete = useCallback(() => {" in page
+    assert "setRawData(null);" in page
+    assert 'setDataScope("");' in page
+    assert "setReplayData(null);" in page
+    assert "setReloadNonce((current) => current + 1);" in page
+    assert "getAdminMatchLog({" in page
+    assert "getAdminReplayStatus(clubId)" in page
+    assert "matchIdParam,\n    reloadNonce,\n    selectedFilterParam" in page
+    assert page.count("onMutationComplete={handleMutationComplete}") == 4
+
+    for child in (panel, bulk_exclude, recovery, quick_replay):
+        assert "onMutationComplete: () => void;" in child
+        assert "onMutationComplete();" in child
+
+    assert "router.refresh()" not in panel
+    assert "router.refresh()" not in bulk_exclude
+    assert 'from "next/navigation"' not in panel
+    assert 'from "next/navigation"' not in bulk_exclude
 
 
 def test_replay_ui_exposes_durable_job_identity_and_history() -> None:

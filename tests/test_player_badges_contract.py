@@ -63,7 +63,8 @@ def _default_indexes():
             "indexname": "player_badges_unique_context",
             "indexdef": (
                 "CREATE UNIQUE INDEX player_badges_unique_context "
-                "ON public.player_badges USING btree (club_id, player_id, badge_id, context_id)"
+                "ON public.player_badges USING btree "
+                "(club_id, player_id, badge_id, context_type, context_id)"
             ),
         }
     ]
@@ -109,6 +110,30 @@ def test_player_badges_multi_context_allowed():
     assert len(storage["player_badges"]) == 2
 
 
+def test_player_badges_same_context_id_with_different_context_type_is_distinct():
+    storage = {"pg_indexes": _default_indexes()}
+    supabase = FakeSupabase(storage)
+    base = dict(
+        badge_id="mountain_climber",
+        player_id=1,
+        club_id="club",
+        context_id="shared-context",
+        match_id=None,
+    )
+
+    upsert_player_badges(
+        supabase,
+        "club",
+        [
+            BadgeCandidate(context_type="league", value_json={"games": 1}, **base),
+            BadgeCandidate(context_type="season", value_json={"games": 2}, **base),
+        ],
+    )
+
+    assert len(storage["player_badges"]) == 2
+    assert {row["context_type"] for row in storage["player_badges"]} == {"league", "season"}
+
+
 def test_player_badges_contract_check_rejects_wrong_index(monkeypatch):
     storage = {
         "pg_indexes": [
@@ -118,7 +143,8 @@ def test_player_badges_contract_check_rejects_wrong_index(monkeypatch):
                 "indexname": "player_badges_unique_context_type",
                 "indexdef": (
                     "CREATE UNIQUE INDEX player_badges_unique_context_type "
-                    "ON public.player_badges USING btree (club_id, player_id, badge_id, context_type, context_id)"
+                    "ON public.player_badges USING btree "
+                    "(club_id, player_id, badge_id, context_id)"
                 ),
             }
         ]

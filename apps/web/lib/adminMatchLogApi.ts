@@ -11,6 +11,7 @@ export type AdminDuplicateResolution = {
 
 export type AdminMatchLogMatch = {
   id: number | null;
+  row_version?: number | null;
   date?: string | null;
   league?: string | null;
   week_tag?: string | null;
@@ -35,6 +36,7 @@ export type AdminDuplicateGroup = {
   dup_count: number;
   keep_id: number;
   delete_ids: number[];
+  delete_targets?: AdminMatchExclusionTarget[];
   ids: number[];
   league?: string | null;
   week_tag?: string | null;
@@ -49,6 +51,8 @@ export type AdminDuplicateDeletePreview = {
   mode: string;
   keep_ids: number[];
   delete_ids: number[];
+  targets?: AdminMatchExclusionTarget[];
+  delete_targets?: AdminMatchExclusionTarget[];
   delete_count: number;
   affected_leagues: string[];
   affected_player_ids: number[];
@@ -82,6 +86,29 @@ export type AdminMatchEditOperation = {
   actor_email?: string | null;
   source?: string | null;
   created_at?: string | null;
+  finished_at?: string | null;
+};
+
+export type AdminMatchExclusionTarget = {
+  match_id: number;
+  expected_row_version: number;
+};
+
+export type AdminMatchExclusionOperation = {
+  id: string;
+  status: string;
+  recovery_stage?: "replay" | "badge_reconcile" | "finalize" | string | null;
+  replay_job_id?: string | null;
+  badge_eval_run_id?: string | null;
+  affected_player_ids?: number[];
+  excluded_ids?: number[];
+  targets?: AdminMatchExclusionTarget[];
+  result_json?: Record<string, unknown> | null;
+  error_text?: string | null;
+  actor_email?: string | null;
+  source?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
   finished_at?: string | null;
 };
 
@@ -119,6 +146,7 @@ export type AdminMatchLogResponse = {
   duplicate_delete_preview?: AdminDuplicateDeletePreview | null;
   resolved_duplicate_groups?: AdminDuplicateGroup[];
   recent_edit_operations?: AdminMatchEditOperation[];
+  recent_exclusion_operations?: AdminMatchExclusionOperation[];
   correction_plan: AdminCorrectionPlan;
   warnings: string[];
 };
@@ -161,6 +189,8 @@ export type AdminMatchLogWriteResult = {
   updated_ids?: number[];
   deleted_count?: number;
   deleted_ids?: number[];
+  excluded_count?: number;
+  excluded_ids?: number[];
   affected_leagues?: string[];
   affected_player_ids?: number[];
   recompute_scope?: { standings: boolean; ratings: boolean };
@@ -177,10 +207,13 @@ export type AdminMatchLogWriteResult = {
   atomic?: boolean | null;
   operation_id?: string | null;
   operation_status?: string | null;
+  status?: string | null;
+  recovery_stage?: string | null;
   idempotent?: boolean | null;
   replay_job_id?: string | null;
   replay_status?: string | null;
   replay_result?: Record<string, unknown> | null;
+  operation?: AdminMatchExclusionOperation | null;
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };

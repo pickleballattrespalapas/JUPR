@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from tests.conftest import require_api_dependency
 from tests.test_admin_match_log_service import FakeSupabase
 
@@ -13,6 +15,7 @@ from fastapi.testclient import TestClient
 from services.api.main import app
 from jupr_app.domain.admin_activity_log import ActivityLogWriteResult
 from jupr_app.domain.gamification.top_performer_awards import TOP_PERFORMER_BADGE_IDS
+from jupr_app.services.admin_league_awards_service import _verify_badge_rows
 
 
 def _storage() -> dict[str, list[dict]]:
@@ -156,6 +159,35 @@ def _advance_to_overrides(client: TestClient) -> dict:
     return confirmed.json()
 
 
+def test_admin_league_awards_badge_verification_includes_context_type():
+    expected = [
+        {
+            "player_id": 1,
+            "badge_id": "league_mvp_gold",
+            "context_type": "league",
+            "context_id": "Open:top_performer:mvp:1",
+        }
+    ]
+    tables = {
+        "player_badges": [
+            {
+                "club_id": "club",
+                "player_id": 1,
+                "badge_id": "league_mvp_gold",
+                "context_type": "tournament",
+                "context_id": "Open:top_performer:mvp:1",
+            }
+        ]
+    }
+    supabase = FakeSupabase(tables)
+
+    with pytest.raises(RuntimeError, match="found 0 of 1"):
+        _verify_badge_rows(supabase, club_id="club", expected=expected)
+
+    tables["player_badges"][0]["context_type"] = "league"
+    assert _verify_badge_rows(supabase, club_id="club", expected=expected) == expected
+
+
 def test_admin_league_awards_persists_freeze_preview_and_override_reason(monkeypatch):
     tables = _storage()
     supabase = FakeSupabase(tables)
@@ -250,6 +282,7 @@ def test_admin_league_awards_mint_never_false_succeeds_and_same_key_retries(monk
                 "club_id": "club",
                 "player_id": award["player_id"],
                 "badge_id": TOP_PERFORMER_BADGE_IDS[award["category_key"]],
+                "context_type": "league",
                 "context_id": f"Open:top_performer:{award['category_key']}:{award['rank']}",
             }
         )

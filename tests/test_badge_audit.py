@@ -60,6 +60,7 @@ def test_badge_audit_soft_match_context_drift(monkeypatch):
                 "club_id": "club",
                 "player_id": 7,
                 "badge_id": "high_roller",
+                "context_type": "overall",
                 "context_id": "old_match_rule_context",
                 "revoked_at": None,
             }
@@ -88,6 +89,50 @@ def test_badge_audit_soft_match_context_drift(monkeypatch):
     assert report["counts"]["context_drift_soft_key_count"] == 1
     assert report["per_badge_summary"][0]["badge_id"] == "high_roller"
     assert report["per_badge_summary"][0]["context_drift_count"] == 1
+
+
+def test_badge_audit_treats_context_type_as_part_of_exact_identity(monkeypatch):
+    storage = {
+        "player_badges": [
+            {
+                "id": "pb-context-type",
+                "club_id": "club",
+                "player_id": 7,
+                "badge_id": "high_roller",
+                "context_type": "league",
+                "context_id": "shared-context",
+                "revoked_at": None,
+            }
+        ]
+    }
+    candidate = BadgeCandidate(
+        badge_id="high_roller",
+        player_id=7,
+        club_id="club",
+        context_type="overall",
+        context_id="shared-context",
+        match_id=None,
+        value_json={"wins": 120},
+    )
+    monkeypatch.setattr(
+        "jupr_app.domain.gamification.badge_audit.compute_candidates_for_club",
+        lambda **kwargs: [candidate],
+    )
+
+    report = build_badge_audit_report(FakeSupabase(storage), club_id="club", ctx=_ctx())
+
+    assert report["counts"]["missing_exact_count"] == 1
+    assert report["counts"]["stale_exact_count"] == 1
+    assert report["counts"]["missing_soft_count"] == 0
+    assert report["counts"]["stale_soft_count"] == 0
+    assert report["counts"]["context_drift_soft_key_count"] == 1
+    assert report["counts"]["duplicate_group_count"] == 0
+    assert report["context_drift_rows"][0]["expected_contexts"] == [
+        {"context_type": "overall", "context_id": "shared-context"}
+    ]
+    assert report["context_drift_rows"][0]["actual_contexts"] == [
+        {"context_type": "league", "context_id": "shared-context"}
+    ]
 
 
 def test_badge_audit_detects_missing_row(monkeypatch):
@@ -121,6 +166,7 @@ def test_badge_audit_detects_true_stale_on_both_layers(monkeypatch):
                 "club_id": "club",
                 "player_id": 9,
                 "badge_id": "high_roller",
+                "context_type": "overall",
                 "context_id": "legacy_context",
                 "revoked_at": None,
             }
@@ -144,6 +190,7 @@ def test_badge_audit_detects_duplicates_and_revoked_not_active(monkeypatch):
                 "club_id": "club",
                 "player_id": 1,
                 "badge_id": "high_roller",
+                "context_type": "overall",
                 "context_id": "overall",
                 "revoked_at": None,
             },
@@ -152,6 +199,7 @@ def test_badge_audit_detects_duplicates_and_revoked_not_active(monkeypatch):
                 "club_id": "club",
                 "player_id": 1,
                 "badge_id": "high_roller",
+                "context_type": "overall",
                 "context_id": "overall",
                 "revoked_at": "2026-01-01T00:00:00Z",
             },
@@ -202,6 +250,7 @@ def test_badge_audit_filters_non_live_actual_rows_by_default(monkeypatch):
                 "club_id": "club",
                 "player_id": 1,
                 "badge_id": "high_roller",
+                "context_type": "overall",
                 "context_id": "overall",
                 "revoked_at": None,
             },
@@ -210,6 +259,7 @@ def test_badge_audit_filters_non_live_actual_rows_by_default(monkeypatch):
                 "club_id": "club",
                 "player_id": 1,
                 "badge_id": "manual_only",
+                "context_type": "manual",
                 "context_id": "admin_manual",
                 "revoked_at": None,
             },
@@ -242,6 +292,7 @@ def test_badge_audit_high_roller_debug_payload(monkeypatch):
                 "club_id": "club",
                 "player_id": 11,
                 "badge_id": "high_roller",
+                "context_type": "overall",
                 "context_id": "lifetime_wins_100",
                 "revoked_at": None,
             }

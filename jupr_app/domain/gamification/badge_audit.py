@@ -20,7 +20,7 @@ from jupr_app.domain.gamification.badge_registry import is_badge_active, registr
 from jupr_app.domain.match_filters import summarize_match_filter_audit
 
 
-KEY_FIELDS = ("player_id", "badge_id", "context_id")
+KEY_FIELDS = ("player_id", "badge_id", "context_type", "context_id")
 DETAIL_FIELDS = [
     "id",
     "club_id",
@@ -397,7 +397,7 @@ def _build_expected_rows(
             continue
         rows.append(row)
 
-    deduped: dict[tuple[int, str, str], dict[str, Any]] = {}
+    deduped: dict[tuple[int, str, str, str], dict[str, Any]] = {}
     for row in rows:
         deduped[_row_key(row)] = row
     return list(deduped.values())
@@ -438,12 +438,13 @@ def fetch_scoped_player_badges_rows(
 
 
 def detect_duplicate_player_badges_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, int, str, str], list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[str, int, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         key = (
             str(row.get("club_id") or ""),
             int(row.get("player_id")),
             str(row.get("badge_id")),
+            str(row.get("context_type")),
             str(row.get("context_id")),
         )
         grouped[key].append(row)
@@ -457,7 +458,8 @@ def detect_duplicate_player_badges_rows(rows: Iterable[dict[str, Any]]) -> list[
                 "club_id": key[0],
                 "player_id": key[1],
                 "badge_id": key[2],
-                "context_id": key[3],
+                "context_type": key[3],
+                "context_id": key[4],
                 "row_count": len(key_rows),
                 "rows": [project_detail_row(row) for row in key_rows],
             }
@@ -528,8 +530,13 @@ def project_detail_row(row: dict[str, Any]) -> dict[str, Any]:
     return {field: row.get(field) for field in DETAIL_FIELDS}
 
 
-def _row_key(row: dict[str, Any]) -> tuple[int, str, str]:
-    return (int(row.get("player_id")), str(row.get("badge_id")), str(row.get("context_id")))
+def _row_key(row: dict[str, Any]) -> tuple[int, str, str, str]:
+    return (
+        int(row.get("player_id")),
+        str(row.get("badge_id")),
+        str(row.get("context_type")),
+        str(row.get("context_id")),
+    )
 
 
 def _soft_key(row: dict[str, Any]) -> tuple[int, str]:
@@ -582,7 +589,19 @@ def build_context_drift_rows(
     for soft_key in sorted(shared_soft_keys):
         expected_context_ids = sorted({str(row.get("context_id")) for row in expected_by_soft[soft_key]})
         actual_context_ids = sorted({str(row.get("context_id")) for row in actual_by_soft[soft_key]})
-        if expected_context_ids == actual_context_ids:
+        expected_contexts = sorted(
+            {
+                (str(row.get("context_type")), str(row.get("context_id")))
+                for row in expected_by_soft[soft_key]
+            }
+        )
+        actual_contexts = sorted(
+            {
+                (str(row.get("context_type")), str(row.get("context_id")))
+                for row in actual_by_soft[soft_key]
+            }
+        )
+        if expected_contexts == actual_contexts:
             continue
         context_drift_rows.append(
             {
@@ -590,6 +609,14 @@ def build_context_drift_rows(
                 "badge_id": str(soft_key[1]),
                 "expected_context_ids": expected_context_ids,
                 "actual_context_ids": actual_context_ids,
+                "expected_contexts": [
+                    {"context_type": context_type, "context_id": context_id}
+                    for context_type, context_id in expected_contexts
+                ],
+                "actual_contexts": [
+                    {"context_type": context_type, "context_id": context_id}
+                    for context_type, context_id in actual_contexts
+                ],
                 "expected_rows": len(expected_by_soft[soft_key]),
                 "actual_rows": len(actual_by_soft[soft_key]),
             }
