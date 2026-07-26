@@ -274,7 +274,6 @@ def process_matches(
 
         if is_unrated:
             skipped_unrated += 1
-            continue
 
         db_matches.append(
             build_match_row(

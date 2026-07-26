@@ -13,6 +13,67 @@ from fastapi.testclient import TestClient
 from services.api.main import app
 
 
+class AtomicSinglesSupabase(FakeSupabase):
+    def __init__(self, tables):
+        super().__init__(tables)
+        self.receipts: dict[tuple[str, str], dict] = {}
+
+    def rpc(self, name, payload):
+        if name != "admin_apply_direct_match_entry_atomic_v1":
+            raise AssertionError(f"Unexpected RPC: {name}")
+
+        def execute():
+            lookup = (
+                str(payload["p_club_id"]),
+                str(payload["p_idempotency_key"]),
+            )
+            if lookup in self.receipts:
+                return SimpleNamespace(
+                    data={
+                        **self.receipts[lookup],
+                        "idempotent": True,
+                        "duplicate_request": False,
+                    }
+                )
+            match_ids = []
+            for match in payload["p_match_rows"]:
+                match_id = str(len(self.tables["matches"]) + 1)
+                self.tables["matches"].append({**match, "id": match_id})
+                match_ids.append(match_id)
+            for update in payload["p_player_updates"]:
+                for player in self.tables["players"]:
+                    if (
+                        str(player.get("club_id"))
+                        == str(payload["p_club_id"])
+                        and int(player.get("id")) == int(update["player_id"])
+                    ):
+                        player.update(update["after"])
+            receipt = {
+                "ok": True,
+                "committed": True,
+                "idempotent": False,
+                "duplicate_request": False,
+                "operation_id": payload["p_operation_id"],
+                "idempotency_key": payload["p_idempotency_key"],
+                "request_fingerprint": payload["p_request_fingerprint"],
+                "match_format": payload["p_match_format"],
+                "inserted": len(match_ids),
+                "match_ids": match_ids,
+                "result_summary": payload["p_result_summary"],
+                "player_updates": payload["p_player_updates"],
+            }
+            self.receipts[lookup] = receipt
+            self.tables["admin_activity_log"].append(
+                {
+                    "action_type": "submit_singles_match_uploader_atomic",
+                    "entity_id": payload["p_operation_id"],
+                }
+            )
+            return SimpleNamespace(data=receipt)
+
+        return SimpleNamespace(execute=execute)
+
+
 def singles_tables():
     return {
         "players": [
@@ -104,11 +165,12 @@ def test_admin_match_uploader_singles_dormant_gate_blocks_before_auth(
             "t2_p1": 2,
             "score_t1": 11,
             "score_t2": 8,
+            "idempotency_key": "test:singles-disabled",
         },
     )
 
     assert response.status_code == 403
-    assert "transactional write/replay hardening" in response.json()["detail"]
+    assert "current write wave" in response.json()["detail"]
     assert called == {"auth": False}
 
 
@@ -124,22 +186,24 @@ def _fake_load_data(supabase, club_id):
 
 def test_admin_match_uploader_singles_contract(monkeypatch):
     tables = singles_tables()
-    supabase = FakeSupabase(tables)
+    supabase = AtomicSinglesSupabase(tables)
     _install_env(monkeypatch, supabase)
-    captured: dict[str, object] = {}
-
-    def fake_process_singles(match_list, **_kwargs):
-        captured["match_list"] = match_list
-        tables["matches"].append({"id": "m1", "club_id": "club", "match_format": "singles"})
-        return {"inserted": len(match_list), "match_format": "singles", "skipped_incomplete": 0, "skipped_empty": 0, "skipped_unrated": 0}
 
     monkeypatch.setattr("jupr_app.services.admin_singles_match_service.load_data", _fake_load_data)
-    monkeypatch.setattr("jupr_app.services.admin_singles_match_service.process_singles_matches", fake_process_singles)
 
     response = TestClient(app).post(
         "/admin/clubs/club/match-uploader/singles",
         headers={"Authorization": "Bearer local"},
-        json={"date": "2026-05-01", "league": "Singles", "week_tag": "Challenge", "t1_p1": 1, "t2_p1": 2, "score_t1": 11, "score_t2": 8},
+        json={
+            "date": "2026-05-01",
+            "league": "Singles",
+            "week_tag": "Challenge",
+            "t1_p1": 1,
+            "t2_p1": 2,
+            "score_t1": 11,
+            "score_t2": 8,
+            "idempotency_key": "test:singles-contract",
+        },
     )
 
     assert response.status_code == 200
@@ -149,21 +213,30 @@ def test_admin_match_uploader_singles_contract(monkeypatch):
     assert payload["match_write_committed"] is True
     assert payload["recovery"]["match_log_route"] == "/admin/match-log"
     assert payload["result"]["match_format"] == "singles"
-    assert captured["match_list"][0]["match_format"] == "singles"
-    assert captured["match_list"][0]["t1_p1"] == 1
-    assert captured["match_list"][0]["t2_p1"] == 2
-    assert tables["admin_activity_log"][0]["action_type"] == "submit_singles_match_uploader"
+    assert tables["matches"][0]["match_format"] == "singles"
+    assert tables["matches"][0]["t1_p1"] == 1
+    assert tables["matches"][0]["t2_p1"] == 2
+    assert (
+        tables["admin_activity_log"][0]["action_type"]
+        == "submit_singles_match_uploader_atomic"
+    )
 
 
 def test_admin_match_uploader_singles_blocks_ties(monkeypatch):
-    supabase = FakeSupabase(singles_tables())
+    supabase = AtomicSinglesSupabase(singles_tables())
     _install_env(monkeypatch, supabase)
     monkeypatch.setattr("jupr_app.services.admin_singles_match_service.load_data", _fake_load_data)
 
     response = TestClient(app).post(
         "/admin/clubs/club/match-uploader/singles",
         headers={"Authorization": "Bearer local"},
-        json={"t1_p1": 1, "t2_p1": 2, "score_t1": 9, "score_t2": 9},
+        json={
+            "t1_p1": 1,
+            "t2_p1": 2,
+            "score_t1": 9,
+            "score_t2": 9,
+            "idempotency_key": "test:singles-tie",
+        },
     )
 
     assert response.status_code == 400
@@ -172,7 +245,7 @@ def test_admin_match_uploader_singles_blocks_ties(monkeypatch):
 
 def test_admin_match_uploader_unrated_singles_records_without_rating_change(monkeypatch):
     tables = singles_tables()
-    supabase = FakeSupabase(tables)
+    supabase = AtomicSinglesSupabase(tables)
     _install_env(monkeypatch, supabase)
     monkeypatch.setattr(
         "jupr_app.services.admin_singles_match_service.load_data",
@@ -192,6 +265,7 @@ def test_admin_match_uploader_unrated_singles_records_without_rating_change(monk
             "score_t1": 11,
             "score_t2": 8,
             "rating_scope": "unrated",
+            "idempotency_key": "test:singles-unrated",
         },
     )
 
@@ -238,7 +312,7 @@ def test_admin_match_uploader_first_singles_uses_preserved_seed_and_keeps_latest
             },
         }
     )
-    supabase = FakeSupabase(tables)
+    supabase = AtomicSinglesSupabase(tables)
     _install_env(monkeypatch, supabase)
     monkeypatch.setattr(
         "jupr_app.services.admin_singles_match_service.load_data",
@@ -254,6 +328,7 @@ def test_admin_match_uploader_first_singles_uses_preserved_seed_and_keeps_latest
             "t2_p1": 2,
             "score_t1": 11,
             "score_t2": 8,
+            "idempotency_key": "test:singles-baseline",
         },
     )
 

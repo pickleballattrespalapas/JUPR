@@ -10,7 +10,6 @@ from jupr_app.services.admin_match_uploader_service import (
     create_admin_match_uploader_players,
     submit_admin_match_uploader_batch,
 )
-from jupr_app.services.result_types import ServiceResult
 
 
 class FakeQuery:
@@ -200,12 +199,28 @@ def test_submit_match_uploader_batch(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
     calls = []
 
-    def fake_submit_match_batch(ctx, matches, **kwargs):
-        calls.append({"ctx": ctx, "matches": matches, "kwargs": kwargs})
-        return ServiceResult.success(data={"inserted": len(matches), "skipped_incomplete": 0, "skipped_empty": 0, "skipped_unrated": 0})
+    def fake_submit_atomic_direct_matches(supabase, **kwargs):
+        calls.append({"supabase": supabase, **kwargs})
+        return {
+            "ok": True,
+            "match_write_committed": True,
+            "submitted_count": len(kwargs["matches"]),
+            "result": {
+                "inserted": len(kwargs["matches"]),
+                "skipped_incomplete": 0,
+                "skipped_empty": 0,
+                "skipped_unrated": 0,
+            },
+            "feedback": {},
+            "operation": {"idempotent": False},
+            "warnings": [],
+        }
 
     monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.load_data", fake_load_data)
-    monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.submit_match_batch", fake_submit_match_batch)
+    monkeypatch.setattr(
+        "jupr_app.services.admin_match_uploader_service.submit_atomic_direct_matches",
+        fake_submit_atomic_direct_matches,
+    )
     storage = fake_storage()
 
     result = submit_admin_match_uploader_batch(
@@ -213,6 +228,7 @@ def test_submit_match_uploader_batch(monkeypatch) -> None:
         club_id="club",
         actor_email="admin@example.com",
         actor_role="scorekeeper",
+        idempotency_key="test:batch-1",
         matches=[
             {
                 "date": "2026-03-01",
@@ -234,19 +250,30 @@ def test_submit_match_uploader_batch(monkeypatch) -> None:
     assert result["submitted_count"] == 1
     assert result["result"]["inserted"] == 1
     assert calls[0]["matches"][0]["league"] == "Open"
-    assert storage["admin_activity_log"][0]["action_type"] == "submit_match_uploader_batch"
+    assert calls[0]["idempotency_key"] == "test:batch-1"
 
 
 def test_submit_match_uploader_popup_context_name_creates_event(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
     calls = []
 
-    def fake_submit_match_batch(ctx, matches, **kwargs):
-        calls.append({"ctx": ctx, "matches": matches, "kwargs": kwargs})
-        return ServiceResult.success(data={"inserted": len(matches), "skipped_incomplete": 0, "skipped_empty": 0, "skipped_unrated": 0})
+    def fake_submit_atomic_direct_matches(supabase, **kwargs):
+        calls.append({"supabase": supabase, **kwargs})
+        return {
+            "ok": True,
+            "match_write_committed": True,
+            "submitted_count": len(kwargs["matches"]),
+            "result": {"inserted": len(kwargs["matches"])},
+            "feedback": {},
+            "operation": {"idempotent": False},
+            "warnings": [],
+        }
 
     monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.load_data", fake_load_data)
-    monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.submit_match_batch", fake_submit_match_batch)
+    monkeypatch.setattr(
+        "jupr_app.services.admin_match_uploader_service.submit_atomic_direct_matches",
+        fake_submit_atomic_direct_matches,
+    )
     storage = fake_storage()
 
     result = submit_admin_match_uploader_batch(
@@ -254,6 +281,7 @@ def test_submit_match_uploader_popup_context_name_creates_event(monkeypatch) -> 
         club_id="club",
         actor_email="admin@example.com",
         actor_role="scorekeeper",
+        idempotency_key="test:popup-1",
         matches=[
             {
                 "date": "2026-03-01",
@@ -291,6 +319,7 @@ def test_submit_match_uploader_rejects_empty(monkeypatch) -> None:
             club_id="club",
             actor_email="admin@example.com",
             actor_role="scorekeeper",
+            idempotency_key="test:empty-1",
             matches=[{"t1_p1": 1}],
         )
     except ValueError as exc:

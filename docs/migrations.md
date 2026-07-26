@@ -21,7 +21,7 @@ Inventory below reflects files currently present in this repository.
 
 ### `supabase/migrations/` (canonical)
 
-This directory contains 44 SQL files: 43 deployable migrations with numeric
+This directory contains 45 SQL files: 44 deployable migrations with numeric
 versions plus one deliberately non-deployable `2026XX` schema placeholder.
 
 - `20260420000000_verified_player_updates_foundation.sql`
@@ -66,6 +66,7 @@ versions plus one deliberately non-deployable `2026XX` schema placeholder.
 - `20260726183000_seed_live_badge_catalog.sql`
 - `20260726204954_match_exclusion_nonretryable_conflicts.sql`
 - `20260726212447_replay_projection_nonretryable_conflicts.sql`
+- `20260726222339_atomic_direct_match_entry.sql`
 - `20261020000000_tournament_registrations_player_id_postgrest_reload.sql`
 - `2026XX_backport_tournament_engine.sql`
 

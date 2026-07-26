@@ -20,6 +20,7 @@ from jupr_app.domain.tournament_registration_repo import (
     save_builder_draft,
     upsert_registration_settings,
 )
+from jupr_app.services.admin_tournament_shell_create_service import CONFIRM_CREATE
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
 CONFIRM_SETTINGS = "SAVE SETUP"
@@ -274,7 +275,12 @@ def build_admin_tournament_setup_status(supabase: Any | None, *, club_id: str) -
         "enabled": True,
         "status": "ready_for_tournament_setup_manager",
         "tournament_count": count,
-        "confirmation_text": {"settings": CONFIRM_SETTINGS, "draft": CONFIRM_DRAFT, "publish": CONFIRM_PUBLISH},
+        "confirmation_text": {
+            "create": CONFIRM_CREATE,
+            "settings": CONFIRM_SETTINGS,
+            "draft": CONFIRM_DRAFT,
+            "publish": CONFIRM_PUBLISH,
+        },
         "warnings": [],
         "streamlit_fallback_url": os.getenv("JUPR_STREAMLIT_FALLBACK_URL", "").strip() or "https://juprtrespalapas.streamlit.app",
         "mutation_runtime": tournament_admin_mutation_status(),

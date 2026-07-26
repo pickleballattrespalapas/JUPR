@@ -152,6 +152,108 @@ def test_tournament_setup_status_and_list(monkeypatch):
     assert listing.json()["tournaments"][0]["id"] == "t1"
 
 
+def test_tournament_setup_creates_a_draft_shell(monkeypatch):
+    supabase = FakeSupabase()
+    install_env(monkeypatch, supabase)
+    monkeypatch.setenv("JUPR_ENV", "test")
+    client = TestClient(app)
+    tournament_id = "9a5660ae-4c71-4bd9-8c67-57c82b662d87"
+    idempotency_key = "675278af-a271-43ac-8f8d-87b36b5886df"
+
+    rejected = client.post(
+        "/admin/clubs/club/tournaments/setup/tournaments",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "tournament_id": tournament_id,
+            "idempotency_key": idempotency_key,
+            "name": "Spring Open",
+            "confirmation_text": "CREATE",
+        },
+    )
+    assert rejected.status_code == 400
+    assert "CREATE TOURNAMENT" in rejected.json()["detail"]
+
+    created = client.post(
+        "/admin/clubs/club/tournaments/setup/tournaments",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "tournament_id": tournament_id,
+            "idempotency_key": idempotency_key,
+            "name": "Spring Open",
+            "start_date": "2027-03-12",
+            "end_date": "2027-03-14",
+            "confirmation_text": "CREATE TOURNAMENT",
+        },
+    )
+
+    assert created.status_code == 200
+    assert created.json()["tournament"] == {
+        "id": tournament_id,
+        "club_id": "club",
+        "name": "Spring Open",
+        "status": "DRAFT",
+        "start_date": "2027-03-12",
+        "end_date": "2027-03-14",
+        "event_tags": {
+            "skill_levels": [],
+            "date_tags": ["March 2027", "Spring 2027"],
+        },
+    }
+    assert len(supabase.storage["tournaments"]) == 2
+    assert supabase.storage["admin_activity_log"][-1]["action_type"] == (
+        "tournament_setup_shell_create"
+    )
+
+
+def test_staging_shell_create_retries_by_idempotency_key_without_duplicate(
+    monkeypatch,
+):
+    supabase = FakeSupabase()
+    install_env(monkeypatch, supabase)
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "tournament-setup")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT", "1")
+    monkeypatch.setenv(
+        "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_SETUP_MUTATIONS",
+        "1",
+    )
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only-test-key")
+    client = TestClient(app)
+    body = {
+        "tournament_id": "b1871068-f73e-4a63-8298-856249457c29",
+        "idempotency_key": "f5a71ee0-9931-4dfc-8d9d-c7a0c779b550",
+        "name": "Protected Retry Open",
+        "start_date": "2027-04-03",
+        "end_date": "2027-04-04",
+        "confirmation_text": "CREATE TOURNAMENT",
+    }
+
+    first = client.post(
+        "/admin/clubs/club/tournaments/setup/tournaments",
+        headers={"Authorization": "Bearer local"},
+        json=body,
+    )
+    retry = client.post(
+        "/admin/clubs/club/tournaments/setup/tournaments",
+        headers={"Authorization": "Bearer local"},
+        json=body,
+    )
+
+    assert first.status_code == 200
+    assert retry.status_code == 200
+    assert first.json()["idempotent_replay"] is False
+    assert retry.json()["idempotent_replay"] is True
+    assert retry.json()["operation_key"] == first.json()["operation_key"]
+    assert [
+        row["id"]
+        for row in supabase.storage["tournaments"]
+        if row["id"] == body["tournament_id"]
+    ] == [body["tournament_id"]]
+    assert supabase.storage["tournament_admin_operations"][0]["status"] == (
+        "completed"
+    )
+
+
 def test_tournament_setup_settings_confirmation(monkeypatch):
     supabase = FakeSupabase()
     install_env(monkeypatch, supabase)

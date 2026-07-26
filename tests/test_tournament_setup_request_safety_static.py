@@ -24,7 +24,7 @@ def test_tournament_setup_waits_for_auth_and_guards_every_request_class() -> Non
     assert "const listRequest = useLatestRequestGuard(accessToken, resetWorkspace);" in PANEL
     assert "const detailRequest = useLatestRequestGuard(accessToken);" in PANEL
     assert "const operationRequest = useLatestRequestGuard(accessToken);" in PANEL
-    assert "if (!listRequest.isCurrent(generation)) return;" in PANEL
+    assert "if (!listRequest.isCurrent(generation)) return false;" in PANEL
     assert "if (!detailRequest.isCurrent(generation)) return false;" in PANEL
     assert "if (!operationRequest.isCurrent(generation)) return;" in PANEL
 
@@ -64,6 +64,28 @@ def test_browser_contract_covers_empty_retry_mobile_payload_and_stale_selection(
     assert 'expect.poll(() => draftWrites).toBe(1)' in E2E
     assert 'expect.poll(() => listReads).toBe(1)' in E2E
     assert 'getByRole("heading", { name: "Draft summary" })).toHaveCount(0)' in E2E
+
+
+def test_guided_shell_creation_uses_one_stable_retry_command() -> None:
+    create = PANEL.split("async function createTournament", 1)[1].split(
+        "async function saveSettings", 1
+    )[0]
+
+    assert "globalThis.crypto.randomUUID()" in create
+    assert "const command = createCommand ||" in create
+    assert "persistCreateCommand(command);" in create
+    assert "tournament_id: command.tournamentId" in create
+    assert "idempotency_key: command.idempotencyKey" in create
+    assert "Retry keeps the same protected request." in create
+    assert "if (loaded)" in create
+    assert "setCreateCommand(null);" in create
+    assert "readStoredCreateCommand(clubId)" in PANEL
+    assert "window.localStorage.setItem(createCommandStorageKey" in PANEL
+    assert "Nothing is published and registration remains closed" in PANEL
+    assert (
+        "creates one protected DRAFT shell and opens it in the builder" in E2E
+    )
+    assert "expect.poll(() => createWrites).toBe(1)" in E2E
 
 
 def test_legacy_drafts_are_projected_only_for_impact_and_publish() -> None:

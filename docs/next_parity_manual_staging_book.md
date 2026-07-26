@@ -27,7 +27,7 @@ weakening those contracts.
 | Staging role accounts exercised | — |
 | Session start / end | — |
 | Primary operator | — |
-| Witness / reviewer | — |
+| Witness / automated reviewer | — |
 
 Keep the formal table above blank until the current `staging` head after this
 documentation reconciliation is deployed to both Vercel and Fly and its exact
@@ -148,9 +148,10 @@ the guard in SQL or the browser.
    recaps and communications; league configuration/live/awards; match/player;
    ladder and one-off live sessions; tournament administration/operations/live;
    and social moderation. Each sub-batch uses exactly one named write wave and
-   its own fixture, authoritative readback, recovery, and witness where the
-   manual row requires one. Tournament Live score remains the sole executable
-   automated mutation; the other writes remain manual-only.
+   its own fixture, authoritative readback, and recovery. Each manual row uses
+   either a human witness or candidate-bound GitHub evidence. Tournament Live
+   score remains the sole executable automated mutation; the other writes remain
+   manual-only.
 3. Exact-candidate restoration: reconcile every affected resource, deploy a
    same-candidate `write_wave=none` release, attest the all-false controlled-write
    projection and `JUPR_EMAIL_MODE=dry_run`, then run canonical Staging Smoke.
@@ -299,7 +300,7 @@ committed book.
 | `public-read` | `Parity Final Evidence` workflow mode `public-read`; local equivalent: `python scripts/run_parity_staging_wave.py public-read --candidate-sha <sha> --vercel-deployment-id <id> --vercel-deployment-origin <immutable-origin> --fly-image-ref <ref>` | Exact preview/API/Auth origins, deployment identities, and Vercel bypass | `Pending` | — | — |
 | `public-intake-auth` | Workflow mode `public-intake-auth`; local equivalent uses the same runner | Server-only exact-one bound-admin lookup, no-email token-hash exchange, capability validation, and read-only intake/registration/partner-board readiness; no mutation confirmation | `Pending` | — | — |
 | `admin-read-export` | Workflow mode `admin-read-export`; local equivalent uses the same runner | Server-only exact-one bound-admin lookup, no-email token-hash exchange, capability validation, exact unpublished recap plus tournament/draw fixture validation, confirmed refresh-session termination, and a maximum one-hour access-JWT lifetime | `Pending` | — | — |
-| `reversible-admin-writes` | Manual-only deferred procedure; no workflow mode | Exact per-page route/resource plan, captured pre-state, truthful inverse, positive write/readback/restore projections, named operator, and a separate human witness | `Pending` | — | — |
+| `reversible-admin-writes` | Manual-only deferred procedure; no workflow mode | Exact per-page route/resource plan, captured pre-state, truthful inverse, positive write/readback/restore projections, named operator, and either a separate human witness or candidate-bound GitHub automation evidence | `Pending` | — | — |
 | `match-rating-writes` | Workflow mode `match-rating-writes` for Tournament Live only; all other cases manual-only | Tournament Live disposable game/version fixture, dynamic fingerprints, distinct idempotency keys, exact mutation confirmation, and `finally` restore/re-read | `Pending` | — | — |
 | `match-exclusion-recovery` | Workflow mode `match-exclusion-recovery`; local equivalent uses the same runner | Unique inactive fixture club, exact bound-operator identity, four disposable players, three rated doubles rows, CAS versions, three request UUIDs, full replay, badge reconciliation, exact-key retry, completed-operation recovery, exact mutation confirmation, and always-run terminal cleanup | `Pending` | — | — |
 | `recovery` | Manual-only route-specific reconciliation; no workflow mode | Exact affected resource IDs, authoritative GET routes, JSON-bearing 2xx statuses, positive state/audit projections, Match Log/Replay handoff evidence, all mutation flags off | `Pending` | — | — |
@@ -312,14 +313,19 @@ all three evidence cells and the operator cell with these exact parseable record
 - Route/pre-state: `Verified: method=<POST|PUT|PATCH|DELETE>; path=<canonical-path>; resource=<id-or-natural-key>; prestate=<captured-baseline>`
 - Write/readback: `Verified: status=<JSON-2xx>; projection=<field=value[,field=value]>; artifact=<id-or-url>`
 - Inverse/readback: `Verified: method=<POST|PUT|PATCH|DELETE|RETAIN>; path=<canonical-path|N/A>; status=<JSON-2xx|N/A>; projection=<field=value[,field=value]>; artifact=<id-or-url>`
-- Manual-only staging sign-off: `operator=<identity>; witness=<different-identity>`
+- Manual-only human sign-off: `operator=<identity>; witness=<different-identity>`
+- Manual-only automated sign-off: `operator=<identity>; automated=candidate=<40-sha>,run=https://github.com/pickleballattrespalapas/JUPR/actions/runs/<run-id>,artifact=<same-run-artifact-url|sha256:64-hex>`
 
 The evidence runner records the candidate SHA, deployment identifiers, approved
 scope, authoritative readback, audit attribution, and restoration artifacts. The
-operator and witness do not transcribe those identifiers. Because the checker has
-no candidate-bound automation artifact for an individual manual-only row, it does
-not accept `review=automated` for that row. Automated-only wave rows may continue
-to use their verified workflow artifact without a manual-row witness.
+operator and witness do not transcribe those identifiers. A manual row may use a
+distinct human witness or exact GitHub automation evidence. Automated evidence
+must name the recorded candidate SHA and the exact JUPR Actions run. Its artifact
+must be either a URL under that same run or a SHA-256 digest emitted by the run.
+Placeholders, arbitrary prose such as `review=automated`, a same-person witness,
+a different candidate or repository, and an artifact URL from a different run
+all fail closed. Automated-only wave rows may continue to use their verified
+workflow artifact without a manual-row witness.
 
 Use a canonical root-relative route with no query, fragment, encoded characters,
 or dot segments. `JSON-2xx` excludes no-content statuses 204 and 205 because the
@@ -328,7 +334,7 @@ exists, use a disposable fixture and `RETAIN` with `path=N/A; status=N/A`, then
 record a positive retained-state projection and artifact. Never describe a forward
 finalizer as cleanup.
 
-| Manual surface | Exact route / resource / captured pre-state | Write status + positive authoritative readback | Truthful inverse + post-restore evidence | Result | Operator / witness |
+| Manual surface | Exact route / resource / captured pre-state | Write status + positive authoritative readback | Truthful inverse + post-restore evidence | Result | Operator / witness or automation |
 |---|---|---|---|---|---|
 | `manual:support-intake` | — | — | — | `Pending` | — |
 | `manual:data-corrections` | — | — | — | `Pending` | — |

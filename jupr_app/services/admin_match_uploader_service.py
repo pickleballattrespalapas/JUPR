@@ -13,8 +13,9 @@ from jupr_app.domain.schedule import (
     SUPPORTED_DOUBLES_FORMAT_TYPES,
     get_match_schedule,
 )
-from jupr_app.services.context import ServiceContext
-from jupr_app.services.match_service import submit_match_batch
+from jupr_app.services.direct_match_entry_service import (
+    submit_atomic_direct_matches,
+)
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 MAX_MATCH_UPLOADER_BATCH_ROWS = 200
@@ -31,7 +32,7 @@ def is_admin_match_uploader_enabled() -> bool:
 
 
 def is_admin_match_uploader_singles_enabled() -> bool:
-    """Keep the non-atomic direct singles writer behind its own dormant gate."""
+    """Expose direct singles only when its reviewed atomic write gate is open."""
     return is_admin_match_uploader_enabled() and _truthy_env(
         "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES"
     )
@@ -286,8 +287,8 @@ def build_admin_match_uploader_status(supabase: Any | None, *, club_id: str) -> 
             []
             if is_admin_match_uploader_singles_enabled()
             else [
-                "Direct singles submission is disabled pending transactional "
-                "write/replay hardening."
+                "Direct singles submission is disabled for the current write "
+                "wave."
             ]
         ),
     }
@@ -557,13 +558,12 @@ def submit_admin_match_uploader_batch(
     matches: list[dict[str, Any]],
     actor_email: str,
     actor_role: str,
+    idempotency_key: str,
     source: str = "next_match_uploader",
 ) -> dict[str, Any]:
     if not is_admin_match_uploader_enabled():
         raise PermissionError("Next Match Uploader is disabled.")
     clean_matches = _apply_event_contexts(supabase, club_id=str(club_id), matches=_normalize_batch(matches))
-    player_ids = _score_entry_player_ids(clean_matches)
-    before_players = _fetch_players(supabase, club_id=str(club_id), player_ids=player_ids)
     (
         df_players_all,
         _df_players_active,
@@ -577,53 +577,21 @@ def submit_admin_match_uploader_batch(
         _schema_degraded,
         _schema_degraded_reason,
     ) = load_data(supabase, str(club_id))
-    service_ctx = ServiceContext(
-        supabase=supabase,
+    result = submit_atomic_direct_matches(
+        supabase,
         club_id=str(club_id),
-        source=source,
+        matches=clean_matches,
+        match_format="doubles",
+        idempotency_key=str(idempotency_key),
         actor_email=str(actor_email or ""),
         actor_role=str(actor_role or ""),
-    )
-    result = submit_match_batch(
-        service_ctx,
-        clean_matches,
+        source=source,
         name_to_id=name_to_id,
         df_players_all=df_players_all,
         df_leagues=df_leagues,
         df_meta=df_meta,
     )
-    if not result.ok:
-        raise ValueError("; ".join(result.errors) or "Unable to submit match batch")
-    after_players = _fetch_players(supabase, club_id=str(club_id), player_ids=player_ids)
-    latest_match_id = _latest_match_id(supabase, club_id=str(club_id))
-    feedback = _score_feedback(before=before_players, after=after_players, player_ids=player_ids, latest_match_id=latest_match_id)
-    audit_payload = build_activity_payload(
-        club_id=str(club_id),
-        actor_email=str(actor_email or ""),
-        actor_role=str(actor_role or ""),
-        action_type="submit_match_uploader_batch",
-        entity_type="matches",
-        entity_id="batch",
-        after_json={
-            "source_client": "fastapi/nextjs",
-            "source_page": source,
-            "match_count": len(clean_matches),
-            "result_summary": result.data if isinstance(result.data, dict) else {"ok": True},
-            "feedback": feedback,
-        },
-        source_page=source,
-    )
-    audit_write = write_admin_activity_log(supabase, audit_payload)
-    warnings: list[str] = []
-    if audit_write.warning:
-        warnings.append(audit_write.warning)
-    if not audit_write.ok and is_api_audit_log_required():
-        raise RuntimeError("audit log write required but unavailable")
     return {
-        "ok": True,
+        **result,
         "mode": "match_uploader_batch",
-        "submitted_count": len(clean_matches),
-        "result": result.data,
-        "feedback": feedback,
-        "warnings": warnings,
     }

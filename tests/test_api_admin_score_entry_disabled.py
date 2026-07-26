@@ -29,9 +29,12 @@ def test_admin_batch_endpoint_disabled_by_default_returns_403_before_auth_or_wri
         raise AssertionError("writes should not run")
 
     monkeypatch.setattr("services.api.main.authenticate_bearer", _auth)
-    monkeypatch.setattr("services.api.main.submit_match_batch", _write)
+    monkeypatch.setattr("services.api.main.submit_atomic_direct_matches", _write)
 
-    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": []})
+    response = client.post(
+        "/admin/clubs/club-1/matches/batch",
+        json={"matches": [], "idempotency_key": "test:score-disabled"},
+    )
 
     assert response.status_code == 403
     assert called == {"auth": False, "write": False}
@@ -53,7 +56,10 @@ def test_score_entry_write_fails_closed_without_service_role(client, monkeypatch
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY", "1")
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
 
-    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": []})
+    response = client.post(
+        "/admin/clubs/club-1/matches/batch",
+        json={"matches": [], "idempotency_key": "test:score-no-role"},
+    )
 
     assert response.status_code == 503
     assert "SUPABASE_SERVICE_ROLE_KEY" in response.json()["detail"]

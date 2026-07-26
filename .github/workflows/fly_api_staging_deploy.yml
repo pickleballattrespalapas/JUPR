@@ -201,15 +201,46 @@ jobs:
               -H "X-GitHub-Api-Version: 2026-03-10" \
               "/repos/$GITHUB_REPOSITORY/actions/runs/$ORCHESTRATION_RUN_ID"
           )"
+          WRITE_SESSION_WORKFLOW_JSON="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/$GITHUB_REPOSITORY/actions/workflows/staging-write-session.yml"
+          )"
+          WRITE_SESSION_WORKFLOW_ID="$(
+            jq -r \
+              'select(
+                .path == ".github/workflows/staging-write-session.yml" and
+                .state == "active"
+              ) | .id' \
+              <<<"$WRITE_SESSION_WORKFLOW_JSON"
+          )"
+          if [[ ! "$WRITE_SESSION_WORKFLOW_ID" =~ ^[1-9][0-9]{0,19}$ ]]; then
+            echo "::error title=Controller delegation rejected::Protected write-session workflow metadata is invalid."
+            exit 2
+          fi
+          export WRITE_SESSION_WORKFLOW_ID
           # The run API projects run-name into .name, so bind the immutable
-          # controller workflow ID as well as its exact protected paths.
+          # controller workflow ID as well as its exact protected paths. The
+          # evidence workflow has an established immutable ID; the protected
+          # write-session workflow ID is resolved from its exact active path.
           jq -e \
             'select(
               .id == (env.ORCHESTRATION_RUN_ID | tonumber) and
-              .workflow_id == 320947530 and
               (
-                .path == ".github/workflows/staging-evidence-automation.yml" or
-                .path == ".github/workflows/staging-evidence-automation.yml@rollback-feb8"
+                (
+                  .workflow_id == 320947530 and
+                  (
+                    .path == ".github/workflows/staging-evidence-automation.yml" or
+                    .path == ".github/workflows/staging-evidence-automation.yml@rollback-feb8"
+                  )
+                ) or
+                (
+                  .workflow_id == (env.WRITE_SESSION_WORKFLOW_ID | tonumber) and
+                  (
+                    .path == ".github/workflows/staging-write-session.yml" or
+                    .path == ".github/workflows/staging-write-session.yml@rollback-feb8"
+                  )
+                )
               ) and
               .event == "issues" and
               .status == "in_progress" and

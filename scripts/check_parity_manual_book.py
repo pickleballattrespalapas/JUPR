@@ -20,6 +20,7 @@ EXPECTED_STAGING_PROJECT_REF = "sijpxjxvdtrehmqvirfi"
 EXPECTED_STAGING_WEB_ORIGIN = (
     "https://jupr-git-staging-pickleballattrespalapas1.vercel.app"
 )
+EXPECTED_GITHUB_REPOSITORY = "pickleballattrespalapas/JUPR"
 EXPECTED_WAVES = {
     "preflight",
     "public-read",
@@ -170,12 +171,29 @@ REQUIRED_CANDIDATE_FIELDS = {
     "Staging role accounts exercised",
     "Session start / end",
     "Primary operator",
-    "Witness / reviewer",
+    "Witness / automated reviewer",
 }
 RESERVED_COMPLETION_RE = re.compile(
     r"\b(?:pending|blocked|fail|failed|unresolved)\b|\bnot\s+applied\b",
     re.IGNORECASE,
 )
+MANUAL_IDENTITY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{2,199}")
+MANUAL_IDENTITY_PLACEHOLDER_RE = re.compile(
+    r"(?:operator|witness|reviewer|human|person|someone|user|test|example)"
+    r"(?:[-_.]?\d+)?",
+    re.IGNORECASE,
+)
+GITHUB_RUN_URL_RE = re.compile(
+    r"https://github\.com/pickleballattrespalapas/JUPR/actions/runs/"
+    r"(?P<run_id>[1-9][0-9]{5,19})",
+    re.IGNORECASE,
+)
+GITHUB_ARTIFACT_URL_RE = re.compile(
+    r"https://github\.com/pickleballattrespalapas/JUPR/actions/runs/"
+    r"(?P<run_id>[1-9][0-9]{5,19})/artifacts/(?P<artifact_id>[1-9][0-9]+)",
+    re.IGNORECASE,
+)
+GITHUB_ARTIFACT_DIGEST_RE = re.compile(r"sha256:[0-9a-fA-F]{64}")
 
 BOOK_ROW_RE = re.compile(
     r"^\|\s*`(?P<key>[^`]+)`\s*\|\s*`(?P<result>Pending|Pass|Fail|Blocked)`\s*\|"
@@ -346,17 +364,83 @@ def _manual_recovery_record(value: str) -> tuple[str, str, str, str, str] | None
     return method, path, status, projection, artifact
 
 
-def _manual_operators(value: str) -> tuple[str, str] | None:
-    """Require distinct human identities for a manual-only staging mutation."""
+def _valid_manual_identity(value: str) -> bool:
+    plain = _plain(value)
+    lowered = plain.casefold()
+    return bool(MANUAL_IDENTITY_RE.fullmatch(plain)) and not (
+        _is_placeholder(plain)
+        or MANUAL_IDENTITY_PLACEHOLDER_RE.fullmatch(plain)
+        or "example." in lowered
+        or lowered.endswith(".invalid")
+    )
 
+
+def _github_automation_reference(
+    value: str,
+) -> tuple[str, str, str] | None:
     match = re.fullmatch(
-        r"operator=([A-Za-z0-9][A-Za-z0-9_.:@-]{2,199});\s*"
-        r"witness=([A-Za-z0-9][A-Za-z0-9_.:@-]{2,199})",
+        r"candidate=([0-9a-fA-F]{40}),\s*run=(https://[^,\s]+),\s*"
+        r"artifact=(\S+)",
         _plain(value),
     )
-    if not match or match.group(1) == match.group(2):
+    if not match:
         return None
-    return match.group(1), match.group(2)
+    candidate, run_url, artifact = (
+        part.strip() for part in match.groups()
+    )
+    run_match = GITHUB_RUN_URL_RE.fullmatch(run_url)
+    if not run_match:
+        return None
+    artifact_match = GITHUB_ARTIFACT_URL_RE.fullmatch(artifact)
+    if artifact_match:
+        if artifact_match.group("run_id") != run_match.group("run_id"):
+            return None
+    elif not GITHUB_ARTIFACT_DIGEST_RE.fullmatch(artifact):
+        return None
+    return candidate.lower(), run_url, artifact
+
+
+def _manual_signoff(
+    value: str,
+    *,
+    candidate_sha: str,
+) -> tuple[str, str, str] | None:
+    """Accept a distinct witness or exact candidate-bound GitHub evidence."""
+
+    plain = _plain(value)
+    human = re.fullmatch(
+        r"operator=([^;]+);\s*witness=([^;]+)",
+        plain,
+    )
+    if human:
+        operator, witness = (part.strip() for part in human.groups())
+        if (
+            not _valid_manual_identity(operator)
+            or not _valid_manual_identity(witness)
+            or operator.casefold() == witness.casefold()
+        ):
+            return None
+        return "human", operator, witness
+
+    automated = re.fullmatch(
+        r"operator=([^;]+);\s*automated=(.+)",
+        plain,
+    )
+    if not automated:
+        return None
+    operator, reference_value = (
+        part.strip() for part in automated.groups()
+    )
+    reference = _github_automation_reference(reference_value)
+    clean_candidate = _plain(candidate_sha).lower()
+    if (
+        not _valid_manual_identity(operator)
+        or reference is None
+        or not re.fullmatch(r"[0-9a-f]{40}", clean_candidate)
+        or reference[0] != clean_candidate
+    ):
+        return None
+    return "automated", operator, f"{reference[1]}#{reference[2]}"
 
 
 def _immutable_vercel_origin(value: str) -> str | None:
@@ -658,11 +742,21 @@ def check_book_complete(
                 "status=<JSON-2xx|N/A>; projection=<field=value[,field=value]>; "
                 "artifact=<id-or-url>`."
             )
-        if _manual_operators(match.group("operator")) is None:
+        if (
+            _manual_signoff(
+                match.group("operator"),
+                candidate_sha=recorded_sha,
+            )
+            is None
+        ):
             errors.append(
-                f"Deferred manual mutation {surface} operator/witness must use "
+                f"Deferred manual mutation {surface} sign-off must use either "
                 "distinct human identities: `operator=<identity>; "
-                "witness=<different-identity>`."
+                "witness=<different-identity>`, or candidate-bound GitHub "
+                "automation: `operator=<identity>; automated=candidate=<40-sha>,"
+                "run=https://github.com/"
+                f"{EXPECTED_GITHUB_REPOSITORY}/actions/runs/<run-id>,"
+                "artifact=<same-run-artifact-url|sha256:64-hex>`."
             )
 
     for match in FIXTURE_ROW_RE.finditer(text):

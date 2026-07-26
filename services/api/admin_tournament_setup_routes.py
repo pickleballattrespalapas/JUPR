@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import HTTPException, Query
 from pydantic import BaseModel, Field
@@ -16,6 +17,13 @@ from jupr_app.services.admin_tournament_setup_service import (
     review_admin_tournament_setup_impact,
     save_admin_tournament_setup_draft,
     update_admin_tournament_setup_settings,
+)
+from jupr_app.services.admin_tournament_shell_create_service import (
+    CONFIRM_CREATE,
+    create_admin_tournament_shell,
+    get_tournament_shell_creation_state_fingerprint,
+    reconcile_admin_tournament_shell_creation,
+    tournament_shell_absent_state_fingerprint,
 )
 from jupr_app.services.admin_tournament_guarded_operation import (
     StaleTournamentAdminStateError,
@@ -41,6 +49,16 @@ class TournamentSetupSettingsRequest(BaseModel):
     confirmation_text: str = ""
     expected_state_fingerprint: str | None = None
     source: str = "next_tournament_setup_settings"
+
+
+class TournamentShellCreateRequest(BaseModel):
+    tournament_id: str = Field(min_length=36, max_length=36)
+    idempotency_key: str = Field(min_length=36, max_length=64)
+    name: str = Field(min_length=1, max_length=180)
+    start_date: str | None = Field(default=None, max_length=40)
+    end_date: str | None = Field(default=None, max_length=40)
+    confirmation_text: str = ""
+    source: str = "next_tournament_setup_create_shell"
 
 
 class TournamentSetupDraftRequest(BaseModel):
@@ -114,6 +132,17 @@ def _require_confirmation(actual: str, expected: str) -> None:
         raise ValueError(f"Type {expected} to confirm this Tournament Setup mutation.")
 
 
+def _require_canonical_uuid(value: str, *, field: str) -> str:
+    text = str(value or "").strip()
+    try:
+        parsed = UUID(text)
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError(f"{field} must be a valid UUID.") from exc
+    if str(parsed) != text.lower():
+        raise ValueError(f"{field} must use canonical UUID format.")
+    return str(parsed)
+
+
 def install_admin_tournament_setup_routes(app, *, get_supabase_client) -> None:
     """Register guarded Tournament Setup Manager routes for the Next staging surface."""
 
@@ -130,6 +159,96 @@ def install_admin_tournament_setup_routes(app, *, get_supabase_client) -> None:
         _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_tournament_setup_list")
         try:
             return list_admin_tournament_setup_tournaments(supabase, club_id=str(club_id), include_archived=bool(include_archived))
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tournaments/setup/tournaments")
+    def post_create_tournament_shell(
+        club_id: str,
+        payload: TournamentShellCreateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_setup_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Setup is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            _require_confirmation(payload.confirmation_text, CONFIRM_CREATE)
+            tournament_id = _require_canonical_uuid(
+                payload.tournament_id,
+                field="tournament_id",
+            )
+            idempotency_key = _require_canonical_uuid(
+                payload.idempotency_key,
+                field="idempotency_key",
+            )
+            mutation_payload = {
+                "tournament_id": tournament_id,
+                "name": payload.name,
+                "start_date": payload.start_date,
+                "end_date": payload.end_date,
+            }
+            preflight = lambda: create_admin_tournament_shell(
+                supabase,
+                club_id=str(club_id),
+                **mutation_payload,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+                dry_run=True,
+            )
+            require_tournament_admin_mutation_runtime("setup")
+            mutate = lambda: create_admin_tournament_shell(
+                supabase,
+                club_id=str(club_id),
+                **mutation_payload,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+            if not tournament_admin_guarded_runtime_enabled("setup"):
+                return mutate()
+            expected_state = tournament_shell_absent_state_fingerprint(
+                club_id=str(club_id),
+                tournament_id=tournament_id,
+            )
+            return run_tournament_admin_guarded_operation(
+                supabase,
+                club_id=str(club_id),
+                surface="setup",
+                action="tournament_setup_shell_create",
+                entity_type="tournament",
+                entity_id=tournament_id,
+                lock_scope=tournament_id,
+                expected_state=expected_state,
+                current_state=lambda: get_tournament_shell_creation_state_fingerprint(
+                    supabase,
+                    club_id=str(club_id),
+                    tournament_id=tournament_id,
+                ),
+                payload=mutation_payload,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+                preflight=preflight,
+                reconcile=lambda _operation: reconcile_admin_tournament_shell_creation(
+                    supabase,
+                    club_id=str(club_id),
+                    tournament_id=tournament_id,
+                    name=payload.name,
+                    start_date=payload.start_date,
+                    end_date=payload.end_date,
+                ),
+                mutate=mutate,
+                idempotency_key=idempotency_key,
+            )
         except Exception as exc:
             _handle(exc)
 

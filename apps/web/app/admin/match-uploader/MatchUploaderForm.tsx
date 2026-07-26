@@ -9,6 +9,10 @@ import type {
   AdminMatchUploaderStatusResponse,
   AdminMatchUploaderWriteResult
 } from "@/lib/adminMatchUploaderApi";
+import {
+  clearDirectMatchIdempotencyKey,
+  directMatchIdempotencyKey
+} from "@/lib/directMatchIdempotency";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
@@ -267,23 +271,35 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
       return;
     }
     setSaving(true);
+    const request = {
+      source: "next_match_uploader_singles",
+      date: singlesRow.date,
+      league: singlesRow.league || "Singles",
+      week_tag: singlesRow.weekTag || "Singles",
+      t1_p1: Number(singlesRow.playerA),
+      t2_p1: Number(singlesRow.playerB),
+      score_t1: Number(singlesRow.scoreA),
+      score_t2: Number(singlesRow.scoreB),
+      rating_scope: singlesRow.ratingScope || undefined
+    };
+    const idempotencyKey = directMatchIdempotencyKey(
+      `match-uploader:${clubId}:singles`,
+      request
+    );
     try {
       const payload = await postJson<AdminMatchUploaderWriteResult>(`/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/singles`, {
-        source: "next_match_uploader_singles",
-        date: singlesRow.date,
-        league: singlesRow.league || "Singles",
-        week_tag: singlesRow.weekTag || "Singles",
-        t1_p1: Number(singlesRow.playerA),
-        t2_p1: Number(singlesRow.playerB),
-        score_t1: Number(singlesRow.scoreA),
-        score_t2: Number(singlesRow.scoreB),
-        rating_scope: singlesRow.ratingScope || undefined
+        ...request,
+        idempotency_key: idempotencyKey
       });
       setResult(payload);
+      clearDirectMatchIdempotencyKey(
+        `match-uploader:${clubId}:singles`,
+        idempotencyKey
+      );
       setMessage(`Submitted singles match; inserted ${payload.result?.inserted ?? 0} rated singles match.`);
       setSinglesRow((current) => ({ ...newSinglesRow(), date: current.date, league: current.league, weekTag: current.weekTag }));
     } catch (error) {
-      setMessage(`${error instanceof Error ? error.message : "Unable to submit singles match."} Outcome unknown: check Match Log before retrying.`);
+      setMessage(`${error instanceof Error ? error.message : "Unable to submit singles match."} Retry this unchanged form; duplicate protection is active.`);
     } finally {
       setSaving(false);
     }
@@ -345,9 +361,19 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
 
   async function submitMatches(matches: Array<Record<string, unknown>>, source: string) {
     setSaving(true);
+    const request = { source, matches };
+    const operationScope = `match-uploader:${clubId}:batch`;
+    const idempotencyKey = directMatchIdempotencyKey(
+      operationScope,
+      request
+    );
     try {
-      const payload = await postJson<AdminMatchUploaderWriteResult>(`/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/batch`, { source, matches });
+      const payload = await postJson<AdminMatchUploaderWriteResult>(`/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/batch`, {
+        ...request,
+        idempotency_key: idempotencyKey
+      });
       setResult(payload);
+      clearDirectMatchIdempotencyKey(operationScope, idempotencyKey);
       const handoff = payload.auto_player_updates;
       const handoffSummary = handoff?.mode === "auto_sent"
         ? ` Player-update email: ${handoff.sent ?? 0} sent, ${handoff.skipped ?? 0} skipped, ${handoff.errors ?? 0} error(s).`
@@ -356,7 +382,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
           : "";
       setMessage(`Submitted ${payload.submitted_count ?? matches.length} row(s); inserted ${payload.result?.inserted ?? 0} rated match(es).${handoffSummary}`);
     } catch (error) {
-      setMessage(`${error instanceof Error ? error.message : "Unable to submit matches."} Outcome unknown: check Match Log before retrying.`);
+      setMessage(`${error instanceof Error ? error.message : "Unable to submit matches."} Retry this unchanged batch; duplicate protection is active.`);
     } finally {
       setSaving(false);
     }

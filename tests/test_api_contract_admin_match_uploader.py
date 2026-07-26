@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 from tests.conftest import require_api_dependency
 from tests.test_admin_match_uploader_service import FakeSupabase, fake_load_data, fake_storage
-from jupr_app.services.result_types import ServiceResult
 
 require_api_dependency("fastapi")
 require_api_dependency("supabase")
@@ -56,7 +55,10 @@ def test_match_uploader_submit_disabled_before_auth(monkeypatch):
 
     monkeypatch.setattr("services.api.admin_match_uploader_routes.authenticate_bearer", fake_auth)
 
-    response = TestClient(app).post("/admin/clubs/club/match-uploader/batch", json={"matches": []})
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-uploader/batch",
+        json={"matches": [], "idempotency_key": "test:disabled-1"},
+    )
 
     assert response.status_code == 403
     assert called == {"auth": False}
@@ -146,12 +148,18 @@ def test_match_uploader_preview_gate_does_not_open_uploader_writes(monkeypatch):
     assert client.post(
         "/admin/clubs/club/match-uploader/batch",
         headers={"Authorization": "Bearer local"},
-        json={"matches": []},
+        json={"matches": [], "idempotency_key": "test:preview-batch"},
     ).status_code == 403
     assert client.post(
         "/admin/clubs/club/match-uploader/singles",
         headers={"Authorization": "Bearer local"},
-        json={"t1_p1": 1, "t2_p1": 2, "score_t1": 11, "score_t2": 7},
+        json={
+            "t1_p1": 1,
+            "t2_p1": 2,
+            "score_t1": 11,
+            "score_t2": 7,
+            "idempotency_key": "test:preview-singles",
+        },
     ).status_code == 403
     assert client.post(
         "/admin/clubs/club/match-uploader/players",
@@ -186,16 +194,32 @@ def test_match_uploader_submit_contract(monkeypatch):
     storage = fake_storage()
     calls = []
 
-    def fake_submit_match_batch(ctx, matches, **kwargs):
-        calls.append({"ctx": ctx, "matches": matches, "kwargs": kwargs})
-        return ServiceResult.success(data={"inserted": len(matches), "skipped_incomplete": 0, "skipped_empty": 0, "skipped_unrated": 0})
+    def fake_submit_atomic_direct_matches(supabase, **kwargs):
+        calls.append({"supabase": supabase, **kwargs})
+        return {
+            "ok": True,
+            "match_write_committed": True,
+            "submitted_count": len(kwargs["matches"]),
+            "result": {
+                "inserted": len(kwargs["matches"]),
+                "skipped_incomplete": 0,
+                "skipped_empty": 0,
+                "skipped_unrated": 0,
+            },
+            "feedback": {},
+            "operation": {"idempotent": False},
+            "warnings": [],
+        }
 
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
     monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.load_data", fake_load_data)
-    monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.submit_match_batch", fake_submit_match_batch)
+    monkeypatch.setattr(
+        "jupr_app.services.admin_match_uploader_service.submit_atomic_direct_matches",
+        fake_submit_atomic_direct_matches,
+    )
     _install_auth(monkeypatch)
 
     response = TestClient(app).post(
@@ -203,6 +227,7 @@ def test_match_uploader_submit_contract(monkeypatch):
         headers={"Authorization": "Bearer local"},
         json={
             "source": "test",
+            "idempotency_key": "test:uploader-batch-1",
             "matches": [
                 {
                     "date": "2026-03-01",
@@ -229,21 +254,37 @@ def test_match_uploader_submit_contract(monkeypatch):
     assert payload["recovery"]["match_log_route"] == "/admin/match-log"
     assert payload["auto_player_updates"]["mode"] in {"disabled", "skipped", "auto_sent"}
     assert calls[0]["matches"][0]["score_t1"] == 11
-    assert storage["admin_activity_log"][0]["action_type"] == "submit_match_uploader_batch"
+    assert calls[0]["idempotency_key"] == "test:uploader-batch-1"
 
 
 def test_match_uploader_email_failure_preserves_committed_write(monkeypatch):
     storage = fake_storage()
 
-    def fake_submit_match_batch(_ctx, matches, **_kwargs):
-        return ServiceResult.success(data={"inserted": len(matches), "skipped_incomplete": 0, "skipped_empty": 0, "skipped_unrated": 0})
+    def fake_submit_atomic_direct_matches(_supabase, **kwargs):
+        return {
+            "ok": True,
+            "match_write_committed": True,
+            "submitted_count": len(kwargs["matches"]),
+            "result": {
+                "inserted": len(kwargs["matches"]),
+                "skipped_incomplete": 0,
+                "skipped_empty": 0,
+                "skipped_unrated": 0,
+            },
+            "feedback": {},
+            "operation": {"idempotent": False},
+            "warnings": [],
+        }
 
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
     monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.load_data", fake_load_data)
-    monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.submit_match_batch", fake_submit_match_batch)
+    monkeypatch.setattr(
+        "jupr_app.services.admin_match_uploader_service.submit_atomic_direct_matches",
+        fake_submit_atomic_direct_matches,
+    )
     monkeypatch.setattr(
         "services.api.admin_match_uploader_routes.auto_send_player_updates_for_match_payloads",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("mail provider unavailable")),
@@ -255,6 +296,7 @@ def test_match_uploader_email_failure_preserves_committed_write(monkeypatch):
         headers={"Authorization": "Bearer local"},
         json={
             "source": "test_email_failure",
+            "idempotency_key": "test:uploader-email-1",
             "matches": [{"date": "2026-03-01", "league": "Open", "week_tag": "Week 1", "match_type": "Live Match", "t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 7}],
         },
     )

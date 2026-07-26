@@ -18,12 +18,21 @@ from jupr_app.services.admin_match_uploader_service import (
 )
 from jupr_app.services.admin_player_updates_service import auto_send_player_updates_for_match_payloads
 from jupr_app.services.admin_singles_match_service import submit_admin_singles_match
+from jupr_app.services.direct_match_entry_service import (
+    DirectMatchConflictError,
+    DirectMatchRecoveryRequiredError,
+)
 from services.api.auth import authenticate_bearer, auth_header
 
 
 class AdminMatchUploaderBatchRequest(BaseModel):
     matches: list[dict[str, Any]] = Field(default_factory=list)
     source: str = "next_match_uploader"
+    idempotency_key: str = Field(
+        min_length=8,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
 
 
 class AdminMatchUploaderSinglesRequest(BaseModel):
@@ -36,6 +45,11 @@ class AdminMatchUploaderSinglesRequest(BaseModel):
     score_t2: int
     rating_scope: str | None = None
     source: str = "next_match_uploader_singles"
+    idempotency_key: str = Field(
+        min_length=8,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
 
 
 class AdminMatchUploaderRoundRobinCourtRequest(BaseModel):
@@ -98,6 +112,10 @@ def _resolve_score_entry_role_or_403(*, supabase: Any, club_id: str, authorizati
 def _handle_write_error(exc: Exception) -> None:
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if isinstance(exc, DirectMatchConflictError):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if isinstance(exc, DirectMatchRecoveryRequiredError):
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if isinstance(exc, ValueError):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if isinstance(exc, RuntimeError):
@@ -177,8 +195,8 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
             raise HTTPException(
                 status_code=403,
                 detail=(
-                    "Direct singles submission is disabled pending transactional "
-                    "write/replay hardening."
+                    "Direct singles submission is disabled for the current "
+                    "write wave."
                 ),
             )
         supabase = get_supabase_client()
@@ -195,13 +213,14 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
                 match=_dump_model(payload),
                 actor_email=actor_email,
                 actor_role=actor_role,
+                idempotency_key=payload.idempotency_key,
                 source=payload.source,
             )
             result["match_write_committed"] = True
             result["recovery"] = {
                 "match_log_route": "/admin/match-log",
                 "replay_history_route": "/admin/replay-history",
-                "operator_rule": "Verify the new singles row in Match Log before retrying any request whose outcome is unclear.",
+                "operator_rule": "Retry the exact unchanged request after an interrupted response; the same idempotency key cannot create a duplicate.",
             }
             return result
         except Exception as exc:
@@ -229,6 +248,7 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
                 matches=payload.matches,
                 actor_email=actor_email,
                 actor_role=actor_role,
+                idempotency_key=payload.idempotency_key,
                 source=payload.source,
             )
         except Exception as exc:
@@ -242,30 +262,40 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
             "match_log_route": "/admin/match-log",
             "player_updates_route": "/admin/player-updates",
             "replay_history_route": "/admin/replay-history",
-            "operator_rule": "Never resubmit committed matches solely because player-update email failed. Verify Match Log, then retry email from Player Updates.",
+            "operator_rule": "An interrupted exact retry is safe with the same idempotency key. Retry email separately from Player Updates.",
         }
-        try:
-            result["auto_player_updates"] = auto_send_player_updates_for_match_payloads(
-                supabase,
-                club_id=str(club_id),
-                match_payloads=payload.matches,
-                source=payload.source,
-            )
-        except Exception as exc:
+        if bool((result.get("operation") or {}).get("idempotent")):
             result["auto_player_updates"] = {
-                "mode": "error",
-                "reason": "Match rows committed, but the post-batch player-update email handoff failed.",
-                "error_code": type(exc).__name__,
+                "mode": "idempotent_retry_skipped",
+                "reason": "The stored match result was returned without rerunning post-commit email.",
                 "attempted": 0,
                 "sent": 0,
                 "skipped": 0,
-                "errors": 1,
+                "errors": 0,
             }
-            warnings = result.setdefault("warnings", [])
-            if not isinstance(warnings, list):
-                warnings = []
-                result["warnings"] = warnings
-            warnings.append(
-                "Matches are committed. Do not resubmit them; use Player Updates to retry email delivery."
-            )
+        else:
+            try:
+                result["auto_player_updates"] = auto_send_player_updates_for_match_payloads(
+                    supabase,
+                    club_id=str(club_id),
+                    match_payloads=payload.matches,
+                    source=payload.source,
+                )
+            except Exception as exc:
+                result["auto_player_updates"] = {
+                    "mode": "error",
+                    "reason": "Match rows committed, but the post-batch player-update email handoff failed.",
+                    "error_code": type(exc).__name__,
+                    "attempted": 0,
+                    "sent": 0,
+                    "skipped": 0,
+                    "errors": 1,
+                }
+                warnings = result.setdefault("warnings", [])
+                if not isinstance(warnings, list):
+                    warnings = []
+                    result["warnings"] = warnings
+                warnings.append(
+                    "Matches are committed. Do not resubmit them; use Player Updates to retry email delivery."
+                )
         return result
