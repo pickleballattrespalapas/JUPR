@@ -239,14 +239,6 @@ jobs:
       JUPR_SMOKE_CLUB_SLUG: ${{ vars.JUPR_SMOKE_CLUB_SLUG }}
       STAGING_CLUB_SLUG: ${{ vars.JUPR_SMOKE_CLUB_SLUG }}
       JUPR_TOURNAMENT_REGISTRATION_FIXTURE_SLUG: ${{ vars.JUPR_TOURNAMENT_REGISTRATION_FIXTURE_SLUG }}
-      JUPR_TOURNAMENT_LIVE_TOURNAMENT_ID: ${{ vars.JUPR_TOURNAMENT_LIVE_TOURNAMENT_ID }}
-      JUPR_TOURNAMENT_LIVE_DRAW_ID: ${{ vars.JUPR_TOURNAMENT_LIVE_DRAW_ID }}
-      JUPR_TOURNAMENT_LIVE_GAME_ID: ${{ vars.JUPR_TOURNAMENT_LIVE_GAME_ID }}
-      JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_A: ${{ vars.JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_A }}
-      JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_B: ${{ vars.JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_B }}
-      JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_A: ${{ vars.JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_A }}
-      JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_B: ${{ vars.JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_B }}
-      JUPR_TOURNAMENT_LIVE_ALLOW_MUTATION_E2E: ${{ needs.evidence-contract.outputs.mode == 'match-rating-writes' && needs.evidence-contract.outputs.mutation_confirmation == 'RUN DISPOSABLE STAGING WRITES' && '1' || '0' }}
     steps:
       - name: Check out exact application candidate
         uses: actions/checkout@v4
@@ -301,6 +293,18 @@ jobs:
             "$PARITY_MODE" \
             --report-dir parity-staging-artifacts
 
+      - name: Prepare disposable Tournament Live score fixture
+        if: needs.evidence-contract.outputs.mode == 'match-rating-writes'
+        env:
+          CANDIDATE_SHA: ${{ needs.evidence-contract.outputs.candidate_sha }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          test -n "$GITHUB_ENV"
+          python scripts/prepare_parity_tournament_live_fixture.py \
+            prepare \
+            --report-dir parity-staging-artifacts \
+            --github-env "$GITHUB_ENV"
+
       - name: Run exact wave and reject skips or flakes
         env:
           CANDIDATE_SHA: ${{ needs.evidence-contract.outputs.candidate_sha }}
@@ -319,6 +323,15 @@ jobs:
             --vercel-deployment-origin "$VERCEL_DEPLOYMENT_ORIGIN" \
             --fly-image-ref "$FLY_IMAGE_REF" \
             --expected-write-wave "$REQUIRED_STAGING_WRITE_WAVE" \
+            --report-dir parity-staging-artifacts
+
+      - name: Remove disposable Tournament Live score fixture
+        if: always() && needs.evidence-contract.outputs.mode == 'match-rating-writes'
+        env:
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python scripts/prepare_parity_tournament_live_fixture.py \
+            cleanup \
             --report-dir parity-staging-artifacts
 
       - name: End authenticated parity refresh session

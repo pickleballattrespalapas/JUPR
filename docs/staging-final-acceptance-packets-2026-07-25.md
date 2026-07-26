@@ -95,8 +95,12 @@ in the shared staging concurrency group, so do not queue the whole sequence.
 7. After the manual packets that precede Tournament Live are reconciled, deploy
    `write_wave=tournament-live`.
 8. Run `Parity Final Evidence` in `match-rating-writes` mode with exact internal
-   confirmation `RUN DISPOSABLE STAGING WRITES`. The workflow owns its disposable
-   score fixture and must restore and reread the original score in `finally`.
+   confirmation `RUN DISPOSABLE STAGING WRITES`. The workflow creates a uniquely
+   owned DRAFT tournament, draw, four null-player teams, and one unpublished
+   round-robin score fixture. The browser must restore and reread the original
+   score in `finally`; server-side cleanup then refuses any official-match
+   linkage, deletes only the manifest-owned fixture, and proves every core row is
+   gone.
 9. Deploy `write_wave=none` and attest the all-false projection.
 10. Only after every remaining manual write/recovery packet is complete, perform
    the final same-candidate `none` deployment and canonical `Staging Smoke`.
@@ -479,8 +483,11 @@ destructive exclusion is dormant.
 
 The automated `match-rating-writes` workflow is not one of the 25 witnessed
 manual rows. Run it only in the exact sequence described under Remaining
-automated sequence; the workflow owns and restores its disposable tournament
-score in `finally`.
+automated sequence. Despite its historical name, it proves only a reversible
+Tournament Live game-score command, stale-state refusal, idempotent retry, and
+cleanup. It does not publish an official match or write player ratings. The
+workflow creates and removes its core fixture while retaining operation/audit
+evidence; the browser restores the original score in `finally`.
 
 ### Packet 10 — Tournament Live non-score operations
 
