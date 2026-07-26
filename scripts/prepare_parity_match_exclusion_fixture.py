@@ -785,39 +785,43 @@ def _validate_owned_rows(
         expected_last_game_at: dict[int, datetime | None] = {
             player_id: None for player_id in player_ids
         }
-        for match in matches:
-            if match.get("deleted_at") not in (None, ""):
-                continue
-            try:
-                score_t1 = int(match.get("score_t1") or 0)
-                score_t2 = int(match.get("score_t2") or 0)
-            except (TypeError, ValueError):
-                raise FixtureError(
-                    "A fixture match has an invalid activity score."
-                ) from None
-            if score_t1 + score_t2 <= 0:
-                continue
-            match_time = _utc_datetime(
-                match.get("date"),
-                label="fixture match activity date",
-            )
-            if match_time is None:
-                raise FixtureError(
-                    "A scored fixture match has no activity date."
-                )
-            for column in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
-                player_id = _positive_int(
-                    match.get(column),
-                    label="match player ID",
-                )
-                if player_id not in expected_last_game_at:
+        # Direct fixture seeding deliberately leaves player activity at its
+        # authored baseline. An accepted exclusion operation runs a full replay,
+        # after which activity must match the surviving scored fixture history.
+        if rows["operations"]:
+            for match in matches:
+                if match.get("deleted_at") not in (None, ""):
                     continue
-                previous = expected_last_game_at[player_id]
-                expected_last_game_at[player_id] = (
-                    match_time
-                    if previous is None
-                    else max(previous, match_time)
+                try:
+                    score_t1 = int(match.get("score_t1") or 0)
+                    score_t2 = int(match.get("score_t2") or 0)
+                except (TypeError, ValueError):
+                    raise FixtureError(
+                        "A fixture match has an invalid activity score."
+                    ) from None
+                if score_t1 + score_t2 <= 0:
+                    continue
+                match_time = _utc_datetime(
+                    match.get("date"),
+                    label="fixture match activity date",
                 )
+                if match_time is None:
+                    raise FixtureError(
+                        "A scored fixture match has no activity date."
+                    )
+                for column in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
+                    player_id = _positive_int(
+                        match.get(column),
+                        label="match player ID",
+                    )
+                    if player_id not in expected_last_game_at:
+                        continue
+                    previous = expected_last_game_at[player_id]
+                    expected_last_game_at[player_id] = (
+                        match_time
+                        if previous is None
+                        else max(previous, match_time)
+                    )
         actual_players_by_id = {
             _positive_int(player.get("id"), label="player ID"): player
             for player in players

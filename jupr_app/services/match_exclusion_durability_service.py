@@ -89,6 +89,14 @@ def _exception_payload(exc: Exception) -> dict[str, Any]:
     args = getattr(exc, "args", ())
     if args and isinstance(args[0], dict):
         payload.update(dict(args[0]))
+    json_error = getattr(exc, "json", None)
+    if callable(json_error):
+        try:
+            raw_error = json_error()
+        except Exception:
+            raw_error = None
+        if isinstance(raw_error, dict):
+            payload.update(dict(raw_error))
     for key in ("code", "message", "details", "hint"):
         value = getattr(exc, key, None)
         if value not in (None, ""):
@@ -166,7 +174,10 @@ def _raise_operation_failure(
     operation_status = _operation_status(
         payload.get("operation_status") or payload.get("status")
     )
-    searchable = f"{code} {message}".upper()
+    searchable = " ".join(
+        str(payload.get(key) or "")
+        for key in ("code", "message", "details", "hint", "error_text")
+    ).upper()
 
     if "STALE" in searchable or "ROW_VERSION" in searchable:
         raise MatchExclusionStaleError(message, operation_id=operation_id)

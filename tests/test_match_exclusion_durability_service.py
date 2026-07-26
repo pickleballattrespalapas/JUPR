@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from postgrest.exceptions import APIError
 
 from jupr_app.services import match_exclusion_durability_service as service
 
@@ -302,6 +303,38 @@ def test_atomic_rpc_conflicts_are_typed(
             supabase,
             club_id="club",
             targets=[{"match_id": 7, "expected_row_version": 3}],
+            actor_email="admin@example.com",
+            actor_role="super_admin",
+            source="test",
+            note="Wrong row",
+            idempotency_key=IDEMPOTENCY_KEY,
+        )
+
+
+def test_postgrest_stale_detail_is_typed(monkeypatch):
+    _patch_badges(monkeypatch)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_REPLAY", "1")
+    supabase = FakeSupabase(
+        rpc_handlers={
+            "apply_match_exclusions_atomic": APIError(
+                {
+                    "code": "40001",
+                    "message": "Database transaction failed.",
+                    "details": (
+                        "JUPR_MATCH_EXCLUSION_STALE: match 7 expected "
+                        "row_version 4 but is 3."
+                    ),
+                    "hint": None,
+                }
+            )
+        }
+    )
+
+    with pytest.raises(service.MatchExclusionStaleError):
+        service.apply_atomic_match_exclusions(
+            supabase,
+            club_id="club",
+            targets=[{"match_id": 7, "expected_row_version": 4}],
             actor_email="admin@example.com",
             actor_role="super_admin",
             source="test",

@@ -574,6 +574,32 @@ def test_cleanup_requires_terminal_ledgers_and_then_removes_exact_fixture_rows(
         assert sensitive not in cleanup_text
 
 
+def test_cleanup_removes_prepared_fixture_when_no_operation_was_created(
+    tmp_path: Path,
+) -> None:
+    fake = FakePostgrest()
+    prepared, _github_env = _prepare(tmp_path, fake)
+
+    assert not fake.tables["match_exclusion_operations"]
+    assert all(player["last_game_at"] is None for player in fake.tables["players"])
+
+    cleaned = cleanup_fixture(
+        report_dir=tmp_path,
+        env=_base_env(),
+        transport=fake,
+    )
+
+    assert cleaned["status"] == "cleaned"
+    assert cleaned["deleted_counts"]["matches"] == 3
+    assert cleaned["deleted_counts"]["players"] == 4
+    assert cleaned["retained_operation_ids"] == []
+    assert cleaned["retained_replay_job_ids"] == []
+    assert not fake.tables["clubs"]
+    assert not fake.tables["players"]
+    assert not fake.tables["matches"]
+    assert len(fake.tables["admin_role_assignments"]) == 1
+
+
 @pytest.mark.parametrize(
     ("table", "field", "value", "message"),
     [
