@@ -19,6 +19,16 @@ export type AdminMatchUploaderWriteResult = {
   mode?: string;
   submitted_count?: number;
   match_write_committed?: boolean;
+  operation?: {
+    operation_id?: string;
+    idempotency_key?: string;
+    request_fingerprint?: string;
+    match_format?: "doubles" | "singles" | string;
+    committed?: boolean;
+    idempotent?: boolean;
+    duplicate_request?: boolean;
+    match_ids?: Array<string | number>;
+  };
   result?: {
     inserted?: number;
     match_format?: string;

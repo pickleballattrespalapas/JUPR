@@ -256,7 +256,7 @@ jobs:
         if: always()
         shell: python
         env:
-          EXPECTED_TOURNAMENT_SETUP_TESTS: "5"
+          EXPECTED_TOURNAMENT_SETUP_TESTS: "6"
           PYTHONPATH: ${{ github.workspace }}
         run: |
           import json

@@ -218,12 +218,14 @@ def test_league_live_waves_open_preview_only_uploader_capability() -> None:
         assert "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER" not in flags
 
 
-def test_direct_singles_uploader_gate_stays_dormant_in_every_wave() -> None:
+def test_direct_singles_uploader_gate_opens_only_in_atomic_match_wave() -> None:
     flag = "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES"
 
-    assert flag in DORMANT_STAGING_WRITE_FLAGS
-    assert all(flag not in flags for flags in STAGING_WRITE_WAVES.values())
-    assert expected_write_flags("match-player")[flag] is False
+    assert flag not in DORMANT_STAGING_WRITE_FLAGS
+    assert {
+        wave for wave, flags in STAGING_WRITE_WAVES.items() if flag in flags
+    } == {"match-player"}
+    assert expected_write_flags("match-player")[flag] is True
     assert f'{flag} = "0"' in (ROOT / "fly.staging.toml").read_text(
         encoding="utf-8"
     )

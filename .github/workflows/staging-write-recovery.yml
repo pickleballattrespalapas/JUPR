@@ -5,6 +5,7 @@ on:
   workflow_run:
     workflows:
       - Automated Staging Evidence
+      - Protected Staging Write Session
     types:
       - completed
   schedule:
@@ -26,26 +27,43 @@ jobs:
         github.event.workflow_run.event == 'issues' &&
         github.event.workflow_run.head_branch == 'rollback-feb8' &&
         (
-          github.event.workflow_run.path ==
-            '.github/workflows/staging-evidence-automation.yml' ||
-          github.event.workflow_run.path ==
-            '.github/workflows/staging-evidence-automation.yml@rollback-feb8'
+          (
+            (
+              github.event.workflow_run.path ==
+                '.github/workflows/staging-evidence-automation.yml' ||
+              github.event.workflow_run.path ==
+                '.github/workflows/staging-evidence-automation.yml@rollback-feb8'
+            ) &&
+            contains(
+              fromJSON(
+                '["Staging evidence control #1046","Staging evidence control #1047","Staging evidence control #1048","Staging evidence control #1049","Staging evidence control #1050","Staging evidence control #1051"]'
+              ),
+              github.event.workflow_run.display_title
+            )
+          ) ||
+          (
+            (
+              github.event.workflow_run.path ==
+                '.github/workflows/staging-write-session.yml' ||
+              github.event.workflow_run.path ==
+                '.github/workflows/staging-write-session.yml@rollback-feb8'
+            ) &&
+            startsWith(
+              github.event.workflow_run.display_title,
+              'Staging write session #1062 · '
+            )
+          )
         ) &&
         github.event.workflow_run.run_attempt == 1 &&
         github.event.workflow_run.actor.id == 250933369 &&
-        github.event.workflow_run.triggering_actor.id == 250933369 &&
-        contains(
-          fromJSON(
-            '["Staging evidence control #1046","Staging evidence control #1047","Staging evidence control #1048","Staging evidence control #1049","Staging evidence control #1050","Staging evidence control #1051"]'
-          ),
-          github.event.workflow_run.display_title
-        )
+        github.event.workflow_run.triggering_actor.id == 250933369
       )
     runs-on: ubuntu-latest
     timeout-minutes: 150
     permissions:
       actions: write
       contents: read
+      issues: write
     steps:
       - name: Check out protected default safety helper
         uses: actions/checkout@v4
@@ -68,8 +86,12 @@ jobs:
           fi
           for path in \
             .github/workflows/fly_api_staging_deploy.yml \
+            .github/workflows/staging-evidence-automation.yml \
+            .github/workflows/staging-write-recovery.yml \
+            .github/workflows/staging-write-session.yml \
             scripts/staging_evidence_automation.py \
             scripts/run_parity_staging_wave.py \
+            scripts/staging_write_session.py \
             scripts/staging_write_waves.py
           do
             if ! cmp --silent \
@@ -104,23 +126,60 @@ jobs:
       - name: Check whether recovery is required
         id: check
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # A cancelled controller can leave its already-dispatched Fly child
-          # alive. Always enqueue a later no-write deployment after any
-          # controller completion. The Fly job's common mutex guarantees that
-          # recovery finishes after that surviving child.
           if [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
+            WORKFLOW_PATH="$(jq -r '.workflow_run.path' "$GITHUB_EVENT_PATH")"
+            CONCLUSION="$(jq -r '.workflow_run.conclusion' "$GITHUB_EVENT_PATH")"
+            case "$WORKFLOW_PATH" in
+              .github/workflows/staging-evidence-automation.yml|\
+              .github/workflows/staging-evidence-automation.yml@rollback-feb8)
+                # Evidence children can survive a cancelled controller. Always
+                # enqueue none behind the shared Fly deployment mutex.
+                echo "required=true" >> "$GITHUB_OUTPUT"
+                echo "reason=evidence_controller_completed" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              .github/workflows/staging-write-session.yml|\
+              .github/workflows/staging-write-session.yml@rollback-feb8)
+                if [ "$CONCLUSION" != "success" ]; then
+                  echo "required=true" >> "$GITHUB_OUTPUT"
+                  echo "reason=write_session_controller_failed" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+                ;;
+              *)
+                echo "Unexpected recovery workflow source." >&2
+                exit 2
+                ;;
+            esac
+          fi
+
+          if ! python scripts/staging_evidence_automation.py fly-health \
+            > "$RUNNER_TEMP/fly-safety-check.json"; then
             echo "required=true" >> "$GITHUB_OUTPUT"
+            echo "reason=fly_health_unavailable" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if python scripts/staging_evidence_automation.py fly-health \
-               > "$RUNNER_TEMP/fly-safety-check.json" && \
-             python scripts/staging_evidence_automation.py verify-final-none \
+          if ! python scripts/staging_write_session.py inspect \
+              --fly-json "$RUNNER_TEMP/fly-safety-check.json" \
+              > "$RUNNER_TEMP/write-session-lease.json"; then
+            echo "required=true" >> "$GITHUB_OUTPUT"
+            echo "reason=lease_inspection_failed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$(jq -r '.keep_active' "$RUNNER_TEMP/write-session-lease.json")" = "true" ]; then
+            echo "required=false" >> "$GITHUB_OUTPUT"
+            echo "reason=valid_exact_write_session_lease" >> "$GITHUB_OUTPUT"
+          elif python scripts/staging_evidence_automation.py verify-final-none \
                --fly-json "$RUNNER_TEMP/fly-safety-check.json"; then
             echo "required=false" >> "$GITHUB_OUTPUT"
+            echo "reason=already_safe_none" >> "$GITHUB_OUTPUT"
           else
             echo "required=true" >> "$GITHUB_OUTPUT"
+            echo "reason=invalid_or_expired_write_session" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Dispatch canonical no-write recovery
@@ -165,11 +224,52 @@ jobs:
           python scripts/staging_evidence_automation.py verify-final-none \
             --fly-json "$RUNNER_TEMP/fly-safety-final.json"
 
+      - name: Close invalid or recovered write-session control
+        if: steps.check.outputs.required == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_REASON: ${{ steps.check.outputs.reason }}
+          RESTORE_RUN_ID: ${{ steps.restore.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          ISSUE_JSON="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/$GITHUB_REPOSITORY/issues/1062"
+          )"
+          if [ "$(jq -r '.state' <<<"$ISSUE_JSON")" != "open" ]; then
+            exit 0
+          fi
+          STATUS="$(
+            printf '%s\n' \
+              "### Staging write safety recovery" \
+              "" \
+              "- Reason: \`$RECOVERY_REASON\`" \
+              "- Final wave: \`none\`" \
+              "- Business writes: disabled" \
+              "- Safe restore: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RESTORE_RUN_ID"
+          )"
+          gh api \
+            --method POST \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "/repos/$GITHUB_REPOSITORY/issues/1062/comments" \
+            -f body="$STATUS" \
+            --silent
+          gh api \
+            --method PATCH \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "/repos/$GITHUB_REPOSITORY/issues/1062" \
+            -f state=closed \
+            -f state_reason=completed \
+            --silent
+
       - name: Record recovery result
         if: always()
         shell: bash
         env:
           RECOVERY_REQUIRED: ${{ steps.check.outputs.required }}
+          RECOVERY_REASON: ${{ steps.check.outputs.reason }}
           RESTORE_RUN_ID: ${{ steps.restore.outputs.run_id }}
         run: |
           {
@@ -177,9 +277,10 @@ jobs:
             echo
             if [ "$RECOVERY_REQUIRED" = "true" ]; then
               echo "- No-write recovery dispatched."
+              echo "- Reason: \`$RECOVERY_REASON\`"
               echo "- Restore run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RESTORE_RUN_ID"
             elif [ "$RECOVERY_REQUIRED" = "false" ]; then
-              echo "- Staging was already safely at \`write_wave=none\`."
+              echo "- Recovery skipped safely: \`$RECOVERY_REASON\`."
             else
               echo "- Recovery check did not complete; the next scheduled run will retry."
             fi

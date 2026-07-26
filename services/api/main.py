@@ -14,9 +14,12 @@ from supabase import Client, create_client
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin.roles import PERMISSION_ENTER_SCORES, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
-from jupr_app.services.context import ServiceContext
+from jupr_app.services.direct_match_entry_service import (
+    DirectMatchConflictError,
+    DirectMatchRecoveryRequiredError,
+    submit_atomic_direct_matches,
+)
 from jupr_app.services.leaderboard_service import LeaderboardDataUnavailable, build_public_leaderboard
-from jupr_app.services.match_service import submit_match_batch
 from jupr_app.services.public_live_service import is_public_live_session_row, public_live_session_detail, public_live_sessions_from_rows
 from jupr_app.services.public_live_operation_service import (
     PublicLiveConflictError,
@@ -183,6 +186,11 @@ app.add_middleware(
 class MatchBatchRequest(BaseModel):
     matches: list[dict[str, Any]] = Field(default_factory=list)
     source: str = "next_admin_score_entry"
+    idempotency_key: str = Field(
+        min_length=8,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
 
 
 class PublicLiveSessionCreateRequest(BaseModel):
@@ -631,6 +639,43 @@ def _validate_score_entry_match(matches: list[dict[str, Any]]) -> None:
         raise HTTPException(status_code=400, detail="Scores must be non-negative and the match score must be non-zero.")
     if score_t1 == score_t2:
         raise HTTPException(status_code=400, detail="Match scores cannot be tied.")
+
+
+def _normalize_score_entry_match(
+    matches: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Allowlist the score-entry contract before fingerprinting or auditing."""
+
+    match = dict(matches[0])
+
+    def text_value(key: str, default: str = "", limit: int = 120) -> str:
+        return (
+            str(match.get(key) or default)
+            .replace("<", "")
+            .replace(">", "")
+            .strip()[:limit]
+        )
+
+    return [
+        {
+            "date": text_value("date", limit=80) or None,
+            "league": text_value("league", "Open") or "Open",
+            "week_tag": text_value("week_tag", limit=80),
+            "match_type": text_value(
+                "match_type",
+                "Web Score Entry",
+                limit=80,
+            )
+            or "Web Score Entry",
+            "rating_scope": text_value("rating_scope", limit=40),
+            "t1_p1": int(float(match["t1_p1"])),
+            "t1_p2": int(float(match["t1_p2"])),
+            "t2_p1": int(float(match["t2_p1"])),
+            "t2_p2": int(float(match["t2_p2"])),
+            "score_t1": int(float(match["score_t1"])),
+            "score_t2": int(float(match["score_t2"])),
+        }
+    ]
 
 
 def _fetch_score_entry_players(supabase, *, club_id: str, player_ids: list[int]) -> dict[int, dict[str, Any]]:
@@ -1213,8 +1258,7 @@ def submit_admin_match_batch(club_id: str, payload: MatchBatchRequest, authoriza
         write_admin_activity_log(supabase, denied_payload)
         raise HTTPException(status_code=403, detail="insufficient permission")
     _validate_score_entry_match(payload.matches)
-    player_ids = _score_entry_player_ids(payload.matches)
-    before_players = _fetch_score_entry_players(supabase, club_id=str(club_id), player_ids=player_ids)
+    clean_matches = _normalize_score_entry_match(payload.matches)
     (
         df_players_all,
         _df_players_active,
@@ -1228,30 +1272,37 @@ def submit_admin_match_batch(club_id: str, payload: MatchBatchRequest, authoriza
         _schema_degraded,
         _schema_degraded_reason,
     ) = load_data(supabase, club_id)
-    service_ctx = ServiceContext(supabase=supabase, club_id=str(club_id), source=payload.source, actor_email=user.email, actor_role=role_resolution.role)
-    result = submit_match_batch(service_ctx, payload.matches, name_to_id=name_to_id, df_players_all=df_players_all, df_leagues=df_leagues, df_meta=df_meta)
-    if not result.ok:
-        raise HTTPException(status_code=400, detail="; ".join(result.errors) or "Unable to submit match batch")
-    after_players = _fetch_score_entry_players(supabase, club_id=str(club_id), player_ids=player_ids)
-    latest_match_id = _latest_score_entry_match_id(supabase, club_id=str(club_id), matches=payload.matches)
-    feedback = _score_entry_feedback(before=before_players, after=after_players, player_ids=player_ids, latest_match_id=latest_match_id)
-    audit_payload = build_activity_payload(club_id=str(club_id), actor_email=user.email, actor_role=role_resolution.role, action_type="submit_match_batch", entity_type="matches", entity_id="batch", after_json={"source_client": "fastapi/nextjs", "source_page": payload.source, "match_count": len(payload.matches), "result_summary": result.data if isinstance(result.data, dict) else {"ok": True}, "feedback": feedback}, source_page=payload.source)
-    audit_write = write_admin_activity_log(supabase, audit_payload)
-    if not audit_write.ok and is_api_audit_log_required():
-        raise HTTPException(status_code=500, detail="Match write committed, but the required audit log write was unavailable. Check Match Log before any retry.")
-    warnings = [audit_write.warning] if audit_write.warning else []
+    try:
+        result = submit_atomic_direct_matches(
+            supabase,
+            club_id=str(club_id),
+            matches=clean_matches,
+            match_format="doubles",
+            idempotency_key=payload.idempotency_key,
+            actor_email=user.email,
+            actor_role=role_resolution.role,
+            source=payload.source,
+            name_to_id=name_to_id,
+            df_players_all=df_players_all,
+            df_leagues=df_leagues,
+            df_meta=df_meta,
+        )
+    except DirectMatchConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DirectMatchRecoveryRequiredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
+        **result,
         "ok": True,
         "auth_mode": "supabase_jwt",
         "required_permission": PERMISSION_ENTER_SCORES,
         "match_write_committed": True,
-        "result": result.data,
-        "feedback": feedback,
-        "warnings": warnings,
         "recovery": {
             "match_log_route": "/admin/match-log",
             "match_uploader_route": "/admin/match-uploader",
             "replay_history_route": "/admin/replay-history",
-            "operator_rule": "Verify Match Log before retrying any score-entry request whose outcome is unclear.",
+            "operator_rule": "Retry the exact unchanged request after an interrupted response; the same idempotency key cannot create a duplicate.",
         },
     }

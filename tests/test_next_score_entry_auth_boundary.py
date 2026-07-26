@@ -28,6 +28,7 @@ CANONICAL_FORM = (
 )
 CANONICAL_PAGE = CANONICAL_FORM.with_name("page.tsx")
 SCORE_ENTRY_FLAG = WEB_ROOT / "lib" / "scoreEntry.ts"
+DIRECT_MATCH_IDEMPOTENCY = WEB_ROOT / "lib" / "directMatchIdempotency.ts"
 
 
 def _web_source() -> str:
@@ -90,5 +91,16 @@ def test_score_entry_requires_backend_readiness_and_keeps_recovery_paths_visible
     assert "Score entry is in fallback mode" in page_source
     assert "/admin/match-uploader" in page_source
     assert "Streamlit fallback" in page_source
-    assert "Outcome unknown: check Match Log before retrying" in form_source
+    assert "directMatchIdempotencyKey" in form_source
+    assert "idempotency_key" in form_source
+    assert "duplicate protection is active" in form_source
     assert "match_write_committed" not in form_source  # server decides commit state
+
+
+def test_direct_match_retry_key_survives_blocked_browser_storage() -> None:
+    source = DIRECT_MATCH_IDEMPOTENCY.read_text(encoding="utf-8")
+
+    assert "new Map<string, PendingDirectMatchWrite>()" in source
+    assert "pendingDirectMatchWrites.get(key)" in source
+    assert "sessionStorage" in source
+    assert "pendingDirectMatchWrites.delete(key)" in source

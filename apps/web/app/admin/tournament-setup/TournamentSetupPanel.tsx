@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
@@ -18,8 +18,16 @@ type StatusResponse = { enabled: boolean; status: string; tournament_count?: num
 type TournamentRow = { id: string; name?: string; status?: string; start_date?: string | null; end_date?: string | null; registration_status?: string | null; registration_slug?: string | null; day_count?: number; event_option_count?: number; registration_count?: number };
 type SetupTemplate = { key: string; label: string; description?: string; days: Array<Record<string, unknown>>; event_families: Array<Record<string, unknown>>; event_options: Array<Record<string, unknown>> };
 type DetailResponse = { ok: boolean; tournament: Record<string, unknown>; settings: Record<string, unknown>; days: Array<Record<string, unknown>>; event_options: Array<Record<string, unknown>>; builder_draft?: Record<string, unknown> | null; publish_impact?: Record<string, unknown> | null; publish_impact_warning?: string | null; registration_count?: number; state_fingerprint: string; templates?: SetupTemplate[] };
-type WriteResponse = { ok: boolean; mode?: string; settings?: Record<string, unknown>; builder_draft?: Record<string, unknown>; publish_result?: Record<string, unknown>; publish_impact?: Record<string, unknown>; days?: Array<Record<string, unknown>>; event_options?: Array<Record<string, unknown>>; warnings?: string[]; operation_key?: string; request_fingerprint?: string; idempotent_replay?: boolean; reconciled?: boolean };
+type WriteResponse = { ok: boolean; mode?: string; tournament?: Record<string, unknown>; settings?: Record<string, unknown>; builder_draft?: Record<string, unknown>; publish_result?: Record<string, unknown>; publish_impact?: Record<string, unknown>; days?: Array<Record<string, unknown>>; event_options?: Array<Record<string, unknown>>; warnings?: string[]; operation_key?: string; request_fingerprint?: string; idempotent_replay?: boolean; reconciled?: boolean };
 type ImpactResponse = { ok: boolean; mode: string; dry_run: true; write_count: 0; state_fingerprint: string; impact_fingerprint: string; publish_impact: Record<string, unknown> };
+type CreateCommand = {
+  clubId: string;
+  tournamentId: string;
+  idempotencyKey: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+};
 
 type Props = { apiBase: string | null; clubId: string; status: StatusResponse | null };
 
@@ -27,9 +35,34 @@ const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: 
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
+const createCommandStorageKey = "jupr_tournament_setup_create_command_v1";
 
 function apiUrl(apiBase: string, path: string): string { return `${apiBase.replace(/\/$/, "")}${path}`; }
 function safeString(value: unknown): string { return value == null ? "" : String(value); }
+function readStoredCreateCommand(clubId: string): CreateCommand | null {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(createCommandStorageKey) || "null") as Partial<CreateCommand> | null;
+    if (!parsed || parsed.clubId !== clubId || !parsed.tournamentId || !parsed.idempotencyKey || !parsed.name) return null;
+    return {
+      clubId,
+      tournamentId: String(parsed.tournamentId),
+      idempotencyKey: String(parsed.idempotencyKey),
+      name: String(parsed.name),
+      startDate: String(parsed.startDate || ""),
+      endDate: String(parsed.endDate || "")
+    };
+  } catch {
+    return null;
+  }
+}
+function persistCreateCommand(command: CreateCommand | null) {
+  try {
+    if (command) window.localStorage.setItem(createCommandStorageKey, JSON.stringify(command));
+    else window.localStorage.removeItem(createCommandStorageKey);
+  } catch {
+    // A current-page retry remains available when browser storage is blocked.
+  }
+}
 function readableImpactItem(value: unknown): string {
   if (value == null) return "No detail supplied.";
   if (typeof value !== "object") return String(value);
@@ -56,6 +89,10 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
   const [lastResult, setLastResult] = useState<WriteResponse | null>(null);
   const [impactReview, setImpactReview] = useState<ImpactResponse | null>(null);
   const [reviewedDraftSignature, setReviewedDraftSignature] = useState("");
+  const [createName, setCreateName] = useState("");
+  const [createStartDate, setCreateStartDate] = useState("");
+  const [createEndDate, setCreateEndDate] = useState("");
+  const [createCommand, setCreateCommand] = useState<CreateCommand | null>(null);
 
   function clearDetailState() {
     setLoadedDetailId("");
@@ -79,6 +116,15 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
   const listRequest = useLatestRequestGuard(accessToken, resetWorkspace);
   const detailRequest = useLatestRequestGuard(accessToken);
   const operationRequest = useLatestRequestGuard(accessToken);
+
+  useEffect(() => {
+    const stored = readStoredCreateCommand(clubId);
+    if (!stored) return;
+    setCreateCommand(stored);
+    setCreateName(stored.name);
+    setCreateStartDate(stored.startDate);
+    setCreateEndDate(stored.endDate);
+  }, [clubId]);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("Missing JUPR API base URL.");
@@ -108,31 +154,40 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
     setReviewedDraftSignature("");
   }
 
-  async function loadTournaments() {
+  async function loadTournaments(preferredId = ""): Promise<boolean> {
     const generation = listRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<{ ok: boolean; tournaments: TournamentRow[]; count: number }>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments?include_archived=true`);
-      if (!listRequest.isCurrent(generation)) return;
+      if (!listRequest.isCurrent(generation)) return false;
       const rows = payload.tournaments || [];
-      const nextId = rows.some((row) => row.id === selectedId) ? selectedId : rows[0]?.id || "";
+      if (preferredId && !rows.some((row) => row.id === preferredId)) {
+        setTournaments(rows);
+        setMessage("The create response was received, but the new shell is not visible yet. Retry the same protected request.");
+        return false;
+      }
+      const requestedId = preferredId || selectedId;
+      const nextId = rows.some((row) => row.id === requestedId) ? requestedId : rows[0]?.id || "";
       setTournaments(rows);
       setSelectedId(nextId);
       if (nextId) {
-        const preserveCurrentEdits = nextId === selectedId && nextId === loadedDetailId && Boolean(detail);
+        const preserveCurrentEdits = !preferredId && nextId === selectedId && nextId === loadedDetailId && Boolean(detail);
         if (preserveCurrentEdits) {
           setMessage("Tournament list refreshed. Unsaved setup edits were preserved.");
+          return true;
         } else {
           if (nextId !== loadedDetailId) clearDetailState();
-          await loadDetail(nextId);
+          return await loadDetail(nextId);
         }
       } else {
         detailRequest.invalidate();
         clearDetailState();
         setMessage("No tournaments are available for setup.");
+        return false;
       }
     } catch (error) {
       if (listRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
+      return false;
     } finally {
       if (listRequest.isCurrent(generation)) setBusy(false);
     }
@@ -173,6 +228,71 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
   }
 
   useAuthenticatedAutoLoad(status?.enabled ? accessToken : "", loadTournaments);
+
+  function updateCreateField(setter: (value: string) => void, value: string) {
+    setter(value);
+    setCreateCommand(null);
+    persistCreateCommand(null);
+  }
+
+  async function createTournament(confirmationText: string) {
+    const name = createName.trim();
+    if (!name) { setMessage("Tournament name is required."); return; }
+    if (createStartDate && createEndDate && createEndDate < createStartDate) {
+      setMessage("Tournament end date cannot be before its start date.");
+      return;
+    }
+    const command = createCommand || {
+      clubId,
+      tournamentId: globalThis.crypto.randomUUID(),
+      idempotencyKey: globalThis.crypto.randomUUID(),
+      name,
+      startDate: createStartDate,
+      endDate: createEndDate
+    };
+    if (!createCommand) {
+      setCreateCommand(command);
+      persistCreateCommand(command);
+    }
+    const generation = operationRequest.begin();
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<WriteResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            tournament_id: command.tournamentId,
+            idempotency_key: command.idempotencyKey,
+            name: command.name,
+            start_date: command.startDate || null,
+            end_date: command.endDate || null,
+            confirmation_text: confirmationText
+          })
+        }
+      );
+      if (!operationRequest.isCurrent(generation)) return;
+      const createdId = safeString(payload.tournament?.id) || command.tournamentId;
+      const loaded = await loadTournaments(createdId);
+      if (operationRequest.isCurrent(generation)) {
+        setLastResult(payload);
+        if (loaded) {
+          setCreateName("");
+          setCreateStartDate("");
+          setCreateEndDate("");
+          setCreateCommand(null);
+          persistCreateCommand(null);
+          setMessage(payload.idempotent_replay ? "Tournament creation was safely reconciled and loaded." : "Tournament shell created and loaded. Continue with registration settings.");
+        }
+      }
+    } catch (error) {
+      if (operationRequest.isCurrent(generation)) {
+        setMessage(`${error instanceof Error ? error.message : "Unable to create tournament."} Retry keeps the same protected request.`);
+      }
+    } finally {
+      if (operationRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
 
   async function saveSettings(confirmationText: string) {
     if (!detail || loadedDetailId !== selectedId) { setMessage("Reload the selected tournament before saving settings."); return; }
@@ -283,19 +403,33 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
   const settingsConfirmation = status.confirmation_text?.settings || "SAVE SETUP";
   const draftConfirmation = status.confirmation_text?.draft || "SAVE SETUP DRAFT";
   const publishConfirmation = status.confirmation_text?.publish || "PUBLISH SETUP";
+  const createConfirmation = status.confirmation_text?.create || "CREATE TOURNAMENT";
   const detailIsCurrent = Boolean(detail && loadedDetailId === selectedId);
   const loadedTournament = tournaments.find((row) => row.id === loadedDetailId);
   const builderIssues = validateSetupConfiguration(configuration);
   const builderReady = detailIsCurrent && builderIssues.length === 0;
   const blockedImpactItems = Array.isArray(impact?.blocked) ? impact.blocked : [];
   const impactWarnings = Array.isArray(impact?.warnings) ? impact.warnings : [];
+  const createReady = Boolean(accessToken && createName.trim() && (!createStartDate || !createEndDate || createEndDate >= createStartDate));
   return <div style={{ display: "grid", gap: "1rem" }}>
     <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Admin session</h2><p style={{ color: "#475569" }}>{adminSessionLabel(session)}</p>{sessionLoading ? <p>Checking session…</p> : null}{sessionMessage ? <p>{sessionMessage}</p> : null}</article>
+    <article style={cardStyle}>
+      <h2 style={{ marginTop: 0 }}>1. Create tournament shell</h2>
+      <p style={{ color: "#475569" }}>Create a safe DRAFT shell first. It will open automatically so registration, schedule, and divisions can be reviewed before publishing.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+        <label>Tournament name<br /><input aria-label="New tournament name" value={createName} onChange={(event) => updateCreateField(setCreateName, event.target.value)} disabled={busy || !accessToken} maxLength={180} style={inputStyle} /></label>
+        <label>Start date<br /><input aria-label="New tournament start date" type="date" value={createStartDate} onChange={(event) => updateCreateField(setCreateStartDate, event.target.value)} disabled={busy || !accessToken} style={inputStyle} /></label>
+        <label>End date<br /><input aria-label="New tournament end date" type="date" value={createEndDate} min={createStartDate || undefined} onChange={(event) => updateCreateField(setCreateEndDate, event.target.value)} disabled={busy || !accessToken} style={inputStyle} /></label>
+      </div>
+      {createStartDate && createEndDate && createEndDate < createStartDate ? <p role="alert" style={{ color: "#b91c1c" }}>End date must be on or after the start date.</p> : null}
+      <p><ConfirmAction triggerLabel="Create tournament" title="Create this tournament shell?" description="This creates one DRAFT tournament. Nothing is published and registration remains closed until you complete the later setup steps." confirmLabel="Yes, create tournament" confirmationText={createConfirmation} disabled={!createReady} busy={busy} onConfirm={createTournament} /></p>
+      {createCommand ? <p style={{ color: "#92400e" }}>A protected retry is ready. Keep the form unchanged and use Create tournament again if the first response was interrupted.</p> : null}
+    </article>
     <article style={cardStyle} aria-busy={Boolean(detailLoadingId)}>
-      <h2 style={{ marginTop: 0 }}>1. Select tournament</h2>
+      <h2 style={{ marginTop: 0 }}>2. Select tournament</h2>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
         <label>Tournament<br /><select aria-label="Tournament" value={selectedId} onChange={(event) => selectTournament(event.target.value)} disabled={busy || !accessToken} aria-busy={busy && !tournaments.length} style={inputStyle}><option value="" disabled>{busy && !tournaments.length ? "Loading tournaments…" : "Choose a tournament"}</option>{tournaments.map((row) => <option key={row.id} value={row.id}>{row.name || row.id} · {row.status || "status"} · {row.registration_status || "registration"}</option>)}</select></label>
-        <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={ghostButtonStyle}>Refresh list</button>
+        <button type="button" onClick={() => void loadTournaments()} disabled={busy || !accessToken} style={ghostButtonStyle}>Refresh list</button>
         <button type="button" onClick={() => loadDetail()} disabled={busy || !selectedId} style={buttonStyle}>{detailLoadingId ? "Loading setup…" : "Reload setup"}</button>
       </div>
       {detailIsCurrent ? <p style={{ color: "#475569" }}>{`Loaded setup: ${loadedTournament?.name || loadedDetailId}`}</p> : null}
@@ -304,7 +438,7 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
 
     {detail && detailIsCurrent ? <>
       <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>2. Registration settings</h2>
+        <h2 style={{ marginTop: 0 }}>3. Registration settings</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
           <label>Slug<br /><input value={safeString(settings.registration_slug)} onChange={(e) => setSettings((s) => ({ ...s, registration_slug: e.target.value }))} disabled={!detailIsCurrent || busy} style={inputStyle} /></label>
           <label>Status<br /><select value={safeString(settings.registration_status || "draft")} onChange={(e) => setSettings((s) => ({ ...s, registration_status: e.target.value }))} disabled={!detailIsCurrent || busy} style={inputStyle}><option value="draft">draft</option><option value="open">open</option><option value="closed">closed</option></select></label>
@@ -319,7 +453,7 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
       </article>
 
       <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>3. Builder draft</h2>
+        <h2 style={{ marginTop: 0 }}>4. Builder draft</h2>
         <p style={{ color: "#475569" }}>Build the schedule with guided day, event, and division controls. The publish step uses the guarded Python diff that preserves populated rows and blocks destructive changes.</p>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
           <ConfirmAction
@@ -359,7 +493,7 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
       </article>
 
       <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
-        <h2 style={{ marginTop: 0 }}>4. Publish setup</h2>
+        <h2 style={{ marginTop: 0 }}>5. Publish setup</h2>
         <p><button type="button" onClick={reviewImpact} disabled={busy || !builderReady} style={ghostButtonStyle}>Review publish impact (dry run)</button></p>
         <p style={{ color: impactReview ? "#166534" : "#92400e" }}>{impactReview ? `Impact review complete; ${impactReview.write_count} writes were performed.` : "Current draft has not been reviewed by FastAPI."}</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "0.75rem" }}>

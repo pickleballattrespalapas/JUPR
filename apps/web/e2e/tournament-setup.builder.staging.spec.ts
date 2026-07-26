@@ -221,6 +221,84 @@ test("guided Tournament Setup preserves payloads, validates rows, and works at a
   expect(overflow).toBe(false);
 });
 
+test("Tournament Setup creates one protected DRAFT shell and opens it in the builder", async ({ page }) => {
+  await seedAdminSession(page);
+  const draft = initialDraft();
+  let createdId = "";
+  let createWrites = 0;
+  let createPayload: Record<string, unknown> | null = null;
+
+  await page.route("**/admin/clubs/tres_palapas/tournaments/setup/tournaments**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "POST" && url.pathname === listPath) {
+      createWrites += 1;
+      createPayload = request.postDataJSON() as Record<string, unknown>;
+      createdId = String(createPayload.tournament_id);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          mode: "tournament_setup_shell_create",
+          tournament: {
+            id: createdId,
+            name: createPayload.name,
+            status: "DRAFT",
+            start_date: createPayload.start_date,
+            end_date: createPayload.end_date
+          },
+          idempotent_replay: false
+        })
+      });
+      return;
+    }
+    if (request.method() === "GET" && url.pathname === listPath) {
+      const rows = [{ id: "tour-1", name: "Setup smoke", status: "draft" }];
+      if (createdId) rows.unshift({ id: createdId, name: "Protected Shell", status: "DRAFT" });
+      await fulfillList(route, rows);
+      return;
+    }
+    if (request.method() === "GET" && url.pathname === `${listPath}/${createdId}` && createdId) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(detailPayload({ days: [], event_families: [], event_options: [] }, createdId, "Protected Shell"))
+      });
+      return;
+    }
+    if (request.method() === "GET" && url.pathname === `${listPath}/tour-1`) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(detailPayload(draft))
+      });
+      return;
+    }
+    await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "unexpected setup create request" }) });
+  });
+
+  await page.goto("/admin/tournament-setup", { waitUntil: "domcontentloaded" });
+  await page.getByLabel("New tournament name").fill("Protected Shell");
+  await page.getByLabel("New tournament start date").fill("2027-05-08");
+  await page.getByLabel("New tournament end date").fill("2027-05-09");
+  await page.getByRole("button", { name: "Create tournament", exact: true }).click();
+  await page.getByRole("button", { name: "Yes, create tournament" }).click();
+
+  await expect.poll(() => createWrites).toBe(1);
+  await expect(page.getByText("Loaded setup: Protected Shell")).toBeVisible();
+  await expect(page.getByRole("status")).toContainText("Tournament shell created and loaded");
+  const capturedCreatePayload = createPayload as unknown as Record<string, unknown>;
+  expect(capturedCreatePayload).toMatchObject({
+    name: "Protected Shell",
+    start_date: "2027-05-08",
+    end_date: "2027-05-09",
+    confirmation_text: "CREATE TOURNAMENT"
+  });
+  expect(String(capturedCreatePayload.tournament_id)).toMatch(/^[0-9a-f-]{36}$/);
+  expect(String(capturedCreatePayload.idempotency_key)).toMatch(/^[0-9a-f-]{36}$/);
+});
+
 test("Tournament Setup waits for an authenticated session", async ({ page }) => {
   let listReads = 0;
   await page.route("**/admin/clubs/tres_palapas/tournaments/setup/tournaments**", async (route) => {

@@ -1,5 +1,10 @@
 # Staging parity operator guide — 2026-07-22
 
+> Protected write windows are now controlled through locked issue `#1062`.
+> Joe never runs a workflow form. The connected agent applies the exact
+> open/advance/close body and the controller restores `write_wave=none`.
+> See `docs/staging-write-session-controller.md`.
+
 This guide turns the remaining parity session into short behavior checks. The
 operator should never need to copy a Git SHA, deployment ID, database row ID, or
 audit ID. The evidence runner records those details and fails closed if the tested
@@ -17,12 +22,17 @@ The evidence runner owns candidate binding, migration and flag checks, disposabl
 fixture IDs, authoritative readback, audit attribution, deduplication counts,
 restoration, and the final `write_wave=none` proof.
 
-For every manual-only staging write, a second person is the witness. The witness
-observes or independently reviews the named browser action and visible result; they
-do not type, copy, or verify Git SHAs, deployment IDs, database row IDs, or audit
-IDs. The evidence runner records and validates that metadata. Automated-only waves
-remain covered by their candidate-bound workflow artifact and do not acquire a
-manual-row witness requirement.
+Every manual-only staging write uses one of two review modes:
+
+- a second person witnesses the named browser action and visible result; or
+- candidate-bound GitHub automation records the exact candidate, Actions run,
+  artifact, authoritative readback, and recovery result.
+
+The witness, when used, does not type, copy, or verify Git SHAs, deployment IDs,
+database row IDs, or audit IDs. The evidence runner records and validates that
+metadata. In automated-review mode, it also writes the exact structured sign-off
+to the formal book. Automated-only waves remain covered by their candidate-bound
+workflow artifact and do not acquire a manual-row witness requirement.
 
 ## Minimal repeatable fixture text
 
@@ -58,8 +68,8 @@ The operator-facing work is grouped into three sessions:
    and pairing; league and communications; match/player recovery; ladder/live
    operations; and tournament operations. Each sub-batch uses one disposable
    fixture family and its own least-privilege wave, authoritative readback,
-   recovery, and return to `none`. A witness is required only for the manual
-   write rows named by the formal book.
+   recovery, and return to `none`. Each manual write row uses either a distinct
+   human witness or candidate-bound automated review.
 3. **Exact-candidate restoration:** remove all disposable fixtures that are
    required to be removed, deploy a same-candidate `write_wave=none` release,
    prove every controlled write flag false and email delivery safe, and run the
@@ -78,13 +88,24 @@ Each operator prompt must contain only:
 - the visible result to look for; and
 - the failure screenshot or text to send only if the result differs.
 
-The witness receives the same short behavior expectation. They confirm that the
-operator performed the named action and that the expected result or recovery was
-visible. Neither person is asked to transcribe candidate or deployment metadata.
+In human-review mode, the witness receives the same short behavior expectation
+and confirms that the operator performed the named action and saw the expected
+result or recovery. Neither person is asked to transcribe candidate or deployment
+metadata. In automated-review mode, no witness prompt is sent; the evidence runner
+must capture the exact candidate-bound GitHub run and artifact.
 
 The evidence runner captures normal success evidence. No prompt should ask the
 operator to inspect source code, network requests, database rows, environment
 variables, workflow IDs, or deployment identifiers.
+
+The formal book accepts only these exact sign-off shapes:
+
+- `operator=<identity>; witness=<different-identity>`
+- `operator=<identity>; automated=candidate=<40-sha>,run=https://github.com/pickleballattrespalapas/JUPR/actions/runs/<run-id>,artifact=<same-run-artifact-url|sha256:64-hex>`
+
+Stop if the automation run or artifact is missing, points to another repository
+or run, or names a candidate other than the recorded staging candidate. Do not
+replace the structured record with prose such as `review=automated`.
 
 ## Stop and recovery rules
 

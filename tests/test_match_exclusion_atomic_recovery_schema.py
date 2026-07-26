@@ -48,7 +48,7 @@ def test_match_exclusion_migration_is_in_canonical_inventory() -> None:
     assert MIGRATION.name in inventory
     assert NONRETRYABLE_CONFLICT_MIGRATION.name in inventory
     assert REPLAY_PROJECTION_CONFLICT_MIGRATION.name in inventory
-    assert "44 SQL files: 43 deployable migrations" in inventory
+    assert "45 SQL files: 44 deployable migrations" in inventory
 
 
 def test_expected_match_conflicts_use_nonretryable_sqlstate() -> None:

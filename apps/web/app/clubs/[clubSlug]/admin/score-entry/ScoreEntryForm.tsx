@@ -3,6 +3,10 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { PublicPlayer } from "@/lib/api";
+import {
+  clearDirectMatchIdempotencyKey,
+  directMatchIdempotencyKey
+} from "@/lib/directMatchIdempotency";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type ScoreEntryFormProps = {
@@ -100,6 +104,27 @@ export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palap
     setMessage(null);
     setFeedback(null);
     setRecovery(null);
+    const request = {
+      source: "next_score_entry_mvp",
+      matches: [
+        {
+          date,
+          league,
+          match_type: "Web Score Entry",
+          rating_scope: "overall",
+          t1_p1: Number(t1p1),
+          t1_p2: Number(t1p2),
+          t2_p1: Number(t2p1),
+          t2_p2: Number(t2p2),
+          score_t1: team1Score,
+          score_t2: team2Score
+        }
+      ]
+    };
+    const idempotencyKey = directMatchIdempotencyKey(
+      `score-entry:${clubId}`,
+      request
+    );
     try {
       const response = await fetch(apiUrl(apiBase, `/admin/clubs/${clubId}/matches/batch`), {
         method: "POST",
@@ -108,21 +133,8 @@ export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palap
           Authorization: `Bearer ${accessToken}`
         },
         body: JSON.stringify({
-          source: "next_score_entry_mvp",
-          matches: [
-            {
-              date,
-              league,
-              match_type: "Web Score Entry",
-              rating_scope: "overall",
-              t1_p1: Number(t1p1),
-              t1_p2: Number(t1p2),
-              t2_p1: Number(t2p1),
-              t2_p2: Number(t2p2),
-              score_t1: team1Score,
-              score_t2: team2Score
-            }
-          ]
+          ...request,
+          idempotency_key: idempotencyKey
         })
       });
       const payload = await response.json().catch(() => null);
@@ -131,9 +143,13 @@ export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palap
       }
       setFeedback(payload?.feedback ?? null);
       setRecovery(payload?.recovery ?? null);
+      clearDirectMatchIdempotencyKey(
+        `score-entry:${clubId}`,
+        idempotencyKey
+      );
       setMessage(`Match saved. Inserted ${payload?.result?.inserted ?? 0} match${payload?.result?.inserted === 1 ? "" : "es"}.`);
     } catch (err) {
-      setMessage(`${err instanceof Error ? err.message : "Unable to save match."} Outcome unknown: check Match Log before retrying.`);
+      setMessage(`${err instanceof Error ? err.message : "Unable to save match."} Retry this unchanged form; duplicate protection is active.`);
     } finally {
       setSaving(false);
     }

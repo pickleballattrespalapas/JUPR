@@ -30,6 +30,7 @@ STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
         "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
         "JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY",
         "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER",
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES",
         "JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR",
         "JUPR_ENABLE_STAGING_NEXT_ADMIN_MATCH_CANONICAL_NORMALIZE_WRITES",
     ),
@@ -107,10 +108,6 @@ STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
 }
 
 DORMANT_STAGING_WRITE_FLAGS = (
-    # Direct singles upload currently inserts the match before separate player
-    # aggregate updates. Keep it unavailable even when the broader uploader
-    # wave is open until that path is one transactional operation.
-    "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES",
     # The current import handoff is a GET-only, write_count=0 projection. Keep
     # its reserved future write gate explicitly off until a mutation exists.
     "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_IMPORT_HANDOFF",
@@ -275,6 +272,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/delete-draft"),
     ),
     "tournament-setup": (
+        ("POST", "/admin/clubs/{club_id}/tournaments/setup/tournaments"),
         ("POST", "/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/impact"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/settings"),
         ("PUT", "/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/draft"),

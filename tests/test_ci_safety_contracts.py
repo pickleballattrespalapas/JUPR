@@ -45,7 +45,7 @@ def test_canonical_smoke_runs_all_mocked_tournament_setup_browser_tests() -> Non
     spec = _read("apps/web/e2e/tournament-setup.builder.staging.spec.ts")
 
     assert "e2e/tournament-setup.builder.staging.spec.ts" in workflow
-    assert 'EXPECTED_TOURNAMENT_SETUP_TESTS: "5"' in workflow
+    assert 'EXPECTED_TOURNAMENT_SETUP_TESTS: "6"' in workflow
     assert "tournament-setup-report.json" in workflow
     assert "report_errors(report)" in workflow
     assert "JUPR_RUN_TOURNAMENT_SETUP_UI_E2E" not in spec

@@ -31,15 +31,24 @@ def _mock_common(monkeypatch):
     )
 
 
-class _Result:
-    ok = True
-    errors = []
-    data = {"inserted": 1}
+def _atomic_result():
+    return {
+        "ok": True,
+        "match_write_committed": True,
+        "submitted_count": 1,
+        "result": {"inserted": 1},
+        "feedback": {},
+        "operation": {"idempotent": False},
+        "warnings": [],
+    }
 
 
 def test_missing_bearer_token_returns_401(client, monkeypatch):
     _enable(monkeypatch)
-    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": []})
+    response = client.post(
+        "/admin/clubs/club-1/matches/batch",
+        json={"matches": [], "idempotency_key": "test:missing-bearer"},
+    )
     assert response.status_code == 401
     assert "token" in response.json()["detail"]
 
@@ -49,7 +58,7 @@ def test_invalid_token_returns_401(client, monkeypatch):
     monkeypatch.setattr("services.api.main.authenticate_bearer", lambda *_args, **_kwargs: (_ for _ in ()).throw(HTTPException(status_code=401, detail="invalid token")))
     response = client.post(
         "/admin/clubs/club-1/matches/batch",
-        json={"matches": []},
+        json={"matches": [], "idempotency_key": "test:invalid-token"},
         headers={"Authorization": "Bearer invalid"},
     )
     assert response.status_code == 401
@@ -61,7 +70,11 @@ def test_valid_token_no_role_returns_403(client, monkeypatch):
     monkeypatch.setattr("services.api.main.authenticate_bearer", lambda *_a, **_k: type("U", (), {"email": "a@b.com", "user_id": "u1"})())
     monkeypatch.setattr("services.api.main.resolve_admin_role", lambda **_k: type("R", (), {"role": "read_only"})())
 
-    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": []}, headers={"Authorization": "Bearer x"})
+    response = client.post(
+        "/admin/clubs/club-1/matches/batch",
+        json={"matches": [], "idempotency_key": "test:no-role"},
+        headers={"Authorization": "Bearer x"},
+    )
     assert response.status_code == 403
 
 
@@ -73,9 +86,19 @@ def test_scorekeeper_for_requested_club_reaches_submit(client, monkeypatch):
     called = {"ok": False}
     def _submit(*_a, **_k):
         called["ok"] = True
-        return _Result()
-    monkeypatch.setattr("services.api.main.submit_match_batch", _submit)
-    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": [VALID_MATCH]}, headers={"Authorization": "Bearer x"})
+        return _atomic_result()
+    monkeypatch.setattr(
+        "services.api.main.submit_atomic_direct_matches",
+        _submit,
+    )
+    response = client.post(
+        "/admin/clubs/club-1/matches/batch",
+        json={
+            "matches": [VALID_MATCH],
+            "idempotency_key": "test:scorekeeper-submit",
+        },
+        headers={"Authorization": "Bearer x"},
+    )
     assert response.status_code == 200
     assert called["ok"] is True
     assert response.json()["match_write_committed"] is True
@@ -88,7 +111,14 @@ def test_scorekeeper_cannot_send_multiple_matches_through_score_entry(client, mo
     monkeypatch.setattr("services.api.main.authenticate_bearer", lambda *_a, **_k: type("U", (), {"email": "keeper@club.com", "user_id": "u1"})())
     monkeypatch.setattr("services.api.main.resolve_admin_role", lambda **_kwargs: type("R", (), {"role": "scorekeeper"})())
 
-    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": [VALID_MATCH, VALID_MATCH]}, headers={"Authorization": "Bearer x"})
+    response = client.post(
+        "/admin/clubs/club-1/matches/batch",
+        json={
+            "matches": [VALID_MATCH, VALID_MATCH],
+            "idempotency_key": "test:multiple",
+        },
+        headers={"Authorization": "Bearer x"},
+    )
 
     assert response.status_code == 400
     assert "exactly one" in response.json()["detail"]
@@ -102,7 +132,10 @@ def test_scorekeeper_cannot_send_fractional_scores_through_score_entry(client, m
 
     response = client.post(
         "/admin/clubs/club-1/matches/batch",
-        json={"matches": [{**VALID_MATCH, "score_t1": 10.5}]},
+        json={
+            "matches": [{**VALID_MATCH, "score_t1": 10.5}],
+            "idempotency_key": "test:fractional",
+        },
         headers={"Authorization": "Bearer x"},
     )
 
@@ -115,7 +148,11 @@ def test_role_for_different_club_returns_403(client, monkeypatch):
     _mock_common(monkeypatch)
     monkeypatch.setattr("services.api.main.authenticate_bearer", lambda *_a, **_k: type("U", (), {"email": "keeper@club.com", "user_id": "u1"})())
     monkeypatch.setattr("services.api.main.resolve_admin_role", lambda **kwargs: type("R", (), {"role": "read_only"})())
-    response = client.post("/admin/clubs/club-2/matches/batch", json={"matches": []}, headers={"Authorization": "Bearer x"})
+    response = client.post(
+        "/admin/clubs/club-2/matches/batch",
+        json={"matches": [], "idempotency_key": "test:other-club"},
+        headers={"Authorization": "Bearer x"},
+    )
     assert response.status_code == 403
 
 
@@ -124,7 +161,11 @@ def test_read_only_returns_403(client, monkeypatch):
     _mock_common(monkeypatch)
     monkeypatch.setattr("services.api.main.authenticate_bearer", lambda *_a, **_k: type("U", (), {"email": "viewer@club.com", "user_id": "u9"})())
     monkeypatch.setattr("services.api.main.resolve_admin_role", lambda **kwargs: type("R", (), {"role": "read_only"})())
-    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": []}, headers={"Authorization": "Bearer x"})
+    response = client.post(
+        "/admin/clubs/club-1/matches/batch",
+        json={"matches": [], "idempotency_key": "test:read-only"},
+        headers={"Authorization": "Bearer x"},
+    )
     assert response.status_code == 403
 
 
@@ -132,6 +173,10 @@ def test_no_secret_in_error_response(client, monkeypatch):
     _enable(monkeypatch)
     secret = "super-secret-value"
     monkeypatch.setenv("SUPABASE_JWT_SECRET", secret)
-    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": []}, headers={"Authorization": "Bearer invalid"})
+    response = client.post(
+        "/admin/clubs/club-1/matches/batch",
+        json={"matches": [], "idempotency_key": "test:no-secret"},
+        headers={"Authorization": "Bearer invalid"},
+    )
     body = response.text
     assert secret not in body

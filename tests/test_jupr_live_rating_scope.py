@@ -224,7 +224,7 @@ def test_process_matches_overall_only_updates_players_not_league_ratings(monkeyp
     assert float(updated_players[1]["rating"]) != 1200.0
 
 
-def test_process_matches_unrated_skips_insert_and_rating_changes(monkeypatch):
+def test_process_matches_unrated_records_match_without_rating_changes(monkeypatch):
     _patch_side_effects(monkeypatch)
     sb = _Supabase()
     initial_players = _players_df().to_dict("records")
@@ -247,13 +247,52 @@ def test_process_matches_unrated_skips_insert_and_rating_changes(monkeypatch):
         df_leagues=pd.DataFrame(),
         df_meta=pd.DataFrame(),
     )
-    assert result["inserted"] == 0
+    assert result["inserted"] == 1
     assert result["skipped_unrated"] == 1
     assert sb.tables["league_ratings"] == []
     before = {int(row["id"]): row for row in initial_players}
     after = {int(row["id"]): row for row in sb.tables["players"]}
     assert int(after[1]["matches_played"]) == int(before[1]["matches_played"])
     assert float(after[1]["rating"]) == float(before[1]["rating"])
+    assert len(sb.tables["matches"]) == 1
+    assert sb.tables["matches"][0]["rating_scope"] == "unrated"
+    assert float(sb.tables["matches"][0]["elo_delta"]) == 0.0
+
+
+def test_process_matches_unrated_plan_has_match_but_no_aggregate_writes(
+    monkeypatch,
+):
+    _patch_side_effects(monkeypatch)
+    sb = _Supabase()
+    sb.tables["players"] = _players_df().to_dict("records")
+
+    result = process_matches(
+        [{
+            "date": "2026-07-26",
+            "league": "Open",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "s1": 11,
+            "s2": 8,
+            "rating_scope": "unrated",
+        }],
+        supabase=sb,
+        club_id="club",
+        name_to_id={},
+        df_players_all=_players_df(),
+        df_leagues=pd.DataFrame(),
+        df_meta=pd.DataFrame(),
+        build_write_plan_only=True,
+    )
+
+    assert result["inserted"] == 1
+    assert result["skipped_unrated"] == 1
+    assert len(result["write_plan"]["match_rows"]) == 1
+    assert result["write_plan"]["match_rows"][0]["rating_scope"] == "unrated"
+    assert result["write_plan"]["player_updates"] == []
+    assert result["write_plan"]["league_rating_updates"] == []
     assert sb.tables["matches"] == []
 
 

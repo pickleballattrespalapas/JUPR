@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from jupr_app.data.load import load_data
-from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
-from jupr_app.domain.singles_match_processing import process_singles_matches
 from jupr_app.services.admin_match_uploader_service import (
     is_admin_match_uploader_singles_enabled,
-    is_api_audit_log_required,
+)
+from jupr_app.services.direct_match_entry_service import (
+    submit_atomic_direct_matches,
 )
 
 
@@ -129,16 +129,14 @@ def submit_admin_singles_match(
     match: dict[str, Any],
     actor_email: str,
     actor_role: str,
+    idempotency_key: str,
     source: str = "next_match_uploader_singles",
 ) -> dict[str, Any]:
     if not is_admin_match_uploader_singles_enabled():
         raise PermissionError(
-            "Direct singles submission is disabled pending transactional "
-            "write/replay hardening."
+            "Direct singles submission is disabled for the current write wave."
         )
     clean_match = _normalize_single_match(match)
-    player_ids = [int(clean_match["t1_p1"]), int(clean_match["t2_p1"])]
-    before_players = _fetch_players(supabase, club_id=str(club_id), player_ids=player_ids)
     (
         df_players_all,
         _df_players_active,
@@ -152,45 +150,19 @@ def submit_admin_singles_match(
         _schema_degraded,
         _schema_degraded_reason,
     ) = load_data(supabase, str(club_id))
-    result = process_singles_matches(
-        [clean_match],
-        supabase=supabase,
+    result = submit_atomic_direct_matches(
+        supabase,
         club_id=str(club_id),
+        matches=[clean_match],
+        match_format="singles",
+        idempotency_key=str(idempotency_key),
+        actor_email=str(actor_email or ""),
+        actor_role=str(actor_role or ""),
+        source=source,
         name_to_id=name_to_id,
         df_players_all=df_players_all,
     )
-    if int(result.get("inserted") or 0) != 1:
-        raise RuntimeError("Singles match submission did not insert one official match row.")
-    after_players = _fetch_players(supabase, club_id=str(club_id), player_ids=player_ids)
-    feedback = _singles_feedback(before=before_players, after=after_players, player_ids=player_ids, latest_match_id=_latest_match_id(supabase, club_id=str(club_id)))
-    audit_payload = build_activity_payload(
-        club_id=str(club_id),
-        actor_email=str(actor_email or ""),
-        actor_role=str(actor_role or ""),
-        action_type="submit_singles_match_uploader",
-        entity_type="matches",
-        entity_id="singles",
-        after_json={
-            "source_client": "fastapi/nextjs",
-            "source_page": source,
-            "match_format": "singles",
-            "result_summary": result,
-            "feedback": feedback,
-        },
-        source_page=source,
-        flagged_for_review=True,
-    )
-    audit_write = write_admin_activity_log(supabase, audit_payload)
-    warnings: list[str] = []
-    if audit_write.warning:
-        warnings.append(audit_write.warning)
-    if not audit_write.ok and is_api_audit_log_required():
-        raise RuntimeError("audit log write required but unavailable")
     return {
-        "ok": True,
+        **result,
         "mode": "singles_match_uploader",
-        "submitted_count": 1,
-        "result": result,
-        "feedback": feedback,
-        "warnings": warnings,
     }

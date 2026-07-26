@@ -1,10 +1,10 @@
 # Exact-candidate staging acceptance packets — 2026-07-25
 
-This guide prepares the remaining operator and witness work for the next
+This guide prepares the remaining operator and review work for the next
 Pickleball Club Sandwich staging candidate. It is a preparation artifact, not a
 formal acceptance record. The authoritative results remain in
 `docs/next_parity_manual_staging_book.md`; no row becomes `Pass` until its exact
-candidate evidence and required human sign-off exist.
+candidate evidence and valid human-witness or automated sign-off exist.
 
 Merge this guide with the executable repair candidate before that candidate is
 frozen. Executable waves require the application candidate to equal the current
@@ -113,7 +113,8 @@ business-data write.
 
 - Operate only on the immutable candidate origin supplied for the active packet.
 - The evidence runner records Git SHAs, deployment IDs, Fly images, database IDs,
-  fingerprints, and audit IDs. The operator and witness do not transcribe them.
+  fingerprints, and audit IDs. Neither the operator nor any witness transcribes
+  them.
 - Every manual write uses `none -> one named wave -> authoritative
   readback/recovery -> none`.
 - Never move directly between active write waves.
@@ -121,7 +122,8 @@ business-data write.
 - Stop on wrong-club data, private-field exposure, external email, stale-state
   conflict, uncertain response, duplicate durable rows, missing audit
   attribution, or unavailable recovery.
-- A distinct human witness observes every manual-only write and visible result.
+- Every manual-only write has either a distinct human witness or a
+  candidate-bound GitHub run and artifact recorded by the evidence runner.
   Automated-only workflow waves do not require a witness.
 
 ## Short fixture vocabulary
@@ -171,7 +173,7 @@ Record each page key separately in the formal book.
   `Blocked` rather than `Pass` until owner/legal approval exists.
 - Support/contact: verify the mail link on a real device and the blank form
   state. Staff-mail handling remains owner/inbox-bound; the durable intake is a
-  separate witnessed write in Session 2.
+  separate reviewed write in Session 2.
 - Tournament roster, confirmation, edit, and partner-board routes: verify
   public-safe empty/invalid-token states, representative filters, and the private
   field denylist. Valid delivered-token flows remain inbox-bound.
@@ -207,7 +209,7 @@ Record each page key separately in the formal book.
 ## Session 2 — bounded write/recovery packets
 
 The required route, prestate, positive readback, truthful inverse or retained
-evidence, and witness instruction for each packet are listed below. Several
+evidence, and review instruction for each packet are listed below. Several
 packets still have unresolved fixtures or owner/inbox gates and are therefore
 preparation records, not Joe-ready prompts. Do not begin a packet until its exact
 fixture and recovery owner are resolved.
@@ -229,8 +231,9 @@ they require several cases for one page.
 
 For every row:
 
-- Joe is the operator and a second human is the witness. The witness only needs
-  to observe the named browser action and visible result; they do not need to
+- Joe is the operator. Review uses either a second human who observes the named
+  browser action and visible result, or the candidate-bound GitHub run and
+  artifact captured by the evidence runner. A human witness does not need to
   understand infrastructure identity.
 - Start from `write_wave=none`, deploy exactly the one wave named below, perform
   the write and authoritative readback, then return to `none`. If cleanup needs
@@ -255,9 +258,11 @@ book.
 
 ### Packet 1 — public intake and registration
 
-Enable only `public-intake-auth`. The witness observes each submission,
-confirmation, idempotent retry when named, and visible result. These writes may
-share one wave only after all exact fixtures and tokens are prepared.
+Enable only `public-intake-auth`. In human-review mode, the witness observes each
+submission, confirmation, idempotent retry when named, and visible result. In
+automated-review mode, the runner records those results in its candidate-bound
+artifact. These writes may share one wave only after all exact fixtures and
+tokens are prepared.
 
 | Ledger row | Joe-ready action and shortest fixture | Authoritative readback | Recovery or retention |
 |---|---|---|---|
@@ -273,10 +278,10 @@ Return to `none` and attest the all-false write projection before Packet 2.
 ### Packet 2 — support queue finalization
 
 Enable only `support-requests`. At the support queue, load the three exact IDs
-created in Packet 1. Joe enters `test only`, confirms Yes, and the witness
-observes both the action and resulting status. Support and privacy fixtures may
-be dismissed; the no-op data correction must be resolved so its full review
-contract can be exercised without changing source data.
+created in Packet 1. Joe enters `test only` and confirms Yes. In human-review
+mode, the witness observes both the action and resulting status. Support and
+privacy fixtures may be dismissed; the no-op data correction must be resolved
+so its full review contract can be exercised without changing source data.
 
 | Ledger row | Route and expected result | Final evidence |
 |---|---|---|
@@ -362,8 +367,8 @@ wave, and destructive exclusion has atomic idempotent recovery:
    aggregate/counter change for the unrated row.
 4. Exclude only those returned IDs, run one full Replay, and require the exact
    captured baselines plus durable succeeded recovery evidence.
-5. Return to `none` and attest both dormant gates disabled. A witness observes
-   the named browser actions and visible results.
+5. Return to `none` and attest both dormant gates disabled. In human-review
+   mode, a witness observes the named browser actions and visible results.
 
 Tournament Operations official singles publishing is a separate automated-ready
 CAS path. It does not clear the direct-uploader blocker, and its manual recovery
@@ -380,9 +385,9 @@ This packet deliberately crosses three waves, always through `none`.
    `POST /admin/clubs/tres_palapas/league-manager/live-sessions`.
 2. Return to `none`; enable `league-live-submit`. Publish round 1 through
    `POST /admin/clubs/tres_palapas/league-manager/live-sessions/<session-id>/rounds/1/submit`.
-   For `manual:league-live`, the witness observes the publish and visible
-   result. Session GET and Match Log must show the exact session, returned match
-   contexts, and one committed round.
+   For `manual:league-live`, a witness observes the publish and visible result
+   when human review is used. Session GET and Match Log must show the exact
+   session, returned match contexts, and one committed round.
 3. Return to `none`; enable `match-player`, exclude only those returned match
    contexts, run Replay, and require restored ratings. Return to `none`.
 4. Re-enable `league-live-submit`, compensate round 1 with reason `test only`
@@ -481,8 +486,8 @@ tournament audit is not rating recovery. The publisher is automated-ready
 through its atomic CAS RPC, but this manual protocol remains `Blocked` while
 destructive exclusion is dormant.
 
-The automated `match-rating-writes` workflow is not one of the 25 witnessed
-manual rows. Run it only in the exact sequence described under Remaining
+The automated `match-rating-writes` workflow is not one of the 25 manual review
+rows. Run it only in the exact sequence described under Remaining
 automated sequence. Despite its historical name, it proves only a reversible
 Tournament Live game-score command, stale-state refusal, idempotent retry, and
 cleanup. It does not publish an official match or write player ratings. The
@@ -497,9 +502,10 @@ team count of 4, 5, 6, 7, or 8. Generate round robin through:
 
 `POST /admin/clubs/tres_palapas/tournament-live/tournaments/<tournament-id>/draws/<draw-id>/commands`
 
-The witness observes the Yes confirmation and generated schedule. The command
-response must report success and the expected game count; the exact Tournament
-Live snapshot must show matching games, progression, operation key, and audit.
+In human-review mode, the witness observes the Yes confirmation and generated
+schedule. The command response must report success and the expected game count;
+the exact Tournament Live snapshot must show matching games, progression,
+operation key, and audit.
 Schedule generation has no structural delete, so `RETAIN` the disposable draw
 and tournament.
 
@@ -534,7 +540,7 @@ session.
 | Dormant direct-singles and destructive-recovery gates | `manual:score-entry`, `manual:match-uploader`, destructive `manual:match-log`, `manual:league-live`, `manual:challenge-ladder`, `manual:moneyball`, `manual:jupr-live`, and official-publish recovery | Keep both flags `0`. Prepare atomic writer/recovery implementation, idempotent retry and unknown-outcome tests, migration acceptance, exact fixtures, and a later reviewed wave before asking Joe to run these protocols. |
 | Full multi-case row contracts | `manual:league-manager`, `manual:match-uploader`, `manual:match-log`, `manual:player-editor`, `manual:challenge-ladder`, `manual:public-live`, `manual:tournament-admin`, `manual:tournament-operations`, `manual:tournament-live-non-score`, and Admin Tools | Prepare the remaining lifecycle, merge, duplicate/social, live-session variants, setup/registration/import/podium/award/publish, playoff, stale/response-loss, and recovery cases. A successful representative mutation is useful evidence but is not a full-row pass. |
 
-The next active witnessed order is: Packet 1 intake/registration, Packet 2 queue
+The next active reviewed order is: Packet 1 intake/registration, Packet 2 queue
 finalization, Packet 3 communications, Packet 4, only the independently
 reversible Match Log/Player Editor parts of Packet 5, Packet 8, the reversible
 Tournament Admin/Ops score-edit parts of Packet 9, then any independently

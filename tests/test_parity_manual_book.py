@@ -20,6 +20,21 @@ from scripts.check_parity_manual_book import (
 VERCEL_ID = "dpl_staging123"
 VERCEL_ORIGIN = "https://jupr-a1b2c3d4-pickleballattrespalapas1.vercel.app"
 FLY_IMAGE = "registry.fly.io/juprleagues-api-staging@sha256:123"
+GITHUB_RUN_URL = (
+    "https://github.com/pickleballattrespalapas/JUPR/actions/runs/30184922707"
+)
+GITHUB_ARTIFACT_DIGEST = f"sha256:{'b' * 64}"
+
+
+def _automated_signoff(
+    candidate_sha: str,
+    *,
+    artifact: str = GITHUB_ARTIFACT_DIGEST,
+) -> str:
+    return (
+        f"operator=joe; automated=candidate={candidate_sha},"
+        f"run={GITHUB_RUN_URL},artifact={artifact}"
+    )
 
 
 def test_manual_book_covers_every_partial_page_and_manifest_entry_once() -> None:
@@ -87,8 +102,8 @@ def _completed_book(text: str, candidate_sha: str) -> str:
         "Streamlit fallback URL / build": "streamlit-build-1",
         "Staging role accounts exercised": "admin, club-owner, viewer",
         "Session start / end": "2026-07-20T01:00Z / 2026-07-20T03:00Z",
-        "Primary operator": "operator-1",
-        "Witness / reviewer": "reviewer-1",
+        "Primary operator": "joe",
+        "Witness / automated reviewer": "alex",
     }
     for field, value in candidate_values.items():
         text = text.replace(f"| {field} | — |", f"| {field} | {value} |")
@@ -109,14 +124,14 @@ def _completed_book(text: str, candidate_sha: str) -> str:
         lambda match: (
             f"| `{match.group('key')}` | `Pass` | evidence-{match.group('key')} | "
             f"{match.group('recovery') if match.group('recovery').strip() == 'N/A' else 'Verified: recovery-1'} "
-            "| operator-1 |"
+            "| joe |"
         ),
         text,
     )
     text = WAVE_ROW_RE.sub(
         lambda match: (
             f"| `{match.group('wave')}` | {match.group('command')} | {match.group('inputs')} "
-            "| `Pass` | run-1 | operator-1 |"
+            "| `Pass` | run-1 | joe |"
         ),
         text,
     )
@@ -131,7 +146,7 @@ def _completed_book(text: str, candidate_sha: str) -> str:
             f"path=/manual/{match.group('surface')}/restore; status=200; "
             "projection=state=restored,readback=true; "
             f"artifact=restore-{match.group('surface')} "
-            "| `Pass` | operator=operator-1; witness=reviewer-1 |"
+            "| `Pass` | operator=joe; witness=alex |"
         ),
         text,
     )
@@ -182,14 +197,14 @@ def test_completion_mode_accepts_bound_all_pass_evidence(tmp_path: Path) -> None
     ) == []
 
 
-def test_completion_mode_rejects_automated_review_for_manual_only_staging_writes(
+def test_completion_mode_rejects_unbound_automated_review_for_manual_writes(
     tmp_path: Path,
 ) -> None:
     candidate_sha = "a" * 40
     completed = _completed_book(BOOK_PATH.read_text(encoding="utf-8"), candidate_sha)
     completed = re.sub(
-        r"operator=operator-1; witness=reviewer-1",
-        "operator=operator-1; review=automated",
+        r"operator=joe; witness=alex",
+        "operator=joe; review=automated",
         completed,
     )
     book = tmp_path / "book.md"
@@ -202,7 +217,35 @@ def test_completion_mode_rejects_automated_review_for_manual_only_staging_writes
         vercel_deployment_origin=VERCEL_ORIGIN,
         fly_image_ref=FLY_IMAGE,
     )
-    assert any("distinct human identities" in error for error in errors)
+    assert any("candidate-bound GitHub automation" in error for error in errors)
+
+
+def test_completion_mode_accepts_candidate_bound_automated_manual_signoff(
+    tmp_path: Path,
+) -> None:
+    candidate_sha = "a" * 40
+    artifacts = (
+        GITHUB_ARTIFACT_DIGEST,
+        f"{GITHUB_RUN_URL}/artifacts/998877",
+    )
+    for index, artifact in enumerate(artifacts):
+        completed = _completed_book(
+            BOOK_PATH.read_text(encoding="utf-8"),
+            candidate_sha,
+        ).replace(
+            "operator=joe; witness=alex",
+            _automated_signoff(candidate_sha, artifact=artifact),
+        )
+        book = tmp_path / f"book-{index}.md"
+        book.write_text(completed, encoding="utf-8")
+
+        assert check_book_complete(
+            book_path=book,
+            candidate_sha=candidate_sha,
+            vercel_deployment_id=VERCEL_ID,
+            vercel_deployment_origin=VERCEL_ORIGIN,
+            fly_image_ref=FLY_IMAGE,
+        ) == []
 
 
 def test_completion_mode_rejects_candidate_sha_mismatch(tmp_path: Path) -> None:
@@ -271,7 +314,7 @@ def test_completion_mode_rejects_reserved_prose_in_every_completion_field_family
     candidate_sha = "a" * 40
     base = _completed_book(BOOK_PATH.read_text(encoding="utf-8"), candidate_sha)
     substitutions = (
-        ("| Primary operator | operator-1 |", "| Primary operator | Pending approval |"),
+        ("| Primary operator | joe |", "| Primary operator | Pending approval |"),
         ("evidence-leaderboards", "Blocked evidence"),
         ("Candidate SHA and clean integrated Order-28 tree", "Unresolved inputs"),
         ("prestate=state-original", "prestate=Blocked baseline"),
@@ -326,8 +369,8 @@ def test_completion_mode_rejects_unstructured_or_weak_manual_mutation_evidence(
             "recovery must use",
         ),
         (
-            "operator=operator-1; witness=reviewer-1",
-            "operator=operator-1; witness=operator-1",
+            "operator=joe; witness=alex",
+            "operator=joe; witness=JOE",
             "distinct human identities",
         ),
     )
@@ -343,3 +386,55 @@ def test_completion_mode_rejects_unstructured_or_weak_manual_mutation_evidence(
             fly_image_ref=FLY_IMAGE,
         )
         assert any(expected_error in error for error in errors)
+
+
+def test_completion_mode_rejects_placeholder_arbitrary_or_unbound_manual_signoff(
+    tmp_path: Path,
+) -> None:
+    candidate_sha = "a" * 40
+    base = _completed_book(
+        BOOK_PATH.read_text(encoding="utf-8"),
+        candidate_sha,
+    )
+    valid_automation = _automated_signoff(candidate_sha)
+    invalid_signoffs = (
+        "operator=operator-1; witness=reviewer-1",
+        "operator=joe; automated=workflow passed",
+        _automated_signoff("c" * 40),
+        valid_automation.replace(
+            "/runs/30184922707",
+            "/runs/123",
+        ),
+        valid_automation.replace(
+            GITHUB_ARTIFACT_DIGEST,
+            "artifact-from-run",
+        ),
+        valid_automation.replace(
+            GITHUB_RUN_URL,
+            "https://github.com/another/repository/actions/runs/30184922707",
+        ),
+        (
+            f"operator=joe; automated=candidate={candidate_sha},"
+            f"run={GITHUB_RUN_URL},"
+            "artifact=https://github.com/pickleballattrespalapas/JUPR/"
+            "actions/runs/30184922708/artifacts/998877"
+        ),
+    )
+    for index, invalid_signoff in enumerate(invalid_signoffs):
+        book = tmp_path / f"invalid-signoff-{index}.md"
+        book.write_text(
+            base.replace(
+                "operator=joe; witness=alex",
+                invalid_signoff,
+                1,
+            ),
+            encoding="utf-8",
+        )
+        errors = check_book_complete(
+            book_path=book,
+            candidate_sha=candidate_sha,
+            vercel_deployment_id=VERCEL_ID,
+            vercel_deployment_origin=VERCEL_ORIGIN,
+            fly_image_ref=FLY_IMAGE,
+        )
+        assert any("sign-off must use either" in error for error in errors)

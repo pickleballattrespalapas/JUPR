@@ -1,6 +1,5 @@
 import ast
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -92,7 +91,7 @@ def test_submit_match_batch_wraps_errors_as_failure(monkeypatch):
 
 
 
-def test_fastapi_admin_batch_uses_submit_match_batch(monkeypatch):
+def test_fastapi_admin_batch_uses_atomic_direct_match_entry(monkeypatch):
     pytest.importorskip("fastapi")
     from services.api import main as api_main
 
@@ -105,11 +104,18 @@ def test_fastapi_admin_batch_uses_submit_match_batch(monkeypatch):
     class FakeRole:
         role = "admin"
 
-    def fake_submit(ctx, matches, **kwargs):
-        submit_calls["ctx"] = ctx
-        submit_calls["matches"] = matches
+    def fake_submit(supabase, **kwargs):
+        submit_calls["supabase"] = supabase
         submit_calls["kwargs"] = kwargs
-        return ServiceResult.success(data={"processed": len(matches)})
+        return {
+            "ok": True,
+            "match_write_committed": True,
+            "submitted_count": len(kwargs["matches"]),
+            "result": {"inserted": len(kwargs["matches"])},
+            "feedback": {},
+            "operation": {"idempotent": False},
+            "warnings": [],
+        }
 
     monkeypatch.setattr(api_main, "is_next_admin_score_entry_enabled", lambda: True)
     monkeypatch.setattr(api_main, "_has_supabase_service_role_key", lambda: True)
@@ -118,10 +124,11 @@ def test_fastapi_admin_batch_uses_submit_match_batch(monkeypatch):
     monkeypatch.setattr(api_main, "resolve_admin_role", lambda **_kwargs: FakeRole())
     monkeypatch.setattr(api_main, "has_permission", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(api_main, "_validate_score_entry_match", lambda _matches: None)
-    monkeypatch.setattr(api_main, "_score_entry_player_ids", lambda _matches: [])
-    monkeypatch.setattr(api_main, "_fetch_score_entry_players", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(api_main, "_latest_score_entry_match_id", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(api_main, "_score_entry_feedback", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        api_main,
+        "_normalize_score_entry_match",
+        lambda matches: list(matches),
+    )
     monkeypatch.setattr(
         api_main,
         "load_data",
@@ -139,19 +146,21 @@ def test_fastapi_admin_batch_uses_submit_match_batch(monkeypatch):
             None,
         ),
     )
-    monkeypatch.setattr(
-        api_main,
-        "write_admin_activity_log",
-        lambda *_args, **_kwargs: SimpleNamespace(ok=True, warning=None),
-    )
-    monkeypatch.setattr(api_main, "submit_match_batch", fake_submit)
+    monkeypatch.setattr(api_main, "submit_atomic_direct_matches", fake_submit)
 
-    payload = api_main.MatchBatchRequest(matches=[{"winner": "A"}], source="test")
+    payload = api_main.MatchBatchRequest(
+        matches=[{"winner": "A"}],
+        source="test",
+        idempotency_key="test:atomic-boundary",
+    )
     out = api_main.submit_admin_match_batch("club-123", payload, authorization="Bearer token")
 
     assert out["ok"] is True
-    assert submit_calls["matches"] == [{"winner": "A"}]
+    assert submit_calls["kwargs"]["matches"] == [{"winner": "A"}]
     assert submit_calls["kwargs"]["name_to_id"] == {"A": 1}
+    assert submit_calls["kwargs"]["idempotency_key"] == "test:atomic-boundary"
+    assert submit_calls["kwargs"]["actor_email"] == "admin@example.com"
+    assert submit_calls["kwargs"]["actor_role"] == "admin"
 
     api_source = Path("services/api/main.py").read_text(encoding="utf-8")
     assert "from jupr_app.domain.match_processing import process_matches" not in api_source
