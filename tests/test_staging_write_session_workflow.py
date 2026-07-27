@@ -244,6 +244,30 @@ def test_lease_wait_does_not_hold_lock_and_expiry_rechecks_nonce() -> None:
     assert "A newer owner command superseded this lease" in expiry
 
 
+def test_expiry_normalizes_the_control_body_before_closing() -> None:
+    workflow = _read(WORKFLOW_PATH)
+    expiry_close = workflow[
+        workflow.index(
+            "      - name: Close only the unchanged expired control\n"
+        ) :
+    ]
+
+    second_recheck = expiry_close.index(
+        '"$RUNNER_TEMP/lease-expiry-after-restore.json"'
+    )
+    close_body = expiry_close.index('CLOSE_BODY="$(')
+    patch = expiry_close.index("--method PATCH")
+    assert second_recheck < close_body < patch
+    assert (
+        "'.close_body | select(type == \"string\" and length > 0)'"
+        in expiry_close
+    )
+    assert expiry_close.count("--method PATCH") == 1
+    assert expiry_close.index('-f body="$CLOSE_BODY"') < expiry_close.index(
+        "-f state=closed"
+    )
+
+
 def test_safety_recovery_understands_valid_lease_and_failed_controller() -> None:
     recovery = _read(RECOVERY_PATH)
     trigger = _between(recovery, "\non:\n", "\npermissions:")

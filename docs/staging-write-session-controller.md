@@ -122,8 +122,10 @@ the existing global Fly mutex. An advance is `current -> none -> next`.
 
 Each open or advance run starts an expiry watcher without holding the staging
 mutex. At expiry it reacquires the mutex, rechecks the exact issue body and
-nonce, restores `none`, and closes only if that lease is still current. An older
-watcher cannot close a newer lease.
+nonce, restores `none`, replaces the expired open or advance command with its
+matching valid close command, and closes only if that lease is still current.
+This leaves the closed issue safe for the connector's next paired edited and
+reopened events. An older watcher cannot close a newer lease.
 
 The scheduled safety workflow runs at minute `7` and `37`. It skips restoration
 only when issue `#1062` is open and locked, the self-contained lease is valid
