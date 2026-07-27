@@ -49,6 +49,9 @@ jobs:
             tests/test_ci_safety_contracts.py \
             tests/test_staging_evidence_automation.py \
             tests/test_staging_evidence_automation_workflow.py \
+            tests/test_staging_write_session.py \
+            tests/test_staging_write_session_workflow.py \
+            tests/test_staging_write_wave_guards.py \
             tests/test_league_awards_static_contract.py \
             tests/test_league_core_static_contract.py \
             tests/test_league_live_domain_static_contract.py \

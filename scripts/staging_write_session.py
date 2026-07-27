@@ -215,6 +215,27 @@ def parse_session_command(body: object) -> SessionCommand:
     )
 
 
+def render_close_body(command: SessionCommand) -> str:
+    if command.command not in {"open", "advance"}:
+        raise ContractError("Only an active lease can render a close body.")
+    body = (
+        "# Protected staging write session control\n\n"
+        "This locked owner-controlled issue is the fail-closed control plane "
+        "for short-lived, exact-candidate staging write-test windows.\n\n"
+        "```yaml\n"
+        "command: close\n"
+        f"candidate_sha: {command.candidate_sha}\n"
+        f"expected_write_wave: {command.write_wave}\n"
+        "write_wave: none\n"
+        f"session_nonce: {command.session_nonce}\n"
+        "```\n\n"
+        "At rest this issue remains closed and staging remains at "
+        "`write_wave=none`. Production is never a target."
+    )
+    parse_session_command(body)
+    return body
+
+
 def validate_lease(
     command: SessionCommand,
     *,
@@ -623,6 +644,7 @@ def should_expire_lease(
             "issue_number": CONTROL_ISSUE_NUMBER,
             "session_nonce": command.session_nonce,
             "write_wave": command.write_wave,
+            "close_body": render_close_body(command),
         }
         if safety_errors:
             result["reason"] = " ".join(safety_errors)

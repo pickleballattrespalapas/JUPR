@@ -722,6 +722,55 @@ def test_old_expiry_cannot_close_a_superseding_lease() -> None:
     assert current["session_nonce"] == old_command.session_nonce
 
 
+def test_expiry_returns_a_reopen_safe_close_body() -> None:
+    active_body = _body()
+    active_command = session.parse_session_command(active_body)
+    expired = session.should_expire_lease(
+        issue=_issue(body=active_body),
+        current_candidate_sha=CANDIDATE_SHA,
+        command=active_command,
+        now=NOW + timedelta(minutes=21),
+    )
+
+    close_body = expired["close_body"]
+    close_command = session.parse_session_command(close_body)
+    assert close_command.command == "close"
+    assert close_command.candidate_sha == active_command.candidate_sha
+    assert close_command.expected_write_wave == active_command.write_wave
+    assert close_command.write_wave == NO_WRITE_WAVE
+    assert close_command.session_nonce == active_command.session_nonce
+    assert close_command.lease_started_at == ""
+    assert close_command.lease_expires_at == ""
+
+    fresh_open_body = _body()
+    request, calls = _request(_issue(body=fresh_open_body))
+    companion = session.authorize_event(
+        _event(
+            action="edited",
+            body=fresh_open_body,
+            previous_body=close_body,
+        ),
+        run_attempt=1,
+        request_json=request,
+        now=NOW,
+    )
+    assert companion == {
+        "authorized": False,
+        "superseded": True,
+        "issue_number": session.CONTROL_ISSUE_NUMBER,
+    }
+    assert calls == []
+
+    reopened = session.authorize_event(
+        _event(action="reopened", body=fresh_open_body),
+        run_attempt=1,
+        request_json=request,
+        now=NOW,
+    )
+    assert reopened["authorized"] is True
+    assert reopened["superseded"] is False
+
+
 @pytest.mark.parametrize("case", ["closed_issue", "candidate_drift"])
 def test_exact_current_lease_fails_closed_without_waiting_for_cron(
     case: str,

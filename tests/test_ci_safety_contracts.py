@@ -16,6 +16,9 @@ def test_api_contract_runs_new_deployment_and_admin_ux_regressions() -> None:
         "tests/test_ci_safety_contracts.py",
         "tests/test_staging_evidence_automation.py",
         "tests/test_staging_evidence_automation_workflow.py",
+        "tests/test_staging_write_session.py",
+        "tests/test_staging_write_session_workflow.py",
+        "tests/test_staging_write_wave_guards.py",
     )
     for test_path in required_tests:
         assert test_path in workflow
