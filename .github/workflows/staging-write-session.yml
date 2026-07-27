@@ -638,10 +638,16 @@ jobs:
             echo "- Issue comment: unavailable; protected issue remains locked." \
               >> "$GITHUB_STEP_SUMMARY"
           fi
+          CLOSE_BODY="$(
+            jq -er \
+              '.close_body | select(type == "string" and length > 0)' \
+              "$RUNNER_TEMP/lease-expiry-after-restore.json"
+          )"
           gh api \
             --method PATCH \
             -H "X-GitHub-Api-Version: 2026-03-10" \
             "/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER" \
+            -f body="$CLOSE_BODY" \
             -f state=closed \
             -f state_reason=completed \
             --silent
