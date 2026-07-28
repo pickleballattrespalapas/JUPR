@@ -1,0 +1,99 @@
+name: Repair team-league awards migration
+
+on:
+  push:
+    branches:
+      - agent/fix-team-league-awards-migration
+    paths:
+      - .github/workflows/repair-team-league-awards-migration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.repository == 'pickleballattrespalapas/JUPR'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/fix-team-league-awards-migration
+          fetch-depth: 0
+
+      - name: Repair invalid catalog-qualified COALESCE
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib
+          import json
+          import subprocess
+
+          migration = Path('supabase/migrations/20260728040000_team_league_awards_hardening.sql')
+          expected_blob = '411cf46c017e69c7f1220abfc7125e4edac5cc6c'
+          actual_blob = subprocess.check_output(
+              ['git', 'hash-object', str(migration)], text=True
+          ).strip()
+          if actual_blob != expected_blob:
+              raise SystemExit(f'Refusing unexpected migration blob {actual_blob}.')
+
+          text = migration.read_text(encoding='utf-8')
+          marker = 'pg_catalog.coalesce('
+          count = text.count(marker)
+          if count < 1:
+              raise SystemExit('Expected at least one invalid pg_catalog.coalesce call.')
+          text = text.replace(marker, 'coalesce(')
+          if marker in text:
+              raise SystemExit('Unrepaired pg_catalog.coalesce call remains.')
+          migration.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_team_league_awards_migration_postgres_compatibility.py')
+          test.write_text(
+              "from pathlib import Path\n\n\n"
+              "def test_team_league_awards_migration_uses_sql_coalesce_syntax() -> None:\n"
+              "    sql = Path(\n"
+              "        'supabase/migrations/20260728040000_team_league_awards_hardening.sql'\n"
+              "    ).read_text(encoding='utf-8')\n"
+              "    assert 'pg_catalog.coalesce(' not in sql\n",
+              encoding='utf-8',
+          )
+
+          migrations = Path('supabase/migrations')
+          records = [
+              f"{path.name}\t{hashlib.sha256(path.read_bytes()).hexdigest()}"
+              for path in sorted(migrations.glob('*.sql'))
+          ]
+          fingerprint = hashlib.sha256('\n'.join(records).encode('utf-8')).hexdigest()
+          contract = Path('config/production_migration_contract.json')
+          payload = json.loads(contract.read_text(encoding='utf-8'))
+          payload['repository_migration_content_sha256'] = fingerprint
+          contract.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+          print(f'Repaired {count} invalid call(s); fingerprint={fingerprint}')
+
+      - name: Verify repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          python -m pytest -q tests/test_team_league_awards_migration_postgres_compatibility.py
+          python - <<'PY'
+          from pathlib import Path
+          sql = Path('supabase/migrations/20260728040000_team_league_awards_hardening.sql').read_text(encoding='utf-8')
+          assert 'pg_catalog.coalesce(' not in sql
+          PY
+
+      - name: Commit repair and remove one-time workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/repair-team-league-awards-migration.yml
+          git config user.name "pickleballattrespalapas"
+          git config user.email "pickleballattrespalapas@gmail.com"
+          git add \
+            supabase/migrations/20260728040000_team_league_awards_hardening.sql \
+            config/production_migration_contract.json \
+            tests/test_team_league_awards_migration_postgres_compatibility.py \
+            .github/workflows/repair-team-league-awards-migration.yml
+          git commit -m "Fix team-league awards migration compatibility"
+          git push origin HEAD:agent/fix-team-league-awards-migration
