@@ -30,14 +30,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: agent/apply-staging-team-migrations
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Verify exact staging source and isolated runner diff
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin +refs/heads/staging:refs/remotes/origin/staging
+          git fetch --no-tags origin +refs/heads/staging:refs/remotes/origin/staging
           test "$(git rev-parse refs/remotes/origin/staging)" = "$EXPECTED_STAGING_SHA"
           CHANGED="$(git diff --name-only "$EXPECTED_STAGING_SHA" HEAD)"
           test "$CHANGED" = ".github/workflows/apply-staging-team-migrations.yml"
