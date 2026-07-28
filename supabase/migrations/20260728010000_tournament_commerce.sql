@@ -1048,6 +1048,7 @@ declare
   v_list_total integer;
   v_discount integer;
   v_line_id uuid;
+  v_pair record;
 begin
   select tournament.* into v_tournament
   from public.tournaments tournament
@@ -1130,8 +1131,8 @@ begin
         raise exception using errcode = '22023', message = 'JUPR_TOURNAMENT_COMMERCE_EVENT_PRICE_INVALID';
       end if;
     elsif v_line ->> 'line_type' = 'ITEM' then
-      select variant, item
-      into v_variant, v_item
+      select variant as variant_row, item as item_row
+      into v_pair
       from public.tournament_commerce_item_variants variant
       join public.tournament_commerce_items item on item.id = variant.item_id
       where variant.id = (v_line ->> 'variant_id')::uuid
@@ -1140,8 +1141,12 @@ begin
         and item.club_id = p_club_id
         and item.status = 'ACTIVE'
         and variant.status = 'ACTIVE';
-      if not found
-         or v_item.base_price_minor + v_variant.price_delta_minor
+      if not found then
+        raise exception using errcode = '22023', message = 'JUPR_TOURNAMENT_COMMERCE_ITEM_PRICE_INVALID';
+      end if;
+      v_variant := v_pair.variant_row;
+      v_item := v_pair.item_row;
+      if v_item.base_price_minor + v_variant.price_delta_minor
             <> (v_line ->> 'list_unit_minor')::integer then
         raise exception using errcode = '22023', message = 'JUPR_TOURNAMENT_COMMERCE_ITEM_PRICE_INVALID';
       end if;
@@ -1372,8 +1377,8 @@ begin
   for v_inventory in
     select value from jsonb_array_elements(p_quote_snapshot -> 'inventory')
   loop
-    select variant, item
-    into v_variant, v_item
+    select variant as variant_row, item as item_row
+    into v_pair
     from public.tournament_commerce_item_variants variant
     join public.tournament_commerce_items item on item.id = variant.item_id
     where variant.id = (v_inventory ->> 'variant_id')::uuid
@@ -1385,6 +1390,8 @@ begin
     if not found then
       raise exception using errcode = '22023', message = 'JUPR_TOURNAMENT_COMMERCE_INVENTORY_TARGET_INVALID';
     end if;
+    v_variant := v_pair.variant_row;
+    v_item := v_pair.item_row;
     select coalesce(sum(reservation.quantity), 0)
     into v_reserved
     from public.tournament_commerce_inventory_reservations reservation
@@ -1913,6 +1920,7 @@ declare
   v_before jsonb;
   v_operation public.tournament_commerce_operations%rowtype;
   v_result jsonb;
+  v_pair record;
 begin
   if p_status not in ('PENDING', 'READY', 'FULFILLED', 'CANCELLED') then
     raise exception using errcode = '22023', message = 'JUPR_TOURNAMENT_COMMERCE_FULFILLMENT_STATUS_INVALID';
@@ -1924,8 +1932,8 @@ begin
   if v_operation.status = 'COMPLETED' then
     return v_operation.result_json || jsonb_build_object('idempotent_replay', true);
   end if;
-  select fulfillment, orders
-  into v_fulfillment, v_order
+  select fulfillment as fulfillment_row, orders as order_row
+  into v_pair
   from public.tournament_commerce_fulfillment fulfillment
   join public.tournament_commerce_orders orders on orders.id = fulfillment.order_id
   where fulfillment.id = p_fulfillment_id
@@ -1935,6 +1943,8 @@ begin
   if not found then
     raise exception using errcode = '22023', message = 'JUPR_TOURNAMENT_COMMERCE_FULFILLMENT_NOT_FOUND';
   end if;
+  v_fulfillment := v_pair.fulfillment_row;
+  v_order := v_pair.order_row;
   if p_expected_updated_at is null
      or v_fulfillment.updated_at is distinct from p_expected_updated_at then
     raise exception using errcode = '40001', message = 'JUPR_TOURNAMENT_COMMERCE_FULFILLMENT_STALE';
