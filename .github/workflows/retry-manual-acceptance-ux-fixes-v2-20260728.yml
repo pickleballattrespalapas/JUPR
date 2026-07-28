@@ -1,0 +1,80 @@
+name: Retry manual acceptance UX fixes v2
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/manual-acceptance-ux-fixes-v2-20260728'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/manual-acceptance-ux-fixes-v2-20260728
+          fetch-depth: 0
+
+      - name: Repair bootstrap typo and apply source changes
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('scripts/apply_manual_acceptance_ux_fixes_20260728.py')
+          text = path.read_text(encoding='utf-8')
+          bad = 'role={messageIsError ? "alert" : "status" style='
+          good = 'role={messageIsError ? "alert" : "status"} style='
+          if text.count(bad) != 2:
+              raise SystemExit(f'Expected two malformed role attributes, found {text.count(bad)}')
+          path.write_text(text.replace(bad, good), encoding='utf-8')
+          exec(compile(path.read_text(encoding='utf-8'), str(path), 'exec'), {'__name__': '__main__'})
+
+      - name: Verify source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          python -m pytest -q tests/test_manual_acceptance_ux_regressions.py
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Build Next.js
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Commit verified fixes and remove bootstrap files
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm scripts/apply_manual_acceptance_ux_fixes_20260728.py
+          rm .github/workflows/apply-manual-acceptance-ux-fixes-v2-20260728.yml
+          rm .github/workflows/retry-manual-acceptance-ux-fixes-v2-20260728.yml
+          git config user.name 'pickleballattrespalapas'
+          git config user.email 'pickleballattrespalapas@gmail.com'
+          git add \
+            apps/web/app/admin/match-uploader/MatchUploaderForm.tsx \
+            apps/web/app/admin/match-log/MatchLogWorkspace.tsx \
+            apps/web/app/admin/match-log/MatchLogApplyPanel.tsx \
+            tests/test_manual_acceptance_ux_regressions.py \
+            docs/manual_acceptance_ux_fixes_20260728.md \
+            scripts/apply_manual_acceptance_ux_fixes_20260728.py \
+            .github/workflows/apply-manual-acceptance-ux-fixes-v2-20260728.yml \
+            .github/workflows/retry-manual-acceptance-ux-fixes-v2-20260728.yml
+          git commit -m 'Fix manual acceptance UX regressions'
+          git push origin HEAD:agent/manual-acceptance-ux-fixes-v2-20260728
