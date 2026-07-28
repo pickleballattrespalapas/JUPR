@@ -14,6 +14,9 @@ def test_match_uploader_manual_acceptance_fixes_are_present() -> None:
     assert "Player-update email was not sent in staging." in source
     assert "JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS is not enabled" not in source
     assert "matchingPlayers.length === 0" in source
+    assert "rowHasEnteredData" in source
+    assert "payload.match_write_committed === false" in source
+    assert "Review Match Log before retrying" in source
 
 
 def test_match_log_edit_page_is_compact() -> None:
