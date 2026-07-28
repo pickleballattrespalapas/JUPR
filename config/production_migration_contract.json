@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-team-competition-2026-07-28",
-  "repository_migration_content_sha256": "00b4f571f148a0c63796c3f55dced6e1b938c128f7180012444e071e1caa05d4",
+  "repository_migration_content_sha256": "03c377b0bb73c454c389014a7d8b942167a9ef9147ff067b6643731b545f42fb",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
