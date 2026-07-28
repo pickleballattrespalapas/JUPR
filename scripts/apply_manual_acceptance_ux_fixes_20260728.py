@@ -15,10 +15,14 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 
 def sub_once(text: str, pattern: str, replacement: str, label: str) -> str:
-    updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=re.DOTALL)
-    if count != 1:
-        raise RuntimeError(f"{label}: expected one regex match, found {count}")
-    return updated
+    regex = re.compile(pattern, re.DOTALL)
+    match = regex.search(text)
+    if match is None:
+        raise RuntimeError(f"{label}: expected one regex match, found 0")
+    rendered = replacement
+    for index, value in enumerate(match.groups(), start=1):
+        rendered = rendered.replace(f"\\{index}", value or "")
+    return text[:match.start()] + rendered + text[match.end():]
 
 
 def section(text: str, start_marker: str, end_marker: str) -> tuple[str, str, str]:
