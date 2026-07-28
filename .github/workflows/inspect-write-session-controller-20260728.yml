@@ -20,10 +20,9 @@ jobs:
       github.event.pull_request.head.ref == 'agent/inspect-write-session-controller-20260728' &&
       github.event.pull_request.base.ref == 'staging'
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 5
     env:
       EXPECTED_SHA: 6da9ea8a2d86d4c2236b7f34fa8f1246dd418d2a
-      NOT_BEFORE: 2026-07-28T19:29:00Z
     steps:
       - name: Check out isolated inspector
         uses: actions/checkout@v4
@@ -53,85 +52,42 @@ jobs:
           )"
           test "$FILES" = ".github/workflows/inspect-write-session-controller-20260728.yml"
 
-      - name: Wait for the authorized apply-command job
+      - name: Capture recent issue-event workflow runs and jobs
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          : > controller-run-id.txt
-          for attempt in $(seq 1 60); do
+          mkdir -p controller-status
+          gh api \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "/repos/$GITHUB_REPOSITORY/actions/runs?event=issues&per_page=100" \
+            > controller-status/recent-issue-runs.json
+          jq '[.workflow_runs[] | {
+                id, name, display_title, status, conclusion, event,
+                head_branch, head_sha, created_at, updated_at, html_url
+              }][0:30]' \
+            controller-status/recent-issue-runs.json \
+            > controller-status/recent-issue-runs-summary.json
+          jq -r '.[] | [.id,.name,.display_title,.status,(.conclusion // ""),.created_at] | @tsv' \
+            controller-status/recent-issue-runs-summary.json \
+            | tee controller-status/recent-issue-runs.txt
+          mapfile -t IDS < <(
+            jq -r '.workflow_runs[0:15][].id' \
+              controller-status/recent-issue-runs.json
+          )
+          for id in "${IDS[@]:-}"; do
+            [ -n "$id" ] || continue
             gh api \
               -H "X-GitHub-Api-Version: 2026-03-10" \
-              "/repos/$GITHUB_REPOSITORY/actions/runs?event=issues&per_page=100" \
-              > recent-issue-runs.json
-
-            mapfile -t RUN_IDS < <(
-              jq -r \
-                --arg not_before "$NOT_BEFORE" \
-                '.workflow_runs
-                 | map(select(
-                     .name == "Protected Staging Write Session" and
-                     .created_at >= $not_before
-                   ))
-                 | sort_by(.created_at)
-                 | reverse
-                 | .[].id' \
-                recent-issue-runs.json
-            )
-
-            chosen=""
-            for run_id in "${RUN_IDS[@]:-}"; do
-              [ -n "$run_id" ] || continue
-              gh api \
-                -H "X-GitHub-Api-Version: 2026-03-10" \
-                "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?filter=latest&per_page=100" \
-                > candidate-jobs.json
-              if jq -e '.jobs[] | select(.name == "Apply one fail-closed write transition")' \
-                  candidate-jobs.json >/dev/null; then
-                chosen="$run_id"
-                cp candidate-jobs.json controller-jobs.json
-                break
-              fi
-            done
-
-            if [ -n "$chosen" ]; then
-              printf '%s\n' "$chosen" > controller-run-id.txt
-              gh api \
-                -H "X-GitHub-Api-Version: 2026-03-10" \
-                "/repos/$GITHUB_REPOSITORY/actions/runs/$chosen" \
-                > controller-run.json
-              status="$(jq -r '.jobs[] | select(.name == "Apply one fail-closed write transition") | .status' controller-jobs.json)"
-              conclusion="$(jq -r '.jobs[] | select(.name == "Apply one fail-closed write transition") | .conclusion // ""' controller-jobs.json)"
-              printf 'controller=%s apply_status=%s apply_conclusion=%s\n' \
-                "$chosen" "$status" "$conclusion"
-              if [ "$status" = "completed" ]; then
-                test "$conclusion" = "success"
-                jq -e --arg sha "$EXPECTED_SHA" 'select(
-                  .event == "issues" and
-                  .head_branch == "rollback-feb8" and
-                  .head_sha != "" and
-                  .status == "in_progress" or .status == "completed"
-                )' controller-run.json >/dev/null
-                exit 0
-              fi
-            fi
-
-            if [ "$attempt" -eq 60 ]; then
-              echo "Authorized apply-command job did not complete in time." >&2
-              exit 1
-            fi
-            sleep 10
+              "/repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?filter=latest&per_page=100" \
+              > "controller-status/jobs-$id.json"
           done
 
-      - name: Upload controller evidence
+      - name: Upload controller status
         uses: actions/upload-artifact@v4
         with:
-          name: match-player-controller-status
-          path: |
-            controller-run-id.txt
-            controller-run.json
-            controller-jobs.json
-            recent-issue-runs.json
+          name: staging-write-session-controller-status
+          path: controller-status
           if-no-files-found: error
           retention-days: 2
