@@ -6,6 +6,12 @@ on:
       - agent/fix-tournament-commerce-migration
     paths:
       - .github/workflows/repair-tournament-commerce-migration.yml
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
 
 permissions:
   contents: write
