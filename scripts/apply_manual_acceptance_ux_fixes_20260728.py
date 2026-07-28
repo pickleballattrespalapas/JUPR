@@ -439,8 +439,8 @@ function SubmissionResultDialog({
 
     text = replace_once(
         text,
-        '{message ? <p aria-live="polite" role={messageIsError ? "alert" : "status" style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}',
-        '{message && !result ? <p aria-live="polite" role={messageIsError ? "alert" : "status" style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}',
+        '{message ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}',
+        '{message && !result ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}',
         "modal success message",
     )
     text = sub_once(
