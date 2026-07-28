@@ -1,0 +1,177 @@
+name: Inspect deployed Match Uploader UI
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/inspect-deployed-match-uploader-ui-20260728' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    env:
+      EXPECTED_SHA: 6da9ea8a2d86d4c2236b7f34fa8f1246dd418d2a
+      ALIAS_ORIGIN: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+    steps:
+      - name: Check out isolated inspector
+        uses: actions/checkout@v4
+        with:
+          ref: agent/inspect-deployed-match-uploader-ui-20260728
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact staging source and one-file diff
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$PR_BASE_SHA" = "$EXPECTED_SHA"
+          test "$PR_HEAD_SHA" = "$(git rev-parse HEAD)"
+          files="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              --paginate \
+              "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+              --jq '.[].filename' | sort
+          )"
+          test "$files" = ".github/workflows/inspect-deployed-match-uploader-ui-20260728.yml"
+
+      - name: Fetch exact Vercel identities and Match Uploader assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth=()
+          if [ -n "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" ]; then
+            auth=(-H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET")
+          fi
+          curl --fail --silent --show-error --location --max-time 30 \
+            "${auth[@]}" "$ALIAS_ORIGIN/api/environment" -o alias-environment.json
+          jq -e --arg sha "$EXPECTED_SHA" 'select(.git_commit_sha == $sha)' \
+            alias-environment.json >/dev/null
+          immutable_origin="$(jq -er '.vercel_deployment_origin' alias-environment.json)"
+          case "$immutable_origin" in
+            https://jupr-*.vercel.app) ;;
+            *) echo "Unexpected immutable Vercel origin" >&2; exit 1 ;;
+          esac
+          curl --fail --silent --show-error --location --max-time 30 \
+            "${auth[@]}" "$immutable_origin/api/environment" -o immutable-environment.json
+          jq -e --arg sha "$EXPECTED_SHA" --arg origin "$immutable_origin" \
+            'select(.git_commit_sha == $sha and .vercel_deployment_origin == $origin)' \
+            immutable-environment.json >/dev/null
+          curl --fail --silent --show-error --location --max-time 30 \
+            "${auth[@]}" "$ALIAS_ORIGIN/admin/match-uploader" -o alias-page.html
+          curl --fail --silent --show-error --location --max-time 30 \
+            "${auth[@]}" "$immutable_origin/admin/match-uploader" -o immutable-page.html
+          printf '%s' "$immutable_origin" > immutable-origin.txt
+
+      - name: Inspect deployed HTML and JavaScript markers
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+          from pathlib import Path
+          from urllib.parse import urljoin
+          from urllib.request import Request, urlopen
+
+          alias = os.environ["ALIAS_ORIGIN"]
+          immutable = Path("immutable-origin.txt").read_text(encoding="utf-8").strip()
+          bypass = os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", "").strip()
+
+          markers = {
+              "new_add_one_match": "Add 1 Match",
+              "new_add_five_matches": "Add 5 Matches",
+              "new_remove_all": "Remove All",
+              "new_team_one_player_one": "Team 1 · Player 1",
+              "new_search_player": "Search player",
+              "old_add_five_rows": "Add 5 rows",
+              "old_t1_p1": "T1 P1",
+          }
+
+          def inspect(origin: str, html_path: str) -> dict[str, object]:
+              html = Path(html_path).read_text(encoding="utf-8", errors="replace")
+              scripts = sorted(set(re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', html)))
+              texts = [html]
+              downloaded = []
+              for src in scripts:
+                  url = urljoin(origin + "/", src)
+                  headers = {"User-Agent": "JUPR-staging-inspector/1.0"}
+                  if bypass:
+                      headers["x-vercel-protection-bypass"] = bypass
+                  try:
+                      with urlopen(Request(url, headers=headers), timeout=30) as response:
+                          body = response.read().decode("utf-8", errors="replace")
+                      texts.append(body)
+                      downloaded.append(url)
+                  except Exception as exc:
+                      downloaded.append(f"ERROR:{url}:{exc.__class__.__name__}")
+              combined = "\n".join(texts)
+              return {
+                  "origin": origin,
+                  "html_bytes": len(html.encode("utf-8")),
+                  "script_count": len(scripts),
+                  "downloaded_count": sum(not item.startswith("ERROR:") for item in downloaded),
+                  "markers": {key: value in combined for key, value in markers.items()},
+              }
+
+          report = {
+              "expected_sha": os.environ["EXPECTED_SHA"],
+              "alias": inspect(alias, "alias-page.html"),
+              "immutable": inspect(immutable, "immutable-page.html"),
+          }
+          Path("ui-marker-report.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(report, indent=2, sort_keys=True))
+
+      - name: Verify Fly returned to no-write mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 18); do
+            if curl --fail --silent --show-error --max-time 20 \
+              "$FLY_HEALTH_URL" -o fly-health.json && \
+              jq -e --arg sha "$EXPECTED_SHA" 'select(
+                .git_commit_sha == $sha and
+                .staging_write_wave == "none" and
+                .business_data_write_wave_active == false and
+                .write_prerequisites.email_mode == "dry_run" and
+                ([.controlled_write_flags[]] | all(. == false))
+              )' fly-health.json >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          cat fly-health.json 2>/dev/null || true
+          echo "Fly did not return to verified no-write mode." >&2
+          exit 1
+
+      - name: Upload diagnostic evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployed-match-uploader-ui-diagnostic
+          path: |
+            alias-environment.json
+            immutable-environment.json
+            ui-marker-report.json
+            fly-health.json
+          if-no-files-found: error
+          retention-days: 2
