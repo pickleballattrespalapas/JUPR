@@ -225,7 +225,7 @@ jobs:
         run: |
           set -euo pipefail
           git diff --check
-          python -m pytest -q tests/test_tournament_commerce_migration_postgres_compatibility.py
+          python -c "from pathlib import Path; sql=Path('supabase/migrations/20260728010000_tournament_commerce.sql').read_text(encoding='utf-8'); assert 'into v_variant, v_item' not in sql; assert 'into v_fulfillment, v_order' not in sql; assert sql.count('into v_pair') == 3; assert sql.count('v_pair record;') == 2"
 
       - name: Commit repair and remove one-time workflow
         shell: bash
