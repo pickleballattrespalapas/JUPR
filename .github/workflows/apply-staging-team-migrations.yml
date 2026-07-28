@@ -30,14 +30,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: agent/apply-staging-team-migrations
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Verify exact staging source and isolated runner diff
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --no-tags origin +refs/heads/staging:refs/remotes/origin/staging
+          git fetch --no-tags --depth=1 origin +refs/heads/staging:refs/remotes/origin/staging
           test "$(git rev-parse refs/remotes/origin/staging)" = "$EXPECTED_STAGING_SHA"
           CHANGED="$(git diff --name-only "$EXPECTED_STAGING_SHA" HEAD)"
           test "$CHANGED" = ".github/workflows/apply-staging-team-migrations.yml"
@@ -80,7 +80,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          psql "$SUPABASE_TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atqc \
+          : > migration-failure.txt
+          psql "$SUPABASE_TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -Atqc \
             "select current_database() || ':' || current_user"
 
           migrations=(
@@ -93,24 +94,25 @@ jobs:
 
           for spec in "${migrations[@]}"; do
             IFS='|' read -r version name file <<<"$spec"
-            count="$(psql "$SUPABASE_TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atqc \
+            count="$(psql "$SUPABASE_TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -Atqc \
               "select count(*) from supabase_migrations.schema_migrations where version = '$version'")"
             if [ "$count" = "1" ]; then
-              existing="$(psql "$SUPABASE_TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atqc \
+              existing="$(psql "$SUPABASE_TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -Atqc \
                 "select coalesce(name, '') from supabase_migrations.schema_migrations where version = '$version'")"
               if [ "$existing" != "$name" ]; then
-                echo "Migration $version has unexpected ledger name $existing" >&2
+                echo "Migration $version has unexpected ledger name $existing" | tee migration-failure.txt >&2
                 exit 2
               fi
               echo "Already applied: $version $name"
               continue
             fi
             if [ "$count" != "0" ]; then
-              echo "Migration $version has duplicate ledger rows" >&2
+              echo "Migration $version has duplicate ledger rows" | tee migration-failure.txt >&2
               exit 2
             fi
 
             runner="$RUNNER_TEMP/apply-$version.sql"
+            log="$RUNNER_TEMP/migration-$version.log"
             cat >"$runner" <<SQL
           \\set ON_ERROR_STOP on
           begin;
@@ -125,11 +127,28 @@ jobs:
           );
           commit;
           SQL
-            psql "$SUPABASE_TEST_DATABASE_URL" -X -f "$runner"
+            if ! psql "$SUPABASE_TEST_DATABASE_URL" -X -q -f "$runner" >"$log" 2>&1; then
+              {
+                echo "Migration failed: $version $name"
+                tail -n 120 "$log"
+              } | tee migration-failure.txt >&2
+              exit 1
+            fi
             echo "Applied: $version $name"
           done
 
-          psql "$SUPABASE_TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atqc \
+          psql "$SUPABASE_TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -Atqc \
             "select version || ':' || name from supabase_migrations.schema_migrations where version between '20260728010000' and '20260728041000' order by version" \
             | tee "$RUNNER_TEMP/applied-migrations.txt"
           test "$(wc -l < "$RUNNER_TEMP/applied-migrations.txt")" -eq 5
+
+      - name: Upload migration failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-migration-failure
+          path: |
+            migration-failure.txt
+            ${{ runner.temp }}/migration-*.log
+          if-no-files-found: warn
+          retention-days: 1
