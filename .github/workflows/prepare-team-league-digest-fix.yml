@@ -1,0 +1,104 @@
+name: Prepare team-league digest fix
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/finalize-team-league-digest-fix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/finalize-team-league-digest-fix
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prepare pgcrypto schema repair
+        shell: python
+        run: |
+          from hashlib import sha256
+          import json
+          from pathlib import Path
+          import subprocess
+
+          migration = Path(
+              'supabase/migrations/20260728040000_team_league_awards_hardening.sql'
+          )
+          expected_blob = 'abf29a80eb6f7c8408a12e832822528c2e66d792'
+          actual_blob = subprocess.check_output(
+              ['git', 'hash-object', str(migration)], text=True
+          ).strip()
+          if actual_blob != expected_blob:
+              raise SystemExit(f'Refusing unexpected migration blob {actual_blob}.')
+
+          text = migration.read_text(encoding='utf-8')
+          if text.count('public.digest(') != 1:
+              raise SystemExit(
+                  f"Expected one public.digest call, found {text.count('public.digest(')}."
+              )
+          migration.write_text(
+              text.replace('public.digest(', 'extensions.digest(', 1),
+              encoding='utf-8',
+          )
+
+          test = Path(
+              'tests/test_team_league_hardening_migration_postgres_compatibility.py'
+          )
+          test.write_text(
+              "from pathlib import Path\n\n\n"
+              "def test_team_league_hardening_uses_valid_postgres_forms() -> None:\n"
+              "    paths = [\n"
+              "        Path('supabase/migrations/20260728040000_team_league_awards_hardening.sql'),\n"
+              "        Path('supabase/migrations/20260728041000_team_league_registration_identity_recovery.sql'),\n"
+              "    ]\n"
+              "    sql = '\\n'.join(path.read_text(encoding='utf-8') for path in paths)\n"
+              "    assert 'pg_catalog.coalesce(' not in sql\n"
+              "    assert 'pg_catalog.least(' not in sql\n"
+              "    assert 'pg_catalog.greatest(' not in sql\n"
+              "    assert 'public.digest(' not in sql\n"
+              "    assert 'extensions.digest(' in sql\n",
+              encoding='utf-8',
+          )
+
+          migrations = Path('supabase/migrations')
+          records = [
+              f"{path.name}\t{sha256(path.read_bytes()).hexdigest()}"
+              for path in sorted(migrations.glob('*.sql'))
+          ]
+          fingerprint = sha256('\n'.join(records).encode('utf-8')).hexdigest()
+          contract = Path('config/production_migration_contract.json')
+          payload = json.loads(contract.read_text(encoding='utf-8'))
+          payload['repository_migration_content_sha256'] = fingerprint
+          contract.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+          print(fingerprint)
+
+      - name: Verify prepared repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          python -m pytest -q tests/test_team_league_hardening_migration_postgres_compatibility.py
+
+      - name: Upload prepared repair
+        uses: actions/upload-artifact@v4
+        with:
+          name: team-league-digest-fix
+          path: |
+            supabase/migrations/20260728040000_team_league_awards_hardening.sql
+            config/production_migration_contract.json
+            tests/test_team_league_hardening_migration_postgres_compatibility.py
+          if-no-files-found: error
+          retention-days: 1
