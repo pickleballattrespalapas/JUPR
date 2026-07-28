@@ -3,15 +3,9 @@ name: One-time tournament commerce migration repair
 on:
   push:
     branches:
-      - agent/fix-tournament-commerce-migration
+      - staging
     paths:
       - .github/workflows/repair-tournament-commerce-migration.yml
-  pull_request:
-    branches:
-      - staging
-    types:
-      - opened
-      - synchronize
 
 permissions:
   contents: write
