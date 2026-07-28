@@ -1,0 +1,137 @@
+name: Inspect staging write-session controller
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  actions: read
+  contents: read
+  issues: read
+
+jobs:
+  inspect:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/inspect-write-session-controller-20260728' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      EXPECTED_SHA: 6da9ea8a2d86d4c2236b7f34fa8f1246dd418d2a
+      NOT_BEFORE: 2026-07-28T19:29:00Z
+    steps:
+      - name: Check out isolated inspector
+        uses: actions/checkout@v4
+        with:
+          ref: agent/inspect-write-session-controller-20260728
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact staging source and one-file diff
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$PR_BASE_SHA" = "$EXPECTED_SHA"
+          test "$PR_HEAD_SHA" = "$(git rev-parse HEAD)"
+          FILES="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              --paginate \
+              "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+              --jq '.[].filename' \
+              | sort
+          )"
+          test "$FILES" = ".github/workflows/inspect-write-session-controller-20260728.yml"
+
+      - name: Wait for the authorized apply-command job
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          : > controller-run-id.txt
+          for attempt in $(seq 1 60); do
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/$GITHUB_REPOSITORY/actions/runs?event=issues&per_page=100" \
+              > recent-issue-runs.json
+
+            mapfile -t RUN_IDS < <(
+              jq -r \
+                --arg not_before "$NOT_BEFORE" \
+                '.workflow_runs
+                 | map(select(
+                     .name == "Protected Staging Write Session" and
+                     .created_at >= $not_before
+                   ))
+                 | sort_by(.created_at)
+                 | reverse
+                 | .[].id' \
+                recent-issue-runs.json
+            )
+
+            chosen=""
+            for run_id in "${RUN_IDS[@]:-}"; do
+              [ -n "$run_id" ] || continue
+              gh api \
+                -H "X-GitHub-Api-Version: 2026-03-10" \
+                "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?filter=latest&per_page=100" \
+                > candidate-jobs.json
+              if jq -e '.jobs[] | select(.name == "Apply one fail-closed write transition")' \
+                  candidate-jobs.json >/dev/null; then
+                chosen="$run_id"
+                cp candidate-jobs.json controller-jobs.json
+                break
+              fi
+            done
+
+            if [ -n "$chosen" ]; then
+              printf '%s\n' "$chosen" > controller-run-id.txt
+              gh api \
+                -H "X-GitHub-Api-Version: 2026-03-10" \
+                "/repos/$GITHUB_REPOSITORY/actions/runs/$chosen" \
+                > controller-run.json
+              status="$(jq -r '.jobs[] | select(.name == "Apply one fail-closed write transition") | .status' controller-jobs.json)"
+              conclusion="$(jq -r '.jobs[] | select(.name == "Apply one fail-closed write transition") | .conclusion // ""' controller-jobs.json)"
+              printf 'controller=%s apply_status=%s apply_conclusion=%s\n' \
+                "$chosen" "$status" "$conclusion"
+              if [ "$status" = "completed" ]; then
+                test "$conclusion" = "success"
+                jq -e --arg sha "$EXPECTED_SHA" 'select(
+                  .event == "issues" and
+                  .head_branch == "rollback-feb8" and
+                  .head_sha != "" and
+                  .status == "in_progress" or .status == "completed"
+                )' controller-run.json >/dev/null
+                exit 0
+              fi
+            fi
+
+            if [ "$attempt" -eq 60 ]; then
+              echo "Authorized apply-command job did not complete in time." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Upload controller evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: match-player-controller-status
+          path: |
+            controller-run-id.txt
+            controller-run.json
+            controller-jobs.json
+            recent-issue-runs.json
+          if-no-files-found: error
+          retention-days: 2
