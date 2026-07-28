@@ -11,4 +11,6 @@ This staging-only patch addresses the Match Uploader and Match Log findings from
 - Match Log Edit One keeps filters and the compact editor but hides the duplicate full results table and summary cards.
 - Durable operation history is collapsed by default.
 
+Verification is rerun against the final generated source before the branch is merged.
+
 The patch does not open a write window and does not target production.
