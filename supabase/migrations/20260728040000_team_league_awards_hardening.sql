@@ -219,7 +219,7 @@ security invoker
 set search_path = ''
 as $function$
   select pg_catalog.encode(
-    public.digest(
+    extensions.digest(
       coalesce(
         pg_catalog.string_agg(
           team.id::text || ':' ||
