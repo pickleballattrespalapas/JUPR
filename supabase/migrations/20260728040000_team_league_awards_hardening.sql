@@ -220,7 +220,7 @@ set search_path = ''
 as $function$
   select pg_catalog.encode(
     public.digest(
-      pg_catalog.coalesce(
+      coalesce(
         pg_catalog.string_agg(
           team.id::text || ':' ||
           team.captain_player_id::text || ':' ||
@@ -1774,16 +1774,16 @@ begin
       into v_pair_count
       from (
         select
-          pg_catalog.least(item.team_a_id::text, item.team_b_id::text),
-          pg_catalog.greatest(item.team_a_id::text, item.team_b_id::text)
+          least(item.team_a_id::text, item.team_b_id::text),
+          greatest(item.team_a_id::text, item.team_b_id::text)
         from pg_catalog.jsonb_to_recordset(p_fixtures) as item(
           team_a_id uuid,
           team_b_id uuid
         )
         where item.team_b_id is not null
         group by
-          pg_catalog.least(item.team_a_id::text, item.team_b_id::text),
-          pg_catalog.greatest(item.team_a_id::text, item.team_b_id::text)
+          least(item.team_a_id::text, item.team_b_id::text),
+          greatest(item.team_a_id::text, item.team_b_id::text)
         having pg_catalog.count(*) = 1
       ) as unique_pair;
     if v_pair_count <> (v_team_count * (v_team_count - 1)) / 2 then

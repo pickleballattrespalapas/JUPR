@@ -74,11 +74,11 @@ begin
     pg_catalog.hashtextextended(
       'pcs:team-league-registration:' || v_club_id || ':' ||
       v_league_name || ':' || v_signup_type || ':' ||
-      pg_catalog.least(
+      least(
         p_player_id,
         coalesce(p_partner_player_id, p_player_id)
       )::text || ':' ||
-      pg_catalog.greatest(
+      greatest(
         p_player_id,
         coalesce(p_partner_player_id, p_player_id)
       )::text,
