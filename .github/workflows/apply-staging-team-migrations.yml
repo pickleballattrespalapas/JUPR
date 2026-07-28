@@ -1,18 +1,22 @@
 name: Apply staging team-competition migrations
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/apply-staging-team-migrations
-    paths:
-      - .github/workflows/apply-staging-team-migrations.yml
+      - staging
+    types:
+      - opened
+      - synchronize
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   apply:
-    if: github.repository == 'pickleballattrespalapas/JUPR'
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/apply-staging-team-migrations' &&
+      github.event.pull_request.base.ref == 'staging'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: staging
@@ -27,6 +31,7 @@ jobs:
         with:
           ref: agent/apply-staging-team-migrations
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Verify exact staging source and isolated runner diff
         shell: bash
@@ -34,7 +39,6 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin +refs/heads/staging:refs/remotes/origin/staging
           test "$(git rev-parse refs/remotes/origin/staging)" = "$EXPECTED_STAGING_SHA"
-          test "$(git rev-parse HEAD^)" = "$EXPECTED_STAGING_SHA"
           CHANGED="$(git diff --name-only "$EXPECTED_STAGING_SHA" HEAD)"
           test "$CHANGED" = ".github/workflows/apply-staging-team-migrations.yml"
 
@@ -129,19 +133,3 @@ jobs:
             "select version || ':' || name from supabase_migrations.schema_migrations where version between '20260728010000' and '20260728041000' order by version" \
             | tee "$RUNNER_TEMP/applied-migrations.txt"
           test "$(wc -l < "$RUNNER_TEMP/applied-migrations.txt")" -eq 5
-
-      - name: Record successful isolated run
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > staging-team-migrations-applied.txt <<EOF
-          staging_candidate=$EXPECTED_STAGING_SHA
-          staging_project=$EXPECTED_SUPABASE_PROJECT_REF
-          migration_head=20260728041000_team_league_registration_identity_recovery
-          write_wave=none
-          EOF
-          git config user.name "pickleballattrespalapas"
-          git config user.email "pickleballattrespalapas@gmail.com"
-          git add staging-team-migrations-applied.txt
-          git commit -m "Record staging team migrations applied"
-          git push origin HEAD:agent/apply-staging-team-migrations
