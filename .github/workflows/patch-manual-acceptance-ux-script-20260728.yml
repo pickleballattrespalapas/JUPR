@@ -1,0 +1,45 @@
+name: Patch manual acceptance UX repair script
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/manual-acceptance-ux-fixes-v2-20260728'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/manual-acceptance-ux-fixes-v2-20260728
+          fetch-depth: 0
+      - name: Patch literal regex replacements
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('scripts/apply_manual_acceptance_ux_fixes_20260728.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    updated, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)'
+          new = '    updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=re.DOTALL)'
+          if text.count(old) != 1:
+              raise SystemExit('Unexpected sub_once implementation')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+      - name: Commit patch and remove patch workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/patch-manual-acceptance-ux-script-20260728.yml
+          git config user.name 'pickleballattrespalapas'
+          git config user.email 'pickleballattrespalapas@gmail.com'
+          git add scripts/apply_manual_acceptance_ux_fixes_20260728.py .github/workflows/patch-manual-acceptance-ux-script-20260728.yml
+          git commit -m 'Fix UX repair regex replacements'
+          git push origin HEAD:agent/manual-acceptance-ux-fixes-v2-20260728
