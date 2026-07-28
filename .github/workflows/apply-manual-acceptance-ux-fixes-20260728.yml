@@ -1,0 +1,696 @@
+name: Apply manual acceptance UX fixes
+
+on:
+  push:
+    branches:
+      - agent/manual-acceptance-ux-fixes-20260728
+    paths:
+      - .github/workflows/apply-manual-acceptance-ux-fixes-20260728.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.repository == 'pickleballattrespalapas/JUPR'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out UX repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/manual-acceptance-ux-fixes-20260728
+          fetch-depth: 0
+
+      - name: Apply reviewed Match Uploader and Match Log fixes
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          def replace_regex(text: str, pattern: str, replacement: str, label: str) -> str:
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one regex match, found {count}")
+              return updated
+
+          def replace_in_section(text: str, start: str, end: str, old: str, new: str, label: str) -> str:
+              start_index = text.index(start)
+              end_index = text.index(end, start_index)
+              section = text[start_index:end_index]
+              count = section.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one section match, found {count}")
+              section = section.replace(old, new, 1)
+              return text[:start_index] + section + text[end_index:]
+
+          uploader_path = Path("apps/web/app/admin/match-uploader/MatchUploaderForm.tsx")
+          uploader = uploader_path.read_text(encoding="utf-8")
+
+          uploader = replace_once(
+              uploader,
+              'import { useEffect, useState } from "react";\n',
+              'import { useEffect, useRef, useState } from "react";\nimport { ConfirmAction } from "@/components/ConfirmAction";\n',
+              "uploader imports",
+          )
+
+          uploader = replace_once(
+              uploader,
+              '''function newMatchRow(): MatchRow {
+            return { rowId: randomId("row"), date: todayIsoDate(), weekTag: "Week 1", ratingScope: "", t1p1: "", t1p2: "", t2p1: "", t2p2: "", s1: "0", s2: "0" };
+          }
+          ''',
+              '''function newMatchRow(
+            date: string = todayIsoDate(),
+            weekTag: string = "Week 1",
+            ratingScope: MatchRow["ratingScope"] = "",
+          ): MatchRow {
+            return { rowId: randomId("row"), date, weekTag, ratingScope, t1p1: "", t1p2: "", t2p1: "", t2p2: "", s1: "0", s2: "0" };
+          }
+          ''',
+              "new match row defaults",
+          )
+
+          uploader = replace_once(
+              uploader,
+              '''  if (s1 + s2 <= 0) return `Row ${index + 1}: enter a non-zero score.`;
+            return null;
+          }
+
+          function validateSingles''',
+              '''  if (s1 + s2 <= 0) return `Row ${index + 1}: enter a non-zero score.`;
+            return null;
+          }
+
+          function isReadyRow(row: MatchRow, index: number): boolean {
+            return isFilled(row) && validateRow(row, index) === null;
+          }
+
+          function validateSingles''',
+              "ready row predicate",
+          )
+
+          search_start = "function SearchablePlayerInput({"
+          search_end = "function SearchablePlayerMultiInput({"
+          uploader = replace_in_section(
+              uploader,
+              search_start,
+              search_end,
+              '''  const exactPlayer = players.find(
+            (player) =>
+              String(player.name).trim().toLocaleLowerCase()
+              === cleanedQuery.toLocaleLowerCase(),
+          );
+            const numericStartingJupr = Number(startingJupr);
+          ''',
+              '''  const exactPlayer = players.find(
+            (player) =>
+              String(player.name).trim().toLocaleLowerCase()
+              === cleanedQuery.toLocaleLowerCase(),
+          );
+            const matchingPlayers = cleanedQuery
+              ? players.filter((player) =>
+                  String(player.name).trim().toLocaleLowerCase().includes(cleanedQuery.toLocaleLowerCase()),
+                )
+              : players;
+            const numericStartingJupr = Number(startingJupr);
+          ''',
+              "matching player guard",
+          )
+
+          old_player_control = '''      <div style={{ display: "flex", gap: "0.35rem" }}>
+                <input
+                  id={inputId}
+                  list={`${inputId}-options`}
+                  value={query}
+                  placeholder="Search player…"
+                  autoComplete="off"
+                  disabled={disabled || creating}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setQuery(next);
+                    const match = players.find(
+                      (player) =>
+                        String(player.name).trim().toLocaleLowerCase()
+                        === next.replace(/\\s+/g, " ").trim().toLocaleLowerCase(),
+                    );
+                    onChange(match ? String(match.id) : "");
+                  }}
+                  style={inputStyle}
+                />
+                {value ? (
+                  <button
+                    type="button"
+                    aria-label={`Clear ${label}`}
+                    disabled={disabled || creating}
+                    onClick={() => {
+                      setQuery("");
+                      onChange("");
+                    }}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+          '''
+          new_player_control = '''      {value ? (
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "0.35rem", alignItems: "stretch" }}>
+                  <div
+                    title={selectedName}
+                    style={{ ...inputStyle, minHeight: "2.4rem", display: "flex", alignItems: "center", whiteSpace: "normal", overflowWrap: "anywhere", background: "#f8fafc" }}
+                  >
+                    {selectedName}
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={`Clear ${label}`}
+                    disabled={disabled || creating}
+                    onClick={() => {
+                      setQuery("");
+                      onChange("");
+                    }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              ) : (
+                <input
+                  id={inputId}
+                  list={`${inputId}-options`}
+                  value={query}
+                  placeholder="Search player…"
+                  autoComplete="off"
+                  disabled={disabled || creating}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setQuery(next);
+                    const match = players.find(
+                      (player) =>
+                        String(player.name).trim().toLocaleLowerCase()
+                        === next.replace(/\\s+/g, " ").trim().toLocaleLowerCase(),
+                    );
+                    onChange(match ? String(match.id) : "");
+                  }}
+                  style={inputStyle}
+                />
+              )}
+          '''
+          uploader = replace_in_section(
+              uploader,
+              search_start,
+              search_end,
+              old_player_control,
+              new_player_control,
+              "selected player display",
+          )
+          uploader = replace_in_section(
+              uploader,
+              search_start,
+              search_end,
+              "      {cleanedQuery && !exactPlayer ? (",
+              "      {cleanedQuery && !exactPlayer && matchingPlayers.length === 0 ? (",
+              "safe inline player creation",
+          )
+
+          dialog_component = r'''
+          function SubmissionResultDialog({
+            result,
+            onClose,
+          }: {
+            result: AdminMatchUploaderWriteResult;
+            onClose: () => void;
+          }) {
+            const dialogRef = useRef<HTMLDialogElement>(null);
+
+            useEffect(() => {
+              const dialog = dialogRef.current;
+              if (dialog && !dialog.open) dialog.showModal();
+              return () => {
+                if (dialog?.open) dialog.close();
+              };
+            }, []);
+
+            const inserted = result.result?.inserted ?? 0;
+            const email = result.auto_player_updates;
+            const emailSummary = email?.mode === "auto_sent"
+              ? `${email.sent ?? 0} sent, ${email.skipped ?? 0} skipped, ${email.errors ?? 0} error(s).`
+              : "Not sent in staging.";
+
+            return (
+              <dialog
+                ref={dialogRef}
+                aria-labelledby="match-submission-result-title"
+                onCancel={(event) => {
+                  event.preventDefault();
+                  onClose();
+                }}
+                style={{ width: "min(720px, calc(100vw - 2rem))", maxHeight: "calc(100vh - 2rem)", overflowY: "auto", border: 0, borderRadius: "16px", padding: 0, boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)" }}
+              >
+                <div style={{ padding: "1.25rem" }}>
+                  <h2 id="match-submission-result-title" style={{ marginTop: 0 }}>Match submission complete</h2>
+                  <p role="status" style={{ color: "#166534" }}>
+                    Successfully inserted {inserted} rated match{inserted === 1 ? "" : "es"}.
+                  </p>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem" }}>
+                    <div><strong>Inserted</strong><br />{inserted}</div>
+                    <div><strong>Match write</strong><br />{result.match_write_committed ? "Committed" : "Review required"}</div>
+                    <div><strong>Rating type</strong><br />{result.feedback?.rating_type || result.result?.match_format || "doubles/overall"}</div>
+                    <div><strong>Skipped incomplete</strong><br />{result.result?.skipped_incomplete ?? 0}</div>
+                    <div><strong>Skipped empty</strong><br />{result.result?.skipped_empty ?? 0}</div>
+                    <div><strong>Skipped unrated</strong><br />{result.result?.skipped_unrated ?? 0}</div>
+                  </div>
+                  {email ? <p style={{ marginTop: "1rem" }}><strong>Player-update email:</strong> {emailSummary}</p> : null}
+                  {result.feedback?.affected_players?.length ? (
+                    <div style={{ overflowX: "auto", marginTop: "1rem" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                        <thead><tr><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Before</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>After</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Change</th></tr></thead>
+                        <tbody>
+                          {result.feedback.affected_players.map((player) => (
+                            <tr key={player.id}><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{player.name}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_before)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_after)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{deltaLabel(player.rating_delta)}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
+                  {result.warnings?.length ? <ul style={{ color: "#92400e" }}>{result.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+                  <p style={{ display: "flex", justifyContent: "flex-end", marginBottom: 0 }}>
+                    <button type="button" onClick={onClose} style={buttonStyle}>OK</button>
+                  </p>
+                </div>
+              </dialog>
+            );
+          }
+          '''
+          uploader = replace_once(
+              uploader,
+              "\nexport default function MatchUploaderForm({ apiBase, clubId, players, status }: Props) {",
+              dialog_component + "\nexport default function MatchUploaderForm({ apiBase, clubId, players, status }: Props) {",
+              "submission result dialog",
+          )
+
+          uploader = replace_once(
+              uploader,
+              '''  const [entryMethod, setEntryMethod] = useState<"singles" | "manual" | "round_robin">(
+            () => singlesEnabled ? "singles" : "manual"
+          );''',
+              '''  const [entryMethod, setEntryMethod] = useState<"singles" | "manual" | "round_robin">("manual");''',
+              "manual default entry method",
+          )
+          uploader = replace_once(
+              uploader,
+              '''  const [rows, setRows] = useState<MatchRow[]>(() => Array.from({ length: 5 }, () => newMatchRow()));''',
+              '''  const [rows, setRows] = useState<MatchRow[]>(() => [newMatchRow(todayIsoDate(), status.week_tag_options[0] || "Week 1")]);''',
+              "single initial match row",
+          )
+          uploader = replace_once(
+              uploader,
+              '''  const [result, setResult] = useState<AdminMatchUploaderWriteResult | null>(null);
+
+            const validRows = rows.filter(isFilled);''',
+              '''  const [result, setResult] = useState<AdminMatchUploaderWriteResult | null>(null);
+            const [submissionKind, setSubmissionKind] = useState<"manual" | "round_robin" | "singles" | null>(null);
+
+            const filledRows = rows.filter(isFilled);
+            const readyRows = rows.filter((row, index) => isReadyRow(row, index));
+            const hasInvalidFilledRows = filledRows.length !== readyRows.length;''',
+              "ready row state",
+          )
+
+          helper_block = '''
+            function clearEntryFeedback() {
+              setMessage(null);
+              setResult(null);
+            }
+
+            function resetManualRows() {
+              const preservedScope = (readyRows[0] || filledRows[0])?.ratingScope || "";
+              setRows([newMatchRow(defaultDate, defaultWeekTag, preservedScope)]);
+            }
+
+            function acknowledgeSubmission() {
+              if (submissionKind === "manual") resetManualRows();
+              if (submissionKind === "singles") {
+                setSinglesRow((current) => ({
+                  ...newSinglesRow(),
+                  date: current.date,
+                  league: current.league,
+                  weekTag: current.weekTag,
+                  ratingScope: current.ratingScope,
+                }));
+              }
+              if (submissionKind === "round_robin") {
+                setRrSchedule([]);
+                setRrPendingPayload(null);
+              }
+              setSubmissionKind(null);
+              setMessage(null);
+              setResult(null);
+            }
+
+            function removeRow(rowId: string) {
+              clearEntryFeedback();
+              setRows((current) => {
+                const remaining = current.filter((row) => row.rowId !== rowId);
+                return remaining.length ? remaining : [newMatchRow(defaultDate, defaultWeekTag)];
+              });
+            }
+
+            function removeAllRows() {
+              clearEntryFeedback();
+              resetManualRows();
+            }
+          '''
+          uploader = replace_once(
+              uploader,
+              "\n  function requireReady(): boolean {",
+              helper_block + "\n  function requireReady(): boolean {",
+              "entry feedback helpers",
+          )
+
+          uploader = replace_once(
+              uploader,
+              '''  function patchRow(rowId: string, patch: Partial<MatchRow>) {
+            setRows((current) => current.map((row) => row.rowId === rowId ? { ...row, ...patch } : row));
+          }
+
+            function patchSingles(patch: Partial<SinglesRow>) {
+            setSinglesRow((current) => ({ ...current, ...patch }));
+          }
+          ''',
+              '''  function patchRow(rowId: string, patch: Partial<MatchRow>) {
+            clearEntryFeedback();
+            setRows((current) => current.map((row) => row.rowId === rowId ? { ...row, ...patch } : row));
+          }
+
+            function patchSingles(patch: Partial<SinglesRow>) {
+            clearEntryFeedback();
+            setSinglesRow((current) => ({ ...current, ...patch }));
+          }
+          ''',
+              "clear stale row validation",
+          )
+          uploader = replace_once(
+              uploader,
+              '''  function patchRrCourt(rowId: string, patch: Partial<RrCourtInput>) {
+            setRrCourts((current) => current.map((court) => court.rowId === rowId ? { ...court, ...patch } : court));''',
+              '''  function patchRrCourt(rowId: string, patch: Partial<RrCourtInput>) {
+            clearEntryFeedback();
+            setRrCourts((current) => current.map((court) => court.rowId === rowId ? { ...court, ...patch } : court));''',
+              "clear round robin feedback",
+          )
+          uploader = replace_once(
+              uploader,
+              '''  function patchRrScore(rowId: string, patch: Partial<Pick<RrScoreRow, "s1" | "s2">>) {
+            setRrSchedule((current) => current.map((court) => ({''',
+              '''  function patchRrScore(rowId: string, patch: Partial<Pick<RrScoreRow, "s1" | "s2">>) {
+            clearEntryFeedback();
+            setRrSchedule((current) => current.map((court) => ({''',
+              "clear round robin score feedback",
+          )
+
+          uploader = replace_once(
+              uploader,
+              '''      setResult(payload);
+                clearDirectMatchIdempotencyKey(
+                  `match-uploader:${clubId}:singles`,
+                  idempotencyKey
+                );
+                setMessage(`Submitted singles match; inserted ${payload.result?.inserted ?? 0} rated singles match.`);
+                setSinglesRow((current) => ({ ...newSinglesRow(), date: current.date, league: current.league, weekTag: current.weekTag }));''',
+              '''      setResult(payload);
+                setSubmissionKind("singles");
+                clearDirectMatchIdempotencyKey(
+                  `match-uploader:${clubId}:singles`,
+                  idempotencyKey
+                );
+                setMessage(`Submitted singles match; inserted ${payload.result?.inserted ?? 0} rated singles match.`);''',
+              "singles success dialog",
+          )
+
+          uploader = replace_once(
+              uploader,
+              '''  async function submitMatches(matches: Array<Record<string, unknown>>, source: string) {''',
+              '''  async function submitMatches(matches: Array<Record<string, unknown>>, source: string, kind: "manual" | "round_robin") {''',
+              "submission kind parameter",
+          )
+          uploader = replace_once(
+              uploader,
+              '''      setResult(payload);
+                clearDirectMatchIdempotencyKey(operationScope, idempotencyKey);
+                const handoff = payload.auto_player_updates;
+                const handoffSummary = handoff?.mode === "auto_sent"
+                  ? ` Player-update email: ${handoff.sent ?? 0} sent, ${handoff.skipped ?? 0} skipped, ${handoff.errors ?? 0} error(s).`
+                  : handoff?.mode
+                    ? ` Player-update email: ${handoff.mode}${handoff.reason ? ` — ${handoff.reason}` : ""}.`
+                    : "";
+                setMessage(`Submitted ${payload.submitted_count ?? matches.length} row(s); inserted ${payload.result?.inserted ?? 0} rated match(es).${handoffSummary}`);''',
+              '''      setResult(payload);
+                setSubmissionKind(kind);
+                clearDirectMatchIdempotencyKey(operationScope, idempotencyKey);
+                const handoff = payload.auto_player_updates;
+                const handoffSummary = handoff?.mode === "auto_sent"
+                  ? ` Player-update email: ${handoff.sent ?? 0} sent, ${handoff.skipped ?? 0} skipped, ${handoff.errors ?? 0} error(s).`
+                  : handoff?.mode
+                    ? " Player-update email was not sent in staging."
+                    : "";
+                setMessage(`Submitted ${payload.submitted_count ?? matches.length} row(s); inserted ${payload.result?.inserted ?? 0} rated match(es).${handoffSummary}`);''',
+              "technical-free success feedback",
+          )
+          uploader = replace_once(uploader, "    const matches = validRows.map((row) => ({", "    const matches = readyRows.map((row) => ({", "ready manual rows")
+          uploader = replace_once(uploader, '    await submitMatches(matches, "next_match_uploader_manual_batch");', '    await submitMatches(matches, "next_match_uploader_manual_batch", "manual");', "manual submission kind")
+          uploader = replace_once(uploader, '    await submitMatches(matches, "next_match_uploader_round_robin");', '    await submitMatches(matches, "next_match_uploader_round_robin", "round_robin");', "round robin submission kind")
+
+          uploader = replace_once(
+              uploader,
+              '''<select value={entryMethod} onChange={(event) => setEntryMethod(event.target.value as "singles" | "manual" | "round_robin")} style={inputStyle}>''',
+              '''<select value={entryMethod} onChange={(event) => { clearEntryFeedback(); setEntryMethod(event.target.value as "singles" | "manual" | "round_robin"); }} style={inputStyle}>''',
+              "entry method feedback reset",
+          )
+          uploader = replace_once(
+              uploader,
+              '''<input value={defaultDate} onChange={(event) => setDefaultDate(event.target.value)} type="date" style={inputStyle} />''',
+              '''<input value={defaultDate} onChange={(event) => { const value = event.target.value; clearEntryFeedback(); setDefaultDate(value); setRows((current) => current.map((row) => isFilled(row) ? row : { ...row, date: value })); }} type="date" style={inputStyle} />''',
+              "default date propagation",
+          )
+          uploader = replace_once(
+              uploader,
+              '''<select value={defaultWeekTag} onChange={(event) => setDefaultWeekTag(event.target.value)} style={inputStyle}>''',
+              '''<select value={defaultWeekTag} onChange={(event) => { const value = event.target.value; clearEntryFeedback(); setDefaultWeekTag(value); setRows((current) => current.map((row) => isFilled(row) ? row : { ...row, weekTag: value })); }} style={inputStyle}>''',
+              "default week propagation",
+          )
+
+          uploader = replace_once(
+              uploader,
+              '''          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                    <button type="button" onClick={() => setRows((current) => [...current, newMatchRow()])} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 1 Match</button>
+                    <button type="button" onClick={() => setRows((current) => [...current, ...Array.from({ length: 5 }, () => newMatchRow())].slice(0, status.max_batch_rows))} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 5 Matches</button>
+                    <button type="button" onClick={() => setRows([newMatchRow()])} disabled={!rows.some(isFilled)} style={ghostButtonStyle}>Remove All</button>
+                  </div>''',
+              '''          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                    <button type="button" onClick={() => { clearEntryFeedback(); setRows((current) => [...current, newMatchRow(defaultDate, defaultWeekTag)]); }} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 1 Match</button>
+                    <button type="button" onClick={() => { clearEntryFeedback(); setRows((current) => [...current, ...Array.from({ length: 5 }, () => newMatchRow(defaultDate, defaultWeekTag))].slice(0, status.max_batch_rows)); }} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 5 Matches</button>
+                    {rows.some(isFilled) ? (
+                      <ConfirmAction
+                        triggerLabel="Remove All"
+                        title="Remove all entered matches?"
+                        description="This clears every entered player and score and returns the uploader to one blank match."
+                        confirmLabel="Yes, remove all"
+                        confirmationText="REMOVE"
+                        tone="danger"
+                        disabled={saving}
+                        busy={saving}
+                        onConfirm={() => removeAllRows()}
+                      />
+                    ) : (
+                      <button type="button" onClick={removeAllRows} disabled={rows.length <= 1} style={ghostButtonStyle}>Remove All</button>
+                    )}
+                  </div>''',
+              "batch row controls",
+          )
+
+          old_row_header = '''                <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}><strong>Match {index + 1}</strong><button type="button" onClick={() => setRows((current) => current.filter((item) => item.rowId !== row.rowId))} disabled={rows.length <= 1}>Remove</button></div>'''
+          new_row_header = '''                <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}>
+                          <strong>Match {index + 1}</strong>
+                          {isFilled(row) ? (
+                            <ConfirmAction
+                              triggerLabel="Remove match"
+                              title={`Remove Match ${index + 1}?`}
+                              description="This match contains entered data. Removing it cannot be undone from this screen."
+                              confirmLabel="Yes, remove match"
+                              confirmationText="REMOVE"
+                              tone="danger"
+                              disabled={saving}
+                              busy={saving}
+                              onConfirm={() => removeRow(row.rowId)}
+                            />
+                          ) : (
+                            <button type="button" onClick={() => removeRow(row.rowId)} disabled={rows.length <= 1}>Remove match</button>
+                          )}
+                        </div>'''
+          uploader = replace_once(uploader, old_row_header, new_row_header, "safe row removal")
+          uploader = replace_once(
+              uploader,
+              '''                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.5rem", marginTop: "0.5rem" }}>''',
+              '''                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.5rem", marginTop: "0.5rem" }}>''',
+              "full selected player names",
+          )
+          uploader = replace_once(
+              uploader,
+              '''          <p><strong>Ready rows:</strong> {validRows.length} / {rows.length}</p>
+                    <button type="button" onClick={submitManualBatch} disabled={saving || !accessToken || !validRows.length} style={buttonStyle}>{saving ? "Submitting…" : "Submit batch"}</button>''',
+              '''          <p><strong>Ready rows:</strong> {readyRows.length} / {rows.length}</p>
+                    <button type="button" onClick={submitManualBatch} disabled={saving || !accessToken || !readyRows.length || hasInvalidFilledRows} style={buttonStyle}>{saving ? "Submitting…" : "Submit batch"}</button>''',
+              "accurate ready rows",
+          )
+          uploader = replace_once(
+              uploader,
+              '''      {message ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}''',
+              '''      {message && !result ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}''',
+              "success message modal handoff",
+          )
+          uploader = replace_regex(
+              uploader,
+              r'''      \{result \? \(\n        <article style=\{cardStyle\}>.*?      \) : null\}\n    </section>''',
+              '''      {result ? <SubmissionResultDialog result={result} onClose={acknowledgeSubmission} /> : null}
+            </section>''',
+              "submission result modal replacement",
+          )
+          uploader_path.write_text(uploader, encoding="utf-8")
+
+          workspace_path = Path("apps/web/app/admin/match-log/MatchLogWorkspace.tsx")
+          workspace = workspace_path.read_text(encoding="utf-8")
+          workspace = replace_once(
+              workspace,
+              '''  const showsMatchContext = mode !== "social" && mode !== "replay";''',
+              '''  const showsMatchContext = mode !== "social" && mode !== "replay";
+            const showsMatchSummary = showsMatchContext && mode !== "edit";
+            const showsMatchTable = showsMatchContext && mode !== "edit" && mode !== "duplicates";''',
+              "match log edit visibility",
+          )
+          workspace = replace_once(
+              workspace,
+              '''          {showsMatchContext ? <form data-testid="match-log-filters" style={{ ...cardStyle, marginBottom: "1rem", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+                    <label>Filter<br />''',
+              '''          {showsMatchContext ? <form data-testid="match-log-filters" style={{ ...cardStyle, marginBottom: "1rem", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+                    {mode === "edit" ? (
+                      <div style={{ gridColumn: "1 / -1" }}>
+                        <h2 style={{ margin: 0 }}>Find a match</h2>
+                        <p style={{ ...muted, marginBottom: 0 }}>Filter the match list, then use the compact selector in the editor below.</p>
+                      </div>
+                    ) : null}
+                    <label>Filter<br />''',
+              "editor filter heading",
+          )
+          workspace = replace_once(workspace, '{showsMatchContext ? <div data-testid="match-log-summary"', '{showsMatchSummary ? <div data-testid="match-log-summary"', "hide edit summary")
+          workspace = replace_once(workspace, '{showsMatchContext && mode !== "duplicates" ? <section data-testid="match-log-results"', '{showsMatchTable ? <section data-testid="match-log-results"', "hide edit table")
+          workspace_path.write_text(workspace, encoding="utf-8")
+
+          apply_path = Path("apps/web/app/admin/match-log/MatchLogApplyPanel.tsx")
+          apply_panel = apply_path.read_text(encoding="utf-8")
+          apply_panel = replace_once(
+              apply_panel,
+              '''        {mode === "guided" ? "Guided match correction" : mode === "bulk" ? "Bulk match correction" : "Duplicate resolution"}''',
+              '''        {mode === "guided" ? "Match editor" : mode === "bulk" ? "Bulk match correction" : "Duplicate resolution"}''',
+              "compact editor title",
+          )
+          apply_panel = replace_once(
+              apply_panel,
+              '''      {mode === "guided" ? <>
+                <h3>Guided match editor</h3>
+                <p style={{ color: "#475569" }}>
+                  Select a match from the current filtered results, change fields with form controls, stage the edit, then apply all staged edits together.
+                </p>''',
+              '''      {mode === "guided" ? <>
+                <p style={{ color: "#475569" }}>
+                  Use the filters above to narrow the choices, select one match, change its fields, stage the edit, then apply the reviewed change.
+                </p>''',
+              "single editor introduction",
+          )
+          old_history = '''      {mode !== "duplicates" && recentOperations.length ? (
+                <div data-testid="match-edit-operation-history" style={{ overflowX: "auto", marginTop: "1rem" }}>
+                  <h4>Recent durable edit operations</h4>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "680px" }}>
+                    <thead><tr>{["Created", "Status", "Replay", "Actor", "Operation"].map((label) => <th key={label} style={{ textAlign: "left", borderBottom: "1px solid #cbd5e1", padding: "0.5rem" }}>{label}</th>)}</tr></thead>
+                    <tbody>{recentOperations.map((operation) => (
+                      <tr key={operation.id} data-operation-status={operation.status}>
+                        <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.created_at ? new Date(operation.created_at).toISOString().slice(0, 19).replace("T", " ") : "—"}</td>
+                        <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.status}{operation.error_text ? ` · ${operation.error_text}` : ""}</td>
+                        <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.replay_target || "Not required"}</td>
+                        <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.actor_email || "—"}</td>
+                        <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem", fontFamily: "monospace" }}>{operation.id}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              ) : null}'''
+          new_history = '''      {mode !== "duplicates" && recentOperations.length ? (
+                <details data-testid="match-edit-operation-history" style={{ marginTop: "1rem" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 700 }}>Recent durable edit operations</summary>
+                  <div style={{ overflowX: "auto", marginTop: "0.75rem" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "680px" }}>
+                      <thead><tr>{["Created", "Status", "Replay", "Actor", "Operation"].map((label) => <th key={label} style={{ textAlign: "left", borderBottom: "1px solid #cbd5e1", padding: "0.5rem" }}>{label}</th>)}</tr></thead>
+                      <tbody>{recentOperations.map((operation) => (
+                        <tr key={operation.id} data-operation-status={operation.status}>
+                          <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.created_at ? new Date(operation.created_at).toISOString().slice(0, 19).replace("T", " ") : "—"}</td>
+                          <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.status}{operation.error_text ? ` · ${operation.error_text}` : ""}</td>
+                          <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.replay_target || "Not required"}</td>
+                          <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.actor_email || "—"}</td>
+                          <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem", fontFamily: "monospace" }}>{operation.id}</td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                  </div>
+                </details>
+              ) : null}'''
+          apply_panel = replace_once(apply_panel, old_history, new_history, "collapsed edit history")
+          apply_path.write_text(apply_panel, encoding="utf-8")
+
+          test_path = Path("tests/test_manual_acceptance_ux_regressions.py")
+          test_path.write_text(
+              '''from pathlib import Path\n\n\ndef test_match_uploader_manual_acceptance_fixes_are_present() -> None:\n    source = Path("apps/web/app/admin/match-uploader/MatchUploaderForm.tsx").read_text(encoding="utf-8")\n    assert 'useState<"singles" | "manual" | "round_robin">("manual")' in source\n    assert '[newMatchRow(todayIsoDate(), status.week_tag_options[0] || "Week 1")]' in source\n    assert "const readyRows = rows.filter" in source\n    assert "hasInvalidFilledRows" in source\n    assert 'triggerLabel="Remove match"' in source\n    assert 'triggerLabel="Remove All"' in source\n    assert "SubmissionResultDialog" in source\n    assert "Successfully inserted" in source\n    assert "Player-update email was not sent in staging." in source\n    assert "JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS is not enabled" not in source\n    assert "matchingPlayers.length === 0" in source\n\n\ndef test_match_log_edit_page_is_compact() -> None:\n    workspace = Path("apps/web/app/admin/match-log/MatchLogWorkspace.tsx").read_text(encoding="utf-8")\n    panel = Path("apps/web/app/admin/match-log/MatchLogApplyPanel.tsx").read_text(encoding="utf-8")\n    assert 'const showsMatchSummary = showsMatchContext && mode !== "edit"' in workspace\n    assert 'const showsMatchTable = showsMatchContext && mode !== "edit"' in workspace\n    assert "Find a match" in workspace\n    assert 'mode === "guided" ? "Match editor"' in panel\n    assert '<details data-testid="match-edit-operation-history"' in panel\n    assert "Use the filters above to narrow the choices" in panel\n''',
+              encoding="utf-8",
+          )
+
+      - name: Verify source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          python -m pytest -q tests/test_manual_acceptance_ux_regressions.py
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Build Next.js
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Commit fixes and remove bootstrap workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/apply-manual-acceptance-ux-fixes-20260728.yml
+          git config user.name "pickleballattrespalapas"
+          git config user.email "pickleballattrespalapas@gmail.com"
+          git add \
+            apps/web/app/admin/match-uploader/MatchUploaderForm.tsx \
+            apps/web/app/admin/match-log/MatchLogWorkspace.tsx \
+            apps/web/app/admin/match-log/MatchLogApplyPanel.tsx \
+            tests/test_manual_acceptance_ux_regressions.py \
+            .github/workflows/apply-manual-acceptance-ux-fixes-20260728.yml
+          git commit -m "Fix manual acceptance UX regressions"
+          git push origin HEAD:agent/manual-acceptance-ux-fixes-20260728
