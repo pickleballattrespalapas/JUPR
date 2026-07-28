@@ -1,0 +1,159 @@
+name: Verify staging candidate read-only
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/verify-staging-candidate-readonly' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    env:
+      EXPECTED_SHA: 6da9ea8a2d86d4c2236b7f34fa8f1246dd418d2a
+      EXPECTED_SUPABASE_REF: sijpxjxvdtrehmqvirfi
+      FLY_APP: juprleagues-api-staging
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      WEB_ORIGIN: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+    steps:
+      - name: Check out isolated verifier
+        uses: actions/checkout@v4
+        with:
+          ref: agent/verify-staging-candidate-readonly
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact staging source and one-file diff
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$PR_BASE_SHA" = "$EXPECTED_SHA"
+          test "$PR_HEAD_SHA" = "$(git rev-parse HEAD)"
+          FILES="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              --paginate \
+              "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+              --jq '.[].filename' \
+              | sort
+          )"
+          test "$FILES" = ".github/workflows/verify-staging-candidate-readonly.yml"
+
+      - name: Fetch and verify Fly staging health
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error --max-time 20 \
+              "$FLY_HEALTH_URL" -o fly-health.json; then
+              ACTUAL_SHA="$(jq -r '.git_commit_sha // empty' fly-health.json)"
+              if [ "$ACTUAL_SHA" = "$EXPECTED_SHA" ]; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 20 ]; then
+              cat fly-health.json 2>/dev/null || true
+              echo "Fly staging did not reach the exact candidate in time." >&2
+              exit 1
+            fi
+            sleep 15
+          done
+
+          jq -e \
+            --arg sha "$EXPECTED_SHA" \
+            --arg app "$FLY_APP" \
+            --arg web "$WEB_ORIGIN" \
+            --arg supabase "$EXPECTED_SUPABASE_REF" \
+            'select(
+              .ok == true and
+              .service == "jupr-api" and
+              .environment == "staging" and
+              .git_commit_sha == $sha and
+              .image_build_git_sha == $sha and
+              .fly_app_name == $app and
+              .web_origin == $web and
+              .supabase_project_ref == $supabase and
+              .jwt_verification_configured == true and
+              .jwt_verification_mode == "jwks" and
+              .jwt_verification_project_ref == $supabase and
+              .write_wave == "none" and
+              .staging_write_wave == "none" and
+              .business_data_write_wave_active == false and
+              .write_prerequisites.service_role_configured == true and
+              .write_prerequisites.api_audit_required == true and
+              .write_prerequisites.worker_run_log_required == true and
+              .write_prerequisites.email_mode == "dry_run" and
+              .write_prerequisites.live_player_update_email_enabled == false and
+              .public_live_writes_enabled == false and
+              ([.controlled_write_flags[]] | all(. == false))
+            )' fly-health.json >/dev/null
+
+      - name: Verify Fly app state
+        if: env.FLY_API_TOKEN != ''
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: "0.4.49"
+
+      - name: Read Fly machine status
+        if: env.FLY_API_TOKEN != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          flyctl status --app "$FLY_APP" --json > fly-status.json
+          jq -e --arg app "$FLY_APP" '
+            (.Name // .name) == $app and
+            ((.Machines // .machines // []) | length > 0)
+          ' fly-status.json >/dev/null
+
+      - name: Verify staging web read surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          paths=(
+            "/"
+            "/admin/match-uploader"
+            "/admin/players"
+            "/admin/match-log"
+            "/admin/league-manager"
+            "/admin/tournaments/commerce"
+            "/admin/tournaments/team-competition"
+            "/clubs/tres-palapas/team-leagues"
+          )
+          : > web-status.txt
+          for path in "${paths[@]}"; do
+            code="$(curl --silent --show-error --location --max-time 30 \
+              --output /dev/null --write-out '%{http_code}' "$WEB_ORIGIN$path")"
+            printf '%s %s\n' "$code" "$path" | tee -a web-status.txt
+            case "$code" in
+              200|204) ;;
+              *) exit 1 ;;
+            esac
+          done
+
+      - name: Upload read-only evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-candidate-readonly-evidence
+          path: |
+            fly-health.json
+            fly-status.json
+            web-status.txt
+          if-no-files-found: error
+          retention-days: 2
