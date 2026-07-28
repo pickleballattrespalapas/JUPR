@@ -302,6 +302,8 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
   const selectedMode = workspaceModes.find((item) => item.mode === mode) || workspaceModes[0];
   const modePath = selectedMode.path;
   const showsMatchContext = mode !== "social" && mode !== "replay";
+  const showsMatchSummary = showsMatchContext && mode !== "edit";
+  const showsMatchTable = showsMatchContext && mode !== "edit" && mode !== "duplicates";
   const preserveFilters = (path: string) => {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(searchParams || {})) {
@@ -376,6 +378,12 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
       {data?.enabled ? (
         <>
           {showsMatchContext ? <form data-testid="match-log-filters" style={{ ...cardStyle, marginBottom: "1rem", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+            {mode === "edit" ? (
+              <div style={{ gridColumn: "1 / -1" }}>
+                <h2 style={{ margin: 0 }}>Find a match</h2>
+                <p style={{ ...muted, marginBottom: 0 }}>Filter the match list, then use the compact selector in the editor below.</p>
+              </div>
+            ) : null}
             <label>Filter<br />
               <select key={`filter-${selectedFilterParam}`} name="filter" defaultValue={selectedFilter} style={{ width: "100%" }}>
                 <option>All</option>
@@ -410,7 +418,7 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
             <Link href={modePath} style={{ padding: "0.5rem 0.75rem", borderRadius: "8px", border: "1px solid #64748b", color: "#0f172a", textAlign: "center", textDecoration: "none" }}>Clear filters</Link>
           </form> : null}
 
-          {showsMatchContext ? <div data-testid="match-log-summary" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+          {showsMatchSummary ? <div data-testid="match-log-summary" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Scanned</strong><br />{data.summary.scanned_matches}</article>
             <article style={cardStyle}><strong>Filtered</strong><br />{data.summary.filtered_matches ?? data.summary.returned_matches}</article>
             <article style={cardStyle}><strong>Shown</strong><br />{data.summary.returned_matches}</article>
@@ -419,7 +427,7 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
             <article style={cardStyle}><strong>Resolved no issue</strong><br />{data.summary.resolved_duplicate_groups ?? resolvedDuplicateGroups.length}</article>
           </div> : null}
 
-          {showsMatchContext && mode !== "duplicates" ? <section data-testid="match-log-results" style={{ marginBottom: "1rem" }}>
+          {showsMatchTable ? <section data-testid="match-log-results" style={{ marginBottom: "1rem" }}>
             <h2>Matches</h2>
             {data.matches.length ? (
               <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "14px", background: "white" }}>
