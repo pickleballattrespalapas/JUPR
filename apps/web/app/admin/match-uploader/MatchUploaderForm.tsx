@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import type { PublicPlayer } from "@/lib/api";
 import type {
   AdminMatchUploaderCreatePlayersResult,
@@ -109,8 +110,12 @@ function randomId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function newMatchRow(): MatchRow {
-  return { rowId: randomId("row"), date: todayIsoDate(), weekTag: "Week 1", ratingScope: "", t1p1: "", t1p2: "", t2p1: "", t2p2: "", s1: "0", s2: "0" };
+function newMatchRow(
+  date: string = todayIsoDate(),
+  weekTag: string = "Week 1",
+  ratingScope: MatchRow["ratingScope"] = "",
+): MatchRow {
+  return { rowId: randomId("row"), date, weekTag, ratingScope, t1p1: "", t1p2: "", t2p1: "", t2p2: "", s1: "0", s2: "0" };
 }
 
 function newSinglesRow(): SinglesRow {
@@ -159,6 +164,10 @@ function validateRow(row: MatchRow, index: number): string | null {
   return null;
 }
 
+function isReadyRow(row: MatchRow, index: number): boolean {
+  return isFilled(row) && validateRow(row, index) === null;
+}
+
 function validateSingles(row: SinglesRow): string | null {
   if (!row.playerA || !row.playerB) return "Select two singles players.";
   if (row.playerA === row.playerB) return "Singles players must be different.";
@@ -197,6 +206,11 @@ function SearchablePlayerInput({
       String(player.name).trim().toLocaleLowerCase()
       === cleanedQuery.toLocaleLowerCase(),
   );
+  const matchingPlayers = cleanedQuery
+    ? players.filter((player) =>
+        String(player.name).trim().toLocaleLowerCase().includes(cleanedQuery.toLocaleLowerCase()),
+      )
+    : players;
   const numericStartingJupr = Number(startingJupr);
 
   useEffect(() => {
@@ -226,7 +240,27 @@ function SearchablePlayerInput({
   return (
     <div>
       <label htmlFor={inputId}><strong>{label}</strong></label>
-      <div style={{ display: "flex", gap: "0.35rem" }}>
+      {value ? (
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "0.35rem", alignItems: "stretch" }}>
+          <div
+            title={selectedName}
+            style={{ ...inputStyle, minHeight: "2.4rem", display: "flex", alignItems: "center", whiteSpace: "normal", overflowWrap: "anywhere", background: "#f8fafc" }}
+          >
+            {selectedName}
+          </div>
+          <button
+            type="button"
+            aria-label={`Clear ${label}`}
+            disabled={disabled || creating}
+            onClick={() => {
+              setQuery("");
+              onChange("");
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      ) : (
         <input
           id={inputId}
           list={`${inputId}-options`}
@@ -246,26 +280,13 @@ function SearchablePlayerInput({
           }}
           style={inputStyle}
         />
-        {value ? (
-          <button
-            type="button"
-            aria-label={`Clear ${label}`}
-            disabled={disabled || creating}
-            onClick={() => {
-              setQuery("");
-              onChange("");
-            }}
-          >
-            Clear
-          </button>
-        ) : null}
-      </div>
+      )}
       <datalist id={`${inputId}-options`}>
         {players.map((player) => (
           <option key={String(player.id)} value={String(player.name)} />
         ))}
       </datalist>
-      {cleanedQuery && !exactPlayer ? (
+      {cleanedQuery && !exactPlayer && matchingPlayers.length === 0 ? (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(100px, 1fr) auto", gap: "0.35rem", marginTop: "0.35rem", alignItems: "end" }}>
           <label htmlFor={`${inputId}-starting-jupr`}>
             <span style={{ display: "block", color: "#475569", fontSize: "0.8rem" }}>Starting JUPR</span>
@@ -444,21 +465,87 @@ function previewToSchedule(preview: AdminMatchUploaderRoundRobinPreview): RrCour
   }));
 }
 
+function SubmissionResultDialog({
+  result,
+  onClose,
+}: {
+  result: AdminMatchUploaderWriteResult;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+    return () => {
+      if (dialog?.open) dialog.close();
+    };
+  }, []);
+
+  const inserted = result.result?.inserted ?? 0;
+  const email = result.auto_player_updates;
+  const emailSummary = email?.mode === "auto_sent"
+    ? `${email.sent ?? 0} sent, ${email.skipped ?? 0} skipped, ${email.errors ?? 0} error(s).`
+    : "Not sent in staging.";
+
+  return (
+    <dialog
+      ref={dialogRef}
+      aria-labelledby="match-submission-result-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      style={{ width: "min(720px, calc(100vw - 2rem))", maxHeight: "calc(100vh - 2rem)", overflowY: "auto", border: 0, borderRadius: "16px", padding: 0, boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)" }}
+    >
+      <div style={{ padding: "1.25rem" }}>
+        <h2 id="match-submission-result-title" style={{ marginTop: 0 }}>Match submission complete</h2>
+        <p role="status" style={{ color: "#166534" }}>
+          Successfully inserted {inserted} rated match{inserted === 1 ? "" : "es"}.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem" }}>
+          <div><strong>Inserted</strong><br />{inserted}</div>
+          <div><strong>Match write</strong><br />{result.match_write_committed ? "Committed" : "Review required"}</div>
+          <div><strong>Rating type</strong><br />{result.feedback?.rating_type || result.result?.match_format || "doubles/overall"}</div>
+          <div><strong>Skipped incomplete</strong><br />{result.result?.skipped_incomplete ?? 0}</div>
+          <div><strong>Skipped empty</strong><br />{result.result?.skipped_empty ?? 0}</div>
+          <div><strong>Skipped unrated</strong><br />{result.result?.skipped_unrated ?? 0}</div>
+        </div>
+        {email ? <p style={{ marginTop: "1rem" }}><strong>Player-update email:</strong> {emailSummary}</p> : null}
+        {result.feedback?.affected_players?.length ? (
+          <div style={{ overflowX: "auto", marginTop: "1rem" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Before</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>After</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Change</th></tr></thead>
+              <tbody>
+                {result.feedback.affected_players.map((player) => (
+                  <tr key={player.id}><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{player.name}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_before)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_after)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{deltaLabel(player.rating_delta)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+        {result.warnings?.length ? <ul style={{ color: "#92400e" }}>{result.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+        <p style={{ display: "flex", justifyContent: "flex-end", marginBottom: 0 }}>
+          <button type="button" onClick={onClose} style={buttonStyle}>OK</button>
+        </p>
+      </div>
+    </dialog>
+  );
+}
+
 export default function MatchUploaderForm({ apiBase, clubId, players, status }: Props) {
   const firstFormat = status.round_robin_format_options?.[0] || "4-Player";
   const singlesEnabled = Boolean(status.singles_write_enabled && status.singles_submit_endpoint);
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [knownPlayers, setKnownPlayers] = useState<PublicPlayer[]>(players);
-  const [entryMethod, setEntryMethod] = useState<"singles" | "manual" | "round_robin">(
-    () => singlesEnabled ? "singles" : "manual"
-  );
+  const [entryMethod, setEntryMethod] = useState<"singles" | "manual" | "round_robin">("manual");
   const [context, setContext] = useState<"league" | "popup">("league");
   const [defaultDate, setDefaultDate] = useState(todayIsoDate());
   const [defaultLeague, setDefaultLeague] = useState(status.league_options[0] || "Open");
   const [defaultWeekTag, setDefaultWeekTag] = useState(status.week_tag_options[0] || "Week 1");
   const [popupEventName, setPopupEventName] = useState("Saturday Social");
   const [singlesRow, setSinglesRow] = useState<SinglesRow>(() => newSinglesRow());
-  const [rows, setRows] = useState<MatchRow[]>(() => Array.from({ length: 5 }, () => newMatchRow()));
+  const [rows, setRows] = useState<MatchRow[]>(() => [newMatchRow(todayIsoDate(), status.week_tag_options[0] || "Week 1")]);
   const [rrCourts, setRrCourts] = useState<RrCourtInput[]>(() => [newRoundRobin(firstFormat)]);
   const [rrCustomSchedule, setRrCustomSchedule] = useState("");
   const [rrSchedule, setRrSchedule] = useState<RrCourtSchedule[]>([]);
@@ -469,12 +556,58 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   const [creatingPlayers, setCreatingPlayers] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [result, setResult] = useState<AdminMatchUploaderWriteResult | null>(null);
+  const [submissionKind, setSubmissionKind] = useState<"manual" | "round_robin" | "singles" | null>(null);
 
-  const validRows = rows.filter(isFilled);
+  const filledRows = rows.filter(isFilled);
+  const readyRows = rows.filter((row, index) => isReadyRow(row, index));
+  const hasInvalidFilledRows = filledRows.length !== readyRows.length;
   const scoredRrRows = rrSchedule.flatMap((court) => court.matches).filter((match) => Number(match.s1 || 0) + Number(match.s2 || 0) > 0);
   const league = context === "popup" ? "POPUP" : defaultLeague;
   const matchType = context === "popup" ? "PopUp" : "Live Match";
   const messageIsError = Boolean(message && (result?.ok === false || isUploaderErrorMessage(message)));
+
+  function clearEntryFeedback() {
+    setMessage(null);
+    setResult(null);
+  }
+
+  function resetManualRows() {
+    const preservedScope = (readyRows[0] || filledRows[0])?.ratingScope || "";
+    setRows([newMatchRow(defaultDate, defaultWeekTag, preservedScope)]);
+  }
+
+  function acknowledgeSubmission() {
+    if (submissionKind === "manual") resetManualRows();
+    if (submissionKind === "singles") {
+      setSinglesRow((current) => ({
+        ...newSinglesRow(),
+        date: current.date,
+        league: current.league,
+        weekTag: current.weekTag,
+        ratingScope: current.ratingScope,
+      }));
+    }
+    if (submissionKind === "round_robin") {
+      setRrSchedule([]);
+      setRrPendingPayload(null);
+    }
+    setSubmissionKind(null);
+    setMessage(null);
+    setResult(null);
+  }
+
+  function removeRow(rowId: string) {
+    clearEntryFeedback();
+    setRows((current) => {
+      const remaining = current.filter((row) => row.rowId !== rowId);
+      return remaining.length ? remaining : [newMatchRow(defaultDate, defaultWeekTag)];
+    });
+  }
+
+  function removeAllRows() {
+    clearEntryFeedback();
+    resetManualRows();
+  }
 
   function requireReady(): boolean {
     if (!apiBase) {
@@ -493,14 +626,17 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   }
 
   function patchRow(rowId: string, patch: Partial<MatchRow>) {
+    clearEntryFeedback();
     setRows((current) => current.map((row) => row.rowId === rowId ? { ...row, ...patch } : row));
   }
 
   function patchSingles(patch: Partial<SinglesRow>) {
+    clearEntryFeedback();
     setSinglesRow((current) => ({ ...current, ...patch }));
   }
 
   function patchRrCourt(rowId: string, patch: Partial<RrCourtInput>) {
+    clearEntryFeedback();
     setRrCourts((current) => current.map((court) => court.rowId === rowId ? { ...court, ...patch } : court));
     if (patch.formatType !== undefined || patch.playerNames !== undefined) {
       setRrSchedule([]);
@@ -510,6 +646,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   }
 
   function patchRrScore(rowId: string, patch: Partial<Pick<RrScoreRow, "s1" | "s2">>) {
+    clearEntryFeedback();
     setRrSchedule((current) => current.map((court) => ({
       ...court,
       matches: court.matches.map((match) => match.rowId === rowId ? { ...match, ...patch } : match)
@@ -617,12 +754,12 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
         idempotency_key: idempotencyKey
       });
       setResult(payload);
+      setSubmissionKind("singles");
       clearDirectMatchIdempotencyKey(
         `match-uploader:${clubId}:singles`,
         idempotencyKey
       );
       setMessage(`Submitted singles match; inserted ${payload.result?.inserted ?? 0} rated singles match.`);
-      setSinglesRow((current) => ({ ...newSinglesRow(), date: current.date, league: current.league, weekTag: current.weekTag }));
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "Unable to submit singles match."} Retry this unchanged form; duplicate protection is active.`);
     } finally {
@@ -684,7 +821,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     }
   }
 
-  async function submitMatches(matches: Array<Record<string, unknown>>, source: string) {
+  async function submitMatches(matches: Array<Record<string, unknown>>, source: string, kind: "manual" | "round_robin") {
     setSaving(true);
     const request = { source, matches };
     const operationScope = `match-uploader:${clubId}:batch`;
@@ -698,12 +835,13 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
         idempotency_key: idempotencyKey
       });
       setResult(payload);
+      setSubmissionKind(kind);
       clearDirectMatchIdempotencyKey(operationScope, idempotencyKey);
       const handoff = payload.auto_player_updates;
       const handoffSummary = handoff?.mode === "auto_sent"
         ? ` Player-update email: ${handoff.sent ?? 0} sent, ${handoff.skipped ?? 0} skipped, ${handoff.errors ?? 0} error(s).`
         : handoff?.mode
-          ? ` Player-update email: ${handoff.mode}${handoff.reason ? ` — ${handoff.reason}` : ""}.`
+          ? " Player-update email was not sent in staging."
           : "";
       setMessage(`Submitted ${payload.submitted_count ?? matches.length} row(s); inserted ${payload.result?.inserted ?? 0} rated match(es).${handoffSummary}`);
     } catch (error) {
@@ -722,7 +860,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
       setMessage(errors[0]);
       return;
     }
-    const matches = validRows.map((row) => ({
+    const matches = readyRows.map((row) => ({
       date: row.date,
       league,
       week_tag: row.weekTag,
@@ -742,7 +880,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
       setMessage("Enter at least one complete match row.");
       return;
     }
-    await submitMatches(matches, "next_match_uploader_manual_batch");
+    await submitMatches(matches, "next_match_uploader_manual_batch", "manual");
   }
 
   async function submitRoundRobinScores() {
@@ -768,7 +906,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
       setMessage("Enter at least one non-zero round-robin score before submitting.");
       return;
     }
-    await submitMatches(matches, "next_match_uploader_round_robin");
+    await submitMatches(matches, "next_match_uploader_round_robin", "round_robin");
   }
 
   if (!status.enabled) {
@@ -802,11 +940,11 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
           {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
-          <label><strong>Entry method</strong><br /><select value={entryMethod} onChange={(event) => setEntryMethod(event.target.value as "singles" | "manual" | "round_robin")} style={inputStyle}>{singlesEnabled ? <option value="singles">Singles match</option> : null}<option value="manual">Doubles manual / batch</option><option value="round_robin">Doubles round robin</option></select></label>
+          <label><strong>Entry method</strong><br /><select value={entryMethod} onChange={(event) => { clearEntryFeedback(); setEntryMethod(event.target.value as "singles" | "manual" | "round_robin"); }} style={inputStyle}>{singlesEnabled ? <option value="singles">Singles match</option> : null}<option value="manual">Doubles manual / batch</option><option value="round_robin">Doubles round robin</option></select></label>
           {entryMethod !== "singles" ? <label><strong>Context</strong><br /><select value={context} onChange={(event) => setContext(event.target.value as "league" | "popup")} style={inputStyle}><option value="league">Official League</option><option value="popup">Pop-Up / Social</option></select></label> : null}
-          {entryMethod !== "singles" ? <label><strong>Default date</strong><br /><input value={defaultDate} onChange={(event) => setDefaultDate(event.target.value)} type="date" style={inputStyle} /></label> : null}
+          {entryMethod !== "singles" ? <label><strong>Default date</strong><br /><input value={defaultDate} onChange={(event) => { const value = event.target.value; clearEntryFeedback(); setDefaultDate(value); setRows((current) => current.map((row) => isFilled(row) ? row : { ...row, date: value })); }} type="date" style={inputStyle} /></label> : null}
           {entryMethod !== "singles" ? <label><strong>Default league</strong><br /><select value={defaultLeague} onChange={(event) => setDefaultLeague(event.target.value)} disabled={context === "popup"} style={inputStyle}>{status.league_options.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
-          {entryMethod !== "singles" ? <label><strong>Default week/session</strong><br /><select value={defaultWeekTag} onChange={(event) => setDefaultWeekTag(event.target.value)} style={inputStyle}>{status.week_tag_options.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
+          {entryMethod !== "singles" ? <label><strong>Default week/session</strong><br /><select value={defaultWeekTag} onChange={(event) => { const value = event.target.value; clearEntryFeedback(); setDefaultWeekTag(value); setRows((current) => current.map((row) => isFilled(row) ? row : { ...row, weekTag: value })); }} style={inputStyle}>{status.week_tag_options.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
           {entryMethod !== "singles" && context === "popup" ? <label><strong>Pop-Up event name</strong><br /><input value={popupEventName} onChange={(event) => setPopupEventName(event.target.value)} style={inputStyle} /></label> : null}
         </div>
       </article>
@@ -852,14 +990,45 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
           <h2 style={{ marginTop: 0 }}>Doubles manual / batch score entry</h2>
           <p style={{ color: "#475569" }}>Empty rows are ignored. Submitted rows must have four distinct players and a non-zero score.</p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
-            <button type="button" onClick={() => setRows((current) => [...current, newMatchRow()])} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 1 Match</button>
-            <button type="button" onClick={() => setRows((current) => [...current, ...Array.from({ length: 5 }, () => newMatchRow())].slice(0, status.max_batch_rows))} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 5 Matches</button>
-            <button type="button" onClick={() => setRows([newMatchRow()])} disabled={!rows.some(isFilled)} style={ghostButtonStyle}>Remove All</button>
+            <button type="button" onClick={() => { clearEntryFeedback(); setRows((current) => [...current, newMatchRow(defaultDate, defaultWeekTag)]); }} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 1 Match</button>
+            <button type="button" onClick={() => { clearEntryFeedback(); setRows((current) => [...current, ...Array.from({ length: 5 }, () => newMatchRow(defaultDate, defaultWeekTag))].slice(0, status.max_batch_rows)); }} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 5 Matches</button>
+            {rows.some(isFilled) ? (
+              <ConfirmAction
+                triggerLabel="Remove All"
+                title="Remove all entered matches?"
+                description="This clears every entered player and score and returns the uploader to one blank match."
+                confirmLabel="Yes, remove all"
+                confirmationText="REMOVE"
+                tone="danger"
+                disabled={saving}
+                busy={saving}
+                onConfirm={() => removeAllRows()}
+              />
+            ) : (
+              <button type="button" onClick={removeAllRows} disabled={rows.length <= 1} style={ghostButtonStyle}>Remove All</button>
+            )}
           </div>
           <div style={{ display: "grid", gap: "0.75rem" }}>
             {rows.map((row, index) => (
               <div key={row.rowId} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: isFilled(row) ? "#f8fafc" : "white" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}><strong>Match {index + 1}</strong><button type="button" onClick={() => setRows((current) => current.filter((item) => item.rowId !== row.rowId))} disabled={rows.length <= 1}>Remove</button></div>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}>
+                  <strong>Match {index + 1}</strong>
+                  {isFilled(row) ? (
+                    <ConfirmAction
+                      triggerLabel="Remove match"
+                      title={`Remove Match ${index + 1}?`}
+                      description="This match contains entered data. Removing it cannot be undone from this screen."
+                      confirmLabel="Yes, remove match"
+                      confirmationText="REMOVE"
+                      tone="danger"
+                      disabled={saving}
+                      busy={saving}
+                      onConfirm={() => removeRow(row.rowId)}
+                    />
+                  ) : (
+                    <button type="button" onClick={() => removeRow(row.rowId)} disabled={rows.length <= 1}>Remove match</button>
+                  )}
+                </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "0.5rem" }}>
                   <label><strong>Date</strong><br /><input type="date" value={row.date} onChange={(event) => patchRow(row.rowId, { date: event.target.value })} style={inputStyle} /></label>
                   <label><strong>League</strong><br /><input value={league} readOnly aria-readonly="true" style={{ ...inputStyle, background: "#f1f5f9" }} /></label>
@@ -867,7 +1036,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
                   <label><strong>Match type</strong><br /><input value={matchType} readOnly aria-readonly="true" style={{ ...inputStyle, background: "#f1f5f9" }} /></label>
                   <label><strong>Rating scope</strong><br /><select value={row.ratingScope} onChange={(event) => patchRow(row.rowId, { ratingScope: event.target.value as MatchRow["ratingScope"] })} style={inputStyle}><option value="">Overall + league</option><option value="overall_only">Overall only</option><option value="unrated">Unrated / record only</option></select></label>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.5rem", marginTop: "0.5rem" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.5rem", marginTop: "0.5rem" }}>
                   <SearchablePlayerInput inputId={`${row.rowId}-t1p1`} label="Team 1 · Player 1" value={row.t1p1} players={knownPlayers} disabled={saving || creatingPlayers} onChange={(t1p1) => patchRow(row.rowId, { t1p1 })} onCreate={createAndSelectPlayer} />
                   <SearchablePlayerInput inputId={`${row.rowId}-t1p2`} label="Team 1 · Player 2" value={row.t1p2} players={knownPlayers} disabled={saving || creatingPlayers} onChange={(t1p2) => patchRow(row.rowId, { t1p2 })} onCreate={createAndSelectPlayer} />
                   <label><strong>Team 1 score</strong><br /><input value={row.s1} onChange={(event) => patchRow(row.rowId, { s1: event.target.value })} type="number" min={0} max={99} style={inputStyle} /></label>
@@ -878,8 +1047,8 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
               </div>
             ))}
           </div>
-          <p><strong>Ready rows:</strong> {validRows.length} / {rows.length}</p>
-          <button type="button" onClick={submitManualBatch} disabled={saving || !accessToken || !validRows.length} style={buttonStyle}>{saving ? "Submitting…" : "Submit batch"}</button>
+          <p><strong>Ready rows:</strong> {readyRows.length} / {rows.length}</p>
+          <button type="button" onClick={submitManualBatch} disabled={saving || !accessToken || !readyRows.length || hasInvalidFilledRows} style={buttonStyle}>{saving ? "Submitting…" : "Submit batch"}</button>
         </article>
       ) : null}
 
@@ -956,36 +1125,9 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
         </>
       ) : null}
 
-      {message ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+      {message && !result ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}
 
-      {result ? (
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Submission result</h2>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem" }}>
-            <div><strong>Inserted</strong><br />{result.result?.inserted ?? 0}</div>
-            <div><strong>Match write</strong><br />{result.match_write_committed ? "Committed" : "See response"}</div>
-            <div><strong>Rating type</strong><br />{result.feedback?.rating_type || result.result?.match_format || "doubles/overall"}</div>
-            <div><strong>Skipped incomplete</strong><br />{result.result?.skipped_incomplete ?? 0}</div>
-            <div><strong>Skipped empty</strong><br />{result.result?.skipped_empty ?? 0}</div>
-            <div><strong>Skipped unrated</strong><br />{result.result?.skipped_unrated ?? 0}</div>
-          </div>
-          {result.auto_player_updates ? <div style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #cbd5e1", borderRadius: "12px", background: result.auto_player_updates.mode === "error" ? "#fef2f2" : "#f8fafc" }}><strong>Post-batch player-update email</strong><p style={{ marginBottom: 0 }}>Mode: {result.auto_player_updates.mode || "unknown"} · Attempted: {result.auto_player_updates.attempted ?? 0} · Sent: {result.auto_player_updates.sent ?? 0} · Skipped: {result.auto_player_updates.skipped ?? 0} · Errors: {result.auto_player_updates.errors ?? 0}{result.auto_player_updates.email_mode ? ` · Delivery: ${result.auto_player_updates.email_mode}` : ""}</p>{result.auto_player_updates.reason ? <p style={{ color: "#92400e", marginBottom: 0 }}>{result.auto_player_updates.reason}</p> : null}</div> : null}
-          {result.recovery ? <p style={{ color: "#475569" }}>{result.recovery.operator_rule} {result.recovery.match_log_route ? <Link href={result.recovery.match_log_route}>Open Match Log</Link> : null}{result.recovery.player_updates_route ? <> · <Link href={result.recovery.player_updates_route}>Open Player Updates</Link></> : null}</p> : null}
-          {result.feedback?.affected_players?.length ? (
-            <div style={{ overflowX: "auto", marginTop: "1rem" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Before</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>After</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Change</th></tr></thead>
-                <tbody>
-                  {result.feedback.affected_players.map((player) => (
-                    <tr key={player.id}><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{player.name}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_before)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_after)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{deltaLabel(player.rating_delta)}</td></tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-          {result.warnings?.length ? <ul style={{ color: "#92400e" }}>{result.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
-        </article>
-      ) : null}
+      {result ? <SubmissionResultDialog result={result} onClose={acknowledgeSubmission} /> : null}
     </section>
   );
 }

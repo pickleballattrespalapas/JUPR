@@ -670,7 +670,7 @@ export default function MatchLogApplyPanel({
   return (
     <article style={cardStyle}>
       <h2 style={{ marginTop: 0 }}>
-        {mode === "guided" ? "Guided match correction" : mode === "bulk" ? "Bulk match correction" : "Duplicate resolution"}
+        {mode === "guided" ? "Match editor" : mode === "bulk" ? "Bulk match correction" : "Duplicate resolution"}
       </h2>
       <p style={{ color: "#475569" }}>
         Review each action before confirming it. Every completed change is audited and any required rating replay must finish before success is reported.
@@ -686,9 +686,8 @@ export default function MatchLogApplyPanel({
       </div>
 
       {mode === "guided" ? <>
-      <h3>Guided match editor</h3>
       <p style={{ color: "#475569" }}>
-        Select a match from the current filtered results, change fields with form controls, stage the edit, then apply all staged edits together.
+        Use the filters above to narrow the choices, select one match, change its fields, stage the edit, then apply the reviewed change.
       </p>
       <div style={{ display: "grid", gap: "0.75rem" }}>
         <label><strong>Match</strong><br />
@@ -817,21 +816,23 @@ export default function MatchLogApplyPanel({
       {mode !== "duplicates" && !recoveryOperationId ? feedback("recovery") : null}
 
       {mode !== "duplicates" && recentOperations.length ? (
-        <div data-testid="match-edit-operation-history" style={{ overflowX: "auto", marginTop: "1rem" }}>
-          <h4>Recent durable edit operations</h4>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "680px" }}>
-            <thead><tr>{["Created", "Status", "Replay", "Actor", "Operation"].map((label) => <th key={label} style={{ textAlign: "left", borderBottom: "1px solid #cbd5e1", padding: "0.5rem" }}>{label}</th>)}</tr></thead>
-            <tbody>{recentOperations.map((operation) => (
-              <tr key={operation.id} data-operation-status={operation.status}>
-                <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.created_at ? new Date(operation.created_at).toISOString().slice(0, 19).replace("T", " ") : "—"}</td>
-                <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.status}{operation.error_text ? ` · ${operation.error_text}` : ""}</td>
-                <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.replay_target || "Not required"}</td>
-                <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.actor_email || "—"}</td>
-                <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem", fontFamily: "monospace" }}>{operation.id}</td>
-              </tr>
-            ))}</tbody>
-          </table>
-        </div>
+        <details data-testid="match-edit-operation-history" style={{ marginTop: "1rem" }}>
+          <summary style={{ cursor: "pointer", fontWeight: 700 }}>Recent durable edit operations</summary>
+          <div style={{ overflowX: "auto", marginTop: "0.75rem" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "680px" }}>
+              <thead><tr>{["Created", "Status", "Replay", "Actor", "Operation"].map((label) => <th key={label} style={{ textAlign: "left", borderBottom: "1px solid #cbd5e1", padding: "0.5rem" }}>{label}</th>)}</tr></thead>
+              <tbody>{recentOperations.map((operation) => (
+                <tr key={operation.id} data-operation-status={operation.status}>
+                  <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.created_at ? new Date(operation.created_at).toISOString().slice(0, 19).replace("T", " ") : "—"}</td>
+                  <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.status}{operation.error_text ? ` · ${operation.error_text}` : ""}</td>
+                  <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.replay_target || "Not required"}</td>
+                  <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{operation.actor_email || "—"}</td>
+                  <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem", fontFamily: "monospace" }}>{operation.id}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </details>
       ) : null}
 
       {mode === "duplicates" ? <>
