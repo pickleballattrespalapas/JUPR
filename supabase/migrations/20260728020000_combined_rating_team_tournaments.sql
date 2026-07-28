@@ -5279,8 +5279,12 @@ begin
          )
     into v_seed_ids
     from ranked_stats ranked;
-  if cardinality(v_seed_ids) < case
-       when v_event.team_playoff_format = 'TOP_2_FINAL' then 2 else 4 end then
+  if cardinality(v_seed_ids) < (
+       case
+         when v_event.team_playoff_format = 'TOP_2_FINAL' then 2
+         else 4
+       end
+     ) then
     raise exception using errcode = 'P0001',
       message = 'JUPR_TOURNAMENT_TEAM_PLAYOFF_SOURCE_INCOMPLETE';
   end if;
