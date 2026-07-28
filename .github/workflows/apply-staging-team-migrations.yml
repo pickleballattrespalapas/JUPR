@@ -1,0 +1,147 @@
+name: Apply staging team-competition migrations
+
+on:
+  push:
+    branches:
+      - agent/apply-staging-team-migrations
+    paths:
+      - .github/workflows/apply-staging-team-migrations.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.repository == 'pickleballattrespalapas/JUPR'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: staging
+    env:
+      SUPABASE_TEST_DATABASE_URL: ${{ secrets.SUPABASE_TEST_DATABASE_URL }}
+      EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
+      EXPECTED_STAGING_SHA: 20e21e49792ef539afe925a3362da8c31417c087
+      FORBIDDEN_PRODUCTION_REF: dnoockbwfenunhcibwfn
+    steps:
+      - name: Check out isolated migration runner
+        uses: actions/checkout@v4
+        with:
+          ref: agent/apply-staging-team-migrations
+          fetch-depth: 0
+
+      - name: Verify exact staging source and isolated runner diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/staging:refs/remotes/origin/staging
+          test "$(git rev-parse refs/remotes/origin/staging)" = "$EXPECTED_STAGING_SHA"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_STAGING_SHA"
+          CHANGED="$(git diff --name-only "$EXPECTED_STAGING_SHA" HEAD)"
+          test "$CHANGED" = ".github/workflows/apply-staging-team-migrations.yml"
+
+      - name: Verify staging database target only
+        shell: python
+        run: |
+          import os
+          from urllib.parse import unquote, urlsplit
+
+          raw = os.environ.get('SUPABASE_TEST_DATABASE_URL', '').strip()
+          expected = os.environ.get('EXPECTED_SUPABASE_PROJECT_REF', '').strip().lower()
+          forbidden = os.environ.get('FORBIDDEN_PRODUCTION_REF', '').strip().lower()
+          if not raw or not expected:
+              raise SystemExit('Missing staging database URL or expected staging project ref.')
+          parsed = urlsplit(raw)
+          host = (parsed.hostname or '').lower()
+          username = unquote(parsed.username or '').lower()
+          database = (parsed.path or '').lstrip('/').lower()
+          target_text = f'{username} {host} {raw.lower()}'
+          if expected != 'sijpxjxvdtrehmqvirfi' or expected not in target_text:
+              raise SystemExit('Database URL is not the exact approved staging project.')
+          if forbidden and forbidden in target_text:
+              raise SystemExit('Production project reference detected; refusing to continue.')
+          if parsed.scheme not in {'postgres', 'postgresql'} or database != 'postgres':
+              raise SystemExit('Unexpected staging database connection shape.')
+          print(f'Verified staging target: {expected}')
+
+      - name: Ensure PostgreSQL client is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+          psql --version
+
+      - name: Apply only the approved forward migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atqc \
+            "select current_database() || ':' || current_user"
+
+          migrations=(
+            "20260728010000|tournament_commerce|20260728010000_tournament_commerce.sql"
+            "20260728020000|combined_rating_team_tournaments|20260728020000_combined_rating_team_tournaments.sql"
+            "20260728030000|team_leagues_and_awards|20260728030000_team_leagues_and_awards.sql"
+            "20260728040000|team_league_awards_hardening|20260728040000_team_league_awards_hardening.sql"
+            "20260728041000|team_league_registration_identity_recovery|20260728041000_team_league_registration_identity_recovery.sql"
+          )
+
+          for spec in "${migrations[@]}"; do
+            IFS='|' read -r version name file <<<"$spec"
+            count="$(psql "$SUPABASE_TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atqc \
+              "select count(*) from supabase_migrations.schema_migrations where version = '$version'")"
+            if [ "$count" = "1" ]; then
+              existing="$(psql "$SUPABASE_TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atqc \
+                "select coalesce(name, '') from supabase_migrations.schema_migrations where version = '$version'")"
+              if [ "$existing" != "$name" ]; then
+                echo "Migration $version has unexpected ledger name $existing" >&2
+                exit 2
+              fi
+              echo "Already applied: $version $name"
+              continue
+            fi
+            if [ "$count" != "0" ]; then
+              echo "Migration $version has duplicate ledger rows" >&2
+              exit 2
+            fi
+
+            runner="$RUNNER_TEMP/apply-$version.sql"
+            cat >"$runner" <<SQL
+          \\set ON_ERROR_STOP on
+          begin;
+          \\ir '$GITHUB_WORKSPACE/supabase/migrations/$file'
+          insert into supabase_migrations.schema_migrations (
+            version, statements, name, created_by
+          ) values (
+            '$version',
+            array['repository migration: supabase/migrations/$file'],
+            '$name',
+            'github-actions:staging-team-migrations'
+          );
+          commit;
+          SQL
+            psql "$SUPABASE_TEST_DATABASE_URL" -X -f "$runner"
+            echo "Applied: $version $name"
+          done
+
+          psql "$SUPABASE_TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atqc \
+            "select version || ':' || name from supabase_migrations.schema_migrations where version between '20260728010000' and '20260728041000' order by version" \
+            | tee "$RUNNER_TEMP/applied-migrations.txt"
+          test "$(wc -l < "$RUNNER_TEMP/applied-migrations.txt")" -eq 5
+
+      - name: Record successful isolated run
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > staging-team-migrations-applied.txt <<EOF
+          staging_candidate=$EXPECTED_STAGING_SHA
+          staging_project=$EXPECTED_SUPABASE_PROJECT_REF
+          migration_head=20260728041000_team_league_registration_identity_recovery
+          write_wave=none
+          EOF
+          git config user.name "pickleballattrespalapas"
+          git config user.email "pickleballattrespalapas@gmail.com"
+          git add staging-team-migrations-applied.txt
+          git commit -m "Record staging team migrations applied"
+          git push origin HEAD:agent/apply-staging-team-migrations
