@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import uuid
 from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlencode
@@ -29,6 +30,13 @@ from jupr_app.domain.tournament_registration_repo import (
     registration_feature_available,
     registration_is_open,
     save_registration,
+)
+from jupr_app.services.public_tournament_commerce_service import (
+    build_public_tournament_commerce_catalog,
+    build_public_tournament_commerce_order,
+    is_tournament_commerce_enabled,
+    prepare_public_registration_commerce_transaction,
+    require_tournament_commerce_mutation_runtime,
 )
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -375,6 +383,30 @@ def _public_event(row: dict[str, Any], *, registration_open: bool) -> dict[str, 
         "partner_required": _safe_bool(row.get("partner_required")),
         "partner_board_enabled": _safe_bool(row.get("partner_board_enabled", row.get("public_partner_board"))),
         "waitlist_enabled": _safe_bool(row.get("waitlist_enabled", True)),
+        "eligibility_mode": _clean_text(
+            row.get("eligibility_mode") or "STANDARD", limit=40
+        ),
+        "combined_rating_cap": _safe_float(row.get("combined_rating_cap")),
+        "rating_source_policy": _clean_text(
+            row.get("rating_source_policy"), limit=80
+        ),
+        "rating_review_timing": _clean_text(
+            row.get("rating_review_timing"), limit=80
+        ),
+        "competition_format": _clean_text(
+            row.get("competition_format") or "STANDARD", limit=40
+        ),
+        "team_roster_size": _safe_int(row.get("team_roster_size")),
+        "team_gender_rule": _clean_text(row.get("team_gender_rule"), limit=80),
+        "team_tiebreak_mode": _clean_text(
+            row.get("team_tiebreak_mode"), limit=40
+        ),
+        "team_playoff_format": _clean_text(
+            row.get("team_playoff_format"), limit=80
+        ),
+        "team_allow_substitutes": _safe_bool(
+            row.get("team_allow_substitutes")
+        ),
         "status": _clean_text(row.get("status") or "draft", limit=40).lower(),
         "visibility": visibility,
         "selectable": bool(registration_open and visibility == "selectable"),
@@ -452,6 +484,7 @@ def build_registration_confirmation_delivery(
     tournament_id: str,
     registration_id: str,
     public_base_url: str | None = None,
+    send_email: bool = True,
 ) -> dict[str, Any]:
     """Build signed confirmation access and attempt email after persistence.
 
@@ -506,6 +539,19 @@ def build_registration_confirmation_delivery(
             },
         }
 
+    if not send_email:
+        return {
+            "confirmation_available": True,
+            "confirmation_token": token,
+            "email_delivery": {
+                "status": "already_completed",
+                "message": (
+                    "Registration was already saved; the original "
+                    "confirmation delivery was not repeated."
+                ),
+            },
+        }
+
     web_base = _public_web_base_url(public_base_url)
     if not web_base:
         return {
@@ -536,6 +582,16 @@ def build_registration_confirmation_delivery(
             selections=bundle.get("selections") or [],
             days=bundle.get("days") or [],
             event_options=bundle.get("event_options") or [],
+            commerce_order=(
+                build_public_tournament_commerce_order(
+                    supabase,
+                    club_id=str(club_id),
+                    tournament_id=str(tournament_id),
+                    registration_id=str(registration_id),
+                )
+                if is_tournament_commerce_enabled()
+                else None
+            ),
             confirmation_url=confirmation_url,
             roster_url=roster_url,
             sender_from_name=smtp_status.get("from_name"),
@@ -623,6 +679,13 @@ def build_public_tournament_registration_page(
     public_events.sort(key=lambda item: (item.get("registration_day_id") or "", str(item.get("event_family_label") or ""), str(item.get("division_name") or "")))
 
     roster_state = build_public_tournament_roster_state(supabase, tournament, settings, days_raw, events_raw)
+    commerce = None
+    if is_tournament_commerce_enabled() and registration_open:
+        commerce = build_public_tournament_commerce_catalog(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=str(tournament.get("id") or ""),
+        )
     return {
         "available": True,
         "setup_error": None,
@@ -638,6 +701,7 @@ def build_public_tournament_registration_page(
         # already-linked player to this otherwise-empty collection.
         "players": [],
         "roster_summary": roster_state.get("summary") if isinstance(roster_state, dict) else None,
+        "commerce": commerce,
     }
 
 
@@ -1177,7 +1241,14 @@ def submit_public_tournament_registration(
     tournament_id = str(tournament.get("id") or "").strip()
     if not tournament_id:
         raise ValueError("Tournament registration was not found.")
-    if get_registration_by_email(supabase, tournament_id, _clean_email(payload.get("email"))):
+    commerce_available = bool(
+        isinstance(page.get("commerce"), dict)
+        and page["commerce"].get("available")
+    )
+    existing_registration = get_registration_by_email(
+        supabase, tournament_id, _clean_email(payload.get("email"))
+    )
+    if existing_registration and not commerce_available:
         raise DuplicateTournamentRegistrationError(
             "A registration already exists for this email. Please use the secure edit-link flow."
         )
@@ -1188,13 +1259,53 @@ def submit_public_tournament_registration(
         page=page,
         payload=payload,
     )
-    result = save_registration(supabase, tournament_id=tournament_id, payload=save_payload)
+    commerce_transaction = None
+    if commerce_available:
+        require_tournament_commerce_mutation_runtime(
+            actor_type="PUBLIC_REGISTRANT"
+        )
+        save_payload["_registration_id"] = f"reg_{uuid.uuid4().hex}"
+        commerce_transaction = (
+            prepare_public_registration_commerce_transaction(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=tournament_id,
+                registration_id=str(save_payload["_registration_id"]),
+                registration_email=_clean_email(payload.get("email")),
+                event_option_ids=[
+                    str(row.get("event_option_id") or "")
+                    for row in (save_payload.get("selections") or [])
+                    if row.get("event_option_id")
+                ],
+                commerce=payload.get("commerce"),
+                edit_mode=False,
+            )
+        )
+        if commerce_transaction is not None:
+            commerce_transaction.update(
+                {
+                    "club_id": str(club_id),
+                    "source": "next_public_tournament_registration",
+                }
+            )
+    try:
+        result = save_registration(
+            supabase,
+            tournament_id=tournament_id,
+            payload=save_payload,
+            commerce_transaction=commerce_transaction,
+        )
+    except ValueError as exc:
+        if "registration already exists" in str(exc).lower():
+            raise DuplicateTournamentRegistrationError(str(exc)) from exc
+        raise
     delivery = build_registration_confirmation_delivery(
         supabase,
         club_id=str(club_id),
         club_slug=str(club_slug or club_id),
         tournament_id=tournament_id,
         registration_id=str(result.get("registration_id") or ""),
+        send_email=not bool(result.get("idempotent_replay")),
     )
     return {
         "ok": True,
@@ -1203,6 +1314,7 @@ def submit_public_tournament_registration(
         "registration_id": result.get("registration_id"),
         "submitted_at": result.get("submitted_at"),
         "selection_count": result.get("selection_count"),
+        "commerce_order": result.get("commerce_order"),
         **delivery,
     }
 
@@ -1250,6 +1362,16 @@ def build_public_tournament_registration_confirmation(
                 "show_on_partner_board": _safe_bool(selection.get("show_on_partner_board")),
             }
         )
+    commerce_order = (
+        build_public_tournament_commerce_order(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=tid,
+            registration_id=registration_id,
+        )
+        if is_tournament_commerce_enabled()
+        else None
+    )
     sender_status = get_smtp_config_status()
     return {
         "tournament": _public_tournament(bundle.get("tournament") or {}),
@@ -1262,6 +1384,7 @@ def build_public_tournament_registration_confirmation(
         },
         "selections": selections,
         "total_price_usd": float(bundle.get("total_price_usd") or 0),
+        "commerce_order": commerce_order,
         "payment_note": PAYMENT_NOTE,
         "confirmation_expires_at": verified.get("exp"),
         "notification_sender": {

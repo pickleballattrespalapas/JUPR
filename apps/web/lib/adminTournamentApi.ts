@@ -144,12 +144,21 @@ export type AdminTournamentOpsSnapshotResponse = {
     teams: number;
     games: number;
     podium: number;
+    rating_children?: number;
     completed_games?: number;
   };
   draws: AdminTournamentDraw[];
   teams: AdminTournamentOpsTeam[];
   games: Array<Record<string, unknown>>;
   podium: Array<Record<string, unknown>>;
+  rating_child_draws?: AdminTournamentDraw[];
+  rating_child_publish_queue?: Array<{
+    draw: AdminTournamentDraw;
+    child_game: Record<string, unknown> | null;
+    tournament_game: Record<string, unknown> | null;
+    publish_state: string;
+    canonical_match_count: number;
+  }>;
   registration_days?: Array<Record<string, unknown>>;
   event_options?: Array<Record<string, unknown>>;
   players?: AdminTournamentOpsPlayer[];

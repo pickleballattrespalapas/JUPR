@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getAdminLeagueManagerApiBaseUrl, getAdminLeagueManagerStatus } from "@/lib/adminLeagueManagerApi";
 import LeagueManagerPanel from "./LeagueManagerPanel";
+import LeagueManagerNav from "./LeagueManagerNav";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
@@ -14,6 +15,7 @@ export default async function AdminLeagueManagerPage() {
         Admin League Manager
       </p>
       <h1 style={{ marginTop: 0 }}>League Manager</h1>
+      <LeagueManagerNav />
       <p style={{ color: "#334155", maxWidth: "880px" }}>
         Guarded Next/FastAPI league operations: create drafts, edit settings and roster membership, run persisted live rounds with court movement, print operations sheets, and close awards. Streamlit remains the fallback while staging validation continues.
       </p>

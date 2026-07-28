@@ -91,6 +91,13 @@ def fake_storage():
         "leagues_metadata": [
             {"club_id": "club", "league_name": "Open", "is_active": True},
             {"club_id": "club", "league_name": "Advanced", "is_active": True},
+            {
+                "club_id": "club",
+                "league_name": "Stale Active",
+                "is_active": True,
+                "status": "active",
+                "ended_at": "2026-01-01T00:00:00Z",
+            },
         ],
         "admin_activity_log": [],
     }
@@ -146,6 +153,7 @@ def test_match_uploader_status_enabled_lists_leagues_and_round_robin(monkeypatch
     assert payload["round_robin_preview_endpoint"] == "/admin/clubs/{club_id}/match-uploader/round-robin/preview"
     assert payload["player_create_endpoint"] == "/admin/clubs/{club_id}/match-uploader/players"
     assert "Open" in payload["league_options"]
+    assert "Stale Active" not in payload["league_options"]
     assert payload["round_robin_expected_games"]["4-Player"] == 3
 
 

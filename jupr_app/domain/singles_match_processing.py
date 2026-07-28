@@ -16,6 +16,9 @@ from jupr_app.domain.matches import (
 )
 from jupr_app.domain.notifications.player_profile_update_repo import queue_player_updates_for_affected_subscribers
 from jupr_app.domain.player_activity import build_player_activity_update, coerce_utc_datetime, max_activity_time
+from jupr_app.domain.match_processing import (
+    build_active_league_metadata_expectations,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +150,7 @@ def process_singles_matches(
     club_id: str,
     name_to_id: dict[str, int],
     df_players_all: Any = None,
+    df_meta: Any = None,
     sb_retry: Callable | None = None,
     default_k_factor: int = 32,
     min_win_delta_elo: float = 1.0,
@@ -340,6 +344,17 @@ def process_singles_matches(
             planned_player_updates.append(
                 {"player_id": int(pid), "rating_mode": "singles", "expected": expected, "after": after}
             )
+        league_metadata_expectations = (
+            build_active_league_metadata_expectations(
+                df_meta,
+                club_id=str(club_id),
+                league_names={
+                    str(row.get("league") or "")
+                    for row in db_matches
+                },
+                default_k_factor=int(default_k_factor),
+            )
+        )
         return {
             "inserted": len(db_matches),
             "match_format": "singles",
@@ -354,7 +369,9 @@ def process_singles_matches(
                 "match_rows": db_matches,
                 "player_updates": planned_player_updates,
                 "league_rating_updates": [],
-                "league_metadata_expectations": [],
+                "league_metadata_expectations": (
+                    league_metadata_expectations
+                ),
             },
             "side_effect_context": {
                 "affected_player_ids": sorted(affected_players),

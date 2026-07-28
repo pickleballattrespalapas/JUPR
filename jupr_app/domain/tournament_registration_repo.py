@@ -46,6 +46,12 @@ class TournamentRegistrationRelationshipLockedError(ValueError):
 
 ADMIN_SELECTION_UPDATE_RPC = "admin_update_tournament_registration_selection"
 PUBLIC_REGISTRATION_EDIT_RPC = "server_update_public_tournament_registration_edit"
+PUBLIC_REGISTRATION_COMMERCE_CREATE_RPC = (
+    "server_create_public_tournament_registration_with_commerce"
+)
+PUBLIC_REGISTRATION_COMMERCE_EDIT_RPC = (
+    "server_update_public_tournament_registration_with_commerce"
+)
 SELECTION_WRITE_CONFLICT_CODE = "SELECTION_WRITE_CONFLICT"
 SELECTION_WRITE_CONFLICT_MARKER = "JUPR_SELECTION_WRITE_CONFLICT"
 SELECTION_NOT_FOUND_CODE = "SELECTION_NOT_FOUND"
@@ -58,6 +64,9 @@ REGISTRATION_EDIT_IMPORTED_CODE = "REGISTRATION_IMPORTED_TO_DRAW"
 REGISTRATION_EDIT_IMPORTED_MARKER = "JUPR_REGISTRATION_IMPORTED_TO_DRAW"
 REGISTRATION_EDIT_RELATIONSHIP_CODE = "REGISTRATION_RELATIONSHIP_LOCKED"
 REGISTRATION_EDIT_RELATIONSHIP_MARKER = "JUPR_REGISTRATION_RELATIONSHIP_LOCKED"
+REGISTRATION_COMMERCE_FULFILLED_CANCEL_MARKER = (
+    "JUPR_TOURNAMENT_COMMERCE_FULFILLED_REGISTRATION_CANCEL_LOCKED"
+)
 
 
 REGISTRATION_SCHEMA_CONTRACT_MIGRATIONS = [
@@ -78,6 +87,11 @@ PARTNER_LINK_SCHEMA_TABLES = [
     "tournament_registration_partner_requests",
     "tournament_registration_team_links",
     "tournament_registration_team_members",
+]
+
+FOUR_PLAYER_TEAM_SCHEMA_TABLES = [
+    "tournament_four_player_teams",
+    "tournament_four_player_team_members",
 ]
 
 REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -372,6 +386,10 @@ def partner_link_schema_available(supabase) -> tuple[bool, str | None]:
     except ValueError as exc:
         return False, str(exc)
     return True, None
+
+
+def four_player_team_schema_available(supabase) -> tuple[bool, str | None]:
+    return _tables_available(supabase, FOUR_PLAYER_TEAM_SCHEMA_TABLES)
 
 
 def list_existing_tournaments(supabase, club_id: str, *, include_archived: bool = False) -> list[dict[str, Any]]:
@@ -1433,7 +1451,17 @@ def update_admin_registration(
     )
     if expected_updated_at is not None:
         query = query.eq("updated_at", str(expected_updated_at))
-    resp = query.execute()
+    try:
+        resp = query.execute()
+    except Exception as exc:
+        if _database_error_contains(
+            exc, REGISTRATION_COMMERCE_FULFILLED_CANCEL_MARKER
+        ):
+            raise ValueError(
+                "This registration has fulfilled extras. Resolve fulfillment "
+                "before cancelling the registration."
+            ) from exc
+        raise
     updated = _safe_first(resp)
     if not updated:
         if expected_updated_at is not None:
@@ -1682,6 +1710,30 @@ def list_partner_team_members(supabase, tournament_id: str) -> list[dict[str, An
     return _safe_data(resp)
 
 
+def list_four_player_teams(supabase, tournament_id: str) -> list[dict[str, Any]]:
+    resp = (
+        supabase.table("tournament_four_player_teams")
+        .select("*")
+        .eq("tournament_id", str(tournament_id))
+        .order("created_at")
+        .execute()
+    )
+    return _safe_data(resp)
+
+
+def list_four_player_team_members(
+    supabase, tournament_id: str
+) -> list[dict[str, Any]]:
+    resp = (
+        supabase.table("tournament_four_player_team_members")
+        .select("*")
+        .eq("tournament_id", str(tournament_id))
+        .order("slot")
+        .execute()
+    )
+    return _safe_data(resp)
+
+
 def _get_existing_registration_by_email(supabase, tournament_id: str, email: str) -> dict[str, Any] | None:
     return _get_registration_by_email(supabase, tournament_id, email)
 
@@ -1715,6 +1767,7 @@ def save_registration(
     expected_updated_at: str | None = None,
     expected_selection_versions: list[dict[str, Any]] | None = None,
     atomic_edit: bool = False,
+    commerce_transaction: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     email = _normalize_email(payload.get("email"))
     if not email:
@@ -1738,10 +1791,12 @@ def save_registration(
         if existing and str(existing.get("id")) != str(expected_registration_id):
             raise ValueError("Expected registration does not match the registered email.")
         registration_id = str(expected_registration_id)
-    elif existing:
+    elif existing and commerce_transaction is None:
         raise ValueError("A registration already exists for this email. Please use the secure edit link flow.")
     else:
-        registration_id = _uid("reg")
+        registration_id = str(
+            payload.get("_registration_id") or _uid("reg")
+        )
     submitted_at = _now_iso()
     if "status" in payload and payload.get("status") not in (None, ""):
         registration_status = str(payload.get("status")).strip().lower()
@@ -1875,7 +1930,7 @@ def save_registration(
                 "wants_partner_board_contact",
             )
         }
-        params = {
+        params: dict[str, Any] = {
             "p_tournament_id": str(tournament_id),
             "p_registration_id": str(expected_registration_id),
             "p_expected_updated_at": str(expected_updated_at),
@@ -1883,8 +1938,38 @@ def save_registration(
             "p_registration_patch": registration_patch,
             "p_selections": rows,
         }
+        rpc_name = PUBLIC_REGISTRATION_EDIT_RPC
+        if commerce_transaction is not None:
+            params = {
+                "p_club_id": str(commerce_transaction["club_id"]),
+                "p_tournament_id": str(tournament_id),
+                "p_registration_id": str(expected_registration_id),
+                "p_expected_registration_updated_at": str(expected_updated_at),
+                "p_expected_selection_versions": list(
+                    expected_selection_versions or []
+                ),
+                "p_registration_patch": registration_patch,
+                "p_selections": rows,
+                "p_expected_order_updated_at": commerce_transaction.get(
+                    "expected_order_updated_at"
+                ),
+                "p_quote_snapshot": commerce_transaction["quote"],
+                "p_operation_idempotency_key": commerce_transaction[
+                    "operation_idempotency_key"
+                ],
+                "p_order_idempotency_key": commerce_transaction[
+                    "order_idempotency_key"
+                ],
+                "p_request_fingerprint": commerce_transaction[
+                    "request_fingerprint"
+                ],
+                "p_actor_label": commerce_transaction["actor_label"],
+                "p_source": commerce_transaction.get("source")
+                or "next_public_tournament_registration_edit",
+            }
+            rpc_name = PUBLIC_REGISTRATION_COMMERCE_EDIT_RPC
         try:
-            resp = supabase.rpc(PUBLIC_REGISTRATION_EDIT_RPC, params).execute()
+            resp = supabase.rpc(rpc_name, params).execute()
         except Exception as exc:
             if _database_error_contains(exc, REGISTRATION_EDIT_CONFLICT_MARKER):
                 raise TournamentRegistrationEditConflictError(
@@ -1897,6 +1982,21 @@ def save_registration(
             if _database_error_contains(exc, REGISTRATION_EDIT_RELATIONSHIP_MARKER):
                 raise TournamentRegistrationRelationshipLockedError(
                     "This registration has an active partner relationship. Tournament staff must review the change."
+                ) from exc
+            if any(
+                _database_error_contains(exc, marker)
+                for marker in (
+                    "JUPR_TOURNAMENT_COMMERCE_ORDER_STALE",
+                    "JUPR_TOURNAMENT_COMMERCE_QUOTE_STALE",
+                    "JUPR_TOURNAMENT_COMMERCE_INVENTORY_UNAVAILABLE",
+                    "JUPR_TOURNAMENT_COMMERCE_CLAIM_GIVEAWAY_FULL",
+                    "JUPR_TOURNAMENT_COMMERCE_REGISTRANT_GIVEAWAY_FULL",
+                    "JUPR_TOURNAMENT_COMMERCE_IDEMPOTENCY_CONFLICT",
+                )
+            ):
+                raise TournamentRegistrationEditConflictError(
+                    "Tournament extras changed while the registration was "
+                    "being saved. Refresh and review the current total."
                 ) from exc
             raise RuntimeError("Tournament registration edit failed without changing the registration.") from exc
 
@@ -1925,6 +2025,75 @@ def save_registration(
             "submitted_at": (expected or {}).get("submitted_at") or submitted_at,
             "updated_at": result.get("updated_at"),
             "selection_count": int(result.get("selection_count") or 0),
+            "commerce_order": result.get("commerce_order"),
+            "idempotent_replay": bool(result.get("idempotent_replay")),
+        }
+
+    if commerce_transaction is not None:
+        params = {
+            "p_club_id": str(commerce_transaction["club_id"]),
+            "p_tournament_id": str(tournament_id),
+            "p_registration": reg_row,
+            "p_selections": rows,
+            "p_quote_snapshot": commerce_transaction["quote"],
+            "p_operation_idempotency_key": commerce_transaction[
+                "operation_idempotency_key"
+            ],
+            "p_order_idempotency_key": commerce_transaction[
+                "order_idempotency_key"
+            ],
+            "p_request_fingerprint": commerce_transaction[
+                "request_fingerprint"
+            ],
+            "p_actor_label": commerce_transaction["actor_label"],
+            "p_source": commerce_transaction.get("source")
+            or "next_public_tournament_registration",
+        }
+        try:
+            response = supabase.rpc(
+                PUBLIC_REGISTRATION_COMMERCE_CREATE_RPC, params
+            ).execute()
+        except Exception as exc:
+            if _database_error_contains(
+                exc, "JUPR_TOURNAMENT_COMMERCE_REGISTRATION_DUPLICATE"
+            ):
+                raise ValueError(
+                    "A registration already exists for this email. Please use "
+                    "the secure edit-link flow."
+                ) from exc
+            if any(
+                _database_error_contains(exc, marker)
+                for marker in (
+                    "JUPR_TOURNAMENT_COMMERCE_ORDER_STALE",
+                    "JUPR_TOURNAMENT_COMMERCE_QUOTE_STALE",
+                    "JUPR_TOURNAMENT_COMMERCE_INVENTORY_UNAVAILABLE",
+                    "JUPR_TOURNAMENT_COMMERCE_CLAIM_GIVEAWAY_FULL",
+                    "JUPR_TOURNAMENT_COMMERCE_REGISTRANT_GIVEAWAY_FULL",
+                    "JUPR_TOURNAMENT_COMMERCE_IDEMPOTENCY_CONFLICT",
+                )
+            ):
+                raise TournamentRegistrationEditConflictError(
+                    "Tournament extras changed while the registration was "
+                    "being saved. Review the current total and try again."
+                ) from exc
+            raise RuntimeError(
+                "Tournament registration and extras were not saved."
+            ) from exc
+        result = _rpc_object(response)
+        if not result or result.get("ok") is not True:
+            raise RuntimeError(
+                "Tournament registration and extras returned no recovery "
+                "evidence."
+            )
+        return {
+            "registration_id": str(
+                result.get("registration_id") or registration_id
+            ),
+            "submitted_at": result.get("submitted_at") or submitted_at,
+            "updated_at": result.get("updated_at"),
+            "selection_count": int(result.get("selection_count") or 0),
+            "commerce_order": result.get("commerce_order"),
+            "idempotent_replay": bool(result.get("idempotent_replay")),
         }
 
     (
@@ -2019,6 +2188,30 @@ def build_registration_state(supabase, tournament: dict[str, Any], settings: dic
         partner_requests = []
         partner_links = []
         team_members = []
+    has_four_player_event = any(
+        str(event.get("competition_format") or "").upper() == "FOUR_PLAYER_TEAM"
+        for event in event_options
+    )
+    four_player_schema_ok = True
+    four_player_schema_detail = None
+    if has_four_player_event:
+        four_player_schema_ok, four_player_schema_detail = (
+            four_player_team_schema_available(supabase)
+        )
+    if four_player_schema_ok:
+        four_player_teams = (
+            list_four_player_teams(supabase, str(tournament.get("id")))
+            if has_four_player_event
+            else []
+        )
+        four_player_team_members = (
+            list_four_player_team_members(supabase, str(tournament.get("id")))
+            if has_four_player_event
+            else []
+        )
+    else:
+        four_player_teams = []
+        four_player_team_members = []
     state = compile_tournament_registration_state(
         tournament=tournament,
         settings=settings,
@@ -2029,12 +2222,18 @@ def build_registration_state(supabase, tournament: dict[str, Any], settings: dic
         partner_requests=partner_requests,
         partner_links=partner_links,
         team_members=team_members,
+        four_player_teams=four_player_teams,
+        four_player_team_members=four_player_team_members,
     )
     if not partner_schema_ok:
         state["partner_link_schema_available"] = False
         state["partner_link_schema_detail"] = partner_schema_detail
     else:
         state["partner_link_schema_available"] = True
+    if has_four_player_event:
+        state["four_player_team_schema_available"] = four_player_schema_ok
+        if not four_player_schema_ok:
+            state["four_player_team_schema_detail"] = four_player_schema_detail
     return state
 
 
@@ -2108,6 +2307,8 @@ def build_public_tournament_roster_state(
     def _public_entry_type(value: Any) -> str:
         return {
             "confirmed_team": "Team",
+            "four_player_team": "Team",
+            "four_player_team_setup_required": "Registration",
             "needs_partner": "Player",
             "pending_partner_request": "Pairing",
         }.get(str(value or "").strip().lower(), "Registration")

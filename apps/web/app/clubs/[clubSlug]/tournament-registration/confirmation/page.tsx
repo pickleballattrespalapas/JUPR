@@ -1,9 +1,16 @@
 import Link from "next/link";
 import { getClubTournamentRegistrationConfirmation } from "@/lib/tournamentRegistrationApi";
+import { formatCommerceMoney } from "@/lib/tournamentCommerceApi";
+import { recoverPublicFourPlayerTeamSetup } from "@/lib/tournamentTeamCompetitionApi";
+import FourPlayerTeamSetupRecovery from "./FourPlayerTeamSetupRecovery";
 
 type ConfirmationPageProps = {
   params: { clubSlug: string };
-  searchParams?: { confirmation_token?: string; email_status?: string };
+  searchParams?: {
+    confirmation_token?: string;
+    email_status?: string;
+    team_setup?: string;
+  };
 };
 
 const cardStyle = {
@@ -31,10 +38,22 @@ function deliveryMessage(status?: string): { text: string; color: string; backgr
 export default async function TournamentRegistrationConfirmationPage({ params, searchParams }: ConfirmationPageProps) {
   const { clubSlug } = params;
   const confirmationToken = searchParams?.confirmation_token || "";
-  const { data, error } = confirmationToken
-    ? await getClubTournamentRegistrationConfirmation(clubSlug, confirmationToken)
-    : { data: null, error: "Missing secure confirmation token." };
+  const [confirmationResult, teamRecoveryResult] = confirmationToken
+    ? await Promise.all([
+        getClubTournamentRegistrationConfirmation(clubSlug, confirmationToken),
+        recoverPublicFourPlayerTeamSetup(clubSlug, confirmationToken)
+      ])
+    : [
+        { data: null, error: "Missing secure confirmation token." },
+        { data: null, error: null }
+      ];
+  const { data, error } = confirmationResult;
+  const teamRecovery = teamRecoveryResult.data;
+  const teamSetupNeedsAttention = searchParams?.team_setup === "attention";
   const delivery = deliveryMessage(searchParams?.email_status);
+  const commerceQuote = data?.commerce_order?.quote || null;
+  const commerceLines =
+    commerceQuote?.lines.filter((line) => line.line_type !== "EVENT") || [];
   const rosterQuery = new URLSearchParams();
   if (data?.settings?.registration_slug) rosterQuery.set("tournament", data.settings.registration_slug);
   else if (data?.tournament.id) rosterQuery.set("tournament_id", data.tournament.id);
@@ -59,7 +78,7 @@ export default async function TournamentRegistrationConfirmationPage({ params, s
               <div><dt style={{ fontWeight: 700 }}>Submitted</dt><dd style={{ margin: 0 }}>{dateLabel(data.registration.submitted_at) ?? "—"}</dd></div>
               <div><dt style={{ fontWeight: 700 }}>Status</dt><dd style={{ margin: 0 }}>{data.registration.status ?? "confirmed"}</dd></div>
               <div><dt style={{ fontWeight: 700 }}>Payment</dt><dd style={{ margin: 0 }}>{data.registration.payment_status ?? "unpaid"}</dd></div>
-              <div><dt style={{ fontWeight: 700 }}>Estimated total</dt><dd style={{ margin: 0 }}>${Number(data.total_price_usd || 0).toFixed(2)}</dd></div>
+              <div><dt style={{ fontWeight: 700 }}>Total due offline</dt><dd style={{ margin: 0 }}>{commerceQuote ? formatCommerceMoney(commerceQuote.total_minor) : `$${Number(data.total_price_usd || 0).toFixed(2)}`}</dd></div>
             </dl>
           </article>
 
@@ -78,9 +97,86 @@ export default async function TournamentRegistrationConfirmationPage({ params, s
             {!data.selections.length ? <p style={{ color: "#92400e", background: "#fffbeb", borderRadius: "10px", padding: "0.75rem" }}>No event selections were found. Contact tournament staff if this is unexpected.</p> : null}
           </div>
 
+          {commerceLines.length ? (
+            <>
+              <h2>Extras and bundle savings</h2>
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                {commerceLines.map((line) => (
+                  <article key={line.line_key} style={cardStyle}>
+                    <strong>
+                      {line.quantity} × {line.label}
+                      {line.option_label ? ` — ${line.option_label}` : ""}
+                    </strong>
+                    <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
+                      {formatCommerceMoney(line.final_total_minor)}
+                      {line.savings_minor > 0
+                        ? ` · ${formatCommerceMoney(line.savings_minor)} saved`
+                        : ""}
+                    </p>
+                    {line.component_snapshot?.length ? (
+                      <ul style={{ marginBottom: 0 }}>
+                        {line.component_snapshot.map((component, index) => (
+                          <li
+                            key={
+                              component.id ||
+                              `${line.line_key}-${component.component_type}-${index}`
+                            }
+                          >
+                            {component.total_quantity ||
+                              component.quantity ||
+                              1}{" "}
+                            ×{" "}
+                            {component.label ||
+                              component.option_label ||
+                              (component.component_type === "EVENT_OPTION"
+                                ? "event entry"
+                                : "extra")}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+              {commerceQuote && commerceQuote.discount_minor > 0 ? (
+                <p style={{ color: "#166534" }}>
+                  Total bundle and giveaway savings:{" "}
+                  <strong>
+                    {formatCommerceMoney(commerceQuote.discount_minor)}
+                  </strong>
+                </p>
+              ) : null}
+            </>
+          ) : null}
+
+          {teamRecovery?.events.length ? (
+            <FourPlayerTeamSetupRecovery
+              clubSlug={clubSlug}
+              confirmationToken={confirmationToken}
+              initialRecovery={teamRecovery}
+              needsAttention={teamSetupNeedsAttention}
+            />
+          ) : teamSetupNeedsAttention ? (
+            <p
+              role="alert"
+              style={{
+                color: "#991b1b",
+                background: "#fef2f2",
+                borderRadius: "10px",
+                padding: "0.75rem"
+              }}
+            >
+              Your registration is saved, but team setup recovery is
+              temporarily unavailable. Contact tournament staff and do not
+              submit a second registration.
+            </p>
+          ) : null}
+
           <article style={{ ...cardStyle, marginTop: "1rem" }}>
             <h2 style={{ marginTop: 0 }}>Payment and email</h2>
-            <p>{data.payment_note}</p>
+            <p>
+              Payment is handled offline by tournament staff. {data.payment_note}
+            </p>
             {data.notification_sender?.from_email ? (
               <p style={{ color: "#475569" }}>Your confirmation email comes from {data.notification_sender.from_name || "JUPR Notifications"} &lt;{data.notification_sender.from_email}&gt;. Check spam or junk if it is not in your inbox.</p>
             ) : (

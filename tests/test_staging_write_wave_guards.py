@@ -218,6 +218,26 @@ def test_league_live_waves_open_preview_only_uploader_capability() -> None:
         assert "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER" not in flags
 
 
+def test_league_awards_wave_opens_its_required_league_manager_dependency() -> None:
+    flags = set(STAGING_WRITE_WAVES["league-awards"])
+
+    assert {
+        "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT",
+        "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE",
+        "JUPR_ENABLE_STAGING_NEXT_ADMIN_LEAGUE_MANAGER_WRITES",
+    } <= flags
+    assert wave_allows_request(
+        "league-awards",
+        "POST",
+        "/admin/clubs/tres_palapas/league-manager/leagues/Open/awards/freeze",
+    )
+    assert not wave_allows_request(
+        "league-awards",
+        "PATCH",
+        "/admin/clubs/tres_palapas/league-manager/leagues/Open",
+    )
+
+
 def test_direct_singles_uploader_gate_opens_only_in_atomic_match_wave() -> None:
     flag = "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES"
 
@@ -238,7 +258,7 @@ def test_direct_singles_uploader_gate_opens_only_in_atomic_match_wave() -> None:
 def test_match_log_destructive_gate_opens_only_in_atomic_recovery_wave() -> None:
     flag = "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE"
 
-    assert len(ALL_STAGING_WRITE_FLAGS) == 32
+    assert len(ALL_STAGING_WRITE_FLAGS) == 33
     assert flag not in DORMANT_STAGING_WRITE_FLAGS
     assert {
         wave for wave, flags in STAGING_WRITE_WAVES.items() if flag in flags
@@ -258,6 +278,27 @@ def test_match_log_destructive_gate_opens_only_in_atomic_recovery_wave() -> None
         encoding="utf-8"
     )
     assert f'{flag} = "0"' in (ROOT / "fly.toml").read_text(encoding="utf-8")
+    assert f'{flag}: "0"' in (
+        ROOT / ".github/workflows/fly_api_staging_deploy.yml"
+    ).read_text(encoding="utf-8")
+
+
+def test_tournament_commerce_gate_opens_only_in_its_two_reviewed_waves() -> None:
+    flag = "JUPR_ENABLE_STAGING_TOURNAMENT_COMMERCE_WRITES"
+
+    assert flag not in DORMANT_STAGING_WRITE_FLAGS
+    assert {
+        wave for wave, flags in STAGING_WRITE_WAVES.items() if flag in flags
+    } == {"public-intake-auth", "tournament-commerce-admin"}
+    assert expected_write_flags(NO_WRITE_WAVE)[flag] is False
+    assert expected_write_flags("public-intake-auth")[flag] is True
+    assert expected_write_flags("tournament-commerce-admin")[flag] is True
+    assert f'{flag} = "0"' in (ROOT / "fly.staging.toml").read_text(
+        encoding="utf-8"
+    )
+    assert f'{flag} = "0"' in (ROOT / "fly.toml").read_text(
+        encoding="utf-8"
+    )
     assert f'{flag}: "0"' in (
         ROOT / ".github/workflows/fly_api_staging_deploy.yml"
     ).read_text(encoding="utf-8")

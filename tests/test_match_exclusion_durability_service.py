@@ -28,6 +28,9 @@ class FakeQuery:
     def limit(self, _value):
         return self
 
+    def order(self, *_args, **_kwargs):
+        return self
+
     def execute(self):
         rows = list(self.rows)
         for key, value in self.filters:
@@ -91,6 +94,8 @@ class FakeSupabase:
         self.rpc_calls = []
 
     def table(self, name):
+        if name == "match_edit_operations":
+            return FakeQuery([])
         if name != "match_exclusion_operations":
             raise AssertionError(f"Unexpected table {name}")
         return FakeQuery(self.operations)

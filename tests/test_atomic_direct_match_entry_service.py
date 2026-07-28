@@ -249,6 +249,21 @@ def test_stale_conflict_is_explicit_and_never_falls_back_to_table_writes(
     assert len(supabase.calls) == 1
 
 
+def test_ended_league_conflict_is_explicit_and_never_falls_back(
+    monkeypatch,
+):
+    supabase = RpcSupabase(
+        error=RuntimeError(
+            "JUPR_DIRECT_MATCH_LEAGUE_METADATA_STALE: league ended"
+        )
+    )
+
+    with pytest.raises(DirectMatchConflictError, match="Nothing"):
+        _submit(monkeypatch, supabase)
+
+    assert [name for name, _payload in supabase.calls] == [DIRECT_MATCH_RPC]
+
+
 def test_same_idempotency_key_with_changed_body_conflicts_before_planning(
     monkeypatch,
 ):

@@ -212,7 +212,8 @@ def recover_atomic_match_edit(
             "idempotent": True,
             "result": dict(operation.get("result_json") or {}),
         }
-    if str(operation.get("status")) != "recovery_required":
+    operation_status = str(operation.get("status") or "")
+    if operation_status not in {"pending_replay", "recovery_required"}:
         raise ValueError("This operation is not ready for recovery.")
 
     replay = run_admin_replay_history(
@@ -224,7 +225,7 @@ def recover_atomic_match_edit(
         source=str(source or "next_match_log_recovery"),
         confirmation_text="REPLAY",
         idempotency_key=_replay_key(str(operation.get("idempotency_key") or "")),
-        retry_failed=True,
+        retry_failed=operation_status == "recovery_required",
     )
     if str(replay.get("job_status")) != "succeeded":
         raise MatchEditRecoveryRequired(str(operation_id), "Replay recovery is still in progress.")

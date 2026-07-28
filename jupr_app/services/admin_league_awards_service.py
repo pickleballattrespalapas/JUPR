@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 import hashlib
 import json
 import os
@@ -17,6 +18,11 @@ from jupr_app.domain.leagues import (
     mint_top_performer_badges,
     normalize_league_status,
 )
+from jupr_app.domain.league_analytics import (
+    award_category_catalog,
+    compute_league_player_analytics,
+    compute_team_league_analytics,
+)
 from jupr_app.services.admin_league_manager_service import is_admin_league_manager_enabled
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
@@ -24,7 +30,7 @@ CONFIRM_CLOSE_LEAGUE = "CLOSE LEAGUE"
 CONFIRM_FREEZE_AWARDS = "FREEZE LEAGUE AWARDS"
 CONFIRM_MINT_AWARDS = "MINT AWARDS"
 CONFIRM_ARCHIVE_LEAGUE = "ARCHIVE LEAGUE"
-AWARDS_WORKFLOW_VERSION = 2
+AWARDS_WORKFLOW_VERSION = 3
 AWARDS_WRITE_FLAG = "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE"
 TOP_PERFORMER_BADGE_SEED_MIGRATION = "supabase/migrations/20260720014744_seed_top_performer_badges.sql"
 REQUIRED_TOP_PERFORMER_BADGE_IDS = tuple(sorted(set(TOP_PERFORMER_BADGE_IDS.values())))
@@ -50,6 +56,8 @@ def is_admin_league_awards_write_enabled() -> bool:
 
 
 def _require_write_gate() -> None:
+    if os.getenv("JUPR_ENV", "").strip().lower() == "production":
+        raise PermissionError("League Awards writes are staging-only and disabled in production.")
     if not is_admin_league_manager_enabled():
         raise PermissionError("Next League Manager is disabled.")
     if not _truthy_env(AWARDS_WRITE_FLAG):
@@ -58,13 +66,22 @@ def _require_write_gate() -> None:
         raise PermissionError("League Awards writes require the FastAPI SUPABASE_SERVICE_ROLE_KEY.")
 
 
+def require_admin_league_awards_write() -> None:
+    """Fail closed before a League Awards route performs auth or data access."""
+
+    _require_write_gate()
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
     try:
-        return [dict(row) for row in (resp.data or [])]
+        data = resp.data or []
+        if isinstance(data, dict):
+            return [dict(data)]
+        return [dict(row) for row in data]
     except Exception:
         return []
 
@@ -109,8 +126,43 @@ def _clean_idempotency_key(value: Any) -> str:
     return key
 
 
-def _fetch_table_rows(supabase: Any, table_name: str, *, club_id: str) -> list[dict[str, Any]]:
-    return _safe_rows(supabase.table(table_name).select("*").eq("club_id", str(club_id)).execute())
+def _fetch_table_rows(
+    supabase: Any,
+    table_name: str,
+    *,
+    club_id: str,
+    filters: Mapping[str, Any] | None = None,
+    page_size: int = 500,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        query = supabase.table(table_name).select("*").eq("club_id", str(club_id))
+        for field, value in dict(filters or {}).items():
+            query = query.eq(field, value)
+        ranged = getattr(query, "range", None)
+        if callable(ranged):
+            batch = _safe_rows(ranged(offset, offset + page_size - 1).execute())
+        else:
+            batch = _safe_rows(query.execute())
+        rows.extend(batch)
+        if not callable(ranged) or len(batch) < page_size:
+            return rows
+        offset += page_size
+
+
+def _fetch_players_by_id(
+    supabase: Any, *, club_id: str, player_ids: set[int]
+) -> list[dict[str, Any]]:
+    if not player_ids:
+        return []
+    query = (
+        supabase.table("players")
+        .select("*")
+        .eq("club_id", str(club_id))
+        .in_("id", sorted(player_ids))
+    )
+    return _safe_rows(query.execute())
 
 
 def _fetch_league_meta_row(supabase: Any, *, club_id: str, league_name: str) -> dict[str, Any] | None:
@@ -155,9 +207,46 @@ def _award_inputs(
     if not meta_row:
         raise ValueError("league not found")
 
-    meta_rows = _fetch_table_rows(supabase, "leagues_metadata", club_id=str(club_id))
-    league_rows = _fetch_table_rows(supabase, "league_ratings", club_id=str(club_id))
-    player_rows = _fetch_table_rows(supabase, "players", club_id=str(club_id))
+    meta_rows = [meta_row]
+    league_rows = _fetch_table_rows(
+        supabase,
+        "league_ratings",
+        club_id=str(club_id),
+        filters={"league_name": clean_league},
+    )
+    match_rows = _fetch_table_rows(
+        supabase,
+        "matches",
+        club_id=str(club_id),
+        filters={"league": clean_league},
+    )
+    team_rows = _fetch_table_rows(
+        supabase,
+        "team_league_teams",
+        club_id=str(club_id),
+        filters={"league_name": clean_league},
+    )
+    fixture_rows = _fetch_table_rows(
+        supabase,
+        "team_league_fixtures",
+        club_id=str(club_id),
+        filters={"league_name": clean_league},
+    )
+    player_ids = {
+        int(value)
+        for row in league_rows
+        for value in [row.get("player_id")]
+        if value not in (None, "")
+    }
+    for row in match_rows:
+        for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
+            try:
+                player_ids.add(int(row.get(key)))
+            except Exception:
+                pass
+    player_rows = _fetch_players_by_id(
+        supabase, club_id=str(club_id), player_ids=player_ids
+    )
     id_to_name = _id_to_name(player_rows)
 
     df_meta = pd.DataFrame(meta_rows)
@@ -170,7 +259,158 @@ def _award_inputs(
         clean_league,
         awards_config=awards_config if isinstance(awards_config, dict) else {},
     )
+    schedule_config = _json_value(meta_row.get("schedule_config"), {}) or {}
+    expected_weeks: int | None = None
+    if isinstance(schedule_config, dict):
+        for key in ("weeks", "week_count", "total_weeks"):
+            try:
+                candidate = int(schedule_config.get(key) or 0)
+            except Exception:
+                candidate = 0
+            if candidate > 0:
+                expected_weeks = candidate
+                break
+    regular_weeks = [
+        int(row.get("week_number") or 0)
+        for row in fixture_rows
+        if str(row.get("phase") or "") == "regular"
+    ]
+    if expected_weeks is None and regular_weeks:
+        expected_weeks = max(regular_weeks)
+    player_analytics = compute_league_player_analytics(
+        match_rows,
+        club_id=str(club_id),
+        league_name=clean_league,
+        players=player_rows,
+        league_ratings=league_rows,
+        expected_weeks=expected_weeks,
+    )
+    team_analytics = compute_team_league_analytics(fixture_rows, team_rows)
+    analytics_context = {
+        "catalog": award_category_catalog(),
+        "measurable_player_stats": list(
+            player_analytics["players"][0].keys()
+            if player_analytics["players"]
+            else []
+        ),
+        "player_analytics": player_analytics["players"],
+        "team_analytics": team_analytics["teams"],
+        "provenance": player_analytics["provenance"],
+        "expected_weeks": expected_weeks,
+    }
+    configured = _computed_configured_awards(
+        analytics_context,
+        awards_config if isinstance(awards_config, dict) else {},
+    )
+    if configured is not None:
+        awards = configured
+    meta_row = {**meta_row, "_analytics": analytics_context}
     return meta_row, awards, df_meta, df_leagues, id_to_name
+
+
+def _computed_configured_awards(
+    analytics: Mapping[str, Any], awards_config: Mapping[str, Any]
+) -> list[dict[str, Any]] | None:
+    categories = awards_config.get("categories")
+    if not isinstance(categories, Mapping) or not categories:
+        return None
+    catalog = {row["key"]: row for row in analytics.get("catalog", [])}
+    result: list[dict[str, Any]] = []
+    for category_key, raw_config in categories.items():
+        config = dict(raw_config or {}) if isinstance(raw_config, Mapping) else {}
+        if config.get("enabled") is False:
+            continue
+        spec = catalog.get(str(category_key))
+        if not spec:
+            continue
+        recipients = (
+            analytics.get("team_analytics", [])
+            if spec["recipient_type"] == "team"
+            else analytics.get("player_analytics", [])
+        )
+        minimum_metric = str(spec.get("minimum_metric") or "games")
+        minimum = int(config.get("minimum") or config.get("min_games") or 0)
+        qualified = [
+            dict(row)
+            for row in recipients
+            if row.get(spec["metric"]) is not None
+            and float(row.get(minimum_metric) or 0) >= minimum
+        ]
+        qualified.sort(
+            key=lambda row: (
+                -float(row.get(spec["metric"]) or 0),
+                str(
+                    row.get("player_name")
+                    or row.get("team_name")
+                    or ""
+                ).lower(),
+                str(row.get("player_id") or row.get("team_id") or ""),
+            )
+        )
+        depth = max(1, min(3, int(config.get("depth") or 1)))
+        if not qualified:
+            continue
+        cutoff = float(qualified[min(depth, len(qualified)) - 1][spec["metric"]])
+        winners = [
+            row
+            for row in qualified
+            if float(row[spec["metric"]]) >= cutoff
+        ][:12]
+        for row in winners:
+            metric_value = row.get(spec["metric"])
+            numeric_metric = float(metric_value)
+            rank = 1 + sum(
+                float(other[spec["metric"]]) > numeric_metric
+                for other in winners
+            )
+            is_co_winner = (
+                sum(
+                    float(other[spec["metric"]]) == numeric_metric
+                    for other in winners
+                )
+                > 1
+            )
+            recipient_type = str(spec["recipient_type"])
+            recipient_id = (
+                row.get("team_id")
+                if recipient_type == "team"
+                else row.get("player_id")
+            )
+            if recipient_id in (None, ""):
+                continue
+            award_key = (
+                f"{category_key}:{rank}:{recipient_type}:{recipient_id}"
+            )
+            result.append(
+                {
+                    "award_key": award_key,
+                    "category_key": str(category_key),
+                    "category_label": str(spec["label"]),
+                    "recipient_type": recipient_type,
+                    "player_id": row.get("player_id"),
+                    "team_id": row.get("team_id"),
+                    "player_name": row.get("player_name"),
+                    "team_name": row.get("team_name"),
+                    "recipient_name": row.get("player_name")
+                    or row.get("team_name"),
+                    "metric_value": metric_value,
+                    "metric_display": str(metric_value),
+                    "rank": rank,
+                    "is_co_winner": is_co_winner,
+                    "min_games": minimum,
+                    "minimum_metric": minimum_metric,
+                }
+            )
+    return result
+
+
+def _award_identity(award: Mapping[str, Any]) -> str:
+    stored = _clean_text(award.get("award_key"), limit=240)
+    if stored:
+        return stored
+    category = _clean_text(award.get("category_key"), limit=80)
+    rank = int(award.get("rank") or 1)
+    return f"{category}:{rank}"
 
 
 def _eligible_players(df_leagues: pd.DataFrame, id_to_name: Mapping[int, str], league_name: str) -> list[dict[str, Any]]:
@@ -196,6 +436,7 @@ def _league_payload(row: dict[str, Any]) -> dict[str, Any]:
         "is_active": bool(row.get("is_active", False)),
         "min_games": row.get("min_games"),
         "awards_config": _json_value(row.get("awards_config"), {}) or {},
+        "awards_config_version": int(row.get("awards_config_version") or 0),
         "ended_at": row.get("ended_at"),
         "ended_by": row.get("ended_by"),
     }
@@ -282,18 +523,143 @@ def _persist_workflow(
         "workflow": next_workflow,
     }
     update_payload = {"end_awards": end_awards, **dict(lifecycle_patch or {})}
-    updated = _first_row(
-        supabase.table("leagues_metadata")
-        .update(update_payload)
-        .eq("club_id", str(club_id))
-        .eq("league_name", str(league_name))
-        .execute()
+    analytics = dict(meta_row.get("_analytics") or {})
+    source_snapshot = dict(
+        next_workflow.get("frozen_snapshot")
+        or {
+            "analytics": analytics,
+            "awards_config": _json_value(meta_row.get("awards_config"), {}) or {},
+            "awards_config_version": int(meta_row.get("awards_config_version") or 0),
+        }
     )
+    preview_fingerprint = str(
+        (next_workflow.get("preview") or {}).get("fingerprint")
+        or _fingerprint(final_awards)
+    )
+    result_fingerprint = _fingerprint(final_awards)
+    records = _award_records(
+        final_awards,
+        source_snapshot=source_snapshot,
+        override_notes=dict(next_workflow.get("override_notes") or {}),
+    )
+    rpc_method = getattr(supabase, "rpc", None)
+    if callable(rpc_method):
+        response = rpc_method(
+            "league_awards_apply_workflow_v2",
+            {
+                "p_club_id": str(club_id),
+                "p_league_name": str(league_name),
+                "p_expected_workflow_revision": int(workflow.get("revision") or 0),
+                "p_next_workflow": next_workflow,
+                "p_lifecycle_patch": dict(lifecycle_patch or {}),
+                "p_preview_fingerprint": preview_fingerprint,
+                "p_result_fingerprint": result_fingerprint,
+                "p_records": records,
+                "p_source_snapshot": source_snapshot,
+                "p_finalized": str(next_workflow.get("status") or "")
+                in {"minted", "archived"},
+                "p_actor_email": str(
+                    next_workflow.get("updated_by")
+                    or next_workflow.get("frozen_by")
+                    or "unknown"
+                ),
+                "p_actor_role": "admin",
+                "p_source": str(source),
+            },
+        ).execute()
+        receipt = _first_row(response)
+        if not receipt or not bool(receipt.get("committed")):
+            raise RuntimeError(
+                "League Awards returned no atomic workflow receipt."
+            )
+        updated = dict(receipt.get("league") or {})
+    else:
+        # The repository's in-memory unit-test adapter predates RPC support.
+        updated = _first_row(
+            supabase.table("leagues_metadata")
+            .update(update_payload)
+            .eq("club_id", str(club_id))
+            .eq("league_name", str(league_name))
+            .execute()
+        )
     if not updated:
         raise RuntimeError("League Awards state write did not match a league row; no success was recorded.")
     workflow.clear()
     workflow.update(next_workflow)
     return {**dict(meta_row), **updated, **update_payload}
+
+
+def _award_records(
+    awards: list[dict[str, Any]],
+    *,
+    source_snapshot: Mapping[str, Any],
+    override_notes: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for award in awards:
+        category = _clean_text(award.get("category_key"), limit=80)
+        rank = int(award.get("rank") or 1)
+        recipient_type = str(award.get("recipient_type") or "player")
+        recipient_name = _clean_text(
+            award.get("recipient_name")
+            or award.get("player_name")
+            or award.get("team_name"),
+            limit=160,
+        )
+        award_identity = _award_identity(award)
+        reason = _clean_text(
+            override_notes.get(award_identity)
+            or override_notes.get(f"{category}:{rank}"),
+            limit=500,
+        )
+        computed_player_id = award.get(
+            "computed_player_id", award.get("player_id")
+        )
+        computed_team_id = award.get(
+            "computed_team_id", award.get("team_id")
+        )
+        computed_recipient_name = _clean_text(
+            award.get("computed_recipient_name") or recipient_name,
+            limit=160,
+        )
+        computed_metric_value = award.get(
+            "computed_metric_value", award.get("metric_value")
+        )
+        records.append(
+            {
+                "award_key": award_identity,
+                "category_key": category,
+                "category_label": _clean_text(
+                    award.get("category_label"), limit=160
+                ),
+                "recipient_type": recipient_type,
+                "player_id": award.get("player_id")
+                if recipient_type == "player"
+                else None,
+                "team_id": award.get("team_id")
+                if recipient_type == "team"
+                else None,
+                "recipient_name": recipient_name,
+                "placement": rank,
+                "is_co_winner": bool(award.get("is_co_winner")),
+                "metric_value": award.get("metric_value"),
+                "computed_metric_value": computed_metric_value,
+                "computed_player_id": computed_player_id,
+                "computed_team_id": computed_team_id,
+                "computed_recipient_name": computed_recipient_name,
+                "metric_display": _clean_text(
+                    award.get("metric_display"), limit=240
+                ),
+                "manual_label": None,
+                "is_override": bool(reason)
+                or computed_player_id != award.get("player_id")
+                or computed_team_id != award.get("team_id"),
+                "override_reason": reason or None,
+                "public_visible": True,
+                "source_snapshot": dict(source_snapshot),
+            }
+        )
+    return records
 
 
 def _operation_replay(workflow: Mapping[str, Any], *, action: str, idempotency_key: str, request_payload: Any) -> bool:
@@ -430,6 +796,7 @@ def _response(
 ) -> dict[str, Any]:
     awards = _workflow_awards(workflow)
     mint = dict(workflow.get("mint") or {})
+    analytics = dict(meta_row.get("_analytics") or {})
     return {
         "ok": True,
         "mode": mode,
@@ -446,6 +813,21 @@ def _response(
         "badge_verified_count": int(mint.get("verified_count") or 0),
         "idempotent_replay": bool(idempotent_replay),
         "warnings": list(warnings or []),
+        "award_catalog": analytics.get("catalog", award_category_catalog()),
+        "measurable_player_stats": analytics.get(
+            "measurable_player_stats", []
+        ),
+        "player_analytics": analytics.get("player_analytics", []),
+        "team_analytics": analytics.get("team_analytics", []),
+        "provenance": (
+            (workflow.get("frozen_snapshot") or {}).get("provenance")
+            if workflow.get("frozen_snapshot")
+            else analytics.get("provenance", {})
+        ),
+        "expected_weeks": analytics.get("expected_weeks"),
+        "awards_config_version": int(
+            meta_row.get("awards_config_version") or 0
+        ),
         **_badge_definition_readiness(supabase),
     }
 
@@ -487,6 +869,83 @@ def preview_admin_league_awards(supabase: Any, *, club_id: str, league_name: str
     return payload
 
 
+def save_admin_league_awards_config(
+    supabase: Any,
+    *,
+    club_id: str,
+    league_name: str,
+    awards_config: Mapping[str, Any],
+    expected_config_version: int,
+    actor_email: str,
+    actor_role: str,
+    source: str = "next_league_manager_awards_config",
+) -> dict[str, Any]:
+    _require_write_gate()
+    clean_league = _clean_text(league_name, limit=120)
+    config = json.loads(_canonical_json(dict(awards_config or {})))
+    categories = config.get("categories", {})
+    if not isinstance(categories, dict):
+        raise ValueError("awards_config.categories must be an object.")
+    known = {row["key"] for row in award_category_catalog()}
+    unknown = sorted(set(categories) - known)
+    if unknown:
+        raise ValueError(
+            "Unknown award categories: " + ", ".join(unknown)
+        )
+    for key, raw in categories.items():
+        if not isinstance(raw, dict):
+            raise ValueError(f"Award category {key} must be an object.")
+        depth = int(raw.get("depth") or 1)
+        minimum = int(raw.get("minimum") or raw.get("min_games") or 0)
+        if depth not in {1, 2, 3} or not 0 <= minimum <= 1000:
+            raise ValueError(
+                f"Award category {key} has an invalid depth or minimum."
+            )
+    if len(_canonical_json(config).encode("utf-8")) > 50000:
+        raise ValueError("Awards configuration is too large.")
+
+    rpc_method = getattr(supabase, "rpc", None)
+    if callable(rpc_method):
+        receipt = _first_row(
+            rpc_method(
+                "league_awards_save_config_v1",
+                {
+                    "p_club_id": str(club_id),
+                    "p_league_name": clean_league,
+                    "p_expected_config_version": int(
+                        expected_config_version
+                    ),
+                    "p_awards_config": config,
+                    "p_actor_email": _clean_text(actor_email, limit=320),
+                    "p_actor_role": _clean_text(actor_role, limit=80),
+                    "p_source": _clean_text(source, limit=160),
+                },
+            ).execute()
+        )
+        if not receipt or not receipt.get("committed"):
+            raise RuntimeError(
+                "Awards configuration returned no durable commit receipt."
+            )
+    else:
+        updated = _first_row(
+            supabase.table("leagues_metadata")
+            .update(
+                {
+                    "awards_config": config,
+                    "awards_config_version": int(expected_config_version) + 1,
+                }
+            )
+            .eq("club_id", str(club_id))
+            .eq("league_name", clean_league)
+            .execute()
+        )
+        if not updated:
+            raise RuntimeError("Awards configuration did not match a league.")
+    return get_admin_league_awards_wizard(
+        supabase, club_id=str(club_id), league_name=clean_league
+    )
+
+
 def freeze_admin_league_awards(
     supabase: Any,
     *,
@@ -503,7 +962,7 @@ def freeze_admin_league_awards(
         raise ValueError(f"Type {CONFIRM_FREEZE_AWARDS} to freeze the league for award review.")
     key = _clean_idempotency_key(idempotency_key)
     clean_league = _clean_text(league_name, limit=120)
-    meta_row, _awards, _df_meta, df_leagues, id_map = _award_inputs(supabase, club_id=str(club_id), league_name=clean_league)
+    meta_row, computed_awards, _df_meta, df_leagues, id_map = _award_inputs(supabase, club_id=str(club_id), league_name=clean_league)
     workflow = _workflow_from_meta(meta_row)
     request_payload = {"confirmation_text": CONFIRM_FREEZE_AWARDS}
     if _operation_replay(workflow, action="freeze", idempotency_key=key, request_payload=request_payload):
@@ -538,6 +997,29 @@ def freeze_admin_league_awards(
             "override_notes": {},
             "mint": {"status": "not_started", "attempt_count": 0, "attempts": []},
             "archive": {"status": "not_started"},
+            "frozen_snapshot": {
+                "frozen_at": frozen_at,
+                "awards": computed_awards,
+                "awards_config": _json_value(
+                    meta_row.get("awards_config"), {}
+                )
+                or {},
+                "awards_config_version": int(
+                    meta_row.get("awards_config_version") or 0
+                ),
+                "player_analytics": dict(
+                    meta_row.get("_analytics") or {}
+                ).get("player_analytics", []),
+                "team_analytics": dict(
+                    meta_row.get("_analytics") or {}
+                ).get("team_analytics", []),
+                "provenance": dict(meta_row.get("_analytics") or {}).get(
+                    "provenance", {}
+                ),
+                "expected_weeks": dict(
+                    meta_row.get("_analytics") or {}
+                ).get("expected_weeks"),
+            },
         }
     )
     _record_operation(workflow, action="freeze", idempotency_key=key, request_payload=request_payload, status="completed")
@@ -582,6 +1064,13 @@ def persist_admin_league_awards_preview(
     clean_league = _clean_text(league_name, limit=120)
     meta_row, awards, _df_meta, df_leagues, id_map = _award_inputs(supabase, club_id=str(club_id), league_name=clean_league)
     workflow = _workflow_from_meta(meta_row)
+    frozen_snapshot = dict(workflow.get("frozen_snapshot") or {})
+    if isinstance(frozen_snapshot.get("awards"), list):
+        awards = [
+            dict(row)
+            for row in frozen_snapshot["awards"]
+            if isinstance(row, dict)
+        ]
     request_payload = {"league_name": clean_league}
     if _operation_replay(workflow, action="preview", idempotency_key=key, request_payload=request_payload):
         return _response(meta_row, workflow, supabase=supabase, mode="league_awards_preview_persist", eligible_players=_eligible_players(df_leagues, id_map, clean_league), idempotent_replay=True)
@@ -688,11 +1177,31 @@ def save_admin_league_award_overrides(
         source=source,
     )
 
-    preview_awards = [dict(row) for row in preview.get("awards", []) if isinstance(row, dict)]
-    awards_by_key = {(str(row.get("category_key")), int(row.get("rank") or 1)): row for row in preview_awards}
+    preview_awards = [
+        dict(row)
+        for row in preview.get("awards", [])
+        if isinstance(row, dict)
+    ]
+    awards_by_key: dict[str, dict[str, Any]] = {}
+    keys_by_legacy_position: defaultdict[
+        tuple[str, int], list[str]
+    ] = defaultdict(list)
+    for award in preview_awards:
+        award_identity = _award_identity(award)
+        if award_identity in awards_by_key:
+            raise ValueError(
+                "The persisted award preview has duplicate award identities."
+            )
+        awards_by_key[award_identity] = award
+        keys_by_legacy_position[
+            (
+                str(award.get("category_key") or ""),
+                int(award.get("rank") or 1),
+            )
+        ].append(award_identity)
     eligible = _eligible_players(df_leagues, id_map, clean_league)
     eligible_ids = {int(row["player_id"]) for row in eligible}
-    overrides_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+    overrides_by_key: dict[str, dict[str, Any]] = {}
     for item in normalized_overrides:
         category_key = _clean_text(item.get("category_key"), limit=80)
         try:
@@ -700,30 +1209,120 @@ def save_admin_league_award_overrides(
             player_id = int(item.get("player_id"))
         except Exception as exc:
             raise ValueError("Each award override requires a valid category_key, rank, and player_id.") from exc
-        award_key = (category_key, rank)
-        if award_key not in awards_by_key:
-            raise ValueError(f"Unknown award override {category_key}:{rank}.")
+        award_identity = _clean_text(item.get("award_key"), limit=240)
+        if not award_identity:
+            legacy_matches = keys_by_legacy_position.get(
+                (category_key, rank), []
+            )
+            if len(legacy_matches) > 1:
+                raise ValueError(
+                    f"Award {category_key}:{rank} has co-winners; "
+                    "award_key is required."
+                )
+            award_identity = legacy_matches[0] if legacy_matches else ""
+        if award_identity not in awards_by_key:
+            raise ValueError(
+                f"Unknown award override {award_identity or f'{category_key}:{rank}'}."
+            )
+        target_award = awards_by_key[award_identity]
+        if (
+            str(target_award.get("category_key") or "") != category_key
+            or int(target_award.get("rank") or 1) != rank
+        ):
+            raise ValueError(
+                "Award override identity does not match its category and rank."
+            )
+        if str(target_award.get("recipient_type") or "player") != "player":
+            raise ValueError(
+                f"{category_key}:{rank} is a team award and cannot be reassigned to a player."
+            )
         if player_id not in eligible_ids:
             raise ValueError(f"Player {player_id} is not in this league's award roster.")
-        if award_key in overrides_by_key:
-            raise ValueError(f"Duplicate award override {category_key}:{rank}.")
-        overrides_by_key[award_key] = {"player_id": player_id, "reason": _clean_text(item.get("reason"), limit=500)}
+        if award_identity in overrides_by_key:
+            raise ValueError(f"Duplicate award override {award_identity}.")
+        overrides_by_key[award_identity] = {
+            "player_id": player_id,
+            "reason": _clean_text(item.get("reason"), limit=500),
+        }
 
     final_awards: list[dict[str, Any]] = []
     override_notes: dict[str, str] = {}
-    for award_key, award in awards_by_key.items():
-        selected = overrides_by_key.get(award_key, {"player_id": int(award.get("player_id")), "reason": ""})
+    frozen_snapshot = dict(workflow.get("frozen_snapshot") or {})
+    frozen_player_rows = frozen_snapshot.get("player_analytics")
+    if not isinstance(frozen_player_rows, list):
+        frozen_player_rows = dict(meta_row.get("_analytics") or {}).get(
+            "player_analytics", []
+        )
+    frozen_players = {
+        int(row["player_id"]): dict(row)
+        for row in frozen_player_rows
+        if isinstance(row, Mapping) and row.get("player_id") is not None
+    }
+    catalog_by_key = {
+        str(row["key"]): dict(row)
+        for row in award_category_catalog()
+    }
+    selected_recipients: set[tuple[str, int]] = set()
+    for award_identity, award in awards_by_key.items():
+        if str(award.get("recipient_type") or "player") != "player":
+            team_award = dict(award)
+            team_award.setdefault("award_key", award_identity)
+            final_awards.append(team_award)
+            continue
+        selected = overrides_by_key.get(
+            award_identity,
+            {"player_id": int(award.get("player_id")), "reason": ""},
+        )
         selected_player_id = int(selected["player_id"])
         original_player_id = int(award.get("player_id"))
         reason = str(selected.get("reason") or "").strip()
+        category_key = str(award.get("category_key") or "")
+        rank = int(award.get("rank") or 1)
         if selected_player_id != original_player_id and len(reason) < 8:
-            raise ValueError(f"Override reason of at least 8 characters is required for {award_key[0]} rank {award_key[1]}.")
+            raise ValueError(
+                "Override reason of at least 8 characters is required for "
+                f"{category_key} rank {rank}."
+            )
+        recipient_key = (category_key, selected_player_id)
+        if recipient_key in selected_recipients:
+            raise ValueError(
+                f"Player {selected_player_id} cannot receive duplicate "
+                f"{category_key} winner records."
+            )
+        selected_recipients.add(recipient_key)
         updated_award = dict(award)
+        updated_award.setdefault("award_key", award_identity)
+        updated_award.setdefault("computed_player_id", original_player_id)
+        updated_award.setdefault("computed_team_id", award.get("team_id"))
+        updated_award.setdefault(
+            "computed_recipient_name",
+            award.get("recipient_name") or award.get("player_name"),
+        )
+        updated_award.setdefault(
+            "computed_metric_value", award.get("metric_value")
+        )
         updated_award["player_id"] = selected_player_id
-        updated_award["player_name"] = id_map.get(selected_player_id, f"Player {selected_player_id}")
+        selected_name = id_map.get(
+            selected_player_id, f"Player {selected_player_id}"
+        )
+        updated_award["player_name"] = selected_name
+        updated_award["recipient_name"] = selected_name
+        if selected_player_id != original_player_id:
+            metric_name = str(
+                catalog_by_key.get(category_key, {}).get("metric") or ""
+            )
+            selected_metric = frozen_players.get(
+                selected_player_id, {}
+            ).get(metric_name)
+            updated_award["metric_value"] = selected_metric
+            updated_award["metric_display"] = (
+                str(selected_metric)
+                if selected_metric is not None
+                else "Not measurable"
+            )
         final_awards.append(updated_award)
         if selected_player_id != original_player_id:
-            override_notes[f"{award_key[0]}:{award_key[1]}"] = reason
+            override_notes[award_identity] = reason
 
     before_workflow = dict(workflow)
     workflow["status"] = "overrides_confirmed"

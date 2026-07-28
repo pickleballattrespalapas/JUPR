@@ -68,6 +68,8 @@ export default async function EditTournamentRegistrationPage({ params, searchPar
           days={data.days ?? []}
           events={data.events ?? []}
           players={data.players ?? []}
+          commerce={data.commerce ?? null}
+          commerceOrder={data.commerce_order ?? null}
         />
       ) : null}
     </section>

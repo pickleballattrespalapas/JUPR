@@ -60,6 +60,7 @@ on:
           - tournament-email-handoff
           - tournament-live
           - tournament-live-official-publish
+          - tournament-commerce-admin
       expected_candidate_sha:
         description: "Optional controller-bound canonical staging SHA"
         required: false
@@ -130,6 +131,9 @@ jobs:
       JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT: "0"
       JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE: "0"
       JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS: "1"
+      JUPR_ENABLE_TOURNAMENT_COMMERCE: "1"
+      JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION: "1"
+      JUPR_ENABLE_TEAM_LEAGUES: "1"
       JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS: "0"
       JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_SETUP_MUTATIONS: "0"
       JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_REGISTRATION_MUTATIONS: "0"
@@ -152,6 +156,7 @@ jobs:
       JUPR_ENABLE_NEXT_ADMIN_TOOLS: "0"
       JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS: "0"
       JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES: "0"
+      JUPR_ENABLE_STAGING_TOURNAMENT_COMMERCE_WRITES: "0"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -473,6 +478,9 @@ jobs:
             # always-on read surfaces so stale historical secrets cannot win.
             "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=$JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"
             "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=$JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"
+            "JUPR_ENABLE_TOURNAMENT_COMMERCE=$JUPR_ENABLE_TOURNAMENT_COMMERCE"
+            "JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION=$JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION"
+            "JUPR_ENABLE_TEAM_LEAGUES=$JUPR_ENABLE_TEAM_LEAGUES"
             "JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL=0"
             "JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION=0"
           )

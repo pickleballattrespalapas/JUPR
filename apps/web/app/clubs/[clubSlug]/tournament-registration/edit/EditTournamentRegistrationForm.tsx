@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useCallback, useMemo, useState } from "react";
 import {
   PublicRegistrationEditRegistration,
   PublicRegistrationEditSelection,
@@ -11,7 +11,14 @@ import {
   PublicRegistrationDay,
   submitClubTournamentRegistrationEdit
 } from "@/lib/tournamentRegistrationApi";
+import {
+  TournamentCommerceCatalog,
+  TournamentCommerceOrder,
+  TournamentCommerceQuote,
+  TournamentCommerceSelection
+} from "@/lib/tournamentCommerceApi";
 import { publicEventEligibilityReason, publicEventFamilyKey } from "@/lib/tournamentRegistrationEligibility";
+import TournamentCommerceChooser from "../TournamentCommerceChooser";
 
 type EditTournamentRegistrationFormProps = {
   clubSlug: string;
@@ -23,6 +30,8 @@ type EditTournamentRegistrationFormProps = {
   days: PublicRegistrationDay[];
   events: PublicRegistrationEvent[];
   players: PublicRegistrationPlayer[];
+  commerce?: TournamentCommerceCatalog | null;
+  commerceOrder?: TournamentCommerceOrder | null;
 };
 
 const cardStyle = {
@@ -58,7 +67,19 @@ function numericState(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export default function EditTournamentRegistrationForm({ clubSlug, tournamentId, registrationSlug, editToken, registration, selections, days, events, players }: EditTournamentRegistrationFormProps) {
+export default function EditTournamentRegistrationForm({
+  clubSlug,
+  tournamentId,
+  registrationSlug,
+  editToken,
+  registration,
+  selections,
+  days,
+  events,
+  players,
+  commerce,
+  commerceOrder
+}: EditTournamentRegistrationFormProps) {
   const initialSelectionIds = selections.map((selection) => selection.event_option_id).filter(Boolean);
   const [selectedIds, setSelectedIds] = useState<string[]>(initialSelectionIds);
   const [partnerModes, setPartnerModes] = useState<Record<string, "NONE" | "HAS_PARTNER" | "NEEDS_PARTNER">>(() => {
@@ -75,6 +96,16 @@ export default function EditTournamentRegistrationForm({ clubSlug, tournamentId,
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<{ confirmationToken: string; deliveryStatus: string } | null>(null);
+  const [commerceSelections, setCommerceSelections] = useState<
+    TournamentCommerceSelection[]
+  >(() => commerceOrder?.quote?.request.item_selections || []);
+  const [commerceQuote, setCommerceQuote] =
+    useState<TournamentCommerceQuote | null>(
+      commerceOrder?.quote || null
+    );
+  const [commerceIdempotencyKey, setCommerceIdempotencyKey] = useState(() =>
+    crypto.randomUUID()
+  );
 
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const linkedPlayer = useMemo(() => players.find((player) => player.id === String(registration.player_id ?? "")) ?? null, [players, registration.player_id]);
@@ -105,6 +136,26 @@ export default function EditTournamentRegistrationForm({ clubSlug, tournamentId,
     return sum + (price == null ? 0 : Number(price));
   }, 0);
 
+  const updateCommerceReview = useCallback(
+    (
+      nextSelections: TournamentCommerceSelection[],
+      nextQuote: TournamentCommerceQuote | null
+    ) => {
+      const nextFingerprint = nextQuote?.quote_fingerprint || null;
+      const currentFingerprint =
+        commerceQuote?.quote_fingerprint || null;
+      setCommerceSelections(nextSelections);
+      setCommerceQuote(nextQuote);
+      if (
+        currentFingerprint &&
+        nextFingerprint !== currentFingerprint
+      ) {
+        setCommerceIdempotencyKey(crypto.randomUUID());
+      }
+    },
+    [commerceQuote?.quote_fingerprint]
+  );
+
   function toggleEvent(eventId: string, checked: boolean) {
     setSelectedIds((current) => {
       if (!checked) return current.filter((id) => id !== eventId);
@@ -115,6 +166,10 @@ export default function EditTournamentRegistrationForm({ clubSlug, tournamentId,
     });
     if (checked && !partnerModes[eventId]) {
       setPartnerModes((current) => ({ ...current, [eventId]: eventById.get(eventId)?.partner_required ? "NEEDS_PARTNER" : "NONE" }));
+    }
+    if (commerce?.available && commerceQuote) {
+      setCommerceQuote(null);
+      setCommerceIdempotencyKey(crypto.randomUUID());
     }
   }
 
@@ -132,6 +187,12 @@ export default function EditTournamentRegistrationForm({ clubSlug, tournamentId,
       .find((item) => item.reason);
     if (ineligible?.reason) {
       setError(`${ineligible.row.division_name}: ${ineligible.reason}`);
+      return;
+    }
+    if (commerce?.available && !commerceQuote) {
+      setError(
+        "Review extras and the current total before saving. You can choose zero extras."
+      );
       return;
     }
     const formData = new FormData(event.currentTarget);
@@ -178,11 +239,36 @@ export default function EditTournamentRegistrationForm({ clubSlug, tournamentId,
       wants_partner_board_contact: formData.get("wants_partner_board_contact") === "on",
       terms_accepted: formData.get("terms_accepted") === "on",
       website: textValue(formData, "website"),
-      selections: payloadSelections
+      selections: payloadSelections,
+      commerce: commerce?.available
+        ? {
+            item_selections: commerceSelections,
+            expected_quote_fingerprint:
+              commerceQuote?.quote_fingerprint || "",
+            idempotency_key: commerceIdempotencyKey,
+            expected_order_updated_at: commerceOrder?.updated_at || null
+          }
+        : null
     });
     setPending(false);
 
     if (response.error || !response.data?.registration_id) {
+      if (response.status === 409 && response.current_quote) {
+        const nextQuote = response.current_quote;
+        if (
+          (nextQuote?.quote_fingerprint || null) !==
+          (commerceQuote?.quote_fingerprint || null)
+        ) {
+          setCommerceIdempotencyKey(crypto.randomUUID());
+        }
+        setCommerceSelections(nextQuote.request.item_selections || []);
+        setCommerceQuote(nextQuote);
+        setError(
+          response.error ||
+            "The total changed. Review the updated price before saving."
+        );
+        return;
+      }
       setError(response.error || "Unable to save registration changes.");
       return;
     }
@@ -297,6 +383,19 @@ export default function EditTournamentRegistrationForm({ clubSlug, tournamentId,
         {!visibleEvents.length ? <p style={{ color: "#64748b" }}>No events are currently available for editing.</p> : null}
         <p><strong>Estimated total:</strong> ${totalPrice.toFixed(2)}</p>
       </section>
+
+      {commerce?.available ? (
+        <TournamentCommerceChooser
+          clubSlug={clubSlug}
+          tournamentId={tournamentId}
+          registrationId={registration.id}
+          eventOptionIds={selectedIds}
+          catalog={commerce}
+          initialSelections={commerceSelections}
+          disabled={pending}
+          onReviewChange={updateCommerceReview}
+        />
+      ) : null}
 
       <section style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Notes and policies</h2>

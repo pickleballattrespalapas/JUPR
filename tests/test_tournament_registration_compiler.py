@@ -232,3 +232,165 @@ def test_accepted_link_creates_single_confirmed_team_and_suppresses_needs_partne
     assert not any(entry["status"] == "LEGACY_PARTNER_UNRESOLVED" for entry in doubles_entries)
     singles_roster = next(roster for roster in state["event_rosters"] if roster["event_option_id"] == "singles-35")
     assert singles_roster["entries"][0]["status"] == "CONFIRMED"
+
+
+def test_four_player_event_compiles_durable_team_instead_of_partner_missing():
+    registrations = [
+        {
+            "id": f"reg-{index}",
+            "display_name": name,
+            "email": f"player{index}@example.com",
+            "player_id": 200 + index,
+            "status": "CONFIRMED",
+            "submitted_at": f"2026-06-01T10:0{index}:00+00:00",
+        }
+        for index, name in enumerate(
+            ["Captain One", "Player Two", "Player Three", "Player Four"],
+            start=1,
+        )
+    ]
+    selections = [
+        {
+            "id": f"sel-{index}",
+            "registration_id": f"reg-{index}",
+            "registration_day_id": "day-1",
+            "event_option_id": "team-open",
+            "partner_mode": "NONE",
+            "player_id": 200 + index,
+        }
+        for index in range(1, 5)
+    ]
+    state = compile_tournament_registration_state(
+        tournament={"id": "t-1"},
+        settings={},
+        days=[{"id": "day-1", "label": "Saturday", "sort_order": 1}],
+        event_options=[
+            {
+                "id": "team-open",
+                "registration_day_id": "day-1",
+                "label": "Open Team",
+                "event_type": "MIXED_DOUBLES",
+                "partner_required": True,
+                "competition_format": "FOUR_PLAYER_TEAM",
+                "sort_order": 1,
+            }
+        ],
+        registrations=registrations,
+        selections=selections,
+        four_player_teams=[
+            {
+                "id": "team-1",
+                "event_option_id": "team-open",
+                "name": "Kitchen Crew",
+                "captain_registration_id": "reg-1",
+                "status": "CONFIRMED",
+                "eligibility_state": "NOT_REQUIRED",
+                "created_at": "2026-06-01T10:05:00+00:00",
+            }
+        ],
+        four_player_team_members=[
+            {
+                "id": f"member-{index}",
+                "team_id": "team-1",
+                "event_option_id": "team-open",
+                "slot": slot,
+                "registration_id": f"reg-{index}",
+                "player_id": 200 + index,
+                "display_name_snapshot": registrations[index - 1]["display_name"],
+                "status": "ACCEPTED",
+            }
+            for index, slot in enumerate(
+                ["MAN_1", "MAN_2", "WOMAN_1", "WOMAN_2"],
+                start=1,
+            )
+        ],
+    )
+
+    entries = state["event_rosters"][0]["entries"]
+    assert len(entries) == 1
+    assert entries[0]["status"] == "CONFIRMED"
+    assert entries[0]["entry_type"] == "four_player_team"
+    assert entries[0]["team_name"] == "Kitchen Crew"
+    assert len(entries[0]["members"]) == 4
+    assert set(entries[0]["source_selection_ids"]) == {
+        "sel-1",
+        "sel-2",
+        "sel-3",
+        "sel-4",
+    }
+    assert not any(
+        issue["issue_type"] == "MISSING_PARTNER_DETAILS"
+        for issue in state["issues"]
+    )
+
+
+def test_four_player_forming_team_never_exposes_invited_members():
+    state = compile_tournament_registration_state(
+        tournament={"id": "t-1"},
+        settings={},
+        days=[{"id": "day-1", "label": "Saturday", "sort_order": 1}],
+        event_options=[
+            {
+                "id": "team-open",
+                "registration_day_id": "day-1",
+                "label": "Open Team",
+                "event_type": "MIXED_DOUBLES",
+                "partner_required": True,
+                "competition_format": "FOUR_PLAYER_TEAM",
+                "sort_order": 1,
+            }
+        ],
+        registrations=[
+            {
+                "id": "reg-1",
+                "display_name": "Captain One",
+                "email": "captain@example.com",
+                "status": "CONFIRMED",
+                "submitted_at": "2026-06-01T10:01:00+00:00",
+            }
+        ],
+        selections=[
+            {
+                "id": "sel-1",
+                "registration_id": "reg-1",
+                "registration_day_id": "day-1",
+                "event_option_id": "team-open",
+                "partner_mode": "NONE",
+            }
+        ],
+        four_player_teams=[
+            {
+                "id": "team-1",
+                "event_option_id": "team-open",
+                "name": "Kitchen Crew",
+                "captain_registration_id": "reg-1",
+                "status": "FORMING",
+                "eligibility_state": "NOT_REQUIRED",
+            }
+        ],
+        four_player_team_members=[
+            {
+                "id": "member-1",
+                "team_id": "team-1",
+                "event_option_id": "team-open",
+                "slot": "MAN_1",
+                "registration_id": "reg-1",
+                "display_name_snapshot": "Captain One",
+                "status": "ACCEPTED",
+            },
+            {
+                "id": "member-2",
+                "team_id": "team-1",
+                "event_option_id": "team-open",
+                "slot": "MAN_2",
+                "display_name_snapshot": "Private Invitee",
+                "status": "INVITED",
+            },
+        ],
+    )
+
+    entry = state["event_rosters"][0]["entries"][0]
+    assert entry["status"] == "REVIEW"
+    assert [member["display_name"] for member in entry["members"]] == [
+        "Captain One"
+    ]

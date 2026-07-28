@@ -8,6 +8,7 @@ import pytest
 from jupr_app.domain.tournament_registration_repo import PUBLIC_REGISTRATION_EDIT_RPC
 from jupr_app.services.public_tournament_registration_service import (
     DuplicateTournamentRegistrationError,
+    build_registration_confirmation_delivery,
     build_public_tournament_registration_confirmation,
     build_public_tournament_registration_page,
     resolve_public_tournament_registration_profile,
@@ -440,6 +441,48 @@ def test_public_tournament_registration_submit_and_confirmation(monkeypatch) -> 
     assert "email" not in confirmation["registration"]
     assert "id" not in confirmation["registration"]
     assert "selection_id" not in confirmation["selections"][0]
+
+
+def test_completed_registration_replay_builds_token_without_resending_email(
+    monkeypatch,
+) -> None:
+    storage = fake_storage()
+    storage["tournament_registrations"].append(
+        {
+            "id": "reg_replay",
+            "tournament_id": "t1",
+            "submitted_at": "2026-07-01T00:00:00Z",
+            "updated_at": "2026-07-01T00:00:00Z",
+            "status": "confirmed",
+            "payment_status": "unpaid",
+            "display_name": "Replay Player",
+            "email": "replay@example.com",
+        }
+    )
+    monkeypatch.setenv(
+        "JUPR_REGISTRATION_CONFIRMATION_SECRET",
+        "unit-test-confirmation-secret",
+    )
+    monkeypatch.setattr(
+        "jupr_app.services.public_tournament_registration_service."
+        "send_tournament_registration_confirmation_email",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed replay must not resend email")
+        ),
+    )
+
+    result = build_registration_confirmation_delivery(
+        FakeSupabase(storage),
+        club_id="club-1",
+        club_slug="tres-palapas",
+        tournament_id="t1",
+        registration_id="reg_replay",
+        send_email=False,
+    )
+
+    assert result["confirmation_available"] is True
+    assert result["confirmation_token"]
+    assert result["email_delivery"]["status"] == "already_completed"
 
 
 def test_registration_stays_saved_when_confirmation_email_fails(monkeypatch) -> None:

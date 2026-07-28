@@ -27,6 +27,13 @@ def tournament_registration_import_tables(*, include_games: bool = False, missin
                 "event_option_id": "event_1",
             }
         ],
+        "tournament_event_options": [
+            {
+                "id": "event_1",
+                "tournament_id": "tour_1",
+                "eligibility_mode": "STANDARD",
+            }
+        ],
         "tournament_registrations": [
             {
                 "id": "reg_1",

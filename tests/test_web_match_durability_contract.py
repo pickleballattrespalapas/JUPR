@@ -5,7 +5,7 @@ MATCH_PANEL = Path("apps/web/app/admin/match-log/MatchLogApplyPanel.tsx")
 MATCH_BULK_EXCLUDE_PANEL = Path(
     "apps/web/app/admin/match-log/MatchLogBulkExcludePanel.tsx"
 )
-MATCH_PAGE = Path("apps/web/app/admin/match-log/page.tsx")
+MATCH_PAGE = Path("apps/web/app/admin/match-log/MatchLogWorkspace.tsx")
 MATCH_API = Path("apps/web/lib/adminMatchLogApi.ts")
 MATCH_EXCLUSION_RECOVERY = Path(
     "apps/web/app/admin/match-log/MatchLogExclusionRecoveryPanel.tsx"
@@ -28,6 +28,8 @@ def test_match_log_closes_notes_bulk_and_recovery_gaps() -> None:
     assert "idempotency_key" in source
     assert "replay_target" in source
     assert "Mandatory replay recovery required" in source
+    assert 'operation.status === "pending_replay"' in source
+    assert 'operation.status === "recovery_required"' in source
     assert 'confirmationText="RECOVER"' in source
     assert 'title="Retry this mandatory replay?"' in source
     assert "cannot be cleared. Choose a replacement player instead." in source
@@ -43,7 +45,7 @@ def test_match_log_filters_are_selectable_clearable_and_keep_results_first() -> 
     assert '<option value="">All weeks</option>' in page
     assert '<input name="league"' not in page
     assert '<input name="week_tag"' not in page
-    assert '<Link href="/admin/match-log"' in page
+    assert "<Link href={modePath}" in page
     assert ">Clear filters</Link>" in page
     assert "if (selected?.trim()) options.add(selected.trim());" in page
     assert "filter_options?:" in api
@@ -125,12 +127,16 @@ def test_successful_match_log_mutations_refetch_parent_owned_data() -> None:
 
     assert "const [reloadNonce, setReloadNonce] = useState(0);" in page
     assert "const handleMutationComplete = useCallback(() => {" in page
-    assert "setRawData(null);" in page
-    assert 'setDataScope("");' in page
-    assert "setReplayData(null);" in page
+    handler = page[page.index("const handleMutationComplete"):page.index("useEffect(() =>", page.index("const handleMutationComplete"))]
+    assert "mutationRefreshPending.current = true;" in handler
+    assert "setRawData(null);" not in handler
+    assert 'setDataScope("");' not in handler
+    assert "setReplayData(null);" not in handler
     assert "setReloadNonce((current) => current + 1);" in page
     assert "getAdminMatchLog({" in page
-    assert "getAdminReplayStatus(clubId)" in page
+    assert "getAdminReplayStatus(clubId, { accessToken, apiBase })" in page
+    assert "Match and replay status refreshed from the server." in page
+    assert "replay status could not be reloaded" in page
     assert "matchIdParam,\n    reloadNonce,\n    selectedFilterParam" in page
     assert page.count("onMutationComplete={handleMutationComplete}") == 4
 
@@ -142,6 +148,28 @@ def test_successful_match_log_mutations_refetch_parent_owned_data() -> None:
     assert "router.refresh()" not in bulk_exclude
     assert 'from "next/navigation"' not in panel
     assert 'from "next/navigation"' not in bulk_exclude
+
+
+def test_match_log_uses_focused_subpages_and_local_stage_feedback() -> None:
+    page = MATCH_PAGE.read_text(encoding="utf-8")
+    panel = MATCH_PANEL.read_text(encoding="utf-8")
+
+    for section in ("edit", "bulk", "duplicates", "exclude", "social", "replay"):
+        wrapper = Path(f"apps/web/app/admin/match-log/{section}/page.tsx")
+        assert wrapper.exists()
+        assert "MatchLogWorkspace" in wrapper.read_text(encoding="utf-8")
+
+    assert 'mode: "review" | "edit" | "bulk" | "duplicates" | "exclude" | "social" | "replay"' in page
+    assert 'aria-label="Match Log sections"' in page
+    assert 'aria-current={item.mode === mode ? "page" : undefined}' in page
+    assert "preserveFilters(item.path)" in page
+    assert 'data-testid="match-log-staged-edits"' in panel
+    assert "stagedEditsRef.current?.focus()" in panel
+    assert "stagedEditsRef.current?.scrollIntoView" in panel
+    assert 'role={messageTone === "success" ? "status" : "alert"}' in panel
+    assert 'feedback("guided")' in panel
+    assert 'feedback("bulk")' in panel
+    assert 'feedback("apply")' in panel
 
 
 def test_replay_ui_exposes_durable_job_identity_and_history() -> None:

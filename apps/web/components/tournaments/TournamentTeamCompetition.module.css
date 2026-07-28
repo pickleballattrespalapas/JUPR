@@ -1,0 +1,106 @@
+.card {
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  padding: 1rem;
+  background: #f8fbff;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.header h4,
+.header p {
+  margin: 0;
+}
+
+.hint {
+  color: #475569;
+  max-width: 60rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+
+.slot {
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: white;
+}
+
+.slot h5 {
+  margin: 0 0 0.55rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.25rem;
+  color: #334155;
+  font-weight: 650;
+  margin-top: 0.55rem;
+}
+
+.input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.65rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #94a3b8;
+  border-radius: 9px;
+  background: white;
+  color: #0f172a;
+  font: inherit;
+}
+
+.rules {
+  margin: 0.85rem 0 0;
+  padding-left: 1.2rem;
+  color: #475569;
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  min-width: 36rem;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: 0.65rem;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+@media (max-width: 680px) {
+  .card {
+    padding: 0.8rem;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .table {
+    min-width: 30rem;
+  }
+}

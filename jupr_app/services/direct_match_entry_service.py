@@ -400,6 +400,7 @@ def submit_atomic_direct_matches(
             club_id=str(club_id),
             name_to_id=name_to_id,
             df_players_all=df_players_all,
+            df_meta=df_meta,
             default_k_factor=default_k_factor,
             min_win_delta_elo=min_win_delta_elo,
             cap_loser_gain_elo=cap_loser_gain_elo,

@@ -106,6 +106,56 @@ def test_live_send_path_uses_registrant_email(monkeypatch):
     assert calls[0]["chart_png_bytes"] is None
 
 
+def test_confirmation_email_includes_extras_bundle_parts_and_server_total():
+    vm = emailer.build_registration_confirmation_view_model(
+        tournament={"name": "Bundle Open"},
+        registration={
+            "display_name": "Bundle Player",
+            "email": "bundle@example.com",
+        },
+        selections=[],
+        commerce_order={
+            "offline_payment": True,
+            "quote": {
+                "total_minor": 5000,
+                "discount_minor": 1000,
+                "offline_payment": True,
+                "lines": [
+                    {
+                        "line_key": "bundle:1",
+                        "line_type": "BUNDLE",
+                        "label": "Player pack",
+                        "quantity": 1,
+                        "final_total_minor": 5000,
+                        "savings_minor": 1000,
+                        "component_snapshot": [
+                            {
+                                "component_type": "ITEM_VARIANT",
+                                "label": "Tournament shirt",
+                                "option_label": "Medium",
+                                "total_quantity": 1,
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+
+    html = emailer.build_tournament_registration_confirmation_html(vm)
+    text = emailer.build_tournament_registration_confirmation_text(vm)
+
+    assert vm["total_price_usd"] == Decimal("50")
+    assert "Tournament extras and bundles" in html
+    assert "Player pack" in html
+    assert "Tournament shirt" in html
+    assert "Bundle and giveaway savings: $10" in html
+    assert "Total due: $50" in html
+    assert "offline payment" in html
+    assert "Tournament shirt" in text
+    assert "Total due: $50" in text
+
+
 class _CaptureQuery:
     def __init__(self, table_name, storage, calls):
         self.table_name = table_name

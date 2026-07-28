@@ -9,6 +9,8 @@ import {
   type Surface
 } from "./support/staging";
 
+const clubId = String(process.env.JUPR_SMOKE_CLUB_ID || "tres_palapas").trim();
+
 const publicSurfaces: Surface[] = [
   { name: "home", path: "/", expected: /Pickleball Club Sandwich/i },
   { name: "site map", path: "/site-map", expected: /site map/i },
@@ -33,6 +35,12 @@ const publicSurfaces: Surface[] = [
 const adminSurfaces: Surface[] = [
   { name: "admin login", path: "/admin/login", expected: /admin login/i },
   { name: "match log", path: "/admin/match-log", expected: /match log/i },
+  { name: "match log edit", path: "/admin/match-log/edit", expected: /edit a match/i },
+  { name: "match log bulk", path: "/admin/match-log/bulk", expected: /bulk edit matches/i },
+  { name: "match log duplicates", path: "/admin/match-log/duplicates", expected: /resolve duplicates/i },
+  { name: "match log exclude", path: "/admin/match-log/exclude", expected: /exclude rated matches/i },
+  { name: "match log social", path: "/admin/match-log/social", expected: /social match tools/i },
+  { name: "match log replay", path: "/admin/match-log/replay", expected: /replay ratings/i },
   { name: "replay history", path: "/admin/replay-history", expected: /replay history/i },
   { name: "match uploader", path: "/admin/match-uploader", expected: /match uploader/i },
   { name: "player editor", path: "/admin/players", expected: /player editor/i },
@@ -55,6 +63,107 @@ const adminSurfaces: Surface[] = [
   { name: "challenge ladder admin", path: "/admin/challenge-ladder", expected: /challenge ladder admin/i },
   { name: "match canonical audit", path: "/admin/match-canonical-audit", expected: /match canonical audit/i },
   { name: "admin tools", path: "/admin/tools", expected: /admin tools/i }
+];
+
+type ReadOnlyFeatureArea = {
+  name: string;
+  surfaces: Surface[];
+  apiChecks: Array<{
+    name: string;
+    path: string;
+    expectedStatuses: number[];
+    disabledStatus?: number;
+    disabledExpected?: RegExp;
+  }>;
+};
+
+const readOnlyFeatureAreas: ReadOnlyFeatureArea[] = [
+  {
+    name: "tournament commerce",
+    surfaces: [
+      {
+        name: "tournament commerce admin",
+        path: "/admin/tournaments/commerce",
+        expected: /extras, bundles, and fulfillment/i
+      }
+    ],
+    apiChecks: [
+      {
+        name: "tournament commerce status",
+        path: `/admin/clubs/${clubId}/tournaments/commerce/status`,
+        expectedStatuses: [200, 401],
+        disabledStatus: 200,
+        disabledExpected: /"available":false/
+      }
+    ]
+  },
+  {
+    name: "combined-rating and four-player team tournaments",
+    surfaces: [
+      {
+        name: "team tournament admin",
+        path: "/admin/tournaments/team-competition",
+        expected: /combined ratings and four-player teams/i
+      },
+      {
+        name: "published team tournament results",
+        path: `/clubs/${clubSlug}/tournament-team-results`,
+        expected: /follow four-player team standings/i
+      }
+    ],
+    apiChecks: [
+      {
+        name: "team tournament admin status",
+        path: `/admin/clubs/${clubId}/tournaments/team-competition/status`,
+        expectedStatuses: [401, 403],
+        disabledStatus: 403,
+        disabledExpected: /disabled/i
+      },
+      {
+        name: "published team tournament results",
+        path: `/clubs/${clubSlug}/tournament-team-results`,
+        expectedStatuses: [200, 404],
+        disabledStatus: 404,
+        disabledExpected: /feature not found/i
+      }
+    ]
+  },
+  {
+    name: "team leagues and awards",
+    surfaces: [
+      {
+        name: "team league admin",
+        path: "/admin/league-manager/teams",
+        expected: /team leagues/i
+      },
+      {
+        name: "league awards admin",
+        path: "/admin/league-manager/awards",
+        expected: /league awards/i
+      },
+      {
+        name: "published team leagues",
+        path: `/clubs/${clubSlug}/team-leagues`,
+        expected: /team leagues/i
+      }
+    ],
+    apiChecks: [
+      {
+        name: "team league admin list",
+        path: `/admin/clubs/${clubId}/league-manager/team-leagues`,
+        expectedStatuses: [401, 403],
+        disabledStatus: 403,
+        disabledExpected: /disabled/i
+      },
+      {
+        name: "published team leagues",
+        path: `/clubs/${clubSlug}/team-leagues`,
+        expectedStatuses: [200, 403],
+        disabledStatus: 403,
+        disabledExpected: /disabled/i
+      }
+    ]
+  }
 ];
 
 test.beforeEach(async ({ context }) => {
@@ -88,6 +197,39 @@ test("preview environment is isolated from production", async ({ page }) => {
     expect(environment.auth_origin).toBe(expectedAuthOrigin);
   }
 });
+
+for (const featureArea of readOnlyFeatureAreas) {
+  test(`read-only feature readiness: ${featureArea.name}`, async ({ page }) => {
+    test.setTimeout(120_000);
+
+    for (const surface of featureArea.surfaces) {
+      await expectHealthySurface(page, surface);
+    }
+
+    for (const apiCheck of featureArea.apiChecks) {
+      const response = await page.request.get(
+        `${expectedApiOrigin}${apiCheck.path}`,
+        { failOnStatusCode: false }
+      );
+      expect(
+        apiCheck.expectedStatuses,
+        `${apiCheck.name} returned an unexpected status`
+      ).toContain(response.status());
+      expect(response.headers()["content-type"] || "").toContain(
+        "application/json"
+      );
+
+      const payloadText = await response.text();
+      expect(() => JSON.parse(payloadText)).not.toThrow();
+      if (
+        apiCheck.disabledStatus === response.status() &&
+        apiCheck.disabledExpected
+      ) {
+        expect(payloadText).toMatch(apiCheck.disabledExpected);
+      }
+    }
+  });
+}
 
 for (const surface of publicSurfaces) {
   test(`public surface: ${surface.name}`, async ({ page }) => {

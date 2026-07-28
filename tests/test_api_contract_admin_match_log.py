@@ -701,6 +701,15 @@ def test_admin_match_log_apply_rejects_activity_edits_contract(monkeypatch):
 
 def test_admin_match_log_recovery_contract(monkeypatch):
     tables = fake_tables()
+    tables["match_edit_operations"] = [
+        {
+            "id": "operation-1",
+            "club_id": "club",
+            "status": "pending_replay",
+            "replay_job_id": "job-1",
+            "created_at": "2026-07-27T10:00:00Z",
+        }
+    ]
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
     _patch_admin_auth(monkeypatch, supabase, role="super_admin")
@@ -725,6 +734,105 @@ def test_admin_match_log_recovery_contract(monkeypatch):
     assert response.status_code == 200
     assert response.json()["mode"] == "recovered"
     assert response.json()["operation_id"] == "operation-1"
+
+
+def test_admin_match_log_open_recovery_blocks_unrelated_write(monkeypatch):
+    tables = fake_tables()
+    tables["match_exclusion_operations"] = [
+        {
+            "id": "exclude-1",
+            "club_id": "club",
+            "status": "recovery_required",
+            "replay_job_id": "job-1",
+            "recovery_stage": "replay",
+            "created_at": "2026-07-27T10:00:00Z",
+        }
+    ]
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+    called = {"apply": False}
+
+    def fake_apply(*_args, **_kwargs):
+        called["apply"] = True
+        raise AssertionError("write must be blocked before mutation")
+
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.apply_admin_match_log_edits",
+        fake_apply,
+    )
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/edits",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "confirmation_text": "APPLY",
+            "patches": [{"id": 1, "notes": "blocked"}],
+            "idempotency_key": "blocked-edit",
+        },
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "MATCH_LOG_RECOVERY_LOCKED"
+    assert detail["operation_kind"] == "match_exclusion"
+    assert detail["operation_id"] == "exclude-1"
+    assert called == {"apply": False}
+
+
+def test_admin_match_log_atomic_edit_claim_race_returns_conflict(monkeypatch):
+    supabase = FakeSupabase(fake_tables())
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.apply_admin_match_log_edits",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("JUPR_MATCH_LOG_RECOVERY_LOCKED: concurrent claim")
+        ),
+    )
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/edits",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "confirmation_text": "APPLY",
+            "patches": [{"id": 1, "notes": "race-safe"}],
+            "idempotency_key": "edit-race",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "MATCH_LOG_RECOVERY_LOCKED"
+
+
+def test_admin_match_log_atomic_exclusion_claim_race_returns_conflict(
+    monkeypatch,
+):
+    supabase = FakeSupabase(fake_tables())
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
+    _patch_admin_auth(monkeypatch, supabase, role="super_admin")
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.apply_admin_match_log_exclusions",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError(
+                "JUPR_MATCH_LOG_RECOVERY_LOCK_AMBIGUOUS: concurrent claim"
+            )
+        ),
+    )
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/exclude",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "confirmation_text": "DELETE",
+            "idempotency_key": "99999999-9999-9999-9999-999999999999",
+            "targets": [{"match_id": 1, "expected_row_version": 1}],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "MATCH_LOG_RECOVERY_LOCKED"
 
 
 def test_admin_match_log_duplicate_cleanup_contract(monkeypatch):

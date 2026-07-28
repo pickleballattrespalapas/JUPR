@@ -44,6 +44,13 @@ from jupr_app.services.match_exclusion_durability_service import (
     recover_atomic_match_exclusion,
 )
 from jupr_app.services.match_edit_durability_service import MatchEditRecoveryRequired, recover_atomic_match_edit
+from jupr_app.services.match_log_recovery_lock_service import (
+    MATCH_EDIT_KIND,
+    MATCH_EXCLUSION_KIND,
+    MatchLogRecoveryLocked,
+    MatchLogRecoveryLockUnavailable,
+    enforce_match_log_recovery_lock,
+)
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -260,6 +267,29 @@ def _require_service_role() -> None:
         )
 
 
+def _enforce_match_log_recovery_guard(
+    supabase: Any,
+    *,
+    club_id: str,
+    recovery_kind: str | None = None,
+    recovery_operation_id: str | None = None,
+) -> None:
+    try:
+        enforce_match_log_recovery_lock(
+            supabase,
+            club_id=str(club_id),
+            recovery_kind=recovery_kind,
+            recovery_operation_id=recovery_operation_id,
+        )
+    except MatchLogRecoveryLocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=exc.lock.as_detail(code=exc.code),
+        ) from exc
+    except MatchLogRecoveryLockUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 def _exclusion_target_payloads(
     targets: list[AdminMatchLogExclusionTarget],
 ) -> list[dict[str, int]]:
@@ -272,7 +302,31 @@ def _exclusion_target_payloads(
     ]
 
 
+def _is_atomic_match_log_recovery_conflict(exc: Exception) -> bool:
+    text = str(exc).upper()
+    return (
+        "JUPR_MATCH_LOG_RECOVERY_LOCKED" in text
+        or "JUPR_MATCH_LOG_RECOVERY_LOCK_AMBIGUOUS" in text
+    )
+
+
+def _raise_atomic_match_log_recovery_conflict(exc: Exception) -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "MATCH_LOG_RECOVERY_LOCKED",
+            "message": (
+                "Another Match Log recovery operation claimed this club "
+                "before the write could start. Refresh Match Log and complete "
+                "that exact recovery."
+            ),
+        },
+    ) from exc
+
+
 def _raise_match_exclusion_http(exc: Exception) -> None:
+    if _is_atomic_match_log_recovery_conflict(exc):
+        _raise_atomic_match_log_recovery_conflict(exc)
     if isinstance(exc, MatchExclusionStaleError):
         raise HTTPException(
             status_code=409,
@@ -429,6 +483,10 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
             permission=PERMISSION_MANAGE_MATCHES,
             source=payload.source,
         )
+        _enforce_match_log_recovery_guard(
+            supabase,
+            club_id=str(club_id),
+        )
         patch = _dump_model(payload)
         source = str(patch.pop("source", payload.source))
         if not patch:
@@ -511,6 +569,10 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
             permission=PERMISSION_DELETE_MATCHES,
             source=payload.source,
         )
+        _enforce_match_log_recovery_guard(
+            supabase,
+            club_id=str(club_id),
+        )
         try:
             deleted, deleted_snapshots = delete_social_matches_with_snapshot(
                 supabase,
@@ -576,6 +638,10 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
             permission=PERMISSION_MANAGE_MATCHES,
             source=payload.source,
         )
+        _enforce_match_log_recovery_guard(
+            supabase,
+            club_id=str(club_id),
+        )
         try:
             return apply_admin_match_log_edits(
                 supabase,
@@ -602,6 +668,10 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
                     "message": str(exc),
                 },
             ) from exc
+        except Exception as exc:
+            if _is_atomic_match_log_recovery_conflict(exc):
+                _raise_atomic_match_log_recovery_conflict(exc)
+            raise
 
     @app.post("/admin/clubs/{club_id}/match-log/edits/{operation_id}/recover")
     def post_admin_match_log_edit_recovery(
@@ -624,6 +694,12 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
         )
         if not has_permission(actor_role, PERMISSION_RUN_REPLAY):
             raise HTTPException(status_code=403, detail="Replay recovery permission is required.")
+        _enforce_match_log_recovery_guard(
+            supabase,
+            club_id=str(club_id),
+            recovery_kind=MATCH_EDIT_KIND,
+            recovery_operation_id=str(operation_id),
+        )
         try:
             return recover_atomic_match_edit(
                 supabase,
@@ -668,6 +744,10 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
             source=payload.source,
             require_all=True,
         )
+        _enforce_match_log_recovery_guard(
+            supabase,
+            club_id=str(club_id),
+        )
         try:
             return apply_admin_match_log_duplicate_cleanup(
                 supabase,
@@ -705,6 +785,10 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
             permission=(PERMISSION_DELETE_MATCHES, PERMISSION_RUN_REPLAY),
             source=payload.source,
             require_all=True,
+        )
+        _enforce_match_log_recovery_guard(
+            supabase,
+            club_id=str(club_id),
         )
         try:
             return apply_admin_match_log_exclusions(
@@ -781,6 +865,12 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
             source=payload.source,
             require_all=True,
         )
+        _enforce_match_log_recovery_guard(
+            supabase,
+            club_id=str(club_id),
+            recovery_kind=MATCH_EXCLUSION_KIND,
+            recovery_operation_id=str(operation_id),
+        )
         try:
             return recover_atomic_match_exclusion(
                 supabase,
@@ -809,6 +899,10 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
             permission=PERMISSION_MANAGE_MATCHES,
             source=payload.source,
         )
+        _enforce_match_log_recovery_guard(
+            supabase,
+            club_id=str(club_id),
+        )
         try:
             return resolve_admin_match_log_duplicate_false_positive(
                 supabase,
@@ -826,4 +920,6 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
+            if _is_atomic_match_log_recovery_conflict(exc):
+                _raise_atomic_match_log_recovery_conflict(exc)
             raise HTTPException(status_code=500, detail=str(exc)) from exc

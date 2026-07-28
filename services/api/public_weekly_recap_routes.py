@@ -12,6 +12,9 @@ from jupr_app.services.public_weekly_recap_service import (
 from services.api.admin_operations_routes import install_admin_operations_routes
 from services.api.public_email_preferences_routes import install_public_email_preferences_routes
 from services.api.public_support_intake_routes import install_public_support_intake_routes
+from services.api.public_tournament_commerce_routes import (
+    install_public_tournament_commerce_routes,
+)
 from services.api.public_tournament_pairing_routes import install_public_tournament_pairing_routes
 from services.api.public_tournament_registration_routes import install_public_tournament_registration_routes
 from services.api.public_verified_updates_routes import install_public_verified_updates_routes
@@ -77,6 +80,12 @@ def install_public_weekly_recap_routes(
         )
 
     install_public_tournament_registration_routes(
+        app,
+        get_club=get_club,
+        get_supabase_client=get_supabase_client,
+        public_club_payload=public_club_payload,
+    )
+    install_public_tournament_commerce_routes(
         app,
         get_club=get_club,
         get_supabase_client=get_supabase_client,

@@ -121,6 +121,39 @@ def _validate_doubles_selection_against_skill(
     return True, None
 
 
+def _validate_combined_rating_selection(
+    event: dict[str, Any],
+    selection: dict[str, Any],
+    player: dict[str, Any],
+    partner: dict[str, Any] | None,
+    *,
+    allow_missing_partner_for_preview: bool,
+) -> tuple[bool, str | None]:
+    try:
+        cap = round(float(event.get("combined_rating_cap")), 2)
+    except (TypeError, ValueError):
+        return False, "This combined-rating division is missing a valid rating cap."
+    if cap <= 0 or cap > 14:
+        return False, "This combined-rating division has an invalid rating cap."
+    partner_mode = str(selection.get("partner_mode") or "NONE").upper()
+    if partner_mode == "NEEDS_PARTNER" and allow_missing_partner_for_preview:
+        return True, None
+    player_rating = _effective_doubles_skill(player)
+    partner_rating = _effective_doubles_skill(partner or {}) if partner else None
+    # Missing ratings remain registrable for organizer verification. The
+    # database review is authoritative before draw assignment.
+    if player_rating is None or partner_rating is None:
+        return True, None
+    combined = round(player_rating + partner_rating, 2)
+    if combined >= cap:
+        return False, (
+            f"Your combined rating is {_format_skill(combined)}. "
+            f"This division requires a combined rating strictly below {_format_skill(cap)}."
+        )
+    # No lower bound is applied: a team may deliberately play up.
+    return True, None
+
+
 def validate_selection_against_skill(
     *,
     event: dict[str, Any],
@@ -129,6 +162,16 @@ def validate_selection_against_skill(
     partner: dict[str, Any] | None = None,
     allow_missing_partner_for_preview: bool = False,
 ) -> tuple[bool, str | None]:
+    if str(event.get("eligibility_mode") or "").upper() == "COMBINED_RATING_CAP":
+        if not _is_doubles_event(event):
+            return False, "Combined-rating divisions require a doubles event."
+        return _validate_combined_rating_selection(
+            event,
+            selection,
+            player,
+            partner,
+            allow_missing_partner_for_preview=allow_missing_partner_for_preview,
+        )
     if _is_doubles_event(event):
         partner_mode = str(selection.get("partner_mode") or "NONE").upper()
         resolved_partner = partner
@@ -566,6 +609,292 @@ def _compile_doubles_roster(
 
     return rows, partner_board, issues
 
+
+def _compile_four_player_team_roster(
+    tournament_id: str,
+    day: dict[str, Any],
+    event: dict[str, Any],
+    selections: list[dict[str, Any]],
+    reg_lookup: dict[str, dict[str, Any]],
+    *,
+    four_player_teams: list[dict[str, Any]] | None = None,
+    four_player_team_members: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Compile the durable four-player team model into the canonical roster.
+
+    A four-player event is intentionally not sent through the legacy doubles
+    partner compiler.  Only accepted members become public roster members;
+    invited teammate snapshots remain private on the team-registration
+    surface until those teammates accept.
+    """
+
+    event_id = str(event.get("id") or "")
+    issues: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+
+    registration_aliases: dict[str, dict[str, Any]] = {}
+    for registration in reg_lookup.values():
+        registration_aliases[str(registration.get("id") or "")] = registration
+        for alias in registration.get("_collapsed_from_ids") or []:
+            registration_aliases[str(alias)] = registration
+
+    active_selections = [
+        selection
+        for selection in selections
+        if str(
+            registration_aliases.get(
+                str(selection.get("registration_id") or ""), {}
+            ).get("status")
+            or ""
+        ).strip().lower()
+        not in {"cancelled", "canceled", "withdrawn"}
+    ]
+    selection_by_registration: dict[str, dict[str, Any]] = {}
+    for selection in active_selections:
+        registration = registration_aliases.get(
+            str(selection.get("registration_id") or "")
+        )
+        if not registration:
+            continue
+        selection_by_registration[str(registration.get("id") or "")] = selection
+        for alias in registration.get("_collapsed_from_ids") or []:
+            selection_by_registration[str(alias)] = selection
+
+    members_by_team: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for member in four_player_team_members or []:
+        if str(member.get("event_option_id") or "") != event_id:
+            continue
+        if str(member.get("status") or "").upper() == "REMOVED":
+            continue
+        members_by_team[str(member.get("team_id") or "")].append(member)
+
+    represented_selection_ids: set[str] = set()
+    active_team_statuses = {
+        "FORMING",
+        "CONFIRMED",
+        "WAITLIST",
+        "REVIEW_REQUIRED",
+        "INELIGIBLE",
+    }
+    event_teams = [
+        team
+        for team in (four_player_teams or [])
+        if str(team.get("event_option_id") or "") == event_id
+        and str(team.get("status") or "").upper() in active_team_statuses
+    ]
+    event_teams.sort(
+        key=lambda team: (
+            _parse_dt(team.get("created_at")),
+            str(team.get("name") or ""),
+            str(team.get("id") or ""),
+        )
+    )
+
+    for team in event_teams:
+        team_id = str(team.get("id") or "")
+        durable_members = sorted(
+            members_by_team.get(team_id, []),
+            key=lambda member: (
+                str(member.get("slot") or ""),
+                str(member.get("id") or ""),
+            ),
+        )
+        accepted_members: list[dict[str, Any]] = []
+        source_registration_ids: list[str] = []
+        source_selection_ids: list[str] = []
+        source_player_ids: list[Any] = []
+        submitted_values: list[str] = []
+
+        for member in durable_members:
+            if str(member.get("status") or "").upper() != "ACCEPTED":
+                continue
+            registration_id = str(member.get("registration_id") or "")
+            registration = registration_aliases.get(registration_id)
+            selection = selection_by_registration.get(registration_id)
+            if (
+                not registration
+                or str(registration.get("status") or "").upper()
+                != "CONFIRMED"
+            ):
+                issues.append(
+                    _issue(
+                        str(tournament_id),
+                        "FOUR_PLAYER_TEAM_ACCEPTED_REGISTRATION_INVALID",
+                        "blocker",
+                        f"{team.get('name') or 'Four-player team'} has an "
+                        "accepted member without a confirmed tournament "
+                        "registration.",
+                        registration_id=registration_id or None,
+                        selection_id=(
+                            str(selection.get("id"))
+                            if selection
+                            else None
+                        ),
+                        event_option_id=event_id,
+                    )
+                )
+                continue
+            compiled_member = _to_member_from_registration(
+                registration, selection
+            )
+            submitted_values.append(str(registration.get("submitted_at") or ""))
+            accepted_members.append(compiled_member)
+            canonical_registration_id = str(registration.get("id") or "")
+            if canonical_registration_id:
+                source_registration_ids.append(canonical_registration_id)
+            if selection and str(selection.get("id") or ""):
+                selection_id = str(selection.get("id"))
+                source_selection_ids.append(selection_id)
+                represented_selection_ids.add(selection_id)
+            player_id = member.get("player_id") or (
+                registration.get("player_id") if registration else None
+            )
+            if player_id is not None:
+                source_player_ids.append(player_id)
+
+        captain_registration_id = str(team.get("captain_registration_id") or "")
+        captain_selection = selection_by_registration.get(captain_registration_id)
+        if captain_selection and str(captain_selection.get("id") or ""):
+            captain_selection_id = str(captain_selection.get("id"))
+            if captain_selection_id not in source_selection_ids:
+                source_selection_ids.append(captain_selection_id)
+            represented_selection_ids.add(captain_selection_id)
+        captain_registration = registration_aliases.get(captain_registration_id)
+        if captain_registration:
+            canonical_captain_id = str(captain_registration.get("id") or "")
+            if (
+                canonical_captain_id
+                and canonical_captain_id not in source_registration_ids
+            ):
+                source_registration_ids.append(canonical_captain_id)
+            submitted_values.append(
+                str(captain_registration.get("submitted_at") or "")
+            )
+
+        team_status = str(team.get("status") or "").upper()
+        eligibility = str(team.get("eligibility_state") or "").upper()
+        if team_status == "CONFIRMED" and eligibility in {
+            "ELIGIBLE",
+            "NOT_REQUIRED",
+        }:
+            roster_status = "CONFIRMED"
+        elif team_status == "WAITLIST":
+            roster_status = "WAITLIST"
+        else:
+            roster_status = "REVIEW"
+
+        # A malformed durable team must stay visible to organizers as a
+        # blocker, but never manufacture unaccepted public members.
+        if roster_status == "CONFIRMED" and len(accepted_members) != 4:
+            roster_status = "REVIEW"
+            issues.append(
+                _issue(
+                    str(tournament_id),
+                    "FOUR_PLAYER_TEAM_ROSTER_INCOMPLETE",
+                    "blocker",
+                    f"{team.get('name') or 'Four-player team'} is marked confirmed "
+                    "without exactly four accepted members.",
+                    registration_id=(
+                        str(captain_registration.get("id"))
+                        if captain_registration
+                        else captain_registration_id or None
+                    ),
+                    selection_id=(
+                        str(captain_selection.get("id"))
+                        if captain_selection
+                        else None
+                    ),
+                    event_option_id=event_id,
+                )
+            )
+
+        # Captain acceptance is a database invariant for created teams, so an
+        # empty member list signals corrupt/incomplete setup and must not emit a
+        # browser entry with fabricated identity.
+        if not accepted_members:
+            issues.append(
+                _issue(
+                    str(tournament_id),
+                    "FOUR_PLAYER_TEAM_ACCEPTED_MEMBER_MISSING",
+                    "blocker",
+                    f"{team.get('name') or 'Four-player team'} has no accepted "
+                    "roster member.",
+                    registration_id=(
+                        str(captain_registration.get("id"))
+                        if captain_registration
+                        else captain_registration_id or None
+                    ),
+                    event_option_id=event_id,
+                )
+            )
+            continue
+
+        submitted_at = min((value for value in submitted_values if value), default="")
+        rows.append(
+            {
+                "id": _uid("roster"),
+                "tournament_id": str(tournament_id),
+                "event_day_id": str(day.get("id") or ""),
+                "event_day_label": str(day.get("label") or ""),
+                "event_option_id": event_id,
+                "event_label": str(event.get("label") or ""),
+                "status": roster_status,
+                "entry_type": "four_player_team",
+                "four_player_team_id": team_id or None,
+                "team_name": str(team.get("name") or "").strip() or None,
+                "members": accepted_members,
+                "source_registration_ids": list(
+                    dict.fromkeys(source_registration_ids)
+                ),
+                "source_selection_ids": list(
+                    dict.fromkeys(source_selection_ids)
+                ),
+                "source_player_ids": list(dict.fromkeys(source_player_ids)),
+                "submitted_at": submitted_at,
+                "sort_key": _parse_dt(team.get("created_at") or submitted_at),
+            }
+        )
+
+    for selection in active_selections:
+        selection_id = str(selection.get("id") or "")
+        if selection_id in represented_selection_ids:
+            continue
+        registration = registration_aliases.get(
+            str(selection.get("registration_id") or ""), {}
+        )
+        issues.append(
+            _issue(
+                str(tournament_id),
+                "FOUR_PLAYER_TEAM_SETUP_REQUIRED",
+                "blocker",
+                f"{registration.get('display_name') or registration.get('email') or 'A captain'} "
+                f"selected {event.get('label') or 'a four-player event'} but "
+                "does not have a durable team setup.",
+                registration_id=str(registration.get("id") or "") or None,
+                selection_id=selection_id or None,
+                event_option_id=event_id,
+            )
+        )
+        rows.append(
+            {
+                "id": _uid("roster"),
+                "tournament_id": str(tournament_id),
+                "event_day_id": str(day.get("id") or ""),
+                "event_day_label": str(day.get("label") or ""),
+                "event_option_id": event_id,
+                "event_label": str(event.get("label") or ""),
+                "status": "REVIEW",
+                "entry_type": "four_player_team_setup_required",
+                "members": [_to_member_from_registration(registration, selection)],
+                **_entry_identity(selection, registration),
+                "submitted_at": registration.get("submitted_at"),
+                "sort_key": _parse_dt(registration.get("submitted_at")),
+            }
+        )
+
+    return rows, issues
+
+
 def _apply_capacity(
     tournament_id: str,
     event: dict[str, Any],
@@ -615,6 +944,8 @@ def compile_tournament_registration_state(
     partner_requests: list[dict[str, Any]] | None = None,
     partner_links: list[dict[str, Any]] | None = None,
     team_members: list[dict[str, Any]] | None = None,
+    four_player_teams: list[dict[str, Any]] | None = None,
+    four_player_team_members: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     tournament_id = str(tournament.get("id"))
     settings = settings or {}
@@ -625,6 +956,10 @@ def compile_tournament_registration_state(
     partner_requests = [deepcopy(row) for row in (partner_requests or [])]
     partner_links = [deepcopy(row) for row in (partner_links or [])]
     team_members = [deepcopy(row) for row in (team_members or [])]
+    four_player_teams = [deepcopy(row) for row in (four_player_teams or [])]
+    four_player_team_members = [
+        deepcopy(row) for row in (four_player_team_members or [])
+    ]
 
     day_lookup = {str(row.get("id")): row for row in days}
     event_lookup = {str(row.get("id")): row for row in event_options}
@@ -665,7 +1000,18 @@ def compile_tournament_registration_state(
     for event in sorted(event_options, key=lambda row: _event_sort_key(row, day_lookup)):
         day = day_lookup.get(str(event.get("registration_day_id")), {})
         event_selections = selections_by_event.get(str(event.get("id")), [])
-        if _is_doubles_event(event):
+        if str(event.get("competition_format") or "").upper() == "FOUR_PLAYER_TEAM":
+            entries, event_issues = _compile_four_player_team_roster(
+                tournament_id,
+                day,
+                event,
+                event_selections,
+                reg_lookup,
+                four_player_teams=four_player_teams,
+                four_player_team_members=four_player_team_members,
+            )
+            issues.extend(event_issues)
+        elif _is_doubles_event(event):
             entries, partner_rows, event_issues = _compile_doubles_roster(
                 tournament_id,
                 day,

@@ -5,6 +5,8 @@ import os
 
 PUBLIC_INTAKE_WRITE_FLAG = "JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES"
 LEAGUE_MANAGER_WRITE_FLAG = "JUPR_ENABLE_STAGING_NEXT_ADMIN_LEAGUE_MANAGER_WRITES"
+TEAM_LEAGUE_ADMIN_WRITE_WAVE = "league-manager"
+TEAM_LEAGUE_PUBLIC_WRITE_WAVE = "public-intake-auth"
 MATCH_CANONICAL_NORMALIZE_WRITE_FLAG = (
     "JUPR_ENABLE_STAGING_NEXT_ADMIN_MATCH_CANONICAL_NORMALIZE_WRITES"
 )
@@ -51,6 +53,68 @@ def staging_league_manager_writes_enabled() -> bool:
     if environment != "staging":
         return False
     return os.getenv(LEAGUE_MANAGER_WRITE_FLAG, "").strip().lower() in TRUTHY
+
+
+def _local_test_writes_enabled() -> bool:
+    return os.getenv("JUPR_ENV", "").strip().lower() in {
+        "local",
+        "test",
+        "development",
+        "dev",
+    }
+
+
+def staging_admin_team_league_writes_enabled() -> bool:
+    """Keep the unaccepted team-league surface outside production.
+
+    Local/test environments remain usable for deterministic verification. The
+    only hosted environment that can write is isolated staging, and it must
+    have both the reviewed League Manager wave and its existing write flag.
+    """
+
+    environment = os.getenv("JUPR_ENV", "").strip().lower()
+    if _local_test_writes_enabled():
+        return True
+    if environment != "staging":
+        return False
+    return (
+        os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip()
+        == TEAM_LEAGUE_ADMIN_WRITE_WAVE
+        and os.getenv(LEAGUE_MANAGER_WRITE_FLAG, "").strip().lower() in TRUTHY
+    )
+
+
+def require_staging_admin_team_league_writes() -> None:
+    if staging_admin_team_league_writes_enabled():
+        return
+    raise PermissionError(
+        "Admin team-league writes are staging-only. Open only the approved "
+        f"{TEAM_LEAGUE_ADMIN_WRITE_WAVE} wave with "
+        f"{LEAGUE_MANAGER_WRITE_FLAG}=1."
+    )
+
+
+def staging_public_team_league_writes_enabled() -> bool:
+    environment = os.getenv("JUPR_ENV", "").strip().lower()
+    if _local_test_writes_enabled():
+        return True
+    if environment != "staging":
+        return False
+    return (
+        os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip()
+        == TEAM_LEAGUE_PUBLIC_WRITE_WAVE
+        and os.getenv(PUBLIC_INTAKE_WRITE_FLAG, "").strip().lower() in TRUTHY
+    )
+
+
+def require_staging_public_team_league_writes() -> None:
+    if staging_public_team_league_writes_enabled():
+        return
+    raise PermissionError(
+        "Public team-league writes are staging-only. Open only the approved "
+        f"{TEAM_LEAGUE_PUBLIC_WRITE_WAVE} wave with "
+        f"{PUBLIC_INTAKE_WRITE_FLAG}=1."
+    )
 
 
 def require_staging_match_canonical_normalize_writes() -> None:

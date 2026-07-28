@@ -542,30 +542,37 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     }
   }
 
-  async function publishOfficialMatches(confirmationText: string) {
-    if (!selectedTournamentId || !selectedDrawId) {
+  async function publishOfficialMatches(
+    confirmationText: string,
+    ratingChildDrawId = ""
+  ) {
+    if (!selectedTournamentId || (!selectedDrawId && !ratingChildDrawId)) {
       setMessage("Select a tournament and draw before publishing official matches.");
       return;
     }
-    const bonusElo = Number(publishBonusElo || "0");
+    const bonusElo = ratingChildDrawId ? 0 : Number(publishBonusElo || "0");
     if (!Number.isFinite(bonusElo) || bonusElo < 0) {
       setMessage("Playoff winner bonus must be a non-negative number.");
       return;
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
-    const drawId = selectedDrawId;
+    const drawId = ratingChildDrawId || selectedDrawId;
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/matches/publish`, {
         method: "POST",
-        body: JSON.stringify({ confirmation_text: confirmationText, playoff_winner_bonus_elo: bonusElo, expected_state_fingerprint: reviewedState, source: "next_tournament_ops_publish_matches" })
+        body: JSON.stringify({ confirmation_text: confirmationText, playoff_winner_bonus_elo: bonusElo, expected_state_fingerprint: reviewedState, source: ratingChildDrawId ? "next_team_tournament_child_publish" : "next_tournament_ops_publish_matches" })
       });
       if (!actionRequest.isCurrent(generation)) return;
-      await loadOps(tournamentId, drawId);
+      await loadOps(tournamentId, ratingChildDrawId ? "" : drawId);
       if (!actionRequest.isCurrent(generation)) return;
-      setMessage(`Published ${payload.match_count ?? 0} official rating match(es). Bonus applied to ${payload.bonus_match_count ?? 0} medal-playoff match(es) at ${payload.playoff_winner_bonus_elo ?? bonusElo} Elo per winning player.${operationSuffix(payload)}`);
+      setMessage(
+        ratingChildDrawId
+          ? `Published ${payload.match_count ?? 0} four-player child game as an official rating match.${operationSuffix(payload)}`
+          : `Published ${payload.match_count ?? 0} official rating match(es). Bonus applied to ${payload.bonus_match_count ?? 0} medal-playoff match(es) at ${payload.playoff_winner_bonus_elo ?? bonusElo} Elo per winning player.${operationSuffix(payload)}`
+      );
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to publish official tournament matches.");
     } finally {
@@ -741,6 +748,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
               <div><strong>Draws</strong><br />{snapshot.summary.draws}</div>
               <div><strong>Teams</strong><br />{snapshot.summary.teams}</div>
               <div><strong>Games</strong><br />{snapshot.summary.games}</div>
+              <div><strong>Team rating children</strong><br />{snapshot.summary.rating_children ?? 0}</div>
               <div><strong>Completed games</strong><br />{snapshot.summary.completed_games ?? 0}</div>
               <div><strong>Podium rows</strong><br />{snapshot.summary.podium}</div>
             </div>
@@ -894,6 +902,44 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
               <h2 style={{ marginTop: 0 }}>Publish official rating matches</h2>
               <p style={{ color: "#7c2d12" }}>Creates official Match Log rows from finalized tournament games and applies the regular rating path for both doubles and singles. Optional medal-playoff bonus adds Elo only to semifinal, bronze, and gold winners. Publishing needs both tournament and match-management permissions, a separate staging gate, and a safe email mode when automatic player updates are enabled.</p>
               {!officialPublishReady ? <p style={{ color: "#b91c1c", fontWeight: 700 }}>Official publish is gated off in this environment.</p> : null}
+              {snapshot.rating_child_publish_queue?.length ? (
+                <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
+                  <h3 style={{ marginBottom: 0 }}>Four-player rating games</h3>
+                  <p style={{ color: "#7c2d12", margin: 0 }}>Each finalized child game publishes separately. Parent team results never enter ratings.</p>
+                  {snapshot.rating_child_publish_queue.map((row) => {
+                    const drawId = String(row.draw?.id || "");
+                    const label = String(
+                      row.draw?.name ||
+                      row.child_game?.game_code ||
+                      "Four-player rating game"
+                    );
+                    return (
+                      <div key={drawId} style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center", justifyContent: "space-between", padding: "0.75rem", border: "1px solid #fed7aa", borderRadius: "10px", background: "white" }}>
+                        <div>
+                          <strong>{label}</strong>
+                          <br />
+                          <span style={{ color: "#7c2d12" }}>{row.publish_state.replaceAll("_", " ")}</span>
+                        </div>
+                        {row.publish_state === "READY_TO_PUBLISH" ? (
+                          <ConfirmAction
+                            triggerLabel="Publish rating game"
+                            title={`Publish ${label} as an official rating match?`}
+                            description="This publishes only the finalized child game. No playoff bonus is permitted."
+                            confirmLabel="Publish rating game"
+                            confirmationText="PUBLISH MATCHES"
+                            tone="danger"
+                            disabled={guardedWriteDisabled || !officialPublishReady || !drawId}
+                            busy={busy}
+                            onConfirm={(confirmation) =>
+                              publishOfficialMatches(confirmation, drawId)
+                            }
+                          />
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
               <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
                 <label><strong>Winner bonus Elo</strong><br /><input type="number" min="0" step="0.5" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} style={inputStyle} /><small style={{ color: "#7c2d12" }}>4 Elo = +0.01 JUPR.</small></label>
                 <ConfirmAction triggerLabel="Publish official matches" title="Publish these tournament games as official rated matches?" description={`This terminal write creates Match Log rows from every finalized game and applies a ${publishBonusElo || "0"}-Elo medal-playoff bonus to eligible winners.`} confirmLabel="Yes, publish official matches" confirmationText="PUBLISH MATCHES" tone="danger" disabled={guardedWriteDisabled || !officialPublishReady || !selectedDrawId} busy={busy} onConfirm={publishOfficialMatches} />
