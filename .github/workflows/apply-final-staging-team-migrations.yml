@@ -1,0 +1,193 @@
+name: Apply final staging team migrations
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/apply-final-staging-team-migrations' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: staging
+    env:
+      SUPABASE_TEST_DATABASE_URL: ${{ secrets.SUPABASE_TEST_DATABASE_URL }}
+      EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
+      EXPECTED_STAGING_SHA: bd422da7aa78112826133b02fe3f68f7ace05d7a
+      FORBIDDEN_PRODUCTION_REF: dnoockbwfenunhcibwfn
+    steps:
+      - name: Check out isolated runner
+        uses: actions/checkout@v4
+        with:
+          ref: agent/apply-final-staging-team-migrations
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact staging source and one-file runner diff
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$PR_BASE_SHA" = "$EXPECTED_STAGING_SHA"
+          test "$PR_HEAD_SHA" = "$(git rev-parse HEAD)"
+          FILES="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              --paginate \
+              "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+              --jq '.[].filename' \
+              | sort
+          )"
+          test "$FILES" = ".github/workflows/apply-final-staging-team-migrations.yml"
+
+      - name: Verify staging database target only
+        shell: python
+        run: |
+          import os
+          from urllib.parse import unquote, urlsplit
+
+          raw = os.environ.get('SUPABASE_TEST_DATABASE_URL', '').strip()
+          expected = os.environ.get('EXPECTED_SUPABASE_PROJECT_REF', '').strip().lower()
+          forbidden = os.environ.get('FORBIDDEN_PRODUCTION_REF', '').strip().lower()
+          if not raw or not expected:
+              raise SystemExit('Missing staging database URL or expected staging ref.')
+          parsed = urlsplit(raw)
+          host = (parsed.hostname or '').lower()
+          username = unquote(parsed.username or '').lower()
+          database = (parsed.path or '').lstrip('/').lower()
+          target_text = f'{username} {host} {raw.lower()}'
+          if expected != 'sijpxjxvdtrehmqvirfi' or expected not in target_text:
+              raise SystemExit('Database URL is not the exact approved staging project.')
+          if forbidden and forbidden in target_text:
+              raise SystemExit('Production project reference detected; refusing to continue.')
+          if parsed.scheme not in {'postgres', 'postgresql'} or database != 'postgres':
+              raise SystemExit('Unexpected staging database connection shape.')
+          print(f'Verified staging target: {expected}')
+
+      - name: Ensure PostgreSQL client is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+          psql --version
+
+      - name: Apply only the final two approved migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > migration-failure.txt
+          psql "$SUPABASE_TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -Atqc \
+            "select current_database() || ':' || current_user"
+
+          expected_existing=(
+            "20260728010000|tournament_commerce"
+            "20260728020000|combined_rating_team_tournaments"
+            "20260728030000|team_leagues_and_awards"
+          )
+          for spec in "${expected_existing[@]}"; do
+            IFS='|' read -r version name <<<"$spec"
+            actual="$(psql "$SUPABASE_TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -Atqc \
+              "select coalesce(name, '') from supabase_migrations.schema_migrations where version = '$version'")"
+            if [ "$actual" != "$name" ]; then
+              echo "Required prior migration missing or mismatched: $version $actual" | tee migration-failure.txt >&2
+              exit 2
+            fi
+          done
+
+          migrations=(
+            "20260728040000|team_league_awards_hardening|20260728040000_team_league_awards_hardening.sql"
+            "20260728041000|team_league_registration_identity_recovery|20260728041000_team_league_registration_identity_recovery.sql"
+          )
+
+          for spec in "${migrations[@]}"; do
+            IFS='|' read -r version name file <<<"$spec"
+            count="$(psql "$SUPABASE_TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -Atqc \
+              "select count(*) from supabase_migrations.schema_migrations where version = '$version'")"
+            if [ "$count" = "1" ]; then
+              existing="$(psql "$SUPABASE_TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -Atqc \
+                "select coalesce(name, '') from supabase_migrations.schema_migrations where version = '$version'")"
+              if [ "$existing" != "$name" ]; then
+                echo "Migration $version has unexpected ledger name $existing" | tee migration-failure.txt >&2
+                exit 2
+              fi
+              echo "Already applied: $version $name"
+              continue
+            fi
+            if [ "$count" != "0" ]; then
+              echo "Migration $version has duplicate ledger rows" | tee migration-failure.txt >&2
+              exit 2
+            fi
+
+            runner="$RUNNER_TEMP/apply-$version.sql"
+            log="$RUNNER_TEMP/migration-$version.log"
+            cat >"$runner" <<SQL
+          \\set ON_ERROR_STOP on
+          begin;
+          \\ir '$GITHUB_WORKSPACE/supabase/migrations/$file'
+          insert into supabase_migrations.schema_migrations (
+            version, statements, name, created_by
+          ) values (
+            '$version',
+            array['repository migration: supabase/migrations/$file'],
+            '$name',
+            'github-actions:final-staging-team-migrations'
+          );
+          commit;
+          SQL
+            if ! psql "$SUPABASE_TEST_DATABASE_URL" -X -q -f "$runner" >"$log" 2>&1; then
+              {
+                echo "Migration failed: $version $name"
+                tail -n 160 "$log"
+              } | tee migration-failure.txt >&2
+              exit 1
+            fi
+            echo "Applied: $version $name"
+          done
+
+          psql "$SUPABASE_TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -Atqc \
+            "select version || ':' || name from supabase_migrations.schema_migrations where version between '20260728010000' and '20260728041000' order by version" \
+            | tee "$RUNNER_TEMP/applied-migrations.txt"
+          test "$(wc -l < "$RUNNER_TEMP/applied-migrations.txt")" -eq 5
+          test "$(tail -n 1 "$RUNNER_TEMP/applied-migrations.txt")" = \
+            "20260728041000:team_league_registration_identity_recovery"
+
+      - name: Verify final staging schema surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_TEST_DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -Atqc \
+            "select json_build_object(
+              'team_league_settings', to_regclass('public.team_league_settings') is not null,
+              'team_league_fixtures', to_regclass('public.team_league_fixtures') is not null,
+              'team_league_teams', to_regclass('public.team_league_teams') is not null,
+              'team_league_save_awards_config', to_regprocedure('public.league_awards_save_config_v1(text,text,integer,jsonb,text,text,text)') is not null,
+              'team_league_roster_fingerprint', to_regprocedure('public.team_league_confirmed_roster_fingerprint_v1(text,text)') is not null
+            )"
+
+      - name: Upload migration failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-staging-migration-failure
+          path: |
+            migration-failure.txt
+            ${{ runner.temp }}/migration-*.log
+          if-no-files-found: warn
+          retention-days: 1
