@@ -1,0 +1,161 @@
+name: Verify match-player manual window
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/verify-match-player-window-20260728' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    env:
+      EXPECTED_SHA: 6da9ea8a2d86d4c2236b7f34fa8f1246dd418d2a
+      EXPECTED_SUPABASE_REF: sijpxjxvdtrehmqvirfi
+      FLY_APP: juprleagues-api-staging
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      WEB_ORIGIN: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      SESSION_NONCE: 73686f28-3aa6-4afe-9c76-57a0a2947dc8
+    steps:
+      - name: Check out isolated verifier
+        uses: actions/checkout@v4
+        with:
+          ref: agent/verify-match-player-window-20260728
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact staging source and one-file diff
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$PR_BASE_SHA" = "$EXPECTED_SHA"
+          test "$PR_HEAD_SHA" = "$(git rev-parse HEAD)"
+          FILES="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              --paginate \
+              "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+              --jq '.[].filename' \
+              | sort
+          )"
+          test "$FILES" = ".github/workflows/verify-match-player-window-20260728.yml"
+
+      - name: Verify protected control lease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "/repos/$GITHUB_REPOSITORY/issues/1062" > issue.json
+          jq -e \
+            --arg sha "$EXPECTED_SHA" \
+            --arg nonce "$SESSION_NONCE" \
+            'select(
+              .state == "open" and
+              .locked == true and
+              (.body | contains("command: open")) and
+              (.body | contains("candidate_sha: " + $sha)) and
+              (.body | contains("expected_write_wave: none")) and
+              (.body | contains("write_wave: match-player")) and
+              (.body | contains("session_nonce: " + $nonce))
+            )' issue.json >/dev/null
+
+      - name: Wait for and verify match-player Fly health
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 20 \
+              "$FLY_HEALTH_URL" -o fly-health.json; then
+              if jq -e \
+                --arg sha "$EXPECTED_SHA" \
+                'select(
+                  .git_commit_sha == $sha and
+                  .staging_write_wave == "match-player"
+                )' fly-health.json >/dev/null; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              cat fly-health.json 2>/dev/null || true
+              echo "Match-player wave did not become ready in time." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          python - <<'PY'
+          import json
+          from scripts.staging_write_waves import expected_write_flags
+
+          with open('fly-health.json', encoding='utf-8') as handle:
+              health = json.load(handle)
+          expected = expected_write_flags('match-player')
+          checks = {
+              'ok': health.get('ok') is True,
+              'service': health.get('service') == 'jupr-api',
+              'environment': health.get('environment') == 'staging',
+              'candidate': health.get('git_commit_sha') == '6da9ea8a2d86d4c2236b7f34fa8f1246dd418d2a',
+              'image_candidate': health.get('image_build_git_sha') == '6da9ea8a2d86d4c2236b7f34fa8f1246dd418d2a',
+              'fly_app': health.get('fly_app_name') == 'juprleagues-api-staging',
+              'supabase': health.get('supabase_project_ref') == 'sijpxjxvdtrehmqvirfi',
+              'wave': health.get('write_wave') == 'match-player' and health.get('staging_write_wave') == 'match-player',
+              'business_active': health.get('business_data_write_wave_active') is True,
+              'flags': health.get('controlled_write_flags') == expected,
+              'destructive_off': health.get('controlled_write_flags', {}).get('JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE') is False,
+              'public_live_off': health.get('public_live_writes_enabled') is False,
+              'production_override_off': health.get('public_live_production_override_enabled') is False,
+              'jwt': health.get('jwt_verification_configured') is True and health.get('jwt_verification_project_ref') == 'sijpxjxvdtrehmqvirfi',
+              'service_role': health.get('write_prerequisites', {}).get('service_role_configured') is True,
+              'audit': health.get('write_prerequisites', {}).get('api_audit_required') is True,
+              'worker_log': health.get('write_prerequisites', {}).get('worker_run_log_required') is True,
+              'email': health.get('write_prerequisites', {}).get('email_mode') == 'dry_run',
+              'live_email_off': health.get('write_prerequisites', {}).get('live_player_update_email_enabled') is False,
+          }
+          failed = [name for name, accepted in checks.items() if not accepted]
+          if failed:
+              raise SystemExit('Match-player health verification failed: ' + ', '.join(failed))
+          PY
+
+      - name: Verify Match Uploader page is reachable
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl --silent --show-error --location --max-time 30 \
+            --output /dev/null --write-out '%{http_code}' \
+            "$WEB_ORIGIN/admin/match-uploader")"
+          printf '%s /admin/match-uploader\n' "$code" | tee web-status.txt
+          case "$code" in
+            200|204) ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Upload window evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: match-player-window-evidence
+          path: |
+            issue.json
+            fly-health.json
+            web-status.txt
+          if-no-files-found: error
+          retention-days: 2
