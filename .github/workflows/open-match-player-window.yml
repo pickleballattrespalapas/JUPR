@@ -1,0 +1,309 @@
+name: Open protected match-player staging window
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+jobs:
+  window:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/open-match-player-write-window' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    environment: staging
+    concurrency:
+      group: jupr-isolated-manual-match-player-window
+      cancel-in-progress: false
+    env:
+      EXPECTED_SHA: 6da9ea8a2d86d4c2236b7f34fa8f1246dd418d2a
+      CONTROL_ISSUE: "1062"
+      EXPECTED_WAVE: match-player
+      LEASE_STARTED_AT: 2026-07-28T17:30:00Z
+      LEASE_EXPIRES_AT: 2026-07-28T18:30:00Z
+      SESSION_NONCE: deb767a7-074e-4d2b-b196-a3f84929160d
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out isolated staging runner
+        uses: actions/checkout@v4
+        with:
+          ref: agent/open-match-player-write-window
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact staging source and one-file runner diff
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$PR_BASE_SHA" = "$EXPECTED_SHA"
+          test "$PR_HEAD_SHA" = "$(git rev-parse HEAD)"
+          FILES="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              --paginate \
+              "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+              --jq '.[].filename' \
+              | sort
+          )"
+          test "$FILES" = ".github/workflows/open-match-player-window.yml"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/staging" --jq .object.sha)" = "$EXPECTED_SHA"
+
+      - name: Verify the closed locked owner lease record
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY/issues/$CONTROL_ISSUE" > issue-before.json
+          python - <<'PY'
+          import json
+          import os
+          from scripts.staging_write_session import parse_session_command
+
+          issue = json.load(open('issue-before.json', encoding='utf-8'))
+          errors = []
+          if issue.get('number') != 1062: errors.append('issue number')
+          if issue.get('title') != 'Protected staging write session control': errors.append('issue title')
+          if issue.get('state') != 'closed': errors.append('issue state')
+          if issue.get('locked') is not True: errors.append('issue lock')
+          if (issue.get('user') or {}).get('id') != 250933369: errors.append('issue author')
+          if issue.get('author_association') != 'OWNER': errors.append('owner association')
+          command = parse_session_command(issue.get('body'))
+          expected = {
+              'command': 'open',
+              'candidate_sha': os.environ['EXPECTED_SHA'],
+              'expected_write_wave': 'none',
+              'write_wave': os.environ['EXPECTED_WAVE'],
+              'lease_started_at': os.environ['LEASE_STARTED_AT'],
+              'lease_expires_at': os.environ['LEASE_EXPIRES_AT'],
+              'session_nonce': os.environ['SESSION_NONCE'],
+          }
+          for key, value in expected.items():
+              if getattr(command, key) != value:
+                  errors.append(key)
+          if errors:
+              raise SystemExit('Lease record rejected: ' + ', '.join(errors))
+          PY
+          cp issue-before.json "$RUNNER_TEMP/issue-before.json"
+
+      - name: Verify no-write state before activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if python scripts/staging_evidence_automation.py fly-health \
+              > fly-before.json; then
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then exit 2; fi
+            sleep 10
+          done
+          python scripts/staging_evidence_automation.py verify-final-none \
+            --fly-json fly-before.json > none-before.json
+          jq -e --arg sha "$EXPECTED_SHA" \
+            'select(.git_commit_sha == $sha and .image_build_git_sha == $sha)' \
+            fly-before.json >/dev/null
+
+      - name: Activate and verify match-player
+        id: activate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(date -u +%s)" -ge "$(date -u -d "$LEASE_EXPIRES_AT" +%s)" ]; then
+            echo "Lease expired before activation." >&2
+            exit 2
+          fi
+          python scripts/staging_evidence_automation.py dispatch \
+            --workflow fly_api_staging_deploy.yml \
+            --input "write_wave=$EXPECTED_WAVE" \
+            --input "expected_candidate_sha=$EXPECTED_SHA" \
+            > active-dispatch.json
+          RUN_ID="$(jq -r .workflow_run_id active-dispatch.json)"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          python scripts/staging_evidence_automation.py wait-run \
+            --workflow fly_api_staging_deploy.yml \
+            --run-id "$RUN_ID" \
+            --candidate-sha "$EXPECTED_SHA" \
+            --timeout-seconds 3600
+          for attempt in $(seq 1 12); do
+            if python scripts/staging_evidence_automation.py fly-health \
+              > fly-active.json; then
+              if jq -e --arg sha "$EXPECTED_SHA" --arg wave "$EXPECTED_WAVE" \
+                'select(.git_commit_sha == $sha and .staging_write_wave == $wave)' \
+                fly-active.json >/dev/null; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 12 ]; then exit 2; fi
+            sleep 10
+          done
+          python - <<'PY'
+          import json
+          import os
+          from scripts.staging_write_session import SessionCommand, _leased_health_errors
+
+          health = json.load(open('fly-active.json', encoding='utf-8'))
+          command = SessionCommand(
+              command='open',
+              candidate_sha=os.environ['EXPECTED_SHA'],
+              expected_write_wave='none',
+              write_wave=os.environ['EXPECTED_WAVE'],
+              session_nonce=os.environ['SESSION_NONCE'],
+              lease_started_at=os.environ['LEASE_STARTED_AT'],
+              lease_expires_at=os.environ['LEASE_EXPIRES_AT'],
+          )
+          errors = _leased_health_errors(
+              health,
+              command=command,
+              current_wave=os.environ['EXPECTED_WAVE'],
+          )
+          if errors:
+              raise SystemExit('Active health rejected: ' + ' '.join(errors))
+          if health.get('image_build_git_sha') != os.environ['EXPECTED_SHA']:
+              raise SystemExit('Active image identity mismatch.')
+          PY
+          python - <<'PY' > write-window-ready.json
+          import json
+          import os
+          from datetime import datetime, timezone
+          print(json.dumps({
+              'ready': True,
+              'candidate_sha': os.environ['EXPECTED_SHA'],
+              'write_wave': os.environ['EXPECTED_WAVE'],
+              'lease_expires_at': os.environ['LEASE_EXPIRES_AT'],
+              'session_nonce': os.environ['SESSION_NONCE'],
+              'verified_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+          }, sort_keys=True))
+          PY
+
+      - name: Upload active-window evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: match-player-window-active
+          path: |
+            active-dispatch.json
+            fly-active.json
+            write-window-ready.json
+          if-no-files-found: error
+          retention-days: 2
+
+      - name: Watch lease until expiry or owner close
+        if: steps.activate.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ORIGINAL_BODY="$(jq -r .body "$RUNNER_TEMP/issue-before.json")"
+          EXPIRES_EPOCH="$(date -u -d "$LEASE_EXPIRES_AT" +%s)"
+          while [ "$(date -u +%s)" -lt "$EXPIRES_EPOCH" ]; do
+            gh api "/repos/$GITHUB_REPOSITORY/issues/$CONTROL_ISSUE" > issue-live.json
+            LIVE_BODY="$(jq -r .body issue-live.json)"
+            LIVE_STATE="$(jq -r .state issue-live.json)"
+            if [ "$LIVE_STATE" != "closed" ] || [ "$LIVE_BODY" != "$ORIGINAL_BODY" ]; then
+              echo "Owner close or superseding control record detected."
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Lease expired; restoring no-write state."
+
+      - name: Restore and verify none
+        if: always()
+        id: restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 6); do
+            if python scripts/staging_evidence_automation.py fly-health \
+              > fly-before-restore.json; then break; fi
+            if [ "$attempt" -eq 6 ]; then exit 2; fi
+            sleep 10
+          done
+          CURRENT_WAVE="$(jq -r '.staging_write_wave // empty' fly-before-restore.json)"
+          if [ "$CURRENT_WAVE" != "none" ]; then
+            python scripts/staging_evidence_automation.py dispatch \
+              --workflow fly_api_staging_deploy.yml \
+              --input write_wave=none \
+              --input "expected_candidate_sha=$EXPECTED_SHA" \
+              > none-dispatch.json
+            NONE_RUN_ID="$(jq -r .workflow_run_id none-dispatch.json)"
+            python scripts/staging_evidence_automation.py wait-run \
+              --workflow fly_api_staging_deploy.yml \
+              --run-id "$NONE_RUN_ID" \
+              --candidate-sha "$EXPECTED_SHA" \
+              --timeout-seconds 3600
+          else
+            printf '%s\n' '{"already_none":true}' > none-dispatch.json
+          fi
+          for attempt in $(seq 1 12); do
+            if python scripts/staging_evidence_automation.py fly-health \
+              > fly-final-none.json; then
+              if jq -e --arg sha "$EXPECTED_SHA" \
+                'select(.git_commit_sha == $sha and .staging_write_wave == "none")' \
+                fly-final-none.json >/dev/null; then break; fi
+            fi
+            if [ "$attempt" -eq 12 ]; then exit 2; fi
+            sleep 10
+          done
+          python scripts/staging_evidence_automation.py verify-final-none \
+            --fly-json fly-final-none.json > final-none-verification.json
+
+      - name: Normalize and lock the closed control issue
+        if: always() && steps.restore.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLOSE_BODY="$(cat <<EOF
+          # Protected staging write session control
+
+          This locked owner-controlled issue records the completed exact-candidate staging write-test lease.
+
+          \`\`\`yaml
+          command: close
+          candidate_sha: $EXPECTED_SHA
+          expected_write_wave: $EXPECTED_WAVE
+          write_wave: none
+          session_nonce: $SESSION_NONCE
+          \`\`\`
+
+          Staging was restored and verified at \`write_wave=none\`. Production was never a target.
+          EOF
+          )"
+          gh api \
+            --method PATCH \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "/repos/$GITHUB_REPOSITORY/issues/$CONTROL_ISSUE" \
+            -f body="$CLOSE_BODY" \
+            -f state=closed \
+            -f state_reason=completed \
+            --silent
+          gh api \
+            --method PUT \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "/repos/$GITHUB_REPOSITORY/issues/$CONTROL_ISSUE/lock" \
+            -f lock_reason=resolved \
+            --silent || true
+
+      - name: Upload final restoration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: match-player-window-final
+          path: |
+            fly-before-restore.json
+            none-dispatch.json
+            fly-final-none.json
+            final-none-verification.json
+          if-no-files-found: warn
+          retention-days: 2
