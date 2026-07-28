@@ -39,6 +39,16 @@ test("match uploader exposes every entry mode and recovery language", async ({ p
         "Doubles round robin"
       ]);
     }
+    await entryMethod.selectOption("manual");
+    await expect(page.getByRole("button", { name: "Add 1 Match" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add 5 Matches" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Remove All" })).toBeVisible();
+    await expect(page.getByLabel("Team 1 · Player 1").first()).toHaveAttribute("list", /-options$/);
+
+    await entryMethod.selectOption("round_robin");
+    await expect(page.getByRole("heading", { name: "Doubles round-robin generator" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add round robin" })).toBeVisible();
+    await expect(page.getByLabel("Players").first()).toHaveAttribute("list", /-options$/);
   }
 });
 

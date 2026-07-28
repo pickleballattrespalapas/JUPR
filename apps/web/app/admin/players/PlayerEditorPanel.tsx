@@ -18,6 +18,9 @@ function juprLabel(value?: number | null): string { return value == null ? "—"
 function socialLabel(row: AdminPlayerSocialIdentity): string { return `${row.display_name || "Unknown"}${row.linked_player_name ? ` → ${row.linked_player_name}` : " [unlinked]"}`; }
 function playerOptionLabel(player: AdminPlayerEditorPlayer): string { return `${player.name} #${player.id}${player.active === false ? " [inactive]" : ""}`; }
 function sumRecord(values?: Record<string, number>): number { if (values?.total != null) return Number(values.total || 0); return Object.values(values || {}).reduce((sum, value) => sum + Number(value || 0), 0); }
+function isErrorMessage(message: string): boolean {
+  return /\b(unable|required|sign in|error|missing|invalid|unknown|not found|blocked|unavailable|failed|must|cannot)\b/i.test(message);
+}
 
 export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
@@ -55,7 +58,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
 
   async function loadPlayers() { const generation = playersRequest.begin(); setMessage(null); if (!requireReady()) return null; setSaving(true); try { const payload = await requestJson<AdminPlayerEditorListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players`); if (!playersRequest.isCurrent(generation)) return null; setPlayers(payload.players || []); setMessage(`Loaded ${payload.count ?? payload.players?.length ?? 0} player(s).`); return payload; } catch (error) { if (playersRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load players."); return null; } finally { if (playersRequest.isCurrent(generation)) setSaving(false); } }
   async function loadDetail(playerId: string) { const generation = detailRequest.begin(); setSelectedId(playerId); setDetail(null); setMessage(null); if (!playerId || !requireReady()) return; setSaving(true); try { const payload = await requestJson<AdminPlayerEditorDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${encodeURIComponent(playerId)}`); if (!detailRequest.isCurrent(generation)) return; setDetail(payload); seedEditForm(payload.player); seedLeagueRatingForm(payload.league_ratings?.[0] || null); } catch (error) { if (detailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load player detail."); } finally { if (detailRequest.isCurrent(generation)) setSaving(false); } }
-  async function loadSocialIdentities() { const generation = socialRequest.begin(); setMessage(null); if (!requireReady()) return; setSaving(true); try { const payload = await requestJson<AdminPlayerSocialIdentityListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities`); if (!socialRequest.isCurrent(generation)) return; setSocialPeople(payload.people || []); setSocialPlayers(payload.players || []); seedSocialForm((payload.people || [])[0] || null); setMessage(`Loaded ${payload.summary?.people ?? payload.people?.length ?? 0} social identit${(payload.people?.length ?? 0) === 1 ? "y" : "ies"}.`); } catch (error) { if (socialRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load social identities."); } finally { if (socialRequest.isCurrent(generation)) setSaving(false); } }
+  async function loadSocialIdentities(completionMessage?: string) { const generation = socialRequest.begin(); setMessage(null); if (!requireReady()) return; setSaving(true); try { const payload = await requestJson<AdminPlayerSocialIdentityListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities`); if (!socialRequest.isCurrent(generation)) return; setSocialPeople(payload.people || []); setSocialPlayers(payload.players || []); seedSocialForm((payload.people || [])[0] || null); setMessage(completionMessage || `Loaded ${payload.summary?.people ?? payload.people?.length ?? 0} social identit${(payload.people?.length ?? 0) === 1 ? "y" : "ies"}.`); } catch (error) { if (socialRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load social identities."); } finally { if (socialRequest.isCurrent(generation)) setSaving(false); } }
   async function loadWorkspace() {
     const selectedPlayerBeforeRefresh = selectedId;
     const selectedSocialBeforeRefresh = selectedSocialId;
@@ -174,8 +177,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities/${encodeURIComponent(socialId)}`, { method: "PATCH", body: JSON.stringify({ display_name: socialDisplayName, linked_player_id: socialLinkedPlayerId ? Number(socialLinkedPlayerId) : null, confirmation_text: confirmationText, source: "next_player_editor_social_identity" }) });
       if (!actionRequest.isCurrent(generation)) return;
-      setMessage(`Saved social identity ${payload.club_person?.display_name || socialId}.`);
-      await loadSocialIdentities();
+      await loadSocialIdentities(`Saved social identity ${payload.club_person?.display_name || socialId} and refreshed the list.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save social identity.");
     } finally {
@@ -191,8 +193,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities/auto-link`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText, source: "next_player_editor_social_auto_link" }) });
       if (!actionRequest.isCurrent(generation)) return;
-      setMessage(`Auto-linked ${payload.linked_count ?? 0} social identit${payload.linked_count === 1 ? "y" : "ies"}; skipped ${payload.skipped_count ?? 0}.`);
-      await loadSocialIdentities();
+      await loadSocialIdentities(`Auto-linked ${payload.linked_count ?? 0} social identit${payload.linked_count === 1 ? "y" : "ies"}; skipped ${payload.skipped_count ?? 0}. The list is refreshed.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to auto-link social identities.");
     } finally {
@@ -323,9 +324,33 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
   if (!status.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Next Player Editor is disabled</h2><p style={{ color: "#475569" }}>{status.warnings?.[0] || "Enable the Player Editor pilot flag on FastAPI."}</p></article>;
 
   return <section style={{ display: "grid", gap: "1rem" }}>
+    {message ? (
+      <div
+        role={isErrorMessage(message) ? "alert" : "status"}
+        aria-live="polite"
+        style={{
+          position: "sticky",
+          top: "0.75rem",
+          zIndex: 10,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: "0.75rem",
+          border: `1px solid ${isErrorMessage(message) ? "#fca5a5" : "#86efac"}`,
+          borderRadius: "12px",
+          padding: "0.75rem",
+          background: isErrorMessage(message) ? "#fef2f2" : "#f0fdf4",
+          color: isErrorMessage(message) ? "#b91c1c" : "#166534",
+          boxShadow: "0 4px 14px rgba(15, 23, 42, 0.12)"
+        }}
+      >
+        <span>{message}</span>
+        <button type="button" onClick={() => setMessage(null)} aria-label="Dismiss Player Editor message">Dismiss</button>
+      </div>
+    ) : null}
     {mergeAttempted && mergeOperationId && !mergePreview && !mergeRecovery ? <article style={{ ...cardStyle, background: "#fef2f2", borderColor: "#fca5a5" }}><h2 style={{ marginTop: 0 }}>Merge outcome unknown</h2><p>Do not retry with a new operation. Check operation <code>{mergeOperationId}</code> first; an idempotent server retry uses this same ID.</p><button type="button" onClick={lookupMergeOperation} disabled={saving || !accessToken} style={ghostButtonStyle}>Check merge operation</button></article> : null}
     <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Player Editor admin session</h2><p style={{ color: "#475569" }}>This route supports roster/detail read, add player, basic player updates, guarded league-rating edits, Club Social identity linking, and guarded player merge. Merges require Replay History after execution.</p><div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}><strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong><p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to send authorized Player Editor requests." : sessionLoading ? "Checking admin session…" : "Sign in before using the Player Editor."}</p>{sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}{!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}</div><button type="button" onClick={loadWorkspace} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Refreshing…" : "Refresh players and identities"}</button>{status.warnings?.length ? <ul style={{ color: "#92400e" }}>{status.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}</article>
-    <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Add new player</h2><div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(120px, 180px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Name</strong><br /><input value={newName} onChange={(event) => setNewName(event.target.value)} style={inputStyle} /></label><label><strong>Starting JUPR</strong><br /><input value={newStartingJupr} onChange={(event) => setNewStartingJupr(event.target.value)} type="number" min={1} max={7} step={0.1} style={inputStyle} /></label><button type="button" onClick={createPlayer} disabled={saving || !accessToken} style={ghostButtonStyle}>Add player</button></div></article>
+    <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Add new player</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}><label><strong>Name</strong><br /><input value={newName} onChange={(event) => setNewName(event.target.value)} style={inputStyle} /></label><label><strong>Starting JUPR</strong><br /><input value={newStartingJupr} onChange={(event) => setNewStartingJupr(event.target.value)} type="number" min={1} max={7} step={0.1} style={inputStyle} /></label><button type="button" onClick={createPlayer} disabled={saving || !accessToken} style={ghostButtonStyle}>Add player</button></div></article>
     <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Select player</h2><select value={selectedId} onChange={(event) => loadDetail(event.target.value)} style={inputStyle} disabled={saving || !accessToken}><option value="">Choose a player</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{playerOptionLabel(player)}</option>)}</select></article>
     {detail ? <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Manage player</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem" }}><label><strong>Name</strong><br /><input value={editName} onChange={(event) => setEditName(event.target.value)} style={inputStyle} /></label><label><strong>Overall JUPR</strong><br /><input value={editRating} onChange={(event) => setEditRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label><label><strong>Starting JUPR</strong><br /><input value={editStartingRating} onChange={(event) => setEditStartingRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label><label><strong>Active</strong><br /><select value={editActive ? "yes" : "no"} onChange={(event) => setEditActive(event.target.value === "yes")} style={inputStyle}><option value="yes">Active</option><option value="no">Inactive</option></select></label></div><p><button type="button" onClick={savePlayer} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Saving…" : "Save player"}</button></p><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}><div><strong>Wins</strong><br />{detail.player.wins ?? 0}</div><div><strong>Losses</strong><br />{detail.player.losses ?? 0}</div><div><strong>Matches</strong><br />{detail.player.matches_played ?? 0}</div><div><strong>Match refs</strong><br />{detail.match_reference_counts?.total ?? 0}</div></div></article> : null}
     {detail?.league_ratings?.length ? (
@@ -356,7 +381,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
       <h2 style={{ marginTop: 0 }}>Club Social identity linking</h2>
       <p style={{ color: "#475569" }}>Link social-only Club Social identities to official players so future social rows resolve consistently. This does not rewrite rated match history.</p>
       <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-        <button type="button" onClick={loadSocialIdentities} disabled={saving || !accessToken} style={ghostButtonStyle}>Refresh social identities</button>
+        <button type="button" onClick={() => void loadSocialIdentities()} disabled={saving || !accessToken} style={ghostButtonStyle}>Refresh social identities</button>
         <ConfirmAction
           triggerLabel="Auto-link exact names"
           title="Auto-link exact Club Social names?"
@@ -370,7 +395,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
       </p>
       {socialPeople.length ? (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(220px, 1fr) minmax(220px, 1fr)", gap: "0.75rem", alignItems: "end" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
             <label><strong>Social identity</strong><br /><select value={selectedSocialId} onChange={(event) => seedSocialForm(socialPeople.find((row) => row.id === event.target.value) || null)} style={inputStyle}><option value="">Choose identity…</option>{socialPeople.map((row) => <option key={row.id} value={row.id}>{socialLabel(row)}</option>)}</select></label>
             <label><strong>Display name</strong><br /><input value={socialDisplayName} onChange={(event) => setSocialDisplayName(event.target.value)} style={inputStyle} /></label>
             <label><strong>Linked player</strong><br /><select value={socialLinkedPlayerId} onChange={(event) => setSocialLinkedPlayerId(event.target.value)} style={inputStyle}><option value="">Unlinked</option>{socialPlayers.map((player) => <option key={player.id} value={String(player.id)}>{player.name} #{player.id}{player.active === false ? " [inactive]" : ""}</option>)}</select></label>
@@ -394,7 +419,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
       <h2 style={{ marginTop: 0 }}>Merge player accounts</h2>
       <p style={{ color: "#7c2d12" }}>Merge rewires Source → Target in one guarded database transaction, records a recovery operation, then deactivates the source. A succeeded full Replay History job must be attached afterward.</p>
       {status.transactional_merge_ready === false ? <p style={{ color: "#b91c1c" }}><strong>Merge write unavailable:</strong> FastAPI has not confirmed its server-only service role and transaction contract.</p> : null}
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(220px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
         <label><strong>Source duplicate</strong><br /><select value={mergeSourceId} onChange={(event) => { setMergeSourceId(event.target.value); setMergePreview(null); }} style={inputStyle}><option value="">Choose source…</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{playerOptionLabel(player)}</option>)}</select></label>
         <label><strong>Target keeper</strong><br /><select value={mergeTargetId} onChange={(event) => { setMergeTargetId(event.target.value); setMergePreview(null); }} style={inputStyle}><option value="">Choose target…</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{playerOptionLabel(player)}</option>)}</select></label>
         <button type="button" onClick={previewMerge} disabled={saving || !accessToken || !mergeSourceId || !mergeTargetId || mergeSourceId === mergeTargetId} style={ghostButtonStyle}>Preview merge</button>
@@ -468,6 +493,5 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
         ) : <p>Recovery is complete for this operation. No replay evidence or compensation action remains.</p>}
       </article>
     ) : null}
-    {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("required") || message.toLowerCase().includes("sign in") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
   </section>;
 }

@@ -151,6 +151,7 @@ def build_top_performer_badge_candidates(
         context_id = f"{league_id}:top_performer:{category_key}:{rank}"
         value_json = {
             "league_id": league_id,
+            "award_key": award.get("award_key"),
             "category_key": category_key,
             "category_label": award.get("category_label"),
             "rank": rank,
@@ -158,7 +159,9 @@ def build_top_performer_badge_candidates(
             "metric_display": award.get("metric_display"),
             "ended_at": ended_at,
         }
-        override_key = f"{category_key}:{rank}"
+        override_key = str(
+            award.get("award_key") or f"{category_key}:{rank}"
+        )
         if override_key in overrides:
             value_json["override_note"] = overrides[override_key]
         candidates.append(

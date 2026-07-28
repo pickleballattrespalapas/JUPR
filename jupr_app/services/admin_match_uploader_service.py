@@ -259,9 +259,42 @@ def build_admin_match_uploader_status(supabase: Any | None, *, club_id: str) -> 
         }
     league_options = ["Open", "POPUP"]
     try:
-        rows = _safe_rows(supabase.table("leagues_metadata").select("league_name,is_active,status").eq("club_id", str(club_id)).execute())
-        names = sorted({_clean_text(row.get("league_name"), limit=120) for row in rows if _clean_text(row.get("league_name"), limit=120)})
-        active_names = [name for name in names if name.upper() != "OVERALL"]
+        rows = _safe_rows(
+            supabase.table("leagues_metadata")
+            .select("league_name,is_active,status,ended_at")
+            .eq("club_id", str(club_id))
+            .execute()
+        )
+        active_names: list[str] = []
+        seen_names: set[str] = set()
+        for row in rows:
+            name = _clean_text(row.get("league_name"), limit=120)
+            normalized_name = name.casefold()
+            if not name or normalized_name in {"overall", "popup"}:
+                continue
+            ended_at = row.get("ended_at")
+            if ended_at not in (None, "") and str(ended_at) not in {
+                "<NA>",
+                "NaT",
+                "nan",
+            }:
+                continue
+            status = str(row.get("status") or "").strip().casefold()
+            if status in {"inactive", "disabled", "ended", "completed"}:
+                continue
+            is_active = row.get("is_active", True)
+            if isinstance(is_active, str):
+                is_active = is_active.strip().casefold() not in {
+                    "0",
+                    "false",
+                    "no",
+                    "off",
+                }
+            if not bool(is_active) or normalized_name in seen_names:
+                continue
+            seen_names.add(normalized_name)
+            active_names.append(name)
+        active_names.sort(key=str.casefold)
         if active_names:
             league_options = active_names + (["POPUP"] if "POPUP" not in active_names else [])
     except Exception:

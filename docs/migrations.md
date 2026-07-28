@@ -15,13 +15,13 @@ builds on the partner-link tables provisioned by
 `migrations/20261019_tournament_registration_partner_links.sql` and the canonical
 selection lock protocol already captured under `supabase/migrations/`.
 
-## Current inventory (as of 2026-07-26)
+## Current inventory (as of 2026-07-28)
 
 Inventory below reflects files currently present in this repository.
 
 ### `supabase/migrations/` (canonical)
 
-This directory contains 45 SQL files: 44 deployable migrations with numeric
+This directory contains 53 SQL files: 52 deployable migrations with numeric
 versions plus one deliberately non-deployable `2026XX` schema placeholder.
 
 - `20260420000000_verified_player_updates_foundation.sql`
@@ -67,6 +67,14 @@ versions plus one deliberately non-deployable `2026XX` schema placeholder.
 - `20260726204954_match_exclusion_nonretryable_conflicts.sql`
 - `20260726212447_replay_projection_nonretryable_conflicts.sql`
 - `20260726222339_atomic_direct_match_entry.sql`
+- `20260727183000_atomic_league_roster_batch.sql`
+- `20260727210000_match_log_club_recovery_mutex.sql`
+- `20260727211500_direct_match_active_league_guard.sql`
+- `20260728010000_tournament_commerce.sql`
+- `20260728020000_combined_rating_team_tournaments.sql`
+- `20260728030000_team_leagues_and_awards.sql`
+- `20260728040000_team_league_awards_hardening.sql`
+- `20260728041000_team_league_registration_identity_recovery.sql`
 - `20261020000000_tournament_registrations_player_id_postgrest_reload.sql`
 - `2026XX_backport_tournament_engine.sql`
 

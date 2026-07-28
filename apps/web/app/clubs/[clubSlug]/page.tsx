@@ -67,6 +67,11 @@ export default async function ClubPage({ params }: ClubPageProps) {
           <Link href={`/clubs/${clubSlug}/league-results`}>Open league results</Link>
         </article>
         <article style={cardStyle}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Team leagues</h2>
+          <p style={{ color: "#475569" }}>Register with one partner for a weekly round robin and optional playoffs.</p>
+          <Link href={`/clubs/${clubSlug}/team-leagues`}>Open team leagues</Link>
+        </article>
+        <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Badge Codex</h2>
           <p style={{ color: "#475569" }}>Browse JUPR badges, unlock paths, prestige, and recent badge earners.</p>
           <Link href={`/clubs/${clubSlug}/badge-codex`}>Open badge codex</Link>
@@ -85,6 +90,11 @@ export default async function ClubPage({ params }: ClubPageProps) {
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Tournament Registration</h2>
           <p style={{ color: "#475569" }}>Register for published tournament divisions without exposing draw seeding, score entry, or admin tools.</p>
           <Link href={`/clubs/${clubSlug}/tournament-registration`}>Open tournament registration</Link>
+        </article>
+        <article style={cardStyle}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Team Tournament Results</h2>
+          <p style={{ color: "#475569" }}>Follow four-player team standings, playoff brackets, rosters, and published podiums.</p>
+          <Link href={`/clubs/${clubSlug}/tournament-team-results`}>Open team tournament results</Link>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Tournament Roster</h2>

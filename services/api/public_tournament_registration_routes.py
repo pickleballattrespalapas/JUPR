@@ -25,8 +25,24 @@ from jupr_app.services.public_tournament_registration_service import (
     resolve_public_tournament_registration_profile,
     submit_public_tournament_registration,
 )
+from jupr_app.services.public_tournament_commerce_service import (
+    TournamentCommerceConflictError,
+    TournamentCommerceQuoteChangedError,
+    TournamentCommerceUnavailableError,
+)
 from jupr_app.services.public_tournament_roster_service import build_public_tournament_roster_page
 from services.api.staging_write_guard import require_public_intake_or_403
+
+
+class PublicTournamentCommerceSelectionRequest(BaseModel):
+    item_selections: list[dict[str, Any]] = Field(
+        default_factory=list, max_length=50
+    )
+    expected_quote_fingerprint: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=36, max_length=80)
+    expected_order_updated_at: str | None = Field(
+        default=None, max_length=80
+    )
 
 
 class PublicTournamentRegistrationRequest(BaseModel):
@@ -48,6 +64,7 @@ class PublicTournamentRegistrationRequest(BaseModel):
     terms_accepted: bool = False
     website: str | None = None
     selections: list[dict[str, Any]] = Field(default_factory=list)
+    commerce: PublicTournamentCommerceSelectionRequest | None = None
 
 
 class PublicTournamentRegistrationEditRequest(PublicTournamentRegistrationRequest):
@@ -86,6 +103,23 @@ def _require_registration_edit_service_role() -> None:
             status_code=503,
             detail="Public registration editing is temporarily unavailable because its server credential is not configured.",
         )
+
+
+def _handle_commerce_error(exc: Exception) -> None:
+    if isinstance(exc, TournamentCommerceQuoteChangedError):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(exc),
+                "current_quote": exc.current_quote,
+            },
+        ) from exc
+    if isinstance(exc, TournamentCommerceConflictError):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if isinstance(exc, TournamentCommerceUnavailableError):
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if isinstance(exc, PermissionError):
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 def install_public_tournament_registration_routes(
@@ -214,6 +248,13 @@ def install_public_tournament_registration_routes(
             TournamentRegistrationRelationshipLockedError,
         ) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (
+            TournamentCommerceQuoteChangedError,
+            TournamentCommerceConflictError,
+            TournamentCommerceUnavailableError,
+            PermissionError,
+        ) as exc:
+            _handle_commerce_error(exc)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"club": public_club_payload(club, club_slug), **result}
@@ -255,6 +296,13 @@ def install_public_tournament_registration_routes(
             )
         except DuplicateTournamentRegistrationError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (
+            TournamentCommerceQuoteChangedError,
+            TournamentCommerceConflictError,
+            TournamentCommerceUnavailableError,
+            PermissionError,
+        ) as exc:
+            _handle_commerce_error(exc)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"club": public_club_payload(club, club_slug), **result}

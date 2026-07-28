@@ -70,8 +70,19 @@ export default function MatchLogExclusionRecoveryPanel({
   const { accessToken } = useAdminSession();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [completedMessage, setCompletedMessage] = useState<string | null>(null);
 
-  if (!operation || operation.status === "succeeded") return null;
+  if (!operation || operation.status === "succeeded") {
+    const text = completedMessage || (operation?.status === "succeeded"
+      ? "The exclusion, rating replay, and badge repair are complete."
+      : null);
+    return text ? (
+      <article role="status" aria-live="polite" style={{ ...panelStyle, border: "1px solid #86efac", background: "#f0fdf4", color: "#166534" }}>
+        <strong>Recovery complete</strong>
+        <p style={{ marginBottom: 0 }}>{text}</p>
+      </article>
+    ) : null;
+  }
   const activeOperation = operation;
   const recoveryRequired = activeOperation.status === "recovery_required";
 
@@ -104,7 +115,10 @@ export default function MatchLogExclusionRecoveryPanel({
       setMessage(current.status === "succeeded"
         ? "Recovery is complete. Refresh Match Log before starting another exclusion."
         : `Operation is still ${current.status.replace(/_/g, " ")}.`);
-      if (current.status === "succeeded") onMutationComplete();
+      if (current.status === "succeeded") {
+        setCompletedMessage("Recovery is complete. Match and replay status are being refreshed.");
+        onMutationComplete();
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to inspect exclusion recovery.");
     } finally {
@@ -130,7 +144,10 @@ export default function MatchLogExclusionRecoveryPanel({
       setMessage(current.status === "succeeded"
         ? "The exact exclusion operation, Replay, and badge repair all completed."
         : `Recovery remains ${current.status.replace(/_/g, " ")}. Do not start another exclusion.`);
-      if (current.status === "succeeded") onMutationComplete();
+      if (current.status === "succeeded") {
+        setCompletedMessage("The exact exclusion operation, rating replay, and badge repair all completed.");
+        onMutationComplete();
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to resume exclusion recovery.");
     } finally {

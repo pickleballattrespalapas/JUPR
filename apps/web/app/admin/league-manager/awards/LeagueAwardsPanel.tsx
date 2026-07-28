@@ -8,14 +8,64 @@ import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };
 type AwardRow = {
+  award_key?: string;
   category_key: string;
   category_label: string;
-  player_id: number;
+  recipient_type?: "player" | "team";
+  player_id?: number | null;
+  team_id?: string | null;
   player_name?: string;
+  team_name?: string;
+  recipient_name?: string;
   metric_display?: string;
   rank?: number;
+  is_co_winner?: boolean;
   min_games?: number;
 };
+type AwardCatalogRow = {
+  key: string;
+  label: string;
+  recipient_type: "player" | "team";
+  metric: string;
+  format?: string;
+  minimum_metric?: string;
+  default_enabled?: boolean;
+};
+type PlayerAnalyticsRow = {
+  player_id: number;
+  player_name: string;
+  games?: number;
+  wins?: number;
+  losses?: number;
+  win_pct?: number | null;
+  rating_jupr?: number | null;
+  rating_gain_jupr?: number | null;
+  point_differential?: number;
+  longest_win_streak?: number;
+  close_wins?: number;
+  close_games?: number;
+  upset_wins?: number;
+  average_opponent_jupr?: number | null;
+  wins_above_expected?: number | null;
+  best_partner_name?: string | null;
+  best_partnership_win_pct?: number | null;
+  weeks_played?: number;
+  attendance_pct?: number | null;
+};
+type TeamAnalyticsRow = {
+  team_id: string;
+  team_name: string;
+  rank?: number;
+  games_played?: number;
+  wins?: number;
+  losses?: number;
+  win_pct?: number | null;
+  points_for?: number;
+  points_against?: number;
+  point_differential?: number;
+  head_to_head_score?: number;
+};
+type AwardConfigDraft = { enabled: boolean; depth: "1" | "2" | "3"; minimum: string };
 type EligiblePlayer = { player_id: number; player_name: string };
 type WizardPreview = { awards?: AwardRow[]; fingerprint?: string; generated_at?: string; award_count?: number };
 type MintState = {
@@ -59,6 +109,19 @@ type AwardsResponse = {
   badge_verified_count?: number;
   idempotent_replay?: boolean;
   warnings?: string[];
+  award_catalog?: AwardCatalogRow[];
+  measurable_player_stats?: string[];
+  player_analytics?: PlayerAnalyticsRow[];
+  team_analytics?: TeamAnalyticsRow[];
+  provenance?: {
+    rule_version?: string;
+    discovered_count?: number;
+    included_count?: number;
+    excluded_count?: number;
+    exclusion_counts?: Record<string, number>;
+  };
+  expected_weeks?: number | null;
+  awards_config_version?: number;
 };
 type OverrideDraft = { playerId: number; reason: string };
 
@@ -78,7 +141,15 @@ function shortValue(value: unknown): string {
 }
 
 function awardKey(award: AwardRow): string {
-  return `${award.category_key}:${award.rank || 1}`;
+  return award.award_key || `${award.category_key}:${award.rank || 1}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function percent(value?: number | null): string {
+  return value == null ? "—" : `${(Number(value) * 100).toFixed(1)}%`;
 }
 
 function newOperationKey(action: string): string {
@@ -93,6 +164,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
   const [state, setState] = useState<AwardsResponse | null>(null);
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, OverrideDraft>>({});
   const [operationKeys, setOperationKeys] = useState<Record<string, string>>({});
+  const [configDrafts, setConfigDrafts] = useState<Record<string, AwardConfigDraft>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const listRequest = useLatestRequestGuard(accessToken, clearProtectedAwardsState);
@@ -122,11 +194,25 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
     const notes = payload.wizard?.override_notes || {};
     const drafts: Record<string, OverrideDraft> = {};
     for (const award of previewAwards) {
+      if ((award.recipient_type || "player") !== "player" || award.player_id == null) continue;
       const key = awardKey(award);
       const finalAward = finalByKey.get(key);
-      drafts[key] = { playerId: finalAward?.player_id ?? award.player_id, reason: notes[key] || "" };
+      drafts[key] = { playerId: Number(finalAward?.player_id ?? award.player_id), reason: notes[key] || "" };
     }
     setOverrideDrafts(drafts);
+    const leagueConfig = asRecord(payload.league?.awards_config);
+    const categories = asRecord(leagueConfig.categories);
+    const defaultMinimum = Number(leagueConfig.default_min_games ?? payload.league?.min_games ?? 0);
+    const nextConfig: Record<string, AwardConfigDraft> = {};
+    for (const category of payload.award_catalog || []) {
+      const configured = asRecord(categories[category.key]);
+      nextConfig[category.key] = {
+        enabled: typeof configured.enabled === "boolean" ? configured.enabled : Boolean(category.default_enabled),
+        depth: ["1", "2", "3"].includes(String(configured.depth || "")) ? String(configured.depth) as "1" | "2" | "3" : "1",
+        minimum: String(configured.minimum ?? configured.min_games ?? defaultMinimum)
+      };
+    }
+    setConfigDrafts(nextConfig);
   }
 
   function keyFor(action: string): string {
@@ -150,6 +236,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
     actionRequest.invalidate();
     setBusy(false); setMessage(null); setLeagues([]); setLeagueName(""); setState(null);
     setOverrideDrafts({}); setOperationKeys({});
+    setConfigDrafts({});
   }
 
   async function loadLeagues() {
@@ -244,6 +331,53 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
+  async function saveAwardConfig() {
+    if (!leagueName || !state) {
+      setMessage("Select and recover a league before saving award categories.");
+      return;
+    }
+    if (state.wizard.status !== "not_started") {
+      setMessage("Award categories are locked after the league is frozen.");
+      return;
+    }
+    const categories: Record<string, unknown> = {};
+    for (const category of state.award_catalog || []) {
+      const draft = configDrafts[category.key];
+      if (!draft) continue;
+      const minimum = Number(draft.minimum);
+      if (!Number.isInteger(minimum) || minimum < 0 || minimum > 1000) {
+        setMessage(`${category.label} minimum must be a whole number from 0 to 1000.`);
+        return;
+      }
+      categories[category.key] = {
+        enabled: draft.enabled,
+        depth: Number(draft.depth),
+        minimum
+      };
+    }
+    const generation = actionRequest.begin();
+    setBusy(true);
+    setMessage(null);
+    try {
+      const currentConfig = asRecord(state.league?.awards_config);
+      const payload = await requestJson<AwardsResponse>(leagueAwardsPath("/config"), {
+        method: "PUT",
+        body: JSON.stringify({
+          awards_config: { ...currentConfig, categories },
+          expected_config_version: Number(state.awards_config_version || 0),
+          source: "next_league_manager_awards_category_picker"
+        })
+      });
+      if (!actionRequest.isCurrent(generation)) return;
+      hydrate(payload);
+      setMessage(`Saved ${Object.values(configDrafts).filter((draft) => draft.enabled).length} award category choice(s).`);
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save award categories.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
   async function saveOverrides() {
     const fingerprint = state?.wizard?.preview?.fingerprint;
     const awards = state?.wizard?.preview?.awards || [];
@@ -262,9 +396,9 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
         body: JSON.stringify({
           idempotency_key: idempotencyKey,
           preview_fingerprint: fingerprint,
-          overrides: awards.map((award) => {
-            const draft = overrideDrafts[awardKey(award)] || { playerId: award.player_id, reason: "" };
-            return { category_key: award.category_key, rank: award.rank || 1, player_id: draft.playerId, reason: draft.reason };
+          overrides: awards.filter((award) => (award.recipient_type || "player") === "player" && award.player_id != null).map((award) => {
+            const draft: OverrideDraft = overrideDrafts[awardKey(award)] || { playerId: Number(award.player_id), reason: "" };
+            return { award_key: award.award_key, category_key: award.category_key, rank: award.rank || 1, player_id: draft.playerId, reason: draft.reason };
           }),
           source: "next_league_manager_awards_overrides"
         })
@@ -330,9 +464,56 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
         ) : null}
       </article>
 
+      {state && wizard ? (
+        <article style={cardStyle}>
+          <h2 style={{ marginTop: 0 }}>2. Choose award categories</h2>
+          <p style={{ color: "#475569" }}>
+            Choose any measurable player or team result, the number of places to recognize, and the minimum sample required. Choices lock when the league is frozen.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "0.75rem" }}>
+            {(state.award_catalog || []).map((category) => {
+              const draft = configDrafts[category.key] || { enabled: false, depth: "1" as const, minimum: "0" };
+              const disabled = busy || workflowStatus !== "not_started";
+              return (
+                <fieldset key={category.key} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: draft.enabled ? "#f0fdf4" : "#f8fafc" }}>
+                  <legend style={{ fontWeight: 800 }}>{category.label}</legend>
+                  <p style={{ color: "#64748b", marginTop: 0 }}>{category.recipient_type === "team" ? "Team award" : "Player award"} · {category.metric.replace(/_/g, " ")}</p>
+                  <label><input type="checkbox" checked={draft.enabled} disabled={disabled} onChange={(event) => setConfigDrafts((current) => ({ ...current, [category.key]: { ...draft, enabled: event.target.checked } }))} /> Enabled</label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem", marginTop: "0.6rem" }}>
+                    <label><strong>Places</strong><br /><select value={draft.depth} disabled={disabled || !draft.enabled} onChange={(event) => setConfigDrafts((current) => ({ ...current, [category.key]: { ...draft, depth: event.target.value as "1" | "2" | "3" } }))} style={inputStyle}><option value="1">Top 1</option><option value="2">Top 2</option><option value="3">Top 3</option></select></label>
+                    <label><strong>Minimum {String(category.minimum_metric || "games").replace(/_/g, " ")}</strong><br /><input type="number" min={0} max={1000} value={draft.minimum} disabled={disabled || !draft.enabled} onChange={(event) => setConfigDrafts((current) => ({ ...current, [category.key]: { ...draft, minimum: event.target.value } }))} style={inputStyle} /></label>
+                  </div>
+                </fieldset>
+              );
+            })}
+          </div>
+          {workflowStatus === "not_started" ? <p><button type="button" onClick={() => void saveAwardConfig()} disabled={busy || !writeReady || !(state.award_catalog || []).length} style={buttonStyle}>Save award category choices</button></p> : <p style={{ color: "#92400e" }}>Category choices are locked to the frozen evidence snapshot.</p>}
+        </article>
+      ) : null}
+
+      {state ? (
+        <article style={cardStyle}>
+          <h2 style={{ marginTop: 0 }}>Measurable league results</h2>
+          <p style={{ color: "#475569" }}>
+            Canonical included matches: <strong>{state.provenance?.included_count ?? 0}</strong> of {state.provenance?.discovered_count ?? 0}
+            {state.expected_weeks ? <> · Expected weeks: <strong>{state.expected_weeks}</strong></> : null}.
+          </p>
+          {state.provenance?.excluded_count ? <p style={{ color: "#92400e" }}>Excluded {state.provenance.excluded_count}: {Object.entries(state.provenance.exclusion_counts || {}).map(([reason, count]) => `${reason.replace(/_/g, " ")} ${count}`).join(" · ")}</p> : null}
+          <details open>
+            <summary style={{ cursor: "pointer", fontWeight: 800 }}>Player measures ({state.player_analytics?.length || 0})</summary>
+            <p style={{ color: "#64748b" }}>{(state.measurable_player_stats || []).map((metric) => metric.replace(/_/g, " ")).join(" · ") || "No player measures are available yet."}</p>
+            {state.player_analytics?.length ? <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1180px" }}><thead><tr><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Player</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Games</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Record</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Win %</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>JUPR</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Gain</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Point diff.</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Streak</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Close record</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Upsets</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Opp. JUPR</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Above expected</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Best partner</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Attendance</th></tr></thead><tbody>{state.player_analytics.map((row) => <tr key={row.player_id}><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.player_name}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.games ?? 0}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}-{row.losses ?? 0}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{percent(row.win_pct)}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.rating_jupr == null ? "—" : Number(row.rating_jupr).toFixed(2)}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.rating_gain_jupr == null ? "—" : Number(row.rating_gain_jupr).toFixed(2)}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.point_differential ?? 0}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.longest_win_streak ?? 0}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.close_wins ?? 0}-{Math.max(0, Number(row.close_games || 0) - Number(row.close_wins || 0))}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.upset_wins ?? 0}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.average_opponent_jupr == null ? "—" : Number(row.average_opponent_jupr).toFixed(2)}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins_above_expected == null ? "insufficient rating history" : Number(row.wins_above_expected).toFixed(2)}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.best_partner_name || "—"}{row.best_partnership_win_pct == null ? "" : ` · ${percent(row.best_partnership_win_pct)}`}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{percent(row.attendance_pct)} ({row.weeks_played ?? 0})</td></tr>)}</tbody></table></div> : <p style={{ color: "#64748b" }}>No qualifying canonical matches yet.</p>}
+          </details>
+          <details style={{ marginTop: "0.75rem" }}>
+            <summary style={{ cursor: "pointer", fontWeight: 800 }}>Team measures ({state.team_analytics?.length || 0})</summary>
+            {state.team_analytics?.length ? <div style={{ overflowX: "auto", marginTop: "0.75rem" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: "720px" }}><thead><tr><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Rank</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Team</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Games</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Record</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Win %</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Points</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Diff.</th><th style={{ textAlign: "left", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>Head-to-head</th></tr></thead><tbody>{state.team_analytics.map((row) => <tr key={row.team_id}><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.rank ?? "—"}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.team_name}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.games_played ?? 0}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}-{row.losses ?? 0}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{percent(row.win_pct)}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.points_for ?? 0}-{row.points_against ?? 0}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.point_differential ?? 0}</td><td style={{ padding: "0.45rem", borderBottom: "1px solid #e2e8f0" }}>{row.head_to_head_score ?? 0}</td></tr>)}</tbody></table></div> : <p style={{ color: "#64748b" }}>No confirmed team-league standings are available.</p>}
+          </details>
+        </article>
+      ) : null}
+
       {wizard && workflowStatus === "not_started" ? (
         <article style={{ ...cardStyle, borderColor: "#fed7aa" }}>
-          <h2 style={{ marginTop: 0 }}>2. Freeze league</h2>
+          <h2 style={{ marginTop: 0 }}>3. Freeze league</h2>
           <p style={{ color: "#7c2d12" }}>Freezing marks the league ended and locks the award snapshot workflow. Match corrections must happen before this step or through Match Log and Replay History.</p>
           <ConfirmAction
             triggerLabel={busy ? "Working…" : "Freeze and save"}
@@ -350,7 +531,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
 
       {wizard && ["frozen", "previewed", "overrides_confirmed"].includes(workflowStatus) && Number(wizard.mint?.attempt_count || 0) === 0 ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>3. Persist award preview</h2>
+          <h2 style={{ marginTop: 0 }}>4. Persist award preview</h2>
           <p style={{ color: "#475569" }}>FastAPI recomputes the Python-authoritative top performers and stores the exact rows and fingerprint used by later steps.</p>
           <button type="button" onClick={() => runAction("preview")} disabled={busy || !writeReady} style={buttonStyle}>{wizard.preview ? "Recompute and replace preview" : "Compute and save preview"}</button>
         </article>
@@ -358,22 +539,23 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
 
       {wizard?.preview ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>4. Review and document overrides</h2>
+          <h2 style={{ marginTop: 0 }}>5. Review and document overrides</h2>
           <p style={{ color: "#475569" }}>Preview fingerprint <code>{wizard.preview.fingerprint?.slice(0, 16)}…</code>. Changing a winner requires a reason of at least eight characters; both are persisted and audit-attributed.</p>
           {displayAwards.length ? (
             <div style={{ display: "grid", gap: "0.75rem" }}>
               {previewAwards.map((award) => {
                 const key = awardKey(award);
-                const draft = overrideDrafts[key] || { playerId: award.player_id, reason: "" };
-                const changed = Number(draft.playerId) !== Number(award.player_id);
+                const isTeamAward = (award.recipient_type || "player") === "team";
+                const draft = overrideDrafts[key] || { playerId: Number(award.player_id || 0), reason: "" };
+                const changed = !isTeamAward && Number(draft.playerId) !== Number(award.player_id);
                 return (
                   <fieldset key={key} style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.75rem" }}>
-                    <legend style={{ fontWeight: 800 }}>{award.category_label || award.category_key} #{award.rank || 1}</legend>
-                    <p style={{ color: "#475569" }}>Computed: {award.player_name || `Player ${award.player_id}`} · {award.metric_display || "—"} · Min {award.min_games ?? "—"} games</p>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.75rem" }}>
+                    <legend style={{ fontWeight: 800 }}>{award.category_label || award.category_key} #{award.rank || 1}{award.is_co_winner ? " · co-winner" : ""}</legend>
+                    <p style={{ color: "#475569" }}>Computed: {award.recipient_name || award.team_name || award.player_name || (award.player_id ? `Player ${award.player_id}` : "—")} · {award.metric_display || "—"} · Minimum sample {award.min_games ?? "—"}</p>
+                    {isTeamAward ? <p style={{ color: "#64748b" }}>Team awards follow the frozen team standings and are recorded without a player-badge reassignment.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.75rem" }}>
                       <label>Winner<br /><select value={draft.playerId} onChange={(event) => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, playerId: Number(event.target.value) } }))} disabled={Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle}>{(state?.eligible_players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} (#{player.player_id})</option>)}</select></label>
                       <label>Override reason {changed ? "(required)" : "(not needed)"}<br /><input value={draft.reason} onChange={(event) => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, reason: event.target.value } }))} disabled={!changed || Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle} /></label>
-                    </div>
+                    </div>}
                   </fieldset>
                 );
               })}
@@ -386,7 +568,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
 
       {wizard && ["overrides_confirmed", "minting", "mint_failed"].includes(workflowStatus) ? (
         <article style={{ ...cardStyle, borderColor: workflowStatus === "mint_failed" ? "#fecaca" : "#bfdbfe" }}>
-          <h2 style={{ marginTop: 0 }}>5. Mint and verify badges</h2>
+          <h2 style={{ marginTop: 0 }}>6. Mint and verify badges</h2>
           <p style={{ color: "#334155" }}>A mint is successful only after FastAPI reads back every expected <code>player_badges</code> row. Partial or unavailable writes remain <strong>mint failed</strong> and can be retried with the retained idempotency key.</p>
           {wizard.mint?.last_error ? <p style={{ color: "#b91c1c" }}>Last verified failure: {wizard.mint.last_error}</p> : null}
           <p style={{ color: "#475569" }}>Attempts: {wizard.mint?.attempt_count || 0} · Expected: {wizard.mint?.expected_count ?? "—"} · Verified: {wizard.mint?.verified_count ?? "—"}</p>
@@ -405,7 +587,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
 
       {wizard && ["minted", "archived"].includes(workflowStatus) ? (
         <article style={{ ...cardStyle, borderColor: "#bbf7d0" }}>
-          <h2 style={{ marginTop: 0 }}>6. Archive</h2>
+          <h2 style={{ marginTop: 0 }}>7. Archive</h2>
           <p style={{ color: "#166534" }}>Mint result: <strong>{wizard.mint?.status}</strong> · Verified {wizard.mint?.verified_count || 0} of {wizard.mint?.expected_count || 0} expected row(s).</p>
           {workflowStatus === "archived" ? <p><strong>Archived.</strong> This workflow is read-only and remains recoverable for audit review.</p> : (
             <ConfirmAction

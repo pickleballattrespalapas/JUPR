@@ -22,7 +22,8 @@ test.describe("Match Log durability staging smoke", () => {
 
   test("exposes durable edit and replay evidence without writing", async ({ page }) => {
     await page.goto("/admin/match-log");
-    await expect(page.getByRole("heading", { name: "Match Log correction cockpit" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Review matches" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Match Log sections" })).toBeVisible();
 
     const filters = page.getByTestId("match-log-filters");
     if (await filters.count()) {
@@ -40,14 +41,22 @@ test.describe("Match Log durability staging smoke", () => {
       expect(resultsBeforeMutationTools).toBe(true);
     }
 
-    const editor = page.getByRole("heading", { name: "Apply audited Match Log changes" });
+    await page.goto("/admin/match-log/edit");
+    await expect(page.getByRole("heading", { name: "Edit a match" })).toBeVisible();
+    const editor = page.getByRole("heading", { name: "Guided match correction" });
     if (await editor.count()) {
       await expect(editor).toBeVisible();
       await expect(page.getByRole("heading", { name: "Guided match editor" })).toBeVisible();
+      await expect(page.getByTestId("match-log-bulk-editor")).toHaveCount(0);
+      await expect(page.getByTestId("match-log-staged-edits")).toBeVisible();
+
+      await page.goto("/admin/match-log/bulk");
+      await expect(page.getByRole("heading", { name: "Bulk edit matches" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Bulk match correction" })).toBeVisible();
       await expect(page.getByTestId("match-log-bulk-editor")).toBeVisible();
-      await expect(page.getByText("Nothing is written until the staged operation is confirmed below.")).toBeVisible();
+      await expect(page.getByText(/Nothing is written until the staged operation is confirmed below/)).toBeVisible();
     } else {
-      await expect(page.getByRole("heading", { name: "Apply flow is disabled" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: /Apply flow is disabled|Next Match Log is disabled/ })).toBeVisible();
     }
   });
 

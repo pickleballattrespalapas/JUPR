@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   PublicRegistrationDay,
   PublicRegistrationEvent,
@@ -10,8 +10,21 @@ import {
   resolveClubTournamentRegistrationProfile,
   submitClubTournamentRegistration
 } from "@/lib/tournamentRegistrationApi";
+import {
+  TournamentCommerceCatalog,
+  TournamentCommerceQuote,
+  TournamentCommerceSelection
+} from "@/lib/tournamentCommerceApi";
 import { publicEventEligibilityReason, publicEventFamilyKey } from "@/lib/tournamentRegistrationEligibility";
+import { createPublicFourPlayerTeam } from "@/lib/tournamentTeamCompetitionApi";
+import FourPlayerTeamRegistrationCard, {
+  TEAM_SLOTS,
+  TeamRegistrationDraft,
+  newTeamRegistrationDraft,
+  validateTeamRegistrationDraft
+} from "@/components/tournaments/FourPlayerTeamRegistrationCard";
 import EditLinkRequestForm from "./EditLinkRequestForm";
+import TournamentCommerceChooser from "./TournamentCommerceChooser";
 
 type TournamentRegistrationFormProps = {
   clubSlug: string;
@@ -21,6 +34,7 @@ type TournamentRegistrationFormProps = {
   registrationClosedReason?: string | null;
   days: PublicRegistrationDay[];
   events: PublicRegistrationEvent[];
+  commerce?: TournamentCommerceCatalog | null;
 };
 
 type ContactState = {
@@ -119,6 +133,23 @@ function eventMeta(event: PublicRegistrationEvent): string {
     .map(String);
   if (event.price_usd != null) pieces.push(`$${Number(event.price_usd).toFixed(2)}`);
   if (event.capacity_teams != null) pieces.push(`Cap ${event.capacity_teams}`);
+  if (
+    String(event.eligibility_mode || "").toUpperCase() ===
+      "COMBINED_RATING_CAP" &&
+    event.combined_rating_cap != null
+  ) {
+    pieces.push(
+      `Combined rating strictly under ${Number(
+        event.combined_rating_cap
+      ).toFixed(2)}`
+    );
+  }
+  if (
+    String(event.competition_format || "").toUpperCase() ===
+    "FOUR_PLAYER_TEAM"
+  ) {
+    pieces.push("Four-player team");
+  }
   return pieces.join(" • ");
 }
 
@@ -134,7 +165,8 @@ export default function TournamentRegistrationForm({
   registrationOpen,
   registrationClosedReason,
   days,
-  events
+  events,
+  commerce
 }: TournamentRegistrationFormProps) {
   const [mode, setMode] = useState<"choose" | "new" | "edit">("choose");
   const [step, setStep] = useState(1);
@@ -162,6 +194,23 @@ export default function TournamentRegistrationForm({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recoveryEmail, setRecoveryEmail] = useState("");
+  const [commerceSelections, setCommerceSelections] = useState<
+    TournamentCommerceSelection[]
+  >([]);
+  const [commerceQuote, setCommerceQuote] =
+    useState<TournamentCommerceQuote | null>(null);
+  const [commerceIdempotencyKey, setCommerceIdempotencyKey] = useState(() =>
+    crypto.randomUUID()
+  );
+  const [teamDrafts, setTeamDrafts] = useState<
+    Record<string, TeamRegistrationDraft>
+  >({});
+  const [savedRegistration, setSavedRegistration] = useState<{
+    registrationId: string;
+    confirmationToken: string;
+    emailStatus?: string | null;
+  } | null>(null);
+  const [createdTeamEventIds, setCreatedTeamEventIds] = useState<string[]>([]);
 
   const selectableEvents = useMemo(() => events.filter((event) => event.selectable), [events]);
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
@@ -185,6 +234,14 @@ export default function TournamentRegistrationForm({
   const needsPartnerBoardConsent = selectedIds.some(
     (id) => partnerDetails[id]?.mode === "NEEDS_PARTNER" && partnerDetails[id]?.showOnBoard
   );
+  const selectedTeamEvents = selectedIds
+    .map((id) => eventById.get(id))
+    .filter(
+      (event): event is PublicRegistrationEvent =>
+        Boolean(event) &&
+        String(event?.competition_format || "").toUpperCase() ===
+          "FOUR_PLAYER_TEAM"
+    );
 
   function resetWizard(nextMode: "choose" | "new" | "edit" = "choose") {
     setMode(nextMode);
@@ -194,8 +251,33 @@ export default function TournamentRegistrationForm({
     setPartnerDetails({});
     setPartnerConsent(false);
     setTermsAccepted(false);
+    setCommerceSelections([]);
+    setCommerceQuote(null);
+    setCommerceIdempotencyKey(crypto.randomUUID());
+    setTeamDrafts({});
+    setSavedRegistration(null);
+    setCreatedTeamEventIds([]);
     setError(null);
   }
+
+  const updateCommerceReview = useCallback(
+    (
+      selections: TournamentCommerceSelection[],
+      quote: TournamentCommerceQuote | null
+    ) => {
+      const priorFingerprint = commerceQuote?.quote_fingerprint || null;
+      const nextFingerprint = quote?.quote_fingerprint || null;
+      setCommerceSelections(selections);
+      setCommerceQuote(quote);
+      if (
+        priorFingerprint &&
+        priorFingerprint !== nextFingerprint
+      ) {
+        setCommerceIdempotencyKey(crypto.randomUUID());
+      }
+    },
+    [commerceQuote?.quote_fingerprint]
+  );
 
   function updateContact(key: keyof ContactState, value: string) {
     setContact((current) => ({ ...current, [key]: value }));
@@ -233,6 +315,17 @@ export default function TournamentRegistrationForm({
       return [...current.filter((id) => !sameFamily.includes(id) && id !== eventId), eventId];
     });
     if (checked) updatePartner(eventId, {});
+    if (
+      checked &&
+      String(nextEvent.competition_format || "").toUpperCase() ===
+        "FOUR_PLAYER_TEAM"
+    ) {
+      setTeamDrafts((current) => ({
+        ...current,
+        [eventId]:
+          current[eventId] || newTeamRegistrationDraft(contact.gender)
+      }));
+    }
   }
 
   async function resolveProfile() {
@@ -297,6 +390,18 @@ export default function TournamentRegistrationForm({
       if (!event) return "A selected event is no longer available.";
       const reason = publicEventEligibilityReason(event, eligibilityProfile);
       if (reason) return `${event.division_name}: ${reason}`;
+      if (
+        String(event.competition_format || "").toUpperCase() ===
+        "FOUR_PLAYER_TEAM"
+      ) {
+        const teamError = validateTeamRegistrationDraft(
+          teamDrafts[id],
+          contact.email,
+          contact.gender
+        );
+        if (teamError) return `${event.division_name}: ${teamError}`;
+        continue;
+      }
       const partner = partnerDetails[id] || emptyPartnerState(event);
       if (event.partner_required && !["HAS_PARTNER", "NEEDS_PARTNER"].includes(partner.mode)) {
         return `${event.division_name}: choose whether you have or need a partner.`;
@@ -310,6 +415,24 @@ export default function TournamentRegistrationForm({
         }
         if (partner.email.trim().toLowerCase() === contact.email.trim().toLowerCase()) {
           return "A player cannot register themselves as their own partner.";
+        }
+        if (
+          String(event.eligibility_mode || "").toUpperCase() ===
+            "COMBINED_RATING_CAP" &&
+          event.combined_rating_cap != null
+        ) {
+          const playerRating = numericValue(profile.doublesSkill);
+          const partnerRating = numericValue(partner.skill);
+          if (
+            playerRating != null &&
+            partnerRating != null &&
+            Number((playerRating + partnerRating).toFixed(2)) >=
+              Number(event.combined_rating_cap)
+          ) {
+            return `${event.division_name}: combined rating must be strictly below ${Number(
+              event.combined_rating_cap
+            ).toFixed(2)}.`;
+          }
         }
       }
     }
@@ -342,13 +465,24 @@ export default function TournamentRegistrationForm({
       setError(validationError);
       return;
     }
+    if (commerce?.available && !commerceQuote) {
+      setError(
+        "Review extras and the current total before continuing. You can choose zero extras."
+      );
+      return;
+    }
     setStep(4);
   }
 
   function selectionsPayload(): PublicRegistrationSelectionPayload[] {
     return selectedIds.map((eventId) => {
       const event = eventById.get(eventId)!;
-      const partner = partnerDetails[eventId] || emptyPartnerState(event);
+      const teamFormat =
+        String(event.competition_format || "").toUpperCase() ===
+        "FOUR_PLAYER_TEAM";
+      const partner = teamFormat
+        ? { ...emptyPartnerState(event), mode: "NONE" as const }
+        : partnerDetails[eventId] || emptyPartnerState(event);
       return {
         event_option_id: eventId,
         registration_day_id: event.registration_day_id,
@@ -364,6 +498,24 @@ export default function TournamentRegistrationForm({
         show_on_partner_board: partner.mode === "NEEDS_PARTNER" && partner.showOnBoard
       };
     });
+  }
+
+  function confirmationPath(
+    saved: {
+      registrationId: string;
+      confirmationToken: string;
+      emailStatus?: string | null;
+    },
+    teamSetupNeedsAttention = false
+  ): string {
+    const query = new URLSearchParams({
+      confirmation_token: saved.confirmationToken
+    });
+    if (saved.emailStatus) query.set("email_status", saved.emailStatus);
+    if (registrationSlug) query.set("tournament", registrationSlug);
+    else query.set("tournament_id", tournamentId);
+    if (teamSetupNeedsAttention) query.set("team_setup", "attention");
+    return `/clubs/${clubSlug}/tournament-registration/confirmation?${query.toString()}`;
   }
 
   async function submitRegistration() {
@@ -382,49 +534,138 @@ export default function TournamentRegistrationForm({
       setError("Confirm the tournament policies before submitting.");
       return;
     }
+    if (commerce?.available && !commerceQuote) {
+      setStep(3);
+      setError(
+        "Review extras and the current total before submitting. Prices or availability may have changed."
+      );
+      return;
+    }
     setPending(true);
-    const response = await submitClubTournamentRegistration(clubSlug, {
-      tournament_id: tournamentId,
-      registration_slug: registrationSlug || null,
-      first_name: contact.firstName,
-      last_name: contact.lastName,
-      display_name: profile.displayName,
-      email: contact.email,
-      phone: contact.phone,
-      // Public profile suggestions are never identity proof. Staff links the row after review.
-      player_id: null,
-      dupr_id: profile.duprId,
-      doubles_skill: numericValue(profile.doublesSkill),
-      singles_skill: numericValue(profile.singlesSkill),
-      age: numericValue(contact.age),
-      gender: contact.gender,
-      notes: contact.notes,
-      wants_partner_board_contact: needsPartnerBoardConsent && partnerConsent,
-      terms_accepted: termsAccepted,
-      website: "",
-      selections: selectionsPayload()
-    });
-    setPending(false);
-    if (response.error || !response.data?.registration_id) {
-      if (response.status === 409) {
-        setRecoveryEmail(contact.email.trim());
-        setMode("edit");
-        setError(null);
+    let saved = savedRegistration;
+    if (!saved) {
+      const response = await submitClubTournamentRegistration(clubSlug, {
+        tournament_id: tournamentId,
+        registration_slug: registrationSlug || null,
+        first_name: contact.firstName,
+        last_name: contact.lastName,
+        display_name: profile.displayName,
+        email: contact.email,
+        phone: contact.phone,
+        // Public profile suggestions are never identity proof. Staff links the row after review.
+        player_id: null,
+        dupr_id: profile.duprId,
+        doubles_skill: numericValue(profile.doublesSkill),
+        singles_skill: numericValue(profile.singlesSkill),
+        age: numericValue(contact.age),
+        gender: contact.gender,
+        notes: contact.notes,
+        wants_partner_board_contact:
+          needsPartnerBoardConsent && partnerConsent,
+        terms_accepted: termsAccepted,
+        website: "",
+        selections: selectionsPayload(),
+        commerce: commerce?.available
+          ? {
+              item_selections: commerceSelections,
+              expected_quote_fingerprint:
+                commerceQuote?.quote_fingerprint || "",
+              idempotency_key: commerceIdempotencyKey
+            }
+          : null
+      });
+      if (response.error || !response.data?.registration_id) {
+        setPending(false);
+        if (response.status === 409 && response.current_quote) {
+          const nextQuote = response.current_quote;
+          if (
+            nextQuote.quote_fingerprint !==
+            (commerceQuote?.quote_fingerprint || null)
+          ) {
+            setCommerceIdempotencyKey(crypto.randomUUID());
+          }
+          setCommerceQuote(nextQuote);
+          setCommerceSelections(nextQuote.request.item_selections || []);
+          setStep(3);
+          setError(
+            response.error ||
+              "The total changed. Review the updated price before submitting."
+          );
+          return;
+        }
+        if (response.status === 409) {
+          setRecoveryEmail(contact.email.trim());
+          setMode("edit");
+          setError(null);
+          return;
+        }
+        setError(response.error || "Unable to submit registration.");
         return;
       }
-      setError(response.error || "Unable to submit registration.");
-      return;
-    }
-    if (!response.data.confirmation_token) {
-      setError(response.data.email_delivery?.message || "Your registration was saved, but secure confirmation access is unavailable. Please contact tournament staff before submitting again.");
-      return;
+      if (!response.data.confirmation_token) {
+        setPending(false);
+        setError(
+          response.data.email_delivery?.message ||
+            "Your registration was saved, but secure confirmation access is unavailable. Please contact tournament staff before submitting again."
+        );
+        return;
+      }
+      saved = {
+        registrationId: response.data.registration_id,
+        confirmationToken: response.data.confirmation_token,
+        emailStatus: response.data.email_delivery?.status
+      };
+      setSavedRegistration(saved);
+      if (selectedTeamEvents.length) {
+        // From this point the saved registration and its signed bearer proof
+        // are the recovery source. If the tab reloads during team creation,
+        // the confirmation page resumes from durable server state.
+        window.history.replaceState(null, "", confirmationPath(saved));
+      }
     }
 
-    const query = new URLSearchParams({ confirmation_token: response.data.confirmation_token });
-    if (response.data.email_delivery?.status) query.set("email_status", response.data.email_delivery.status);
-    if (registrationSlug) query.set("tournament", registrationSlug);
-    else query.set("tournament_id", tournamentId);
-    window.location.href = `/clubs/${clubSlug}/tournament-registration/confirmation?${query.toString()}`;
+    const completedTeamEvents = new Set(createdTeamEventIds);
+    for (const teamEvent of selectedTeamEvents) {
+      if (completedTeamEvents.has(teamEvent.id)) continue;
+      const draft = teamDrafts[teamEvent.id];
+      const teamResponse = await createPublicFourPlayerTeam(clubSlug, {
+        tournament_id: tournamentId,
+        event_option_id: teamEvent.id,
+        team_name: draft.teamName.trim(),
+        captain_registration_id: saved.registrationId,
+        confirmation_token: saved.confirmationToken,
+        members: TEAM_SLOTS.map((slot) => {
+          if (slot === draft.captainSlot) {
+            return {
+              slot,
+              registration_id: saved.registrationId,
+              email: contact.email.trim().toLowerCase(),
+              display_name: profile.displayName.trim(),
+              gender: contact.gender
+            };
+          }
+          return {
+            slot,
+            email: draft.teammates[slot].email.trim().toLowerCase(),
+            display_name: draft.teammates[slot].displayName.trim(),
+            gender: slot.startsWith("MAN_") ? "Men" : "Women"
+          };
+        }),
+        idempotency_key: draft.idempotencyKey,
+        website: ""
+      });
+      if (teamResponse.error) {
+        setPending(false);
+        setCreatedTeamEventIds([...completedTeamEvents]);
+        window.location.href = confirmationPath(saved, true);
+        return;
+      }
+      completedTeamEvents.add(teamEvent.id);
+      setCreatedTeamEventIds([...completedTeamEvents]);
+    }
+    setPending(false);
+
+    window.location.href = confirmationPath(saved);
   }
 
   if (mode === "choose") {
@@ -532,7 +773,11 @@ export default function TournamentRegistrationForm({
                         <span><strong>{eventOption.event_family_label} — {eventOption.division_name}</strong><br /><span style={{ color: "#64748b" }}>{eventMeta(eventOption)}</span></span>
                       </label>
                       {eligibilityReason ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{eligibilityReason}</p> : null}
-                      {selected && eventOption.partner_required ? (
+                      {selected &&
+                      eventOption.partner_required &&
+                      String(
+                        eventOption.competition_format || ""
+                      ).toUpperCase() !== "FOUR_PLAYER_TEAM" ? (
                         <div style={{ display: "grid", gap: "0.65rem", marginTop: "0.75rem" }}>
                           <label>Partner plan<br />
                             <select aria-label={`${eventOption.division_name} partner plan`} value={partner.mode} onChange={(event) => updatePartner(eventOption.id, { mode: event.target.value as PartnerState["mode"] })} style={inputStyle}>
@@ -568,7 +813,37 @@ export default function TournamentRegistrationForm({
             </div>
           ))}
           {!selectableEvents.length ? <p>No selectable events are currently open.</p> : null}
+          {selectedTeamEvents.map((teamEvent) => (
+            <FourPlayerTeamRegistrationCard
+              key={teamEvent.id}
+              event={teamEvent}
+              captainName={profile.displayName}
+              captainEmail={contact.email}
+              captainGender={contact.gender}
+              value={
+                teamDrafts[teamEvent.id] ||
+                newTeamRegistrationDraft(contact.gender)
+              }
+              onChange={(draft) =>
+                setTeamDrafts((current) => ({
+                  ...current,
+                  [teamEvent.id]: draft
+                }))
+              }
+            />
+          ))}
           <p><strong>Estimated total:</strong> ${totalPrice.toFixed(2)}</p>
+          {commerce?.available ? (
+            <TournamentCommerceChooser
+              clubSlug={clubSlug}
+              tournamentId={tournamentId}
+              eventOptionIds={selectedIds}
+              catalog={commerce}
+              initialSelections={commerceSelections}
+              disabled={pending}
+              onReviewChange={updateCommerceReview}
+            />
+          ) : null}
         </section>
       ) : null}
 
@@ -581,13 +856,46 @@ export default function TournamentRegistrationForm({
             {selectedIds.map((id) => {
               const event = eventById.get(id)!;
               const partner = partnerDetails[id] || emptyPartnerState(event);
-              const entryLabel = event.partner_required
+              const teamDraft = teamDrafts[id];
+              const entryLabel =
+                String(event.competition_format || "").toUpperCase() ===
+                "FOUR_PLAYER_TEAM"
+                  ? `Team: ${teamDraft?.teamName || "not named"}`
+                  : event.partner_required
                 ? partner.mode === "HAS_PARTNER" ? `Partner: ${partner.name}` : "Needs partner"
                 : isDoublesEvent(event) ? "Individual doubles entry" : "Singles";
               return <li key={id}>{daysById.get(event.registration_day_id)?.label || "Day"} · {event.event_family_label} — {event.division_name} · {entryLabel}</li>;
             })}
           </ul>
-          <p><strong>Estimated total:</strong> ${totalPrice.toFixed(2)}</p>
+          <p>
+            <strong>Total due offline:</strong>{" "}
+            {commerceQuote
+              ? `$${(commerceQuote.total_minor / 100).toFixed(2)}`
+              : `$${totalPrice.toFixed(2)}`}
+          </p>
+          {commerceQuote?.lines.some(
+            (line) => line.line_type !== "EVENT"
+          ) ? (
+            <>
+              <h3>Extras and bundles</h3>
+              <ul>
+                {commerceQuote.lines
+                  .filter((line) => line.line_type !== "EVENT")
+                  .map((line) => (
+                    <li key={line.line_key}>
+                      {line.quantity} × {line.label}
+                      {line.option_label ? ` — ${line.option_label}` : ""} · $
+                      {(line.final_total_minor / 100).toFixed(2)}
+                    </li>
+                  ))}
+              </ul>
+            </>
+          ) : null}
+          {commerceQuote ? (
+            <p style={{ color: "#475569" }}>
+              Payment is handled offline by tournament staff.
+            </p>
+          ) : null}
           {needsPartnerBoardConsent ? (
             <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", marginBottom: "0.75rem" }}>
               <input type="checkbox" checked={partnerConsent} onChange={(event) => setPartnerConsent(event.target.checked)} /> Organizers may use my contact information for the partner-board listing I selected.
@@ -601,11 +909,11 @@ export default function TournamentRegistrationForm({
 
       {error ? <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
-        {step > 1 ? <button type="button" onClick={() => { setError(null); setStep((current) => current - 1); }} style={secondaryButtonStyle}>Back</button> : <button type="button" onClick={() => resetWizard("choose")} style={secondaryButtonStyle}>Back</button>}
+        {step > 1 ? <button type="button" disabled={Boolean(savedRegistration)} onClick={() => { setError(null); setStep((current) => current - 1); }} style={secondaryButtonStyle}>Back</button> : <button type="button" onClick={() => resetWizard("choose")} style={secondaryButtonStyle}>Back</button>}
         {step === 1 ? <button type="button" onClick={resolveProfile} disabled={pending} style={primaryButtonStyle}>{pending ? "Checking…" : "Continue"}</button> : null}
         {step === 2 ? <button type="button" onClick={advanceFromProfile} style={primaryButtonStyle}>Continue to events</button> : null}
         {step === 3 ? <button type="button" onClick={advanceFromEvents} style={primaryButtonStyle}>Review registration</button> : null}
-        {step === 4 ? <button type="button" onClick={submitRegistration} disabled={pending} style={primaryButtonStyle}>{pending ? "Submitting…" : "Submit registration"}</button> : null}
+        {step === 4 ? <button type="button" onClick={submitRegistration} disabled={pending} style={primaryButtonStyle}>{pending ? "Submitting…" : savedRegistration ? "Retry team setup" : "Submit registration"}</button> : null}
       </div>
     </section>
   );

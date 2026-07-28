@@ -51,6 +51,16 @@ export type PublicRegistrationEvent = {
   partner_required?: boolean | null;
   partner_board_enabled?: boolean | null;
   waitlist_enabled?: boolean | null;
+  eligibility_mode?: string | null;
+  combined_rating_cap?: number | null;
+  rating_source_policy?: string | null;
+  rating_review_timing?: string | null;
+  competition_format?: string | null;
+  team_roster_size?: number | null;
+  team_gender_rule?: string | null;
+  team_tiebreak_mode?: string | null;
+  team_playoff_format?: string | null;
+  team_allow_substitutes?: boolean | null;
   status?: string | null;
   visibility?: string | null;
   selectable?: boolean | null;
@@ -110,6 +120,7 @@ export type TournamentRegistrationResponse = {
     players_needing_partners?: number | null;
     waitlist?: number | null;
   } | null;
+  commerce?: TournamentCommerceCatalog | null;
 };
 
 export type PublicTournamentRosterMember = {
@@ -205,6 +216,12 @@ export type PublicRegistrationSubmitPayload = {
   terms_accepted: boolean;
   website?: string | null;
   selections: PublicRegistrationSelectionPayload[];
+  commerce?: {
+    item_selections: TournamentCommerceSelection[];
+    expected_quote_fingerprint: string;
+    idempotency_key: string;
+    expected_order_updated_at?: string | null;
+  } | null;
 };
 
 export type PublicRegistrationEditRegistration = {
@@ -240,6 +257,7 @@ export type PublicRegistrationEditResponse = TournamentRegistrationResponse & {
   registration: PublicRegistrationEditRegistration;
   selections: PublicRegistrationEditSelection[];
   total_price_usd: number;
+  commerce_order?: TournamentCommerceOrder | null;
 };
 
 export type PublicRegistrationEditSubmitPayload = Omit<PublicRegistrationSubmitPayload, "email" | "selections"> & {
@@ -275,6 +293,7 @@ export type PublicRegistrationSubmitResponse = {
   registration_id: string;
   submitted_at?: string | null;
   selection_count?: number | null;
+  commerce_order?: Record<string, unknown> | null;
   updated_at?: string | null;
   confirmation_delivery?: {
     status: "sent" | "staging_redirect" | "dry_run" | "failed" | "unknown";
@@ -311,6 +330,7 @@ export type PublicRegistrationConfirmationResponse = {
     show_on_partner_board?: boolean | null;
   }>;
   total_price_usd: number;
+  commerce_order?: TournamentCommerceOrder | null;
   payment_note: string;
   confirmation_expires_at?: string | null;
   notification_sender?: {
@@ -319,30 +339,67 @@ export type PublicRegistrationConfirmationResponse = {
   } | null;
 };
 
-type ApiResult<T> = { data: T | null; error: string | null; status?: number | null };
+export type ApiResult<T> = {
+  data: T | null;
+  error: string | null;
+  status?: number | null;
+  current_quote?: TournamentCommerceQuote | null;
+};
 
 function baseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
 }
 
-async function apiErrorMessage(response: Response): Promise<string> {
+async function apiErrorDetails(
+  response: Response
+): Promise<{ message: string; currentQuote: TournamentCommerceQuote | null }> {
   const fallback = `API error (${response.status}).`;
   let bodyText = "";
   try {
     bodyText = await response.text();
   } catch {
-    return fallback;
+    return { message: fallback, currentQuote: null };
   }
-  if (!bodyText) return fallback;
+  if (!bodyText) return { message: fallback, currentQuote: null };
   try {
-    const payload = JSON.parse(bodyText) as { detail?: unknown; message?: unknown; error?: unknown };
+    const payload = JSON.parse(bodyText) as {
+      detail?: unknown;
+      message?: unknown;
+      error?: unknown;
+    };
     const detail = payload.detail ?? payload.message ?? payload.error;
-    if (Array.isArray(detail)) return `${fallback} ${detail.map((item) => JSON.stringify(item)).join("; ")}`;
-    if (detail) return `${fallback} ${String(detail)}`;
+    if (Array.isArray(detail)) {
+      return {
+        message: `${fallback} ${detail
+          .map((item) => JSON.stringify(item))
+          .join("; ")}`,
+        currentQuote: null
+      };
+    }
+    if (detail && typeof detail === "object") {
+      const record = detail as Record<string, unknown>;
+      return {
+        message: String(record.message || fallback),
+        currentQuote:
+          record.current_quote &&
+          typeof record.current_quote === "object"
+            ? (record.current_quote as TournamentCommerceQuote)
+            : null
+      };
+    }
+    if (detail) {
+      return {
+        message: `${fallback} ${String(detail)}`,
+        currentQuote: null
+      };
+    }
   } catch {
     // Fall through to short text excerpt below.
   }
-  return `${fallback} ${bodyText.slice(0, 240)}`;
+  return {
+    message: `${fallback} ${bodyText.slice(0, 240)}`,
+    currentQuote: null
+  };
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
@@ -351,7 +408,15 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
     const response = await fetch(url, init ?? { next: { revalidate: 60 } });
-    if (!response.ok) return { data: null, error: await apiErrorMessage(response), status: response.status };
+    if (!response.ok) {
+      const details = await apiErrorDetails(response);
+      return {
+        data: null,
+        error: details.message,
+        status: response.status,
+        current_quote: details.currentQuote
+      };
+    }
     return { data: (await response.json()) as T, error: null, status: response.status };
   } catch (error) {
     return { data: null, error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}`, status: null };
@@ -448,3 +513,9 @@ export async function getClubTournamentRegistrationConfirmation(
     `/clubs/${clubSlug}/tournament-registration/confirmation?${query.toString()}`
   );
 }
+import type {
+  TournamentCommerceCatalog,
+  TournamentCommerceOrder,
+  TournamentCommerceQuote,
+  TournamentCommerceSelection
+} from "@/lib/tournamentCommerceApi";

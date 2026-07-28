@@ -16,6 +16,8 @@ from jupr_app.services.admin_league_awards_service import (
     mint_admin_league_awards,
     persist_admin_league_awards_preview,
     preview_admin_league_awards,
+    require_admin_league_awards_write,
+    save_admin_league_awards_config,
     save_admin_league_award_overrides,
 )
 from jupr_app.services.admin_league_live_service import (
@@ -49,6 +51,9 @@ from jupr_app.services.admin_league_print_service import (
 )
 from jupr_app.services.admin_league_manager_lifecycle_service import transition_admin_league_manager_lifecycle
 from jupr_app.services.admin_league_manager_roster_service import update_admin_league_manager_roster_membership
+from jupr_app.services.admin_league_manager_roster_batch_service import (
+    update_admin_league_manager_roster_batch,
+)
 from jupr_app.services.admin_league_manager_service import (
     build_admin_league_manager_status,
     build_admin_league_schedule_preview,
@@ -110,6 +115,15 @@ class AdminLeagueManagerRosterMembershipRequest(BaseModel):
     source: str = "next_league_manager_roster_update"
 
 
+class AdminLeagueManagerRosterBatchRequest(BaseModel):
+    action: str = Field(pattern=r"^(activate|deactivate)$")
+    player_ids: list[int] = Field(min_length=1, max_length=500)
+    starting_rating: float | None = None
+    idempotency_key: str = Field(min_length=8, max_length=160)
+    confirmation_text: str = ""
+    source: str = "next_league_manager_bulk_roster_editor"
+
+
 class AdminLeagueAwardsCloseRequest(BaseModel):
     award_badges: bool = True
     confirmation_text: str = ""
@@ -123,7 +137,16 @@ class AdminLeagueAwardsActionRequest(BaseModel):
     source: str = Field(default="next_league_manager_awards_action", max_length=120)
 
 
+class AdminLeagueAwardsConfigRequest(BaseModel):
+    awards_config: dict[str, Any]
+    expected_config_version: int = Field(ge=0)
+    source: str = Field(
+        default="next_league_manager_awards_config", max_length=120
+    )
+
+
 class AdminLeagueAwardOverrideItem(BaseModel):
+    award_key: str | None = Field(default=None, min_length=3, max_length=240)
     category_key: str = Field(min_length=1, max_length=80)
     rank: int = Field(default=1, ge=1, le=3)
     player_id: int
@@ -133,7 +156,7 @@ class AdminLeagueAwardOverrideItem(BaseModel):
 class AdminLeagueAwardOverridesRequest(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=160)
     preview_fingerprint: str = Field(min_length=64, max_length=64)
-    overrides: list[AdminLeagueAwardOverrideItem] = Field(default_factory=list, max_length=12)
+    overrides: list[AdminLeagueAwardOverrideItem] = Field(default_factory=list, max_length=60)
     source: str = Field(default="next_league_manager_awards_overrides", max_length=120)
 
 
@@ -307,6 +330,13 @@ def _require_league_manager_service_role() -> None:
             status_code=503,
             detail="League Manager mutations require SUPABASE_SERVICE_ROLE_KEY on FastAPI.",
         )
+
+
+def _require_league_awards_write_or_403() -> None:
+    try:
+        require_admin_league_awards_write()
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
@@ -950,6 +980,40 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         except Exception as exc:
             _handle_common(exc)
 
+    @app.put("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/config")
+    def put_admin_league_awards_config(
+        club_id: str,
+        league_name: str,
+        payload: AdminLeagueAwardsConfigRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_awards_write_or_403()
+        require_league_manager_write_or_403()
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(
+                status_code=403, detail="Next League Manager is disabled."
+            )
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return save_admin_league_awards_config(
+                supabase,
+                club_id=str(club_id),
+                league_name=str(league_name),
+                awards_config=payload.awards_config,
+                expected_config_version=payload.expected_config_version,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
     @app.post("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/freeze")
     def post_admin_league_awards_freeze(
         club_id: str,
@@ -957,6 +1021,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         payload: AdminLeagueAwardsActionRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        _require_league_awards_write_or_403()
+        require_league_manager_write_or_403()
         if not is_admin_league_manager_enabled():
             raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
         supabase = get_supabase_client()
@@ -987,6 +1053,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         payload: AdminLeagueAwardsActionRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        _require_league_awards_write_or_403()
+        require_league_manager_write_or_403()
         if not is_admin_league_manager_enabled():
             raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
         supabase = get_supabase_client()
@@ -1016,6 +1084,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         payload: AdminLeagueAwardOverridesRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        _require_league_awards_write_or_403()
+        require_league_manager_write_or_403()
         if not is_admin_league_manager_enabled():
             raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
         supabase = get_supabase_client()
@@ -1047,6 +1117,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         payload: AdminLeagueAwardsActionRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        _require_league_awards_write_or_403()
+        require_league_manager_write_or_403()
         if not is_admin_league_manager_enabled():
             raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
         supabase = get_supabase_client()
@@ -1077,6 +1149,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         payload: AdminLeagueAwardsActionRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        _require_league_awards_write_or_403()
+        require_league_manager_write_or_403()
         if not is_admin_league_manager_enabled():
             raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
         supabase = get_supabase_client()
@@ -1107,6 +1181,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         payload: AdminLeagueAwardsCloseRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
+        _require_league_awards_write_or_403()
+        require_league_manager_write_or_403()
         if not is_admin_league_manager_enabled():
             raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
         supabase = get_supabase_client()
@@ -1158,6 +1234,49 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 confirmation_text=confirmation_text,
                 source=source,
             )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/roster/batch")
+    def post_admin_league_manager_roster_batch(
+        club_id: str,
+        league_name: str,
+        payload: AdminLeagueManagerRosterBatchRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(
+                status_code=403, detail="Next League Manager is disabled."
+            )
+        require_league_manager_write_or_403()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        _require_league_manager_service_role()
+        try:
+            result = update_admin_league_manager_roster_batch(
+                supabase,
+                club_id=str(club_id),
+                league_name=str(league_name),
+                action=payload.action,
+                player_ids=payload.player_ids,
+                starting_rating=payload.starting_rating,
+                idempotency_key=payload.idempotency_key,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+            result["detail"] = get_admin_league_manager_detail(
+                supabase,
+                club_id=str(club_id),
+                league_name=str(league_name),
+            )
+            return result
         except Exception as exc:
             _handle_common(exc)
 

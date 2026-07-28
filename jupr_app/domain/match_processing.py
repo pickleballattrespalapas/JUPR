@@ -68,6 +68,117 @@ def _frame_rows(frame: Any, **conditions: Any) -> list[dict[str, Any]]:
     ]
 
 
+def build_active_league_metadata_expectations(
+    df_meta: Any,
+    *,
+    club_id: str,
+    league_names: set[str] | list[str] | tuple[str, ...],
+    default_k_factor: int,
+) -> list[dict[str, Any]]:
+    """Build the exact lifecycle snapshot required by the atomic write RPC."""
+
+    reserved = {"overall", "popup", "singles"}
+    required_names = sorted(
+        {
+            str(name or "").strip()
+            for name in league_names
+            if str(name or "").strip().casefold() not in reserved
+        },
+        key=str.casefold,
+    )
+    expectations: list[dict[str, Any]] = []
+    for league_name in required_names:
+        if df_meta is None or getattr(df_meta, "empty", True):
+            raise RuntimeError(
+                f"Active league metadata for {league_name} is unavailable. "
+                "Nothing was written."
+            )
+        try:
+            selected = df_meta[
+                df_meta["league_name"].astype(str).str.casefold()
+                == league_name.casefold()
+            ]
+        except Exception as exc:
+            raise RuntimeError(
+                f"Active league metadata for {league_name} is unavailable. "
+                "Nothing was written."
+            ) from exc
+        rows = [
+            {
+                str(key): _json_value(value)
+                for key, value in dict(row).items()
+            }
+            for _, row in selected.iterrows()
+        ]
+        if len(rows) != 1:
+            raise RuntimeError(
+                f"Expected one active league record for {league_name}; "
+                f"found {len(rows)}. Nothing was written."
+            )
+        current = rows[0]
+        ended_at = current.get("ended_at")
+        status = str(current.get("status") or "").strip()
+        is_active = current.get("is_active")
+        if isinstance(is_active, str):
+            is_active = is_active.strip().casefold() not in {
+                "0",
+                "false",
+                "no",
+                "off",
+            }
+        if is_active is not None:
+            is_active = bool(is_active)
+        lifecycle_active = (
+            ended_at in (None, "")
+            and (
+                (
+                    status.casefold() in {"active", "running", "live"}
+                    and is_active is not False
+                )
+                or (not status and is_active is True)
+            )
+        )
+        if not lifecycle_active:
+            raise ValueError(
+                f"{league_name} is no longer an active official league. "
+                "Reload before entering league-rated matches."
+            )
+        required_fields = {
+            "id",
+            "club_id",
+            "league_name",
+            "k_factor",
+            "status",
+            "is_active",
+            "ended_at",
+        }
+        if not required_fields.issubset(current):
+            raise RuntimeError(
+                f"The active league snapshot for {league_name} is incomplete. "
+                "Nothing was written."
+            )
+        expectations.append(
+            {
+                "league_name": str(current.get("league_name") or league_name),
+                "expected": {
+                    "id": current.get("id"),
+                    "club_id": str(current.get("club_id") or club_id),
+                    "league_name": str(
+                        current.get("league_name") or league_name
+                    ),
+                    "k_factor": int(
+                        current.get("k_factor", default_k_factor)
+                        or default_k_factor
+                    ),
+                    "status": current.get("status"),
+                    "is_active": current.get("is_active"),
+                    "ended_at": current.get("ended_at"),
+                },
+            }
+        )
+    return expectations
+
+
 def process_matches(
     match_list: list[dict[str, Any]],
     *,
@@ -376,29 +487,14 @@ def process_matches(
                     "after": after,
                 }
             )
-        league_metadata_expectations: list[dict[str, Any]] = []
-        for league_name in sorted({str(name) for _, name in island_updates}):
-            rows = _frame_rows(df_meta, league_name=league_name)
-            if len(rows) > 1:
-                raise RuntimeError(
-                    f"Official publish found duplicate league metadata for {league_name}."
-                )
-            current = rows[0] if rows else None
-            league_metadata_expectations.append(
-                {
-                    "league_name": league_name,
-                    "expected": (
-                        {
-                            "id": current.get("id"),
-                            "club_id": str(current.get("club_id") or club_id),
-                            "league_name": str(current.get("league_name") or league_name),
-                            "k_factor": int(current.get("k_factor", default_k_factor) or default_k_factor),
-                        }
-                        if current
-                        else None
-                    ),
-                }
+        league_metadata_expectations = (
+            build_active_league_metadata_expectations(
+                df_meta,
+                club_id=str(club_id),
+                league_names={str(name) for _, name in island_updates},
+                default_k_factor=int(default_k_factor),
             )
+        )
         return {
             "inserted": len(db_matches),
             "skipped_incomplete": int(skipped_incomplete),

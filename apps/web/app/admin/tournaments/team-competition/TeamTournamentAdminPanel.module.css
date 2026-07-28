@@ -1,0 +1,226 @@
+.shell {
+  display: grid;
+  gap: 1rem;
+}
+
+.toolbar,
+.card {
+  border: 1px solid #dbe3ee;
+  border-radius: 14px;
+  background: #fff;
+  padding: 1rem;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: minmax(16rem, 1fr) auto;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.tabs,
+.actions,
+.checkGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.tab,
+.button,
+.secondaryButton {
+  min-height: 2.55rem;
+  border-radius: 999px;
+  border: 1px solid #0f172a;
+  padding: 0.55rem 0.9rem;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.tab,
+.secondaryButton {
+  background: #fff;
+  color: #0f172a;
+}
+
+.tabActive,
+.button {
+  background: #0f172a;
+  color: #fff;
+}
+
+.button:disabled,
+.secondaryButton:disabled,
+.tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.section {
+  display: grid;
+  gap: 1rem;
+}
+
+.section h2,
+.section h3,
+.section h4,
+.card p {
+  margin-top: 0;
+}
+
+.grid,
+.rosterGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.threeGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.field {
+  display: grid;
+  align-content: start;
+  gap: 0.3rem;
+  color: #334155;
+  font-weight: 650;
+}
+
+.input,
+.select,
+.textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.65rem;
+  border: 1px solid #94a3b8;
+  border-radius: 9px;
+  background: #fff;
+  color: #0f172a;
+  padding: 0.55rem 0.65rem;
+  font: inherit;
+}
+
+.textarea {
+  min-height: 5rem;
+  resize: vertical;
+}
+
+.hint,
+.muted {
+  color: #526173;
+}
+
+.notice,
+.error,
+.success {
+  margin: 0;
+  border-radius: 10px;
+  padding: 0.75rem;
+}
+
+.notice {
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.error {
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.success {
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  min-width: 48rem;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0.65rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.stack {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.subcard {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 0.8rem;
+  background: #f8fafc;
+}
+
+.slot {
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  padding: 0.75rem;
+}
+
+.slot h4 {
+  margin-bottom: 0.5rem;
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.6rem;
+  background: #fff;
+}
+
+.pill {
+  display: inline-block;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.warningList {
+  margin: 0;
+  color: #92400e;
+}
+
+@media (max-width: 760px) {
+  .toolbar,
+  .grid,
+  .threeGrid,
+  .rosterGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar,
+  .card {
+    padding: 0.8rem;
+  }
+
+  .tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tab {
+    width: 100%;
+  }
+}

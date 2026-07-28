@@ -120,6 +120,16 @@ export default async function TournamentRegistrationPage({ params, searchParams 
       ) : null}
 
       {tournament ? (
+        <article style={{ ...cardStyle, marginBottom: "1rem", display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Four-player team results</h2>
+            <p style={{ color: "#475569", margin: "0.35rem 0 0" }}>Follow published team standings, playoff brackets, and podiums.</p>
+          </div>
+          <Link href={`/clubs/${clubSlug}/tournament-team-results`} style={{ fontWeight: 800 }}>View Team Tournament Results</Link>
+        </article>
+      ) : null}
+
+      {tournament ? (
         <TournamentRegistrationForm
           clubSlug={clubSlug}
           tournamentId={tournament.id}
@@ -128,6 +138,7 @@ export default async function TournamentRegistrationPage({ params, searchParams 
           registrationClosedReason={data?.registration_closed_reason ?? null}
           days={data.days ?? []}
           events={data.events ?? []}
+          commerce={data.commerce ?? null}
         />
       ) : null}
     </section>

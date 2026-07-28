@@ -49,10 +49,18 @@ from services.api.auth import (
     jwt_verification_project_ref,
 )
 from services.api.middleware import StagingWriteWaveMiddleware, StructuredRequestLoggingMiddleware
+from services.api.admin_team_league_routes import install_admin_team_league_routes
+from services.api.admin_tournament_team_competition_routes import (
+    install_admin_tournament_team_competition_routes,
+)
 from services.api.public_badge_codex_routes import install_public_badge_codex_routes
 from services.api.public_challenge_ladder_routes import install_public_challenge_ladder_routes
 from services.api.public_league_results_routes import install_public_league_results_routes
 from services.api.public_match_explorer_routes import install_public_match_explorer_routes
+from services.api.public_team_league_routes import install_public_team_league_routes
+from services.api.public_tournament_team_routes import (
+    install_public_tournament_team_routes,
+)
 from services.api.public_weekly_recap_routes import install_public_weekly_recap_routes
 
 DEFAULT_CORS_ALLOWED_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000", "https://juprleagues.com", "https://www.juprleagues.com")
@@ -946,6 +954,10 @@ install_public_league_results_routes(app, get_club=get_club, get_supabase_client
 install_public_badge_codex_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
 install_public_challenge_ladder_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
 install_public_weekly_recap_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
+install_public_team_league_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
+install_public_tournament_team_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
+install_admin_team_league_routes(app, get_supabase_client=get_supabase_client)
+install_admin_tournament_team_competition_routes(app, get_supabase_client=get_supabase_client)
 
 
 @app.get("/clubs/{club_slug}/leaderboards")

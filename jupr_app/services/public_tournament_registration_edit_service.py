@@ -31,6 +31,13 @@ from jupr_app.services.public_tournament_registration_service import (
     build_validated_public_registration_save_payload,
     build_public_tournament_registration_page,
 )
+from jupr_app.services.public_tournament_commerce_service import (
+    build_public_tournament_commerce_catalog,
+    build_public_tournament_commerce_order,
+    is_tournament_commerce_enabled,
+    prepare_public_registration_commerce_transaction,
+    require_tournament_commerce_mutation_runtime,
+)
 
 
 class PublicRegistrationEditUnavailableError(RuntimeError):
@@ -349,6 +356,20 @@ def build_public_tournament_registration_edit_page(
         else None
     )
     page["players"] = [_public_registration_player(linked_player)] if linked_player else []
+    if is_tournament_commerce_enabled():
+        page["commerce"] = build_public_tournament_commerce_catalog(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=tid,
+            registration_id=str(registration.get("id") or ""),
+            token_bound_edit=True,
+        )
+        page["commerce_order"] = build_public_tournament_commerce_order(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=tid,
+            registration_id=str(registration.get("id") or ""),
+        )
 
     # Existing selections remain visible and may be preserved even when an
     # organizer safely closes or disables that division after registration.
@@ -463,6 +484,37 @@ def submit_public_tournament_registration_edit(
         validated_selections=list(save_payload.get("selections") or []),
     )
     save_payload["selections"] = versioned_selections
+    commerce_transaction = None
+    if (
+        isinstance(page.get("commerce"), dict)
+        and page["commerce"].get("available")
+    ):
+        require_tournament_commerce_mutation_runtime(
+            actor_type="PUBLIC_REGISTRANT"
+        )
+        commerce_transaction = (
+            prepare_public_registration_commerce_transaction(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=tournament_id,
+                registration_id=registration_id,
+                registration_email=_clean_email(registration.get("email")),
+                event_option_ids=[
+                    str(row.get("event_option_id") or "")
+                    for row in versioned_selections
+                    if row.get("event_option_id")
+                ],
+                commerce=payload.get("commerce"),
+                edit_mode=True,
+            )
+        )
+        if commerce_transaction is not None:
+            commerce_transaction.update(
+                {
+                    "club_id": str(club_id),
+                    "source": "next_public_tournament_registration_edit",
+                }
+            )
     result = save_registration(
         supabase,
         tournament_id=tournament_id,
@@ -472,6 +524,7 @@ def submit_public_tournament_registration_edit(
         expected_updated_at=expected_updated_at,
         expected_selection_versions=expected_selection_versions,
         atomic_edit=True,
+        commerce_transaction=commerce_transaction,
     )
     delivery = build_registration_confirmation_delivery(
         supabase,
@@ -479,11 +532,18 @@ def submit_public_tournament_registration_edit(
         club_slug=str(club_slug or club_id),
         tournament_id=tournament_id,
         registration_id=str(result.get("registration_id") or ""),
+        send_email=not bool(result.get("idempotent_replay")),
     )
     delivery_status = str(
         (delivery.get("email_delivery") or {}).get("status") or "unknown"
     ).strip().lower()
-    if delivery_status not in {"sent", "staging_redirect", "dry_run", "failed"}:
+    if delivery_status not in {
+        "sent",
+        "staging_redirect",
+        "dry_run",
+        "failed",
+        "already_completed",
+    }:
         delivery_status = "unknown"
     confirmation_delivery = {
         "status": delivery_status,
@@ -507,6 +567,7 @@ def submit_public_tournament_registration_edit(
         "submitted_at": result.get("submitted_at"),
         "updated_at": result.get("updated_at"),
         "selection_count": result.get("selection_count"),
+        "commerce_order": result.get("commerce_order"),
         "confirmation_delivery": confirmation_delivery,
         **delivery,
     }

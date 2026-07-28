@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { PublicPlayer } from "@/lib/api";
 import type {
   AdminMatchUploaderCreatePlayersResult,
@@ -46,7 +46,11 @@ type SinglesRow = {
   ratingScope: "" | "unrated";
 };
 
-type RrCourtInput = { rowId: string; formatType: string; namesText: string };
+type RrCourtInput = {
+  rowId: string;
+  formatType: string;
+  playerNames: string[];
+};
 type RrScoreRow = {
   rowId: string;
   court: number;
@@ -63,6 +67,30 @@ type RrScoreRow = {
 type RrCourtSchedule = { court: number; formatType: string; expectedGames?: number | null; matches: RrScoreRow[] };
 type RrPayload = { source: string; custom_schedule: string; schedule_mode: string; courts: Array<{ court: number; format_type: string; player_names: string[] }> };
 type NewPlayerDraft = { name: string; startingJupr: string };
+type SearchablePlayerInputProps = {
+  inputId: string;
+  label: string;
+  value: string;
+  players: PublicPlayer[];
+  disabled?: boolean;
+  onChange: (playerId: string) => void;
+  onCreate: (
+    name: string,
+    startingJupr: number,
+  ) => Promise<PublicPlayer | null>;
+};
+type SearchablePlayerMultiInputProps = {
+  inputId: string;
+  label: string;
+  values: string[];
+  players: PublicPlayer[];
+  disabled?: boolean;
+  onChange: (playerNames: string[]) => void;
+  onCreate: (
+    name: string,
+    startingJupr: number,
+  ) => Promise<PublicPlayer | null>;
+};
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.5rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
@@ -70,7 +98,11 @@ const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 
 function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function randomId(prefix: string): string {
@@ -85,21 +117,16 @@ function newSinglesRow(): SinglesRow {
   return { date: todayIsoDate(), league: "Singles", weekTag: "Singles", playerA: "", playerB: "", scoreA: "0", scoreB: "0", ratingScope: "" };
 }
 
-function apiUrl(apiBase: string, path: string): string {
-  return `${apiBase.replace(/\/$/, "")}${path}`;
+function newRoundRobin(formatType: string): RrCourtInput {
+  return {
+    rowId: randomId("court"),
+    formatType,
+    playerNames: [],
+  };
 }
 
-function splitNames(value: string): string[] {
-  const seen = new Set<string>();
-  const names: string[] = [];
-  for (const raw of value.replaceAll(String.fromCharCode(10), ",").split(",")) {
-    const name = raw.replace(/\s+/g, " ").trim();
-    if (name && !seen.has(name)) {
-      seen.add(name);
-      names.push(name);
-    }
-  }
-  return names;
+function apiUrl(apiBase: string, path: string): string {
+  return `${apiBase.replace(/\/$/, "")}${path}`;
 }
 
 function ratingLabel(value?: number | null): string {
@@ -110,6 +137,10 @@ function deltaLabel(value?: number | null): string {
   if (value == null) return "—";
   const rounded = Math.round(Number(value));
   return `${rounded >= 0 ? "+" : ""}${rounded}`;
+}
+
+function isUploaderErrorMessage(message: string): boolean {
+  return /\b(unable|unavailable|disabled|required|must|cannot|could not|not configured|sign in|error|invalid|select|enter|choose|failed)\b/i.test(message);
 }
 
 function isFilled(row: MatchRow): boolean {
@@ -144,6 +175,252 @@ function mergePlayers(current: PublicPlayer[], incoming: NonNullable<AdminMatchU
   for (const player of current) byId.set(String(player.id), player);
   for (const player of incoming) byId.set(String(player.id), player as PublicPlayer);
   return Array.from(byId.values()).sort((left, right) => String(left.name).localeCompare(String(right.name)));
+}
+
+function SearchablePlayerInput({
+  inputId,
+  label,
+  value,
+  players,
+  disabled = false,
+  onChange,
+  onCreate,
+}: SearchablePlayerInputProps) {
+  const selected = players.find((player) => String(player.id) === value);
+  const selectedName = selected ? String(selected.name) : "";
+  const [query, setQuery] = useState(selectedName);
+  const [startingJupr, setStartingJupr] = useState("3.5");
+  const [creating, setCreating] = useState(false);
+  const cleanedQuery = query.replace(/\s+/g, " ").trim();
+  const exactPlayer = players.find(
+    (player) =>
+      String(player.name).trim().toLocaleLowerCase()
+      === cleanedQuery.toLocaleLowerCase(),
+  );
+  const numericStartingJupr = Number(startingJupr);
+
+  useEffect(() => {
+    setQuery(selectedName);
+  }, [selectedName]);
+
+  async function createAndSelect() {
+    if (
+      !cleanedQuery
+      || exactPlayer
+      || !Number.isFinite(numericStartingJupr)
+      || numericStartingJupr < 1
+      || numericStartingJupr > 7
+    ) return;
+    setCreating(true);
+    try {
+      const player = await onCreate(cleanedQuery, numericStartingJupr);
+      if (player) {
+        setQuery(String(player.name));
+        onChange(String(player.id));
+      }
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <div>
+      <label htmlFor={inputId}><strong>{label}</strong></label>
+      <div style={{ display: "flex", gap: "0.35rem" }}>
+        <input
+          id={inputId}
+          list={`${inputId}-options`}
+          value={query}
+          placeholder="Search player…"
+          autoComplete="off"
+          disabled={disabled || creating}
+          onChange={(event) => {
+            const next = event.target.value;
+            setQuery(next);
+            const match = players.find(
+              (player) =>
+                String(player.name).trim().toLocaleLowerCase()
+                === next.replace(/\s+/g, " ").trim().toLocaleLowerCase(),
+            );
+            onChange(match ? String(match.id) : "");
+          }}
+          style={inputStyle}
+        />
+        {value ? (
+          <button
+            type="button"
+            aria-label={`Clear ${label}`}
+            disabled={disabled || creating}
+            onClick={() => {
+              setQuery("");
+              onChange("");
+            }}
+          >
+            Clear
+          </button>
+        ) : null}
+      </div>
+      <datalist id={`${inputId}-options`}>
+        {players.map((player) => (
+          <option key={String(player.id)} value={String(player.name)} />
+        ))}
+      </datalist>
+      {cleanedQuery && !exactPlayer ? (
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(100px, 1fr) auto", gap: "0.35rem", marginTop: "0.35rem", alignItems: "end" }}>
+          <label htmlFor={`${inputId}-starting-jupr`}>
+            <span style={{ display: "block", color: "#475569", fontSize: "0.8rem" }}>Starting JUPR</span>
+            <input
+              id={`${inputId}-starting-jupr`}
+              type="number"
+              min={1}
+              max={7}
+              step={0.01}
+              value={startingJupr}
+              disabled={disabled || creating}
+              onChange={(event) => setStartingJupr(event.target.value)}
+              style={inputStyle}
+            />
+          </label>
+          <button
+            type="button"
+            onClick={createAndSelect}
+            disabled={disabled || creating}
+            style={ghostButtonStyle}
+          >
+            {creating ? "Creating…" : `Create “${cleanedQuery}”`}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SearchablePlayerMultiInput({
+  inputId,
+  label,
+  values,
+  players,
+  disabled = false,
+  onChange,
+  onCreate,
+}: SearchablePlayerMultiInputProps) {
+  const [query, setQuery] = useState("");
+  const [startingJupr, setStartingJupr] = useState("3.5");
+  const [creating, setCreating] = useState(false);
+  const cleanedQuery = query.replace(/\s+/g, " ").trim();
+  const selectedNames = new Set(
+    values.map((name) => name.trim().toLocaleLowerCase()),
+  );
+  const exactPlayer = players.find(
+    (player) =>
+      String(player.name).trim().toLocaleLowerCase()
+      === cleanedQuery.toLocaleLowerCase(),
+  );
+  const numericStartingJupr = Number(startingJupr);
+
+  function addPlayerName(name: string) {
+    const cleanedName = name.replace(/\s+/g, " ").trim();
+    if (
+      !cleanedName
+      || selectedNames.has(cleanedName.toLocaleLowerCase())
+    ) return;
+    onChange([...values, cleanedName]);
+    setQuery("");
+  }
+
+  async function createAndAdd() {
+    if (
+      !cleanedQuery
+      || exactPlayer
+      || !Number.isFinite(numericStartingJupr)
+      || numericStartingJupr < 1
+      || numericStartingJupr > 7
+    ) return;
+    setCreating(true);
+    try {
+      const player = await onCreate(cleanedQuery, numericStartingJupr);
+      if (player) addPlayerName(String(player.name));
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <div>
+      <label htmlFor={inputId}><strong>{label}</strong></label>
+      {values.length ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", margin: "0.35rem 0 0.5rem" }}>
+          {values.map((name) => (
+            <span key={name.toLocaleLowerCase()} style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.25rem 0.35rem 0.25rem 0.65rem", background: "white" }}>
+              {name}
+              <button
+                type="button"
+                aria-label={`Remove ${name}`}
+                onClick={() => onChange(values.filter((item) => item.toLocaleLowerCase() !== name.toLocaleLowerCase()))}
+                disabled={disabled || creating}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p style={{ color: "#64748b", fontSize: "0.85rem", margin: "0.35rem 0 0.5rem" }}>No players selected yet.</p>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) auto", gap: "0.4rem" }}>
+        <input
+          id={inputId}
+          list={`${inputId}-options`}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && exactPlayer) {
+              event.preventDefault();
+              addPlayerName(String(exactPlayer.name));
+            }
+          }}
+          placeholder="Search player name…"
+          autoComplete="off"
+          disabled={disabled || creating}
+          style={inputStyle}
+        />
+        <button
+          type="button"
+          onClick={() => exactPlayer && addPlayerName(String(exactPlayer.name))}
+          disabled={!exactPlayer || selectedNames.has(String(exactPlayer?.name || "").trim().toLocaleLowerCase())}
+          style={ghostButtonStyle}
+        >
+          Add player
+        </button>
+      </div>
+      <datalist id={`${inputId}-options`}>
+        {players
+          .filter((player) => !selectedNames.has(String(player.name).trim().toLocaleLowerCase()))
+          .map((player) => <option key={String(player.id)} value={String(player.name)} />)}
+      </datalist>
+      {cleanedQuery && !exactPlayer ? (
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(100px, 1fr) auto", gap: "0.4rem", marginTop: "0.4rem", alignItems: "end" }}>
+          <label htmlFor={`${inputId}-starting-jupr`}>
+            <span style={{ display: "block", color: "#475569", fontSize: "0.8rem" }}>Starting JUPR</span>
+            <input
+              id={`${inputId}-starting-jupr`}
+              type="number"
+              min={1}
+              max={7}
+              step={0.01}
+              value={startingJupr}
+              onChange={(event) => setStartingJupr(event.target.value)}
+              disabled={disabled || creating}
+              style={inputStyle}
+            />
+          </label>
+          <button type="button" onClick={createAndAdd} disabled={disabled || creating} style={ghostButtonStyle}>
+            {creating ? "Creating…" : `Create & add “${cleanedQuery}”`}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function previewToSchedule(preview: AdminMatchUploaderRoundRobinPreview): RrCourtSchedule[] {
@@ -182,7 +459,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   const [popupEventName, setPopupEventName] = useState("Saturday Social");
   const [singlesRow, setSinglesRow] = useState<SinglesRow>(() => newSinglesRow());
   const [rows, setRows] = useState<MatchRow[]>(() => Array.from({ length: 5 }, () => newMatchRow()));
-  const [rrCourts, setRrCourts] = useState<RrCourtInput[]>(() => [{ rowId: randomId("court"), formatType: firstFormat, namesText: "" }]);
+  const [rrCourts, setRrCourts] = useState<RrCourtInput[]>(() => [newRoundRobin(firstFormat)]);
   const [rrCustomSchedule, setRrCustomSchedule] = useState("");
   const [rrSchedule, setRrSchedule] = useState<RrCourtSchedule[]>([]);
   const [rrPendingPayload, setRrPendingPayload] = useState<RrPayload | null>(null);
@@ -193,11 +470,11 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   const [message, setMessage] = useState<string | null>(null);
   const [result, setResult] = useState<AdminMatchUploaderWriteResult | null>(null);
 
-  const playerOptions = useMemo(() => knownPlayers.map((player) => <option key={String(player.id)} value={String(player.id)}>{player.name}</option>), [knownPlayers]);
   const validRows = rows.filter(isFilled);
   const scoredRrRows = rrSchedule.flatMap((court) => court.matches).filter((match) => Number(match.s1 || 0) + Number(match.s2 || 0) > 0);
   const league = context === "popup" ? "POPUP" : defaultLeague;
   const matchType = context === "popup" ? "PopUp" : "Live Match";
+  const messageIsError = Boolean(message && (result?.ok === false || isUploaderErrorMessage(message)));
 
   function requireReady(): boolean {
     if (!apiBase) {
@@ -225,6 +502,11 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
 
   function patchRrCourt(rowId: string, patch: Partial<RrCourtInput>) {
     setRrCourts((current) => current.map((court) => court.rowId === rowId ? { ...court, ...patch } : court));
+    if (patch.formatType !== undefined || patch.playerNames !== undefined) {
+      setRrSchedule([]);
+      setRrPendingPayload(null);
+      setNewPlayerDrafts([]);
+    }
   }
 
   function patchRrScore(rowId: string, patch: Partial<Pick<RrScoreRow, "s1" | "s2">>) {
@@ -235,7 +517,11 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   }
 
   function buildRoundRobinPayload(): RrPayload | null {
-    const courts = rrCourts.map((court, index) => ({ court: index + 1, format_type: court.formatType, player_names: splitNames(court.namesText) }));
+    const courts = rrCourts.map((court, index) => ({
+      court: index + 1,
+      format_type: court.formatType,
+      player_names: [...court.playerNames],
+    }));
     const empty = courts.find((court) => court.player_names.length === 0);
     if (empty) {
       setMessage(`Court ${empty.court}: enter player names before generating a schedule.`);
@@ -255,6 +541,45 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
     return payload as T;
+  }
+
+  async function createAndSelectPlayer(
+    name: string,
+    startingJupr: number,
+  ): Promise<PublicPlayer | null> {
+    if (!requireReady()) return null;
+    setCreatingPlayers(true);
+    try {
+      const payload = await postJson<AdminMatchUploaderCreatePlayersResult>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/players`,
+        {
+          source: "next_match_uploader_inline_new_player",
+          players: [{ name, starting_jupr: startingJupr }],
+        },
+      );
+      const incoming = payload.players || [];
+      if (incoming.length) {
+        setKnownPlayers((current) => mergePlayers(current, incoming));
+      }
+      const created = incoming.find(
+        (player) =>
+          String(player.name).trim().toLocaleLowerCase()
+          === name.trim().toLocaleLowerCase(),
+      );
+      setMessage(
+        created
+          ? `Created ${created.name}. Continue entering the match.`
+          : "The player profile could not be confirmed.",
+      );
+      return (created as PublicPlayer | undefined) || null;
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Unable to create player.",
+      );
+      return null;
+    } finally {
+      setCreatingPlayers(false);
+    }
   }
 
   async function submitSinglesMatch() {
@@ -496,11 +821,27 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
             <label><strong>Session</strong><br /><input value={singlesRow.weekTag} onChange={(event) => patchSingles({ weekTag: event.target.value })} style={inputStyle} /></label>
             <label><strong>Rating scope</strong><br /><select value={singlesRow.ratingScope} onChange={(event) => patchSingles({ ratingScope: event.target.value as SinglesRow["ratingScope"] })} style={inputStyle}><option value="">Rated singles</option><option value="unrated">Unrated / record only</option></select></label>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) 90px 90px minmax(180px, 1fr)", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
-            <label><strong>Player A</strong><br /><select value={singlesRow.playerA} onChange={(event) => patchSingles({ playerA: event.target.value })} style={inputStyle}><option value="">Choose player…</option>{playerOptions}</select></label>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
+            <SearchablePlayerInput
+              inputId="singles-player-a"
+              label="Player A"
+              value={singlesRow.playerA}
+              players={knownPlayers}
+              disabled={saving || creatingPlayers}
+              onChange={(playerA) => patchSingles({ playerA })}
+              onCreate={createAndSelectPlayer}
+            />
             <label><strong>Score A</strong><br /><input type="number" min={0} max={99} value={singlesRow.scoreA} onChange={(event) => patchSingles({ scoreA: event.target.value })} style={inputStyle} /></label>
             <label><strong>Score B</strong><br /><input type="number" min={0} max={99} value={singlesRow.scoreB} onChange={(event) => patchSingles({ scoreB: event.target.value })} style={inputStyle} /></label>
-            <label><strong>Player B</strong><br /><select value={singlesRow.playerB} onChange={(event) => patchSingles({ playerB: event.target.value })} style={inputStyle}><option value="">Choose player…</option>{playerOptions}</select></label>
+            <SearchablePlayerInput
+              inputId="singles-player-b"
+              label="Player B"
+              value={singlesRow.playerB}
+              players={knownPlayers}
+              disabled={saving || creatingPlayers}
+              onChange={(playerB) => patchSingles({ playerB })}
+              onCreate={createAndSelectPlayer}
+            />
           </div>
           <p><button type="button" onClick={submitSinglesMatch} disabled={saving || !accessToken || !singlesEnabled} style={buttonStyle}>{saving ? "Submitting…" : "Submit singles match"}</button></p>
         </article>
@@ -510,25 +851,29 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Doubles manual / batch score entry</h2>
           <p style={{ color: "#475569" }}>Empty rows are ignored. Submitted rows must have four distinct players and a non-zero score.</p>
-          <p><button type="button" onClick={() => setRows((current) => [...current, ...Array.from({ length: 5 }, () => newMatchRow())])} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 5 rows</button></p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
+            <button type="button" onClick={() => setRows((current) => [...current, newMatchRow()])} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 1 Match</button>
+            <button type="button" onClick={() => setRows((current) => [...current, ...Array.from({ length: 5 }, () => newMatchRow())].slice(0, status.max_batch_rows))} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 5 Matches</button>
+            <button type="button" onClick={() => setRows([newMatchRow()])} disabled={!rows.some(isFilled)} style={ghostButtonStyle}>Remove All</button>
+          </div>
           <div style={{ display: "grid", gap: "0.75rem" }}>
             {rows.map((row, index) => (
               <div key={row.rowId} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: isFilled(row) ? "#f8fafc" : "white" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}><strong>Match {index + 1}</strong><button type="button" onClick={() => setRows((current) => current.filter((item) => item.rowId !== row.rowId))} disabled={rows.length <= 1}>Remove</button></div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "0.5rem" }}>
-                  <input type="date" value={row.date} onChange={(event) => patchRow(row.rowId, { date: event.target.value })} style={inputStyle} />
-                  <input value={league} disabled placeholder="League" style={inputStyle} />
-                  <input value={row.weekTag} onChange={(event) => patchRow(row.rowId, { weekTag: event.target.value })} placeholder="Week" style={inputStyle} />
-                  <input value={matchType} disabled placeholder="Match type" style={inputStyle} />
-                  <select value={row.ratingScope} onChange={(event) => patchRow(row.rowId, { ratingScope: event.target.value as MatchRow["ratingScope"] })} style={inputStyle}><option value="">Overall + league</option><option value="overall_only">Overall only</option><option value="unrated">Unrated / record only</option></select>
+                  <label><strong>Date</strong><br /><input type="date" value={row.date} onChange={(event) => patchRow(row.rowId, { date: event.target.value })} style={inputStyle} /></label>
+                  <label><strong>League</strong><br /><input value={league} readOnly aria-readonly="true" style={{ ...inputStyle, background: "#f1f5f9" }} /></label>
+                  <label><strong>Week / session</strong><br /><input value={row.weekTag} onChange={(event) => patchRow(row.rowId, { weekTag: event.target.value })} style={inputStyle} /></label>
+                  <label><strong>Match type</strong><br /><input value={matchType} readOnly aria-readonly="true" style={{ ...inputStyle, background: "#f1f5f9" }} /></label>
+                  <label><strong>Rating scope</strong><br /><select value={row.ratingScope} onChange={(event) => patchRow(row.rowId, { ratingScope: event.target.value as MatchRow["ratingScope"] })} style={inputStyle}><option value="">Overall + league</option><option value="overall_only">Overall only</option><option value="unrated">Unrated / record only</option></select></label>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.5rem", marginTop: "0.5rem" }}>
-                  <select value={row.t1p1} onChange={(event) => patchRow(row.rowId, { t1p1: event.target.value })} style={inputStyle}><option value="">T1 P1</option>{playerOptions}</select>
-                  <select value={row.t1p2} onChange={(event) => patchRow(row.rowId, { t1p2: event.target.value })} style={inputStyle}><option value="">T1 P2</option>{playerOptions}</select>
-                  <input value={row.s1} onChange={(event) => patchRow(row.rowId, { s1: event.target.value })} type="number" min={0} max={99} style={inputStyle} />
-                  <input value={row.s2} onChange={(event) => patchRow(row.rowId, { s2: event.target.value })} type="number" min={0} max={99} style={inputStyle} />
-                  <select value={row.t2p1} onChange={(event) => patchRow(row.rowId, { t2p1: event.target.value })} style={inputStyle}><option value="">T2 P1</option>{playerOptions}</select>
-                  <select value={row.t2p2} onChange={(event) => patchRow(row.rowId, { t2p2: event.target.value })} style={inputStyle}><option value="">T2 P2</option>{playerOptions}</select>
+                  <SearchablePlayerInput inputId={`${row.rowId}-t1p1`} label="Team 1 · Player 1" value={row.t1p1} players={knownPlayers} disabled={saving || creatingPlayers} onChange={(t1p1) => patchRow(row.rowId, { t1p1 })} onCreate={createAndSelectPlayer} />
+                  <SearchablePlayerInput inputId={`${row.rowId}-t1p2`} label="Team 1 · Player 2" value={row.t1p2} players={knownPlayers} disabled={saving || creatingPlayers} onChange={(t1p2) => patchRow(row.rowId, { t1p2 })} onCreate={createAndSelectPlayer} />
+                  <label><strong>Team 1 score</strong><br /><input value={row.s1} onChange={(event) => patchRow(row.rowId, { s1: event.target.value })} type="number" min={0} max={99} style={inputStyle} /></label>
+                  <label><strong>Team 2 score</strong><br /><input value={row.s2} onChange={(event) => patchRow(row.rowId, { s2: event.target.value })} type="number" min={0} max={99} style={inputStyle} /></label>
+                  <SearchablePlayerInput inputId={`${row.rowId}-t2p1`} label="Team 2 · Player 1" value={row.t2p1} players={knownPlayers} disabled={saving || creatingPlayers} onChange={(t2p1) => patchRow(row.rowId, { t2p1 })} onCreate={createAndSelectPlayer} />
+                  <SearchablePlayerInput inputId={`${row.rowId}-t2p2`} label="Team 2 · Player 2" value={row.t2p2} players={knownPlayers} disabled={saving || creatingPlayers} onChange={(t2p2) => patchRow(row.rowId, { t2p2 })} onCreate={createAndSelectPlayer} />
                 </div>
               </div>
             ))}
@@ -547,14 +892,22 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
               {rrCourts.map((court, index) => (
                 <div key={court.rowId} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: "#f8fafc" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}><strong>Court {index + 1}</strong><button type="button" onClick={() => setRrCourts((current) => current.filter((item) => item.rowId !== court.rowId))} disabled={rrCourts.length <= 1}>Remove</button></div>
-                  <div style={{ display: "grid", gridTemplateColumns: "minmax(150px, 220px) 1fr", gap: "0.75rem" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
                     <label><strong>Format</strong><br /><select value={court.formatType} onChange={(event) => patchRrCourt(court.rowId, { formatType: event.target.value })} style={inputStyle}>{(status.round_robin_format_options || [firstFormat]).map((format) => <option key={format}>{format}</option>)}</select><span style={{ display: "block", color: "#64748b", fontSize: "0.85rem", marginTop: "0.25rem" }}>Expected games: {status.round_robin_expected_games?.[court.formatType] ?? "—"}</span></label>
-                    <label><strong>Players</strong><br /><textarea value={court.namesText} onChange={(event) => patchRrCourt(court.rowId, { namesText: event.target.value })} rows={3} placeholder="Alex, Blair, Casey, Devon" style={inputStyle} /></label>
+                    <SearchablePlayerMultiInput
+                      inputId={`${court.rowId}-players`}
+                      label="Players"
+                      values={court.playerNames}
+                      players={knownPlayers}
+                      disabled={generating || creatingPlayers}
+                      onChange={(playerNames) => patchRrCourt(court.rowId, { playerNames })}
+                      onCreate={createAndSelectPlayer}
+                    />
                   </div>
                 </div>
               ))}
             </div>
-            <p><button type="button" onClick={() => setRrCourts((current) => [...current, { rowId: randomId("court"), formatType: firstFormat, namesText: "" }])} disabled={rrCourts.length >= 10} style={ghostButtonStyle}>Add court</button></p>
+            <p><button type="button" onClick={() => setRrCourts((current) => [...current, newRoundRobin(firstFormat)])} disabled={rrCourts.length >= 10} style={ghostButtonStyle}>Add round robin</button></p>
             <label><strong>Custom schedule override</strong><br /><textarea value={rrCustomSchedule} onChange={(event) => setRrCustomSchedule(event.target.value)} rows={3} placeholder="Optional lines like: 1 2 3 4" style={inputStyle} /></label>
             <p><button type="button" onClick={generateRoundRobin} disabled={generating || creatingPlayers || !accessToken} style={buttonStyle}>{generating ? "Generating…" : "Generate schedule"}</button></p>
           </article>
@@ -585,10 +938,10 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
                     <h3 style={{ marginTop: 0 }}>Court {court.court} · {court.formatType}</h3>
                     <div style={{ display: "grid", gap: "0.5rem" }}>
                       {court.matches.map((match) => (
-                        <div key={match.rowId} style={{ display: "grid", gridTemplateColumns: "minmax(160px, 1fr) 80px 80px minmax(160px, 1fr)", gap: "0.5rem", alignItems: "center" }}>
+                        <div key={match.rowId} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "0.5rem", alignItems: "center" }}>
                           <div><strong>{match.label}</strong><br />{match.t1.map((player) => player.name).join(" / ")}</div>
-                          <input value={match.s1} onChange={(event) => patchRrScore(match.rowId, { s1: event.target.value })} type="number" min={0} max={99} style={inputStyle} />
-                          <input value={match.s2} onChange={(event) => patchRrScore(match.rowId, { s2: event.target.value })} type="number" min={0} max={99} style={inputStyle} />
+                          <label><strong>Team 1 score</strong><br /><input value={match.s1} onChange={(event) => patchRrScore(match.rowId, { s1: event.target.value })} type="number" min={0} max={99} style={inputStyle} /></label>
+                          <label><strong>Team 2 score</strong><br /><input value={match.s2} onChange={(event) => patchRrScore(match.rowId, { s2: event.target.value })} type="number" min={0} max={99} style={inputStyle} /></label>
                           <div>{match.t2.map((player) => player.name).join(" / ")}</div>
                         </div>
                       ))}
@@ -603,7 +956,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
         </>
       ) : null}
 
-      {message ? <p style={{ color: result?.ok ? "#166534" : "#b91c1c" }}>{message}</p> : null}
+      {message ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}
 
       {result ? (
         <article style={cardStyle}>

@@ -25,6 +25,9 @@ from jupr_app.services.admin_tournament_service import (
     _first_row,
     is_admin_tournament_admin_enabled,
 )
+from jupr_app.services.admin_tournament_team_competition_service import (
+    is_admin_team_tournament_enabled,
+)
 
 CONFIRM_PUBLISH_MATCHES = "PUBLISH MATCHES"
 MAX_PLAYOFF_WINNER_BONUS_ELO = 40.0
@@ -141,6 +144,80 @@ def _games_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[
             str(row.get("id") or ""),
         ),
     )
+
+
+def _validate_team_rating_child_publish_source(
+    supabase: Any,
+    *,
+    tournament_id: str,
+    draw: dict[str, Any],
+    teams: list[dict[str, Any]],
+    games: list[dict[str, Any]],
+    playoff_winner_bonus_elo: float,
+) -> dict[str, Any] | None:
+    """Keep parent/team child assets out of the ordinary publish surface.
+
+    A rated child draw is publishable only as the one game materialized from
+    one finalized four-player child result. Deleted/excluded canonical rows
+    are still authoritative history and are handled by reconciliation, never
+    by publishing the source again.
+    """
+
+    draw_kind = str(draw.get("draw_kind") or "STANDARD").upper()
+    if draw_kind == "TEAM_PARENT":
+        raise PermissionError(
+            "Four-player parent results are not rating matches. Publish only their rated child games."
+        )
+    if draw_kind != "TEAM_RATING_CHILD":
+        if bool(draw.get("hidden_from_primary_ops")):
+            raise PermissionError("This protected draw cannot be published from Tournament Ops.")
+        return None
+    if not is_admin_team_tournament_enabled():
+        raise PermissionError("Team tournament management is disabled.")
+    if playoff_winner_bonus_elo:
+        raise ValueError("Rated team child games cannot receive an additional playoff bonus.")
+    try:
+        children = _safe_rows(
+            supabase.table("tournament_team_match_games")
+            .select("*")
+            .eq("tournament_id", str(tournament_id))
+            .eq("rating_draw_id", str(draw.get("id") or ""))
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not verify the team child source before official publish."
+        ) from exc
+    if len(children) != 1 or len(games) != 1 or len(teams) != 2:
+        raise ValueError("A rated team child draw must contain exactly one source game and two sides.")
+    child = children[0]
+    game = games[0]
+    if (
+        not bool(child.get("counts_for_rating"))
+        or str(child.get("status") or "").upper() != "FINAL"
+        or str(child.get("tournament_game_id") or "") != str(game.get("id") or "")
+        or str(game.get("team_match_game_id") or "") != str(child.get("id") or "")
+        or bool(game.get("parent_result_only"))
+    ):
+        raise ValueError("Rated team child source is not finalized or no longer matches its game.")
+    source_sides = {
+        str(team.get("team_match_side") or "").upper()
+        for team in teams
+        if str(team.get("team_match_game_id") or "") == str(child.get("id") or "")
+        and str(team.get("source") or "").upper() == "FOUR_PLAYER_TEAM_CHILD"
+    }
+    if source_sides != {"A", "B"}:
+        raise ValueError("Rated team child sides are not bound to the finalized source result.")
+    return child
+
+
+def _require_team_rating_child_feature(draw: dict[str, Any]) -> None:
+    if (
+        str(draw.get("draw_kind") or "STANDARD").upper()
+        == "TEAM_RATING_CHILD"
+        and not is_admin_team_tournament_enabled()
+    ):
+        raise PermissionError("Team tournament management is disabled.")
 
 
 def _existing_published_game_ids(supabase: Any, *, club_id: str, tournament_id: str, game_ids: list[str]) -> set[str]:
@@ -508,10 +585,19 @@ def build_admin_tournament_official_publish_plan(
     draw = _fetch_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not draw:
         raise ValueError("draw not found for this tournament")
+    _require_team_rating_child_feature(draw)
     teams = _teams_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     games = _games_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not games:
         raise ValueError("This draw has no tournament games to publish.")
+    _validate_team_rating_child_publish_source(
+        supabase,
+        tournament_id=clean_tournament_id,
+        draw=draw,
+        teams=teams,
+        games=games,
+        playoff_winner_bonus_elo=bonus_elo,
+    )
     event_option = _fetch_event_option(
         supabase,
         tournament_id=clean_tournament_id,
@@ -703,11 +789,20 @@ def publish_admin_tournament_draw_matches(
     draw = _fetch_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not draw:
         raise ValueError("draw not found for this tournament")
+    _require_team_rating_child_feature(draw)
 
     teams = _teams_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     games = _games_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not games:
         raise ValueError("This draw has no tournament games to publish.")
+    _validate_team_rating_child_publish_source(
+        supabase,
+        tournament_id=clean_tournament_id,
+        draw=draw,
+        teams=teams,
+        games=games,
+        playoff_winner_bonus_elo=bonus_elo,
+    )
 
     game_ids = [_clean_text(row.get("id"), limit=120) for row in games if _clean_text(row.get("id"), limit=120)]
     already_published = _existing_published_game_ids(
@@ -836,6 +931,7 @@ def publish_admin_tournament_draw_matches(
                 club_id=str(club_id),
                 name_to_id={},
                 df_players_all=df_players_all,
+                df_meta=df_meta,
                 build_write_plan_only=True,
             )
             process_result["singles"] = {
@@ -921,6 +1017,7 @@ def publish_admin_tournament_draw_matches(
                 club_id=str(club_id),
                 name_to_id={},
                 df_players_all=df_players_all,
+                df_meta=df_meta,
             )
             process_result["singles"] = singles_result
             inserted_count += int(singles_result.get("inserted") or 0)

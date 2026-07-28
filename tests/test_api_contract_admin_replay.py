@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from tests.conftest import require_api_dependency
 from tests.test_admin_replay_service import FakeSupabase, fake_storage
 
@@ -139,3 +141,108 @@ def test_admin_replay_post_contract(monkeypatch):
     assert payload["result"]["matches_rewritten"] == 3
     assert payload["job_id"] == "job-api"
     assert storage["admin_activity_log"][0]["action_type"] == "replay_history"
+
+
+def test_admin_replay_post_blocked_by_open_match_log_recovery(monkeypatch):
+    storage = fake_storage()
+    storage["match_edit_operations"] = [
+        {
+            "id": "edit-1",
+            "club_id": "club",
+            "status": "recovery_required",
+            "replay_job_id": "job-private",
+            "created_at": "2026-07-27T10:00:00Z",
+        }
+    ]
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_REPLAY", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr(
+        "services.api.main.create_client",
+        lambda _url, _credential: FakeSupabase(storage),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_replay_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(
+            email="admin@example.com",
+            user_id="user-1",
+        ),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_replay_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="super_admin"),
+    )
+    called = {"replay": False}
+
+    def fake_replay(*_args, **_kwargs):
+        called["replay"] = True
+        raise AssertionError("replay must be blocked before mutation")
+
+    monkeypatch.setattr(
+        "services.api.admin_replay_routes.run_admin_replay_history",
+        fake_replay,
+    )
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/replay-history",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "target_reset": "Open",
+            "confirmation_text": "REPLAY",
+        },
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "MATCH_LOG_RECOVERY_LOCKED"
+    assert detail["operation_kind"] == "match_edit"
+    assert detail["operation_id"] == "edit-1"
+    assert called == {"replay": False}
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("JUPR_MATCH_LOG_RECOVERY_LOCKED: concurrent claim"),
+        Exception("JUPR_MATCH_LOG_RECOVERY_LOCK_AMBIGUOUS: concurrent claim"),
+    ],
+)
+def test_admin_replay_atomic_recovery_claim_race_returns_conflict(
+    monkeypatch,
+    error,
+):
+    storage = fake_storage()
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_REPLAY", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr(
+        "services.api.main.create_client",
+        lambda _url, _credential: FakeSupabase(storage),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_replay_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(
+            email="admin@example.com",
+            user_id="user-1",
+        ),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_replay_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="super_admin"),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_replay_routes.run_admin_replay_history",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/replay-history",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "target_reset": "Open",
+            "confirmation_text": "REPLAY",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "MATCH_LOG_RECOVERY_LOCKED"

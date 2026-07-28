@@ -382,6 +382,35 @@ def test_admin_league_awards_writes_require_separate_flag(monkeypatch):
     assert "disabled" in response.json()["detail"].lower()
 
 
+def test_admin_league_awards_production_refusal_precedes_data_access(
+    monkeypatch,
+):
+    monkeypatch.setenv("JUPR_ENV", "production")
+    monkeypatch.setenv("JUPR_PRODUCTION_WRITE_POLICY", "enabled")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only-test-key")
+    monkeypatch.setattr(
+        "services.api.main.create_client",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("data access must not run")
+        ),
+    )
+
+    response = _post(
+        TestClient(app),
+        "freeze",
+        {
+            "confirmation_text": "FREEZE LEAGUE AWARDS",
+            "idempotency_key": "freeze:production-refusal",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "staging-only" in response.json()["detail"].lower()
+
+
 def test_admin_league_awards_strict_audit_fails_before_freeze_mutation(monkeypatch):
     tables = _storage()
     supabase = FakeSupabase(tables)

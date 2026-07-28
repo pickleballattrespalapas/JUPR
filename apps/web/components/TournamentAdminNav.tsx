@@ -18,6 +18,8 @@ const tournamentItems: NavigationItem[] = [
   { href: "/admin/tournaments", label: "Registration editor", match: exact("/admin/tournaments") },
   { href: "/admin/tournaments/registrations", label: "Registration reports", match: exact("/admin/tournaments/registrations") },
   { href: "/admin/tournaments/bulk", label: "Bulk actions", match: exact("/admin/tournaments/bulk") },
+  { href: "/admin/tournaments/commerce", label: "Extras & fulfillment", match: exact("/admin/tournaments/commerce") },
+  { href: "/admin/tournaments/team-competition", label: "Ratings & team play", match: exact("/admin/tournaments/team-competition") },
   { href: "/admin/tournaments/status", label: "Status", match: exact("/admin/tournaments/status") },
   {
     href: "/admin/tournaments/ops",

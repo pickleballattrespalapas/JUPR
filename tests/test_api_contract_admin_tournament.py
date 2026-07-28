@@ -314,7 +314,14 @@ def test_admin_tournament_ops_snapshot_contract(monkeypatch):
     payload = response.json()
     assert payload["ok"] is True
     assert payload["mode"] == "tournament_ops_snapshot"
-    assert payload["summary"] == {"draws": 1, "teams": 2, "games": 1, "podium": 1, "completed_games": 1}
+    assert payload["summary"] == {
+        "draws": 1,
+        "teams": 2,
+        "games": 1,
+        "podium": 1,
+        "rating_children": 0,
+        "completed_games": 1,
+    }
     assert payload["draws"][0]["id"] == "draw_1"
     assert payload["teams"][0]["team_number"] == 1
     assert payload["games"][0]["winner_team_id"] == "team_1"

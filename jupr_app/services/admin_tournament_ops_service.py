@@ -5,6 +5,9 @@ from typing import Any
 
 from jupr_app.config import get_email_mode
 from jupr_app.domain.tournament_admin_operations import stable_tournament_admin_fingerprint
+from jupr_app.domain.tournament_team_canonical_publish import (
+    classify_team_child_publish_state,
+)
 from jupr_app.services.admin_player_updates_service import is_auto_player_updates_enabled
 from jupr_app.services.admin_tournament_guarded_operation import tournament_admin_guarded_runtime_enabled
 from jupr_app.services.admin_tournament_service import (
@@ -13,6 +16,9 @@ from jupr_app.services.admin_tournament_service import (
     _first_row,
     _tournament_payload,
     is_admin_tournament_admin_enabled,
+)
+from jupr_app.services.admin_tournament_team_competition_service import (
+    is_admin_team_tournament_enabled,
 )
 
 OPS_TABLES = {
@@ -30,6 +36,7 @@ OPS_STATE_TABLES = (
     "tournament_event_options",
     "tournament_registrations",
     "tournament_registration_selections",
+    "tournament_team_match_games",
 )
 TRUTHY = {"1", "true", "yes", "y", "on"}
 
@@ -155,6 +162,7 @@ def _load_admin_tournament_ops_state(
     club_id: str,
     tournament_id: str,
     tournament: dict[str, Any] | None = None,
+    include_team_competition: bool | None = None,
 ) -> dict[str, Any]:
     clean_tournament_id = _clean_text(tournament_id, limit=120)
     current_tournament = tournament or _first_row(
@@ -168,7 +176,21 @@ def _load_admin_tournament_ops_state(
         raise ValueError("tournament not found")
 
     state: dict[str, Any] = {"tournament": dict(current_tournament), "tables": {}}
-    for table_name in OPS_STATE_TABLES:
+    team_feature_enabled = (
+        is_admin_team_tournament_enabled()
+        if include_team_competition is None
+        else bool(include_team_competition)
+    )
+    state_tables = (
+        OPS_STATE_TABLES
+        if team_feature_enabled
+        else tuple(
+            table_name
+            for table_name in OPS_STATE_TABLES
+            if table_name != "tournament_team_match_games"
+        )
+    )
+    for table_name in state_tables:
         state["tables"][table_name] = _canonical_state_rows(
             _strict_paginated_rows(
                 supabase,
@@ -268,6 +290,7 @@ def get_admin_tournament_ops_snapshot(
     clean_tournament_id = _clean_text(tournament_id, limit=120)
     if not clean_tournament_id:
         raise ValueError("tournament_id is required")
+    team_feature_enabled = is_admin_team_tournament_enabled()
     tournament = _first_row(supabase, "tournaments", TOURNAMENT_SELECT, key="id", value=clean_tournament_id)
     if not tournament or str(tournament.get("club_id") or "") != str(club_id):
         raise ValueError("tournament not found")
@@ -280,6 +303,7 @@ def get_admin_tournament_ops_snapshot(
             club_id=str(club_id),
             tournament_id=clean_tournament_id,
             tournament=tournament,
+            include_team_competition=team_feature_enabled,
         )
         state_tables = dict(state.get("tables") or {})
         draws = list(state_tables.get(OPS_TABLES["draws"]) or [])
@@ -288,6 +312,12 @@ def get_admin_tournament_ops_snapshot(
         podium = list(state_tables.get(OPS_TABLES["podium"]) or [])
         registration_days = list(state_tables.get("tournament_registration_days") or [])
         event_options = list(state_tables.get("tournament_event_options") or [])
+        team_match_games = (
+            list(state_tables.get("tournament_team_match_games") or [])
+            if team_feature_enabled
+            else []
+        )
+        published_matches = list(state.get("published_matches") or [])
         players = _player_options_from_rows(list(state.get("players") or []))
         state_fingerprint = stable_tournament_admin_fingerprint(state)
     except Exception as exc:  # retain read-only recovery, but never pair it with an accepted write fingerprint
@@ -298,8 +328,114 @@ def get_admin_tournament_ops_snapshot(
         podium, podium_warnings = _table_rows(supabase, OPS_TABLES["podium"], tournament_id=clean_tournament_id)
         registration_days, day_warnings = _table_rows(supabase, "tournament_registration_days", tournament_id=clean_tournament_id)
         event_options, event_warnings = _table_rows(supabase, "tournament_event_options", tournament_id=clean_tournament_id)
+        if team_feature_enabled:
+            team_match_games, child_warnings = _table_rows(
+                supabase,
+                "tournament_team_match_games",
+                tournament_id=clean_tournament_id,
+            )
+            published_matches, published_warnings = _table_rows(
+                supabase,
+                "matches",
+                tournament_id=clean_tournament_id,
+            )
+            published_matches = [
+                row
+                for row in published_matches
+                if str(row.get("club_id") or "") == str(club_id)
+            ]
+        else:
+            team_match_games, child_warnings = [], []
+            published_matches, published_warnings = [], []
         players, player_warnings = _player_options(supabase, club_id=str(club_id))
-        warnings.extend([*draw_warnings, *team_warnings, *game_warnings, *podium_warnings, *day_warnings, *event_warnings, *player_warnings])
+        warnings.extend([*draw_warnings, *team_warnings, *game_warnings, *podium_warnings, *day_warnings, *event_warnings, *child_warnings, *published_warnings, *player_warnings])
+
+    protected_rating_child_draws = [
+        row
+        for row in draws
+        if str(row.get("draw_kind") or "").upper() == "TEAM_RATING_CHILD"
+    ]
+    rating_child_draws = (
+        protected_rating_child_draws if team_feature_enabled else []
+    )
+    rating_child_ids = {
+        str(row.get("id") or "") for row in protected_rating_child_draws
+    }
+    team_parent_ids = {
+        str(row.get("id") or "")
+        for row in draws
+        if str(row.get("draw_kind") or "").upper() == "TEAM_PARENT"
+    }
+    hidden_draw_ids = {
+        str(row.get("id") or "")
+        for row in draws
+        if bool(row.get("hidden_from_primary_ops"))
+    }
+    protected_team_draw_ids = rating_child_ids | team_parent_ids | hidden_draw_ids
+    games_by_id = {str(row.get("id") or ""): row for row in games}
+    canonical_by_game: dict[str, list[dict[str, Any]]] = {}
+    for row in published_matches:
+        tournament_game_id = str(row.get("tournament_game_id") or "")
+        if tournament_game_id:
+            canonical_by_game.setdefault(tournament_game_id, []).append(row)
+    children_by_draw: dict[str, list[dict[str, Any]]] = {}
+    for child in team_match_games:
+        rating_draw_id = str(child.get("rating_draw_id") or "")
+        if rating_draw_id:
+            children_by_draw.setdefault(rating_draw_id, []).append(child)
+    rating_child_publish_queue: list[dict[str, Any]] = []
+    for draw in rating_child_draws:
+        rating_draw_id = str(draw.get("id") or "")
+        child_games = children_by_draw.get(rating_draw_id, [])
+        if len(child_games) != 1:
+            rating_child_publish_queue.append(
+                {
+                    "draw": draw,
+                    "child_game": child_games[0] if child_games else None,
+                    "tournament_game": None,
+                    "publish_state": "RECONCILE_REQUIRED",
+                    "canonical_match_count": 0,
+                }
+            )
+            continue
+        child = child_games[0]
+        tournament_game_id = str(child.get("tournament_game_id") or "")
+        canonical = canonical_by_game.get(tournament_game_id, [])
+        publish_state = classify_team_child_publish_state(
+            child=child,
+            tournament_game=games_by_id.get(tournament_game_id),
+            canonical_matches=canonical,
+        )
+        rating_child_publish_queue.append(
+            {
+                "draw": draw,
+                "child_game": child,
+                "tournament_game": games_by_id.get(tournament_game_id),
+                "publish_state": publish_state,
+                "canonical_match_count": len(canonical),
+            }
+        )
+
+    draws = [
+        row
+        for row in draws
+        if str(row.get("id") or "") not in protected_team_draw_ids
+    ]
+    teams = [
+        row
+        for row in teams
+        if str(row.get("draw_id") or "") not in protected_team_draw_ids
+    ]
+    games = [
+        row
+        for row in games
+        if str(row.get("draw_id") or "") not in protected_team_draw_ids
+    ]
+    podium = [
+        row
+        for row in podium
+        if str(row.get("draw_id") or "") not in protected_team_draw_ids
+    ]
 
     clean_draw_id = _clean_text(draw_id, limit=120) or None
     if clean_draw_id:
@@ -307,6 +443,11 @@ def get_admin_tournament_ops_snapshot(
         games = [row for row in games if str(row.get("draw_id") or "") == clean_draw_id]
         podium = [row for row in podium if str(row.get("draw_id") or "") == clean_draw_id]
         draws = [row for row in draws if str(row.get("id") or "") == clean_draw_id]
+        rating_child_publish_queue = [
+            row
+            for row in rating_child_publish_queue
+            if str((row.get("draw") or {}).get("id") or "") == clean_draw_id
+        ]
 
     draws = _sort_rows(draws, "registration_day_id", "event_option_id", "name", "id")
     teams = _sort_rows(teams, "draw_id", "team_number", "id")
@@ -325,6 +466,7 @@ def get_admin_tournament_ops_snapshot(
             "teams": len(teams),
             "games": len(games),
             "podium": len(podium),
+            "rating_children": len(rating_child_publish_queue),
             "completed_games": len([row for row in games if str(row.get("status") or "").lower() in {"complete", "completed", "final"} or row.get("winner_team_id")]),
         },
         "draws": draws,
@@ -333,6 +475,8 @@ def get_admin_tournament_ops_snapshot(
         "podium": podium,
         "registration_days": registration_days,
         "event_options": event_options,
+        "rating_child_draws": rating_child_draws,
+        "rating_child_publish_queue": rating_child_publish_queue,
         "players": players,
         "state_fingerprint": state_fingerprint,
         "state_ready": bool(state_fingerprint),

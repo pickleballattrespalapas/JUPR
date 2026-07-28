@@ -235,6 +235,63 @@ def test_registration_edit_save_survives_confirmation_delivery_failure(monkeypat
     assert storage["tournament_registrations"][0]["first_name"] == "Saved"
 
 
+def test_registration_edit_replay_reports_completed_without_resending(monkeypatch) -> None:
+    supabase, storage, registration_id, token = _registered_supabase(monkeypatch)
+    delivery_calls: list[bool] = []
+    monkeypatch.setattr(
+        edit_service,
+        "save_registration",
+        lambda *_args, **_kwargs: {
+            "registration_id": registration_id,
+            "submitted_at": "2026-07-01T00:00:00Z",
+            "updated_at": "2026-07-01T00:00:00Z",
+            "selection_count": 1,
+            "idempotent_replay": True,
+        },
+    )
+
+    def replay_delivery(*_args, **kwargs):
+        delivery_calls.append(bool(kwargs.get("send_email")))
+        return {
+            "confirmation_available": True,
+            "confirmation_token": "replay-confirmation-token",
+            "email_delivery": {
+                "status": "already_completed",
+                "message": "Registration was already saved.",
+            },
+        }
+
+    monkeypatch.setattr(
+        edit_service,
+        "build_registration_confirmation_delivery",
+        replay_delivery,
+    )
+
+    result = submit_public_tournament_registration_edit(
+        supabase,
+        club_id="club-1",
+        edit_token=token,
+        payload={
+            **_edit_versions(storage),
+            "tournament_id": "t1",
+            "first_name": "Alex",
+            "last_name": "Rivera",
+            "email": "alex@example.com",
+            "terms_accepted": True,
+            "selections": [
+                {"event_option_id": "event1", "partner_mode": "NONE"}
+            ],
+        },
+    )
+
+    assert result["confirmation_delivery"] == {
+        "status": "already_completed",
+        "delivered": False,
+    }
+    assert result["confirmation_token"] == "replay-confirmation-token"
+    assert delivery_calls == [False]
+
+
 def test_registration_edit_rpc_failure_leaves_registration_unchanged(monkeypatch) -> None:
     supabase, storage, _registration_id, token = _registered_supabase(monkeypatch)
     storage["_fail_public_registration_edit_rpc"] = True

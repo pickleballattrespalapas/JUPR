@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import urllib.request
 
 import pytest
@@ -159,6 +160,39 @@ def test_api_check_table_tracks_current_auth_and_tournament_contracts():
     assert tournament.url.endswith("/admin/clubs/tres_palapas/tournaments/admin/status")
     assert tournament.expected_statuses == (200,)
 
+    commerce = checks["api: admin tournament commerce"]
+    assert commerce.method == "GET"
+    assert commerce.url.endswith(
+        "/admin/clubs/tres_palapas/tournaments/commerce/status"
+    )
+    assert commerce.expected_statuses == (200, 401)
+
+    team_tournament = checks["api: admin team tournament competition"]
+    assert team_tournament.method == "GET"
+    assert team_tournament.url.endswith(
+        "/admin/clubs/tres_palapas/tournaments/team-competition/status"
+    )
+    assert team_tournament.expected_statuses == (401, 403)
+
+    published_team_tournament = checks["api: team tournament results"]
+    assert published_team_tournament.method == "GET"
+    assert published_team_tournament.url.endswith(
+        "/clubs/tres-palapas/tournament-team-results"
+    )
+    assert published_team_tournament.expected_statuses == (200, 404)
+
+    admin_team_leagues = checks["api: admin team leagues"]
+    assert admin_team_leagues.method == "GET"
+    assert admin_team_leagues.url.endswith(
+        "/admin/clubs/tres_palapas/league-manager/team-leagues"
+    )
+    assert admin_team_leagues.expected_statuses == (401, 403)
+
+    published_team_leagues = checks["api: team leagues"]
+    assert published_team_leagues.method == "GET"
+    assert published_team_leagues.url.endswith("/clubs/tres-palapas/team-leagues")
+    assert published_team_leagues.expected_statuses == (200, 403)
+
 
 def test_web_checks_opt_in_to_vercel_bypass_without_exposing_secret(monkeypatch):
     monkeypatch.setenv(smoke.VERCEL_AUTOMATION_BYPASS_SECRET_ENV, "staging-secret")
@@ -170,3 +204,36 @@ def test_web_checks_opt_in_to_vercel_bypass_without_exposing_secret(monkeypatch)
     assert checks
     assert all(check.allow_vercel_bypass for check in checks)
     assert all("staging-secret" not in check.url for check in checks)
+    assert all(check.method == "GET" for check in checks)
+    urls = {check.url for check in checks}
+    assert {
+        "https://jupr-git-staging-team.vercel.app/admin/tournaments/commerce",
+        "https://jupr-git-staging-team.vercel.app/admin/tournaments/team-competition",
+        "https://jupr-git-staging-team.vercel.app/admin/league-manager/teams",
+        "https://jupr-git-staging-team.vercel.app/admin/league-manager/awards",
+        "https://jupr-git-staging-team.vercel.app/clubs/tres-palapas/tournament-team-results",
+        "https://jupr-git-staging-team.vercel.app/clubs/tres-palapas/team-leagues",
+    }.issubset(urls)
+
+
+def test_new_feature_browser_smoke_is_strictly_read_only():
+    spec = (
+        Path("apps/web/e2e/staging.smoke.spec.ts")
+        .read_text(encoding="utf-8")
+    )
+    feature_block = spec.split(
+        "const readOnlyFeatureAreas: ReadOnlyFeatureArea[] = [", 1
+    )[1].split("test.beforeEach", 1)[0]
+    test_block = spec.split(
+        "for (const featureArea of readOnlyFeatureAreas)", 1
+    )[1].split("for (const surface of publicSurfaces)", 1)[0]
+
+    assert "/admin/tournaments/commerce" in feature_block
+    assert "/admin/tournaments/team-competition" in feature_block
+    assert "/admin/league-manager/teams" in feature_block
+    assert "/admin/league-manager/awards" in feature_block
+    assert "/tournament-team-results" in feature_block
+    assert "/team-leagues" in feature_block
+    assert "page.request.get(" in test_block
+    for unsafe_method in ("post", "put", "patch", "delete"):
+        assert f"page.request.{unsafe_method}(" not in test_block

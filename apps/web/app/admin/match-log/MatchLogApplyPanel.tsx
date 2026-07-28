@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import type {
   AdminDuplicateDeletePreview,
@@ -16,6 +16,7 @@ import type {
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type MatchLogApplyPanelProps = {
+  mode: "guided" | "bulk" | "duplicates";
   apiBase: string | null;
   clubId: string;
   applyEnabled: boolean;
@@ -277,6 +278,10 @@ function collectVisiblePlayers(matches: AdminMatchLogMatch[]): AdminMatchLogPlay
   return Array.from(byId.values()).sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
 }
 
+function unresolvedEditRecoveryId(operations: AdminMatchEditOperation[]): string | null {
+  return operations.find((operation) => operation.status === "pending_replay" || operation.status === "recovery_required")?.id || null;
+}
+
 function PlayerSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: AdminMatchLogPlayer[] }) {
   const currentInOptions = Boolean(value) && options.some((player) => String(player.id) === String(value));
   return (
@@ -302,6 +307,7 @@ function MatchSummary({ match }: { match: AdminMatchLogMatch }) {
 }
 
 export default function MatchLogApplyPanel({
+  mode,
   apiBase,
   clubId,
   applyEnabled,
@@ -325,10 +331,13 @@ export default function MatchLogApplyPanel({
   const [noIssueReason, setNoIssueReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageLocation, setMessageLocation] = useState<"guided" | "bulk" | "apply" | "recovery" | "duplicate-resolution" | "duplicate-cleanup" | null>(null);
+  const [messageTarget, setMessageTarget] = useState<string | null>(null);
+  const [messageTone, setMessageTone] = useState<"success" | "error">("error");
   const [result, setResult] = useState<AdminMatchLogWriteResult | null>(null);
   const [idempotencyKey, setIdempotencyKey] = useState(requestKey);
   const [duplicateIdempotencyKey, setDuplicateIdempotencyKey] = useState(requestKey);
-  const [recoveryOperationId, setRecoveryOperationId] = useState<string | null>(() => recentOperations.find((operation) => operation.status === "recovery_required")?.id || null);
+  const [recoveryOperationId, setRecoveryOperationId] = useState<string | null>(() => unresolvedEditRecoveryId(recentOperations));
   const [bulkIds, setBulkIds] = useState<string[]>([]);
   const [bulkLeague, setBulkLeague] = useState("");
   const [bulkWeekMode, setBulkWeekMode] = useState<"unchanged" | "set" | "clear">("unchanged");
@@ -339,6 +348,7 @@ export default function MatchLogApplyPanel({
   const [bulkShiftDays, setBulkShiftDays] = useState("0");
   const [bulkReplaceSlot, setBulkReplaceSlot] = useState<"" | "t1_p1" | "t1_p2" | "t2_p1" | "t2_p2">("");
   const [bulkReplacementPlayer, setBulkReplacementPlayer] = useState("");
+  const stagedEditsRef = useRef<HTMLDivElement | null>(null);
   const selectedMatch = matches.find((match) => match.id != null && String(match.id) === selectedMatchId) || null;
   const visiblePlayerOptions = collectVisiblePlayers(matches);
   const playerOptions = rosterPlayers.length ? rosterPlayers : visiblePlayerOptions;
@@ -348,7 +358,7 @@ export default function MatchLogApplyPanel({
   useEffect(() => {
     let cancelled = false;
     async function loadRosterPlayers() {
-      if (!applyEnabled || !apiBase || !accessToken) {
+      if (mode === "duplicates" || !applyEnabled || !apiBase || !accessToken) {
         setRosterPlayers([]);
         setRosterMessage(null);
         return;
@@ -375,7 +385,51 @@ export default function MatchLogApplyPanel({
     }
     void loadRosterPlayers();
     return () => { cancelled = true; };
-  }, [accessToken, apiBase, applyEnabled, clubId]);
+  }, [accessToken, apiBase, applyEnabled, clubId, mode]);
+
+  useEffect(() => {
+    const unresolvedId = unresolvedEditRecoveryId(recentOperations);
+    if (unresolvedId) setRecoveryOperationId((current) => current || unresolvedId);
+  }, [recentOperations]);
+
+  function clearMessage() {
+    setMessage(null);
+    setMessageLocation(null);
+    setMessageTarget(null);
+    setMessageTone("error");
+  }
+
+  function showMessage(
+    location: NonNullable<typeof messageLocation>,
+    text: string,
+    tone: "success" | "error" = "error",
+    target: string | null = null
+  ) {
+    setMessageLocation(location);
+    setMessageTarget(target);
+    setMessageTone(tone);
+    setMessage(text);
+  }
+
+  function feedback(location: NonNullable<typeof messageLocation>, target: string | null = null) {
+    if (!message || messageLocation !== location || messageTarget !== target) return null;
+    return (
+      <p
+        role={messageTone === "success" ? "status" : "alert"}
+        aria-live="polite"
+        style={{ color: messageTone === "success" ? "#166534" : "#b91c1c" }}
+      >
+        {message}
+      </p>
+    );
+  }
+
+  function focusStagedEdits() {
+    requestAnimationFrame(() => {
+      stagedEditsRef.current?.focus();
+      stagedEditsRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  }
 
   function updateEdit<K extends keyof MatchEditState>(key: K, value: MatchEditState[K]) {
     setEdit((current) => ({ ...current, [key]: value }));
@@ -385,7 +439,7 @@ export default function MatchLogApplyPanel({
     const nextMatch = matches.find((match) => match.id != null && String(match.id) === matchId) || null;
     setSelectedMatchId(matchId);
     setEdit(editStateFromMatch(nextMatch));
-    setMessage(null);
+    clearMessage();
   }
 
   async function callApi(path: string, method: "PATCH" | "POST", body: unknown) {
@@ -408,7 +462,7 @@ export default function MatchLogApplyPanel({
   }
 
   function stageGuidedEdit() {
-    setMessage(null);
+    clearMessage();
     setResult(null);
     try {
       if (!selectedMatch) throw new Error("Select a match before staging an edit.");
@@ -416,9 +470,10 @@ export default function MatchLogApplyPanel({
       const fields = patchFields(patch);
       if (!fields.length) throw new Error("No changes detected for the selected match.");
       setStagedPatches((current) => [patch, ...current.filter((existing) => existing.id !== patch.id)]);
-      setMessage(`Staged edit for match #${patch.id}: ${fields.join(", ")}.`);
+      showMessage("guided", `Staged edit for match #${patch.id}: ${fields.join(", ")}. Review it below before applying.`, "success");
+      focusStagedEdits();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to stage match edit.");
+      showMessage("guided", error instanceof Error ? error.message : "Unable to stage match edit.");
     }
   }
 
@@ -428,7 +483,7 @@ export default function MatchLogApplyPanel({
   }
 
   function stageBulkEdits() {
-    setMessage(null);
+    clearMessage();
     setResult(null);
     try {
       const selected = matches.filter((match) => match.id != null && bulkIds.includes(String(match.id))).slice(0, 100);
@@ -462,15 +517,16 @@ export default function MatchLogApplyPanel({
         for (const patch of generated) byId.set(patch.id, { ...(byId.get(patch.id) || { id: patch.id }), ...patch });
         return Array.from(byId.values());
       });
-      setMessage(`Staged bulk changes for ${generated.length} match(es).`);
+      showMessage("bulk", `Staged bulk changes for ${generated.length} match(es). Review them below before applying.`, "success");
+      focusStagedEdits();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to stage bulk changes.");
+      showMessage("bulk", error instanceof Error ? error.message : "Unable to stage bulk changes.");
     }
   }
 
   async function submitGuidedPatches(confirmationText: string) {
     setBusy(true);
-    setMessage(null);
+    clearMessage();
     setResult(null);
     try {
       if (!stagedPatches.length) throw new Error("Stage at least one match edit first.");
@@ -483,7 +539,7 @@ export default function MatchLogApplyPanel({
         replay_target: "ALL (Full System Reset)"
       });
       setResult(payload);
-      setMessage(resultSummary(payload));
+      showMessage("apply", resultSummary(payload) || "Match edits completed.", payload.ok ? "success" : "error");
       if (payload.ok) {
         setStagedPatches([]);
         setRecoveryOperationId(null);
@@ -492,7 +548,7 @@ export default function MatchLogApplyPanel({
       }
     } catch (error) {
       if (error instanceof ApiCallError && error.operationId) setRecoveryOperationId(error.operationId);
-      setMessage(error instanceof Error ? error.message : "Unable to apply match edits.");
+      showMessage("apply", error instanceof Error ? error.message : "Unable to apply match edits.");
     } finally {
       setBusy(false);
     }
@@ -501,14 +557,14 @@ export default function MatchLogApplyPanel({
   async function recoverMandatoryReplay(confirmationText: string) {
     if (!recoveryOperationId) return;
     setBusy(true);
-    setMessage(null);
+    clearMessage();
     try {
       const payload = await callApi(`/admin/clubs/${encodeURIComponent(clubId)}/match-log/edits/${encodeURIComponent(recoveryOperationId)}/recover`, "POST", {
         confirmation_text: confirmationText,
         source: "next_match_log_recovery"
       });
       setResult(payload);
-      setMessage(resultSummary(payload));
+      showMessage("recovery", resultSummary(payload) || "Replay recovery completed.", payload.ok ? "success" : "error");
       if (payload.ok) {
         setRecoveryOperationId(null);
         setStagedPatches([]);
@@ -516,7 +572,7 @@ export default function MatchLogApplyPanel({
         onMutationComplete();
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to complete replay recovery.");
+      showMessage("recovery", error instanceof Error ? error.message : "Unable to complete replay recovery.");
     } finally {
       setBusy(false);
     }
@@ -525,7 +581,7 @@ export default function MatchLogApplyPanel({
   async function cleanupDuplicates(confirmationText: string) {
     const deleteIds = duplicatePreview?.delete_ids ?? [];
     setBusy(true);
-    setMessage(null);
+    clearMessage();
     setResult(null);
     try {
       if (!deleteIds.length) throw new Error("No duplicate cleanup IDs are available in the current preview.");
@@ -556,7 +612,7 @@ export default function MatchLogApplyPanel({
         source: "next_match_log_duplicate_cleanup_panel"
       });
       setResult(payload);
-      setMessage(resultSummary(payload));
+      showMessage("duplicate-cleanup", resultSummary(payload) || "Duplicate cleanup completed.", payload.ok ? "success" : "error");
       const operation = exclusionOperationFromPayload(payload);
       if (operation) onExclusionOperationChange(operation);
       const status = payload.status || payload.operation_status || payload.operation?.status;
@@ -569,7 +625,7 @@ export default function MatchLogApplyPanel({
       if (error instanceof ApiCallError && error.operation) {
         onExclusionOperationChange(error.operation);
       }
-      setMessage(error instanceof Error ? error.message : "Unable to clean duplicates.");
+      showMessage("duplicate-cleanup", error instanceof Error ? error.message : "Unable to clean duplicates.");
     } finally {
       setBusy(false);
     }
@@ -577,7 +633,7 @@ export default function MatchLogApplyPanel({
 
   async function resolveNoIssue(group: AdminDuplicateGroup, confirmationText: string) {
     setBusy(true);
-    setMessage(null);
+    clearMessage();
     setResult(null);
     try {
       const payload = await callApi(`/admin/clubs/${encodeURIComponent(clubId)}/match-log/duplicates/resolve`, "POST", {
@@ -588,22 +644,22 @@ export default function MatchLogApplyPanel({
         source: "next_match_log_duplicate_no_issue_panel"
       });
       setResult(payload);
-      setMessage(resultSummary(payload));
+      showMessage("duplicate-resolution", resultSummary(payload) || "Duplicate decision saved.", payload.ok ? "success" : "error", group.dup_key);
       if (payload.ok) {
         setNoIssueReason("");
         onMutationComplete();
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to mark duplicate group as no issue.");
+      showMessage("duplicate-resolution", error instanceof Error ? error.message : "Unable to mark duplicate group as no issue.", "error", group.dup_key);
     } finally {
       setBusy(false);
     }
   }
 
-  if (!applyEnabled) {
+  if ((mode !== "duplicates" && !applyEnabled) || (mode === "duplicates" && !applyEnabled && !duplicateCleanupEnabled)) {
     return (
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
-        <h2 style={{ marginTop: 0 }}>Apply flow is disabled</h2>
+        <h2 style={{ marginTop: 0 }}>{mode === "duplicates" ? "Duplicate actions are disabled" : "Apply flow is disabled"}</h2>
         <p style={{ color: "#475569" }}>
           Match Log writes require <code>JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY=1</code> on FastAPI plus Supabase JWT role authorization.
         </p>
@@ -613,9 +669,11 @@ export default function MatchLogApplyPanel({
 
   return (
     <article style={cardStyle}>
-      <h2 style={{ marginTop: 0 }}>Apply audited Match Log changes</h2>
+      <h2 style={{ marginTop: 0 }}>
+        {mode === "guided" ? "Guided match correction" : mode === "bulk" ? "Bulk match correction" : "Duplicate resolution"}
+      </h2>
       <p style={{ color: "#475569" }}>
-        This panel uses guided controls modeled after the Streamlit Match Log editor. It builds safe FastAPI patches for you; no raw JSON editing is required.
+        Review each action before confirming it. Every completed change is audited and any required rating replay must finish before success is reported.
       </p>
 
       <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
@@ -627,6 +685,7 @@ export default function MatchLogApplyPanel({
         {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
       </div>
 
+      {mode === "guided" ? <>
       <h3>Guided match editor</h3>
       <p style={{ color: "#475569" }}>
         Select a match from the current filtered results, change fields with form controls, stage the edit, then apply all staged edits together.
@@ -671,9 +730,11 @@ export default function MatchLogApplyPanel({
           <button type="button" onClick={stageGuidedEdit} disabled={busy || !selectedMatch} style={buttonStyle}>Stage guided edit</button>
           <button type="button" onClick={() => selectedMatch ? setEdit(editStateFromMatch(selectedMatch)) : undefined} disabled={busy || !selectedMatch} style={secondaryButtonStyle}>Reset selected fields</button>
         </p>
+        {feedback("guided")}
       </div>
+      </> : null}
 
-      <section data-testid="match-log-bulk-editor" style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.85rem", marginTop: "1rem", background: "#f8fafc" }}>
+      {mode === "bulk" ? <section data-testid="match-log-bulk-editor" style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.85rem", marginTop: "1rem", background: "#f8fafc" }}>
         <h3 style={{ marginTop: 0 }}>Bulk stage visible matches</h3>
         <p style={{ color: "#475569" }}>Select up to 100 rows, then set shared fields, clear notes/week tags, shift dates, or replace one player slot. Nothing is written until the staged operation is confirmed below.</p>
         <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
@@ -701,9 +762,10 @@ export default function MatchLogApplyPanel({
         </div>
         {bulkNotesMode === "set" ? <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Replacement notes</strong><br /><textarea value={bulkNotes} onChange={(event) => setBulkNotes(event.target.value)} maxLength={2000} rows={3} style={inputStyle} /></label> : null}
         <p><button type="button" onClick={stageBulkEdits} disabled={busy || !bulkIds.length} style={buttonStyle}>Stage bulk changes</button></p>
-      </section>
+        {feedback("bulk")}
+      </section> : null}
 
-      <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", marginTop: "1rem", background: stagedPatches.length ? "#f8fafc" : "white" }}>
+      {mode !== "duplicates" ? <div ref={stagedEditsRef} tabIndex={-1} data-testid="match-log-staged-edits" style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", marginTop: "1rem", background: stagedPatches.length ? "#f8fafc" : "white" }}>
         <h4 style={{ marginTop: 0 }}>Staged edits</h4>
         {stagedPatches.length ? (
           <>
@@ -730,9 +792,10 @@ export default function MatchLogApplyPanel({
           />
           <button type="button" onClick={() => setStagedPatches([])} disabled={busy || !stagedPatches.length} style={secondaryButtonStyle}>Clear staged edits</button>
         </p>
-      </div>
+        {feedback("apply")}
+      </div> : null}
 
-      {recoveryOperationId ? (
+      {mode !== "duplicates" && recoveryOperationId ? (
         <div role="alert" data-testid="match-edit-recovery" style={{ border: "2px solid #dc2626", borderRadius: "12px", padding: "0.85rem", marginTop: "1rem", background: "#fef2f2" }}>
           <h4 style={{ marginTop: 0 }}>Mandatory replay recovery required</h4>
           <p>Edits were committed in one database transaction, but replay did not finish. Do not start another correction until operation <code>{recoveryOperationId}</code> is recovered.</p>
@@ -748,10 +811,12 @@ export default function MatchLogApplyPanel({
               onConfirm={recoverMandatoryReplay}
             />
           </p>
+          {feedback("recovery")}
         </div>
       ) : null}
+      {mode !== "duplicates" && !recoveryOperationId ? feedback("recovery") : null}
 
-      {recentOperations.length ? (
+      {mode !== "duplicates" && recentOperations.length ? (
         <div data-testid="match-edit-operation-history" style={{ overflowX: "auto", marginTop: "1rem" }}>
           <h4>Recent durable edit operations</h4>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "680px" }}>
@@ -769,6 +834,7 @@ export default function MatchLogApplyPanel({
         </div>
       ) : null}
 
+      {mode === "duplicates" ? <>
       <hr style={{ border: 0, borderTop: "1px solid #e2e8f0", margin: "1rem 0" }} />
 
       <h3>Duplicate false positive / no issue</h3>
@@ -792,12 +858,16 @@ export default function MatchLogApplyPanel({
                 busy={busy}
                 onConfirm={(confirmationText) => resolveNoIssue(group, confirmationText)}
               />
+              {feedback("duplicate-resolution", group.dup_key)}
             </div>
           ))}
         </div>
       ) : (
         <p style={{ color: "#475569" }}>No active duplicate groups are available to resolve as no issue.</p>
       )}
+      {messageLocation === "duplicate-resolution" && messageTarget && !duplicateGroups.some((group) => group.dup_key === messageTarget)
+        ? feedback("duplicate-resolution", messageTarget)
+        : null}
 
       <hr style={{ border: 0, borderTop: "1px solid #e2e8f0", margin: "1rem 0" }} />
 
@@ -828,14 +898,14 @@ export default function MatchLogApplyPanel({
               onConfirm={cleanupDuplicates}
             />
           </p>
+          {feedback("duplicate-cleanup")}
         </>
       ) : (
         <p style={{ color: "#475569" }}>
           Atomic duplicate soft-exclusion is disabled. Match edits and duplicate no-issue resolution remain available.
         </p>
       )}
-
-      {message ? <p style={{ color: result?.ok ? "#166534" : "#b91c1c" }}>{message}</p> : null}
+      </> : null}
       {result?.warnings?.length ? (
         <ul style={{ color: "#92400e", paddingLeft: "1.25rem" }}>
           {result.warnings.map((warning) => <li key={warning}>{warning}</li>)}

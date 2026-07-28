@@ -69,6 +69,9 @@ from jupr_app.services.admin_tournament_guarded_operation import (
 )
 from jupr_app.services.admin_tournament_status_service import apply_admin_tournament_status_action
 from jupr_app.services.admin_tournament_team_service import replace_admin_tournament_draw_teams
+from jupr_app.services.admin_tournament_team_competition_service import (
+    is_admin_team_tournament_enabled,
+)
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -930,6 +933,17 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
     def post_admin_tournament_draw_matches_publish(club_id: str, tournament_id: str, draw_id: str, payload: AdminTournamentOfficialMatchPublishRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_tournament_admin_enabled():
             raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        try:
+            require_tournament_admin_mutation_runtime("operations")
+            require_admin_tournament_official_publish_runtime()
+            if (
+                str(payload.source or "").strip()
+                == "next_team_tournament_child_publish"
+                and not is_admin_team_tournament_enabled()
+            ):
+                raise PermissionError("Team tournament management is disabled.")
+        except Exception as exc:
+            _handle(exc)
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_tournament_role_or_403(
             supabase=supabase,
@@ -941,7 +955,6 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         )
         try:
             _require_confirmation(payload.confirmation_text, "PUBLISH MATCHES")
-            require_admin_tournament_official_publish_runtime()
             kwargs = {
                 "club_id": str(club_id),
                 "tournament_id": str(tournament_id),

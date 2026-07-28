@@ -3,6 +3,7 @@ import { getClubPlayers } from "@/lib/api";
 import { getAdminLeagueLiveStatus, getAdminLeagueManagerStatus, getAdminLeagueManagerApiBaseUrl } from "@/lib/adminLeagueManagerApi";
 import { getAdminMatchUploaderStatus } from "@/lib/adminMatchUploaderApi";
 import LeagueLiveRoundPanel from "./LeagueLiveRoundPanel";
+import LeagueManagerNav from "../LeagueManagerNav";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
@@ -22,6 +23,7 @@ export default async function LeagueManagerLivePage() {
         League Manager Live
       </p>
       <h1 style={{ marginTop: 0 }}>League live round entry</h1>
+      <LeagueManagerNav />
       <p style={{ color: "#334155", maxWidth: "900px" }}>
         Resumable league-night workflow: load the roster, arrange courts, generate Python-backed match slots, score every match, then publish and reconcile the complete round through one guarded FastAPI operation.
       </p>

@@ -21,6 +21,7 @@ STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
     NO_WRITE_WAVE: (),
     "public-intake-auth": (
         "JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES",
+        "JUPR_ENABLE_STAGING_TOURNAMENT_COMMERCE_WRITES",
     ),
     "communications": _admin_wave(
         "JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS",
@@ -47,6 +48,7 @@ STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
     ),
     "league-awards": _admin_wave(
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE",
+        "JUPR_ENABLE_STAGING_NEXT_ADMIN_LEAGUE_MANAGER_WRITES",
     ),
     "league-live-domain": _admin_wave(
         "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_PREVIEW",
@@ -105,6 +107,9 @@ STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
         "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH",
         "JUPR_ENABLE_STAGING_NEXT_ADMIN_TOURNAMENT_LIVE_WRITES",
     ),
+    "tournament-commerce-admin": _admin_wave(
+        "JUPR_ENABLE_STAGING_TOURNAMENT_COMMERCE_WRITES",
+    ),
 }
 
 DORMANT_STAGING_WRITE_FLAGS = (
@@ -131,6 +136,13 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/clubs/{club_slug}/tournament-registration/pairing-requests/{partner_request_id}/accept"),
         ("POST", "/clubs/{club_slug}/tournament-registration/pairing-requests/{partner_request_id}/decline"),
         ("POST", "/clubs/{club_slug}/tournament-registration/pairing-requests/{partner_request_id}/cancel"),
+        ("POST", "/clubs/{club_slug}/team-leagues/{league_name}/registrations"),
+        ("POST", "/clubs/{club_slug}/team-leagues/partner-confirmations"),
+        ("POST", "/clubs/{club_slug}/tournament-registration/four-player-team"),
+        ("POST", "/clubs/{club_slug}/tournament-registration/four-player-team/recover"),
+        ("POST", "/clubs/{club_slug}/tournament-team-invitation/resolve"),
+        ("POST", "/clubs/{club_slug}/tournament-team-invitation/respond"),
+        ("POST", "/clubs/{club_slug}/tournament-commerce/quote"),
         ("POST", "/email-preferences/unsubscribe"),
     ),
     "communications": (
@@ -186,6 +198,14 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/schedule/preview"),
         ("PATCH", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}"),
         ("PATCH", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/roster/{player_id}"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/roster/batch"),
+        ("PUT", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/settings"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/schedule-preview/{phase}"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/schedule"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/waitlist-actions"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/fixtures/{fixture_id}/score"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/fixtures/{fixture_id}/reconcile"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/operations/{operation_id}/resolve"),
     ),
     "league-awards": (
         ("POST", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/freeze"),
@@ -194,6 +214,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/mint"),
         ("POST", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/archive"),
         ("POST", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/close"),
+        ("PUT", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/config"),
     ),
     "league-live-domain": (
         ("POST", "/admin/clubs/{club_id}/match-uploader/round-robin/preview"),
@@ -277,12 +298,19 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("PATCH", "/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/settings"),
         ("PUT", "/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/draft"),
         ("POST", "/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/publish"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/events/{event_option_id}/config"),
     ),
     "tournament-registration": (
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/broadcast-preview"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/bulk"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/{registration_id}"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/rating-verifications"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/rating-reviews"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/rating-reviews/close"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/teams"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/teams/{team_id}/invitations/reissue"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/teams/{team_id}/roster"),
     ),
     "tournament-operations": (
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws"),
@@ -296,6 +324,12 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/podium"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/podium/awards"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/games/{game_id}/score"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/draws/{draw_id}/round-robin"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/draws/{draw_id}/playoffs"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/matchups/{matchup_id}/lineups"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/games/{match_game_id}/score"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/games/{match_game_id}/reconcile"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/draws/{draw_id}/podium"),
     ),
     "tournament-official-publish": (
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/matches/publish"),
@@ -311,6 +345,13 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/draws/{draw_id}/commands"),
         ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/draws/{draw_id}/operations/{operation_key}/reconcile"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/matches/publish"),
+    ),
+    "tournament-commerce-admin": (
+        ("POST", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/catalog/preview"),
+        ("PUT", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/catalog"),
+        ("PATCH", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/orders/{registration_id}/payment"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/orders/{registration_id}/cancel"),
+        ("PATCH", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/fulfillment/{fulfillment_id}"),
     ),
 }
 

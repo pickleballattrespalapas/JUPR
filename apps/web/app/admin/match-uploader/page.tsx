@@ -21,7 +21,7 @@ export default async function AdminMatchUploaderPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Match Uploader</h1>
       <p style={{ color: "#334155", maxWidth: "880px" }}>
-        Next/FastAPI score entry for the closed-club admin pilot, including manual batches, single round-robin schedule generation, and the new-player create-and-continue flow from Streamlit.
+        Enter singles, doubles batches, or one or more round robins. Search the club roster or create a player inline with a reviewed Starting JUPR.
       </p>
 
       {playersError ? <p style={{ color: "#b91c1c" }}>Player lookup is unavailable. {playersError}</p> : null}
@@ -36,8 +36,8 @@ export default async function AdminMatchUploaderPage() {
         </div>
       ) : null}
 
-      {!playersError && !players.length ? <p>No players are available for Match Uploader yet.</p> : null}
-      {status && players.length ? (
+      {!playersError && !players.length ? <p>No players are loaded yet. Create the first player directly in a match or round robin below.</p> : null}
+      {status ? (
         <MatchUploaderForm
           apiBase={getAdminMatchUploaderApiBaseUrl()}
           clubId={clubId}

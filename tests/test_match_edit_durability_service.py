@@ -202,3 +202,45 @@ def test_idempotent_succeeded_edit_does_not_run_or_audit_replay_again(monkeypatc
     assert result["ok"] is True
     assert result["idempotent"] is True
     assert result["replay_job_id"] == "job-4"
+
+
+def test_pending_replay_can_continue_through_exact_recovery_path(monkeypatch):
+    storage = {
+        "match_edit_operations": [
+            {
+                "id": "op-pending",
+                "club_id": "club",
+                "status": "pending_replay",
+                "idempotency_key": "pending-request",
+                "replay_target": service.FULL_RESET_LABEL,
+                "result_json": {"updated_ids": [4]},
+            }
+        ]
+    }
+    supabase = FakeSupabase({}, storage)
+    calls = []
+
+    def fake_replay(*_args, **kwargs):
+        calls.append(kwargs)
+        return {
+            "job_id": "job-pending",
+            "job_status": "succeeded",
+            "result": {"matches_rewritten": 1},
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(service, "run_admin_replay_history", fake_replay)
+
+    result = service.recover_atomic_match_edit(
+        supabase,
+        club_id="club",
+        operation_id="op-pending",
+        actor_email="admin@example.com",
+        actor_role="super_admin",
+        source="test-recovery",
+    )
+
+    assert result["ok"] is True
+    assert result["operation_status"] == "succeeded"
+    assert calls[0]["retry_failed"] is False
+    assert storage["match_edit_operations"][0]["status"] == "succeeded"

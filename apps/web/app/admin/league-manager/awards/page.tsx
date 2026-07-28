@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getAdminLeagueManagerApiBaseUrl, getAdminLeagueManagerStatus } from "@/lib/adminLeagueManagerApi";
 import LeagueAwardsPanel from "./LeagueAwardsPanel";
+import LeagueManagerNav from "../LeagueManagerNav";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
@@ -14,6 +15,7 @@ export default async function AdminLeagueAwardsPage() {
         Admin League Manager
       </p>
       <h1 style={{ marginTop: 0 }}>League awards</h1>
+      <LeagueManagerNav />
       <p style={{ color: "#334155", maxWidth: "880px" }}>
         Recoverable freeze, Python-authoritative preview, documented override, verified badge mint, and archive steps through guarded FastAPI. Streamlit remains the fallback until the full manual staging gate passes.
       </p>
