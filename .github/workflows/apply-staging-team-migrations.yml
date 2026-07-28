@@ -30,17 +30,29 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: agent/apply-staging-team-migrations
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Verify exact staging source and isolated runner diff
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin +refs/heads/staging:refs/remotes/origin/staging
-          test "$(git rev-parse refs/remotes/origin/staging)" = "$EXPECTED_STAGING_SHA"
-          CHANGED="$(git diff --name-only "$EXPECTED_STAGING_SHA" HEAD)"
-          test "$CHANGED" = ".github/workflows/apply-staging-team-migrations.yml"
+          test "$PR_BASE_SHA" = "$EXPECTED_STAGING_SHA"
+          test "$PR_HEAD_SHA" = "$(git rev-parse HEAD)"
+          FILES="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              --paginate \
+              "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+              --jq '.[].filename' \
+              | sort
+          )"
+          test "$FILES" = ".github/workflows/apply-staging-team-migrations.yml"
 
       - name: Verify staging database target only
         shell: python
