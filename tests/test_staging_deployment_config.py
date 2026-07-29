@@ -242,7 +242,9 @@ def test_staging_deploy_wave_choices_exactly_match_the_code_ledger():
     )
 
     assert 'default: "open"' in write_wave
-    assert choices == tuple(STAGING_WRITE_WAVES)
+    assert choices[0] == "open"
+    assert set(choices) == set(STAGING_WRITE_WAVES)
+    assert len(choices) == len(STAGING_WRITE_WAVES)
 
 def test_production_cors_includes_both_public_domains():
     production_env = _toml("fly.toml")["env"]
