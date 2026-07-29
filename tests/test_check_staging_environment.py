@@ -485,3 +485,34 @@ def test_json_output_is_valid(monkeypatch, capsys):
     assert rc == 0
     assert isinstance(parsed, dict)
     assert "next_admin_flags" in parsed
+
+
+def test_open_write_wave_is_a_supported_full_staging_posture(monkeypatch):
+    args = cse.build_parser().parse_args(["--write-wave", "open"])
+    assert args.write_wave == "open"
+
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "open")
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
+    monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", "edit-" + "a" * 40)
+    monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "confirm-" + "b" * 40)
+    monkeypatch.setenv("JUPR_PUBLIC_LIVE_TOKEN_SECRET", "token-" + "c" * 40)
+    monkeypatch.setenv("JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET", "rate-" + "d" * 40)
+    for name in cse.FULL_NEXT_ADMIN_FLAGS:
+        monkeypatch.setenv(name, "1")
+    for name, enabled in cse.expected_write_flags("open").items():
+        monkeypatch.setenv(name, "1" if enabled else "0")
+    for name in cse.ALWAYS_DISABLED_FLAGS:
+        monkeypatch.setenv(name, "0")
+
+    rc, summary = cse.run_checks(
+        _args(expect_full_next_admin=True, write_wave="open")
+    )
+
+    assert rc == 0, summary
+    assert summary["ok"] is True
+    assert summary["staging_write_wave"]["known"] is True
+    assert summary["staging_write_wave"]["expected"] == "open"
+    assert summary["staging_write_wave"]["actual"] == "open"
+    assert summary["staging_write_wave"]["public_live_token_secret_configured"] is True
+    assert summary["staging_write_wave"]["public_live_rate_limit_secret_configured"] is True

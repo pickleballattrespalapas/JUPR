@@ -13,6 +13,8 @@ from scripts.staging_write_waves import (
     ALL_STAGING_WRITE_FLAGS,
     ALWAYS_DISABLED_FLAGS,
     NO_WRITE_WAVE,
+    OPEN_WRITE_WAVE,
+    PUBLIC_LIVE_SECRET_WAVES,
     REGISTRATION_SECRET_WAVES,
     STAGING_WRITE_WAVES,
     expected_write_flags,
@@ -218,7 +220,11 @@ def _check_staging_write_wave(
 ) -> str | None:
     actual_wave = os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip() or None
     requested_wave = str(expected_wave or "").strip() or None
-    if requested_wave is not None and requested_wave not in STAGING_WRITE_WAVES:
+    if (
+        requested_wave is not None
+        and requested_wave != OPEN_WRITE_WAVE
+        and requested_wave not in STAGING_WRITE_WAVES
+    ):
         summary["errors"].append(f"Unknown expected staging write wave: {requested_wave}")
         requested_wave = None
     if expect_full_next_admin and requested_wave is None:
@@ -265,7 +271,7 @@ def _check_staging_write_wave(
             )
         if edit_secret and edit_secret == confirmation_secret:
             summary["errors"].append("Registration edit and confirmation secrets must be distinct.")
-    if requested_wave == "public-live":
+    if requested_wave in PUBLIC_LIVE_SECRET_WAVES:
         if len(public_live_token_secret) < 32:
             summary["errors"].append(
                 "The public-live wave requires JUPR_PUBLIC_LIVE_TOKEN_SECRET with at least 32 characters."
@@ -280,7 +286,7 @@ def _check_staging_write_wave(
     summary["staging_write_wave"] = {
         "expected": requested_wave,
         "actual": actual_wave,
-        "known": actual_wave in STAGING_WRITE_WAVES,
+        "known": actual_wave == OPEN_WRITE_WAVE or actual_wave in STAGING_WRITE_WAVES,
         "flags": actual,
         "expected_flags": expected,
         "always_disabled": always_disabled,
@@ -373,7 +379,7 @@ def _check_api(
     results: dict[str, dict[str, Any]] = {}
     expected_gates = (
         expected_write_flags(expected_write_wave)
-        if expected_write_wave in STAGING_WRITE_WAVES
+        if expected_write_wave == OPEN_WRITE_WAVE or expected_write_wave in STAGING_WRITE_WAVES
         else {name: False for name in ALL_STAGING_WRITE_FLAGS}
     )
     status_paths = {template.format(club_id=club_id) for template in ADMIN_STATUS_PATHS}
@@ -504,7 +510,7 @@ def _check_api(
         if (
             path == "/health/live-sessions"
             and expect_full_next_admin
-            and expected_write_wave == "public-live"
+            and expected_write_wave in PUBLIC_LIVE_SECRET_WAVES
         ):
             for key in (
                 "ok",
@@ -760,7 +766,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-git-sha")
     parser.add_argument("--expected-fly-app-name")
     parser.add_argument("--expected-web-origin")
-    parser.add_argument("--write-wave", choices=tuple(STAGING_WRITE_WAVES))
+    parser.add_argument(
+        "--write-wave",
+        choices=(OPEN_WRITE_WAVE, *tuple(STAGING_WRITE_WAVES)),
+    )
     parser.add_argument("--club-slug", default="tres-palapas")
     parser.add_argument("--club-id", default="tres_palapas")
     return parser

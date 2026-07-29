@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 from scripts.staging_write_waves import (
     ALL_STAGING_WRITE_FLAGS,
@@ -37,38 +38,7 @@ def test_open_wave_allows_every_reviewed_staging_route() -> None:
     assert OPEN_WRITE_WAVE not in STAGING_WRITE_WAVE_ROUTES
     assert set(OPEN_WRITE_ROUTES) == expected
     for method, template in expected:
-        concrete = template
-        replacements = {
-            "{club_slug}": "tres-palapas",
-            "{club_id}": "tres_palapas",
-            "{league_name}": "Test",
-            "{player_id}": "1",
-            "{league_rating_id}": "1",
-            "{operation_id}": "00000000-0000-4000-8000-000000000001",
-            "{operation_key}": "test-op",
-            "{subscription_id}": "1",
-            "{week_start}": "2026-07-27",
-            "{session_id}": "1",
-            "{round_number}": "1",
-            "{challenge_id}": "1",
-            "{session_key}": "test-session",
-            "{tournament_id}": "1",
-            "{event_option_id}": "1",
-            "{registration_id}": "1",
-            "{selection_id}": "1",
-            "{team_id}": "1",
-            "{draw_id}": "1",
-            "{game_id}": "1",
-            "{matchup_id}": "1",
-            "{match_game_id}": "1",
-            "{fulfillment_id}": "1",
-            "{social_match_id}": "1",
-            "{badge_id}": "1",
-            "{event_id}": "1",
-            "{partner_request_id}": "1",
-        }
-        for marker, value in replacements.items():
-            concrete = concrete.replace(marker, value)
+        concrete = re.sub(r"\{[^{}]+\}", "1", template)
         assert "{" not in concrete, concrete
         assert wave_allows_request(OPEN_WRITE_WAVE, method, concrete)
     assert not wave_allows_request(NO_WRITE_WAVE, "POST", "/clubs/tres-palapas/support/intake")
