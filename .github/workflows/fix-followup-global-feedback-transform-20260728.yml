@@ -1,0 +1,62 @@
+name: Fix match-player global feedback transform
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/match-player-session-followups-20260728'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/match-player-session-followups-20260728
+          fetch-depth: 0
+
+      - name: Replace only the final global feedback block
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('scripts/apply_match_player_session_followups_20260728.py')
+          text = path.read_text(encoding='utf-8')
+          old_block = '''    text = replace_once(
+              text,
+              \'''      {message && !result ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}\''',
+              \'''      {message && !result && entryMethod !== "manual" ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}\''',
+              "avoid duplicate manual feedback",
+          )'''
+          new_block = '''    global_feedback = \'''      {message && !result ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}\'''
+          global_feedback_replacement = \'''      {message && !result && entryMethod !== "manual" ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}\'''
+          if global_feedback not in text:
+              raise RuntimeError("global feedback block not found")
+          prefix, separator, suffix = text.rpartition(global_feedback)
+          if not separator:
+              raise RuntimeError("global feedback block could not be isolated")
+          text = prefix + global_feedback_replacement + suffix'''
+          if text.count(old_block) != 1:
+              raise SystemExit(f'Unexpected feedback transform block count: {text.count(old_block)}')
+          text = text.replace(old_block, new_block, 1)
+          path.write_text(text, encoding='utf-8')
+          compile(text, str(path), 'exec')
+
+      - name: Commit repair and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/fix-followup-global-feedback-transform-20260728.yml
+          git config user.name 'pickleballattrespalapas'
+          git config user.email 'pickleballattrespalapas@gmail.com'
+          git add scripts/apply_match_player_session_followups_20260728.py .github/workflows/fix-followup-global-feedback-transform-20260728.yml
+          git commit -m 'Fix follow-up global feedback transform'
+          git push origin HEAD:agent/match-player-session-followups-20260728
