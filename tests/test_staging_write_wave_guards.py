@@ -250,9 +250,11 @@ def test_direct_singles_uploader_gate_opens_only_in_atomic_match_wave() -> None:
         encoding="utf-8"
     )
     assert f'{flag} = "0"' in (ROOT / "fly.toml").read_text(encoding="utf-8")
-    assert flag in (
+    workflow = (
         ROOT / ".github/workflows/fly_api_staging_deploy.yml"
     ).read_text(encoding="utf-8")
+    assert "from scripts.staging_write_waves import ALL_STAGING_WRITE_FLAGS" in workflow
+    assert 'secret_args+=("$name=${!name}")' in workflow
 
 
 def test_match_log_destructive_gate_opens_only_in_atomic_recovery_wave() -> None:
@@ -278,9 +280,11 @@ def test_match_log_destructive_gate_opens_only_in_atomic_recovery_wave() -> None
         encoding="utf-8"
     )
     assert f'{flag} = "0"' in (ROOT / "fly.toml").read_text(encoding="utf-8")
-    assert flag in (
+    workflow = (
         ROOT / ".github/workflows/fly_api_staging_deploy.yml"
     ).read_text(encoding="utf-8")
+    assert "from scripts.staging_write_waves import ALL_STAGING_WRITE_FLAGS" in workflow
+    assert 'secret_args+=("$name=${!name}")' in workflow
 
 
 def test_tournament_commerce_gate_opens_only_in_its_two_reviewed_waves() -> None:
@@ -299,9 +303,11 @@ def test_tournament_commerce_gate_opens_only_in_its_two_reviewed_waves() -> None
     assert f'{flag} = "0"' in (ROOT / "fly.toml").read_text(
         encoding="utf-8"
     )
-    assert flag in (
+    workflow = (
         ROOT / ".github/workflows/fly_api_staging_deploy.yml"
     ).read_text(encoding="utf-8")
+    assert "from scripts.staging_write_waves import ALL_STAGING_WRITE_FLAGS" in workflow
+    assert 'secret_args+=("$name=${!name}")' in workflow
 
 
 def _middleware_client() -> TestClient:
