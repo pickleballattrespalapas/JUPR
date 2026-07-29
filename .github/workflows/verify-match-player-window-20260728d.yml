@@ -1,4 +1,4 @@
-name: Diagnose safe match-player controller recovery
+name: Verify closed-ledger recovery before match-player retry
 
 on:
   pull_request:
@@ -20,11 +20,12 @@ jobs:
       github.event.pull_request.head.ref == 'agent/verify-match-player-window-20260728d' &&
       github.event.pull_request.base.ref == 'staging'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     environment: staging
     env:
       EXPECTED_SHA: 8ad7fe2b8d0c6925fc8ff5585aba24e1bc5a7db7
       EXPECTED_SUPABASE_REF: sijpxjxvdtrehmqvirfi
+      EXPECTED_EDIT_AFTER: 2026-07-29T00:55:35Z
       FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
     steps:
       - name: Check out isolated verifier
@@ -48,27 +49,48 @@ jobs:
           files="$(gh api -H "X-GitHub-Api-Version: 2026-03-10" --paginate "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[].filename' | sort)"
           test "$files" = ".github/workflows/verify-match-player-window-20260728d.yml"
 
-      - name: Capture controller issue and latest session run
+      - name: Wait for closed edit controller and its safety recovery
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/issues/1062" > issue.json
+          for attempt in $(seq 1 90); do
+            gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/issues/1062" > issue.json
+            gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/workflows/staging-write-session.yml/runs?event=issues&per_page=20" > session-runs.json
+            SESSION_ID="$(jq -r --arg after "$EXPECTED_EDIT_AFTER" '[.workflow_runs[] | select(.display_title == "Staging write session #1062 · edited" and .created_at >= $after)] | sort_by(.created_at) | reverse | .[0].id // empty' session-runs.json)"
+            SESSION_STATUS="$(jq -r --arg after "$EXPECTED_EDIT_AFTER" '[.workflow_runs[] | select(.display_title == "Staging write session #1062 · edited" and .created_at >= $after)] | sort_by(.created_at) | reverse | .[0].status // empty' session-runs.json)"
+            SESSION_UPDATED="$(jq -r --arg after "$EXPECTED_EDIT_AFTER" '[.workflow_runs[] | select(.display_title == "Staging write session #1062 · edited" and .created_at >= $after)] | sort_by(.created_at) | reverse | .[0].updated_at // empty' session-runs.json)"
+            if [ -n "$SESSION_ID" ] && [ "$SESSION_STATUS" = "completed" ] && [ -n "$SESSION_UPDATED" ]; then
+              gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/workflows/staging-write-recovery.yml/runs?per_page=30" > recovery-runs.json
+              RECOVERY_ID="$(jq -r --arg after "$SESSION_UPDATED" '[.workflow_runs[] | select(.created_at >= $after)] | sort_by(.created_at) | .[0].id // empty' recovery-runs.json)"
+              RECOVERY_STATUS="$(jq -r --arg after "$SESSION_UPDATED" '[.workflow_runs[] | select(.created_at >= $after)] | sort_by(.created_at) | .[0].status // empty' recovery-runs.json)"
+              if [ -n "$RECOVERY_ID" ] && [ "$RECOVERY_STATUS" = "completed" ]; then
+                printf '%s\n' "$SESSION_ID" > session-run-id.txt
+                printf '%s\n' "$RECOVERY_ID" > recovery-run-id.txt
+                gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$SESSION_ID/jobs?filter=all&per_page=100" > session-jobs.json
+                gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_ID/jobs?filter=all&per_page=100" > recovery-jobs.json
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 90 ]; then
+              jq '.workflow_runs[:5] | map({id, display_title, status, conclusion, created_at, updated_at})' session-runs.json || true
+              jq '.workflow_runs[:5] | map({id, display_title, status, conclusion, created_at, updated_at})' recovery-runs.json 2>/dev/null || true
+              echo "Closed-ledger controller recovery did not settle in time." >&2
+              exit 1
+            fi
+            sleep 10
+          done
           jq -e --arg sha "$EXPECTED_SHA" 'select(
             .state == "closed" and
             .locked == true and
-            (.body | contains("candidate_sha: " + $sha))
+            (.body | contains("command: close")) and
+            (.body | contains("candidate_sha: " + $sha)) and
+            (.body | contains("expected_write_wave: none")) and
+            (.body | contains("write_wave: none"))
           )' issue.json >/dev/null
-          gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/workflows/staging-write-session.yml/runs?event=issues&per_page=10" > session-runs.json
-          RUN_ID="$(jq -er '.workflow_runs[0].id' session-runs.json)"
-          printf '%s\n' "$RUN_ID" > session-run-id.txt
-          gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=all&per_page=100" > session-jobs.json
-          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > session-failed.log 2>&1 || true
-          jq '{id: .workflow_runs[0].id, status: .workflow_runs[0].status, conclusion: .workflow_runs[0].conclusion, created_at: .workflow_runs[0].created_at, updated_at: .workflow_runs[0].updated_at, html_url: .workflow_runs[0].html_url}' session-runs.json
-          jq '[.jobs[] | {name, status, conclusion, steps: [.steps[]? | {name, status, conclusion}]}]' session-jobs.json
 
-      - name: Verify exact candidate returned to no-write mode
+      - name: Verify exact candidate remains in no-write mode
         shell: bash
         run: |
           set -euo pipefail
@@ -79,7 +101,7 @@ jobs:
             fi
             if [ "$attempt" -eq 60 ]; then
               cat fly-health.json 2>/dev/null || true
-              echo "Staging did not return to verified no-write mode." >&2
+              echo "Staging did not remain in verified no-write mode." >&2
               exit 1
             fi
             sleep 10
@@ -105,19 +127,21 @@ jobs:
           }
           failed = [name for name, accepted in checks.items() if not accepted]
           if failed:
-              raise SystemExit('No-write recovery verification failed: ' + ', '.join(failed))
+              raise SystemExit('No-write verification failed: ' + ', '.join(failed))
           PY
 
-      - name: Upload recovery diagnosis
+      - name: Upload closed-ledger recovery evidence
         uses: actions/upload-artifact@v4
         with:
-          name: match-player-controller-recovery-diagnosis
+          name: match-player-closed-ledger-recovery
           path: |
             issue.json
             session-runs.json
             session-run-id.txt
             session-jobs.json
-            session-failed.log
+            recovery-runs.json
+            recovery-run-id.txt
+            recovery-jobs.json
             fly-health.json
           if-no-files-found: error
           retention-days: 2
