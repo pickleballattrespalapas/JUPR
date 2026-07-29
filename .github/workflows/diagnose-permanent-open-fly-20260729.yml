@@ -1,0 +1,69 @@
+name: Diagnose permanent-open Fly deployment
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - synchronize
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  diagnose:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/verify-permanent-open-staging-20260729'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPECTED_SHA: fafe0e3a759ed9e88f737942f538938233392388
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/verify-permanent-open-staging-20260729
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Capture exact push deployment failure
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api -H "X-GitHub-Api-Version: 2026-03-10" \
+            "/repos/$GITHUB_REPOSITORY/actions/workflows/fly_api_staging_deploy.yml/runs?branch=staging&event=push&per_page=30" \
+            > fly-runs.json
+          RUN_ID="$(jq -er --arg sha "$EXPECTED_SHA" '[.workflow_runs[] | select(.head_sha == $sha)][0].id' fly-runs.json)"
+          printf '%s\n' "$RUN_ID" > fly-run-id.txt
+          gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > fly-run.json
+          gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=all&per_page=100" > fly-jobs.json
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > fly-failed.log 2>&1 || true
+          jq '{id, name, display_title, event, status, conclusion, head_sha, created_at, updated_at, html_url}' fly-run.json
+          jq '[.jobs[] | {id, name, status, conclusion, steps: [.steps[]? | {name, status, conclusion}]}]' fly-jobs.json
+          cat fly-failed.log
+
+      - name: Capture current Fly health
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 30 \
+            https://juprleagues-api-staging.fly.dev/health \
+            -o fly-health.json
+          jq '{ok, git_commit_sha, image_build_git_sha, staging_write_wave, write_wave, business_data_write_wave_active, supabase_project_ref, write_prerequisites}' fly-health.json
+
+      - name: Upload diagnosis
+        uses: actions/upload-artifact@v4
+        with:
+          name: permanent-open-fly-diagnosis
+          path: |
+            fly-runs.json
+            fly-run-id.txt
+            fly-run.json
+            fly-jobs.json
+            fly-failed.log
+            fly-health.json
+          if-no-files-found: error
+          retention-days: 2
