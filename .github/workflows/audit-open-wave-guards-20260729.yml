@@ -1,0 +1,43 @@
+name: Audit open-wave guards
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/audit-open-wave-guards-20260729' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact staging source
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Upload source snapshot for exact-wave audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-wave-guard-source
+          path: |
+            jupr_app
+            services/api
+            scripts
+            tests
+            fly.staging.toml
+            .github/workflows/fly_api_staging_deploy.yml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 2
