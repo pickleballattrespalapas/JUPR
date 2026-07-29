@@ -23,8 +23,8 @@ jobs:
     timeout-minutes: 110
     environment: staging
     concurrency:
-      group: jupr-staging-api-and-parity-evidence
-      cancel-in-progress: false
+      group: jupr-staging-followup-verification-20260729
+      cancel-in-progress: true
     env:
       EXPECTED_SHA: f6b2b0ce6fe9521b0b907fbb2dee808efc1d8bc0
       EXPECTED_DEPLOYMENT_ID: dpl_9o8URnZo6vzjEtfdWGVKzxhzT3hG
