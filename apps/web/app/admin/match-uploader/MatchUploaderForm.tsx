@@ -74,6 +74,7 @@ type SearchablePlayerInputProps = {
   value: string;
   players: PublicPlayer[];
   disabled?: boolean;
+  invalid?: boolean;
   onChange: (playerId: string) => void;
   onCreate: (
     name: string,
@@ -97,6 +98,7 @@ const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: 
 const inputStyle = { width: "100%", padding: "0.5rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
+const dangerButtonStyle = { ...buttonStyle, background: "#b91c1c", borderColor: "#b91c1c" };
 
 function todayIsoDate(): string {
   const today = new Date();
@@ -135,13 +137,15 @@ function apiUrl(apiBase: string, path: string): string {
 }
 
 function ratingLabel(value?: number | null): string {
-  return value == null ? "—" : Math.round(Number(value)).toString();
+  if (value == null) return "—";
+  return (Number(value) / 400).toFixed(2);
 }
 
 function deltaLabel(value?: number | null): string {
   if (value == null) return "—";
-  const rounded = Math.round(Number(value));
-  return `${rounded >= 0 ? "+" : ""}${rounded}`;
+  const juprDelta = Number(value) / 400;
+  const normalized = Math.abs(juprDelta) < 0.005 ? 0 : juprDelta;
+  return `${normalized >= 0 ? "+" : ""}${normalized.toFixed(2)}`;
 }
 
 function isUploaderErrorMessage(message: string): boolean {
@@ -152,16 +156,20 @@ function isFilled(row: MatchRow): boolean {
   return Boolean(row.t1p1 || row.t1p2 || row.t2p1 || row.t2p2 || Number(row.s1 || 0) + Number(row.s2 || 0) > 0);
 }
 
-function validateRow(row: MatchRow, index: number): string | null {
-  if (!isFilled(row)) return null;
+function validateRequiredRow(row: MatchRow, index: number): string | null {
   const ids = [row.t1p1, row.t1p2, row.t2p1, row.t2p2].filter(Boolean);
-  if (ids.length !== 4) return `Row ${index + 1}: select four players.`;
-  if (new Set(ids).size !== 4) return `Row ${index + 1}: select four different players.`;
+  if (ids.length !== 4) return `Row ${index + 1}: complete the highlighted player fields.`;
+  if (new Set(ids).size !== 4) return `Row ${index + 1}: each player may appear only once.`;
   const s1 = Number(row.s1 || 0);
   const s2 = Number(row.s2 || 0);
   if (!Number.isFinite(s1) || !Number.isFinite(s2) || s1 < 0 || s2 < 0) return `Row ${index + 1}: scores must be non-negative numbers.`;
-  if (s1 + s2 <= 0) return `Row ${index + 1}: enter a non-zero score.`;
+  if (s1 + s2 <= 0) return `Row ${index + 1}: enter a non-zero score in the highlighted score fields.`;
   return null;
+}
+
+function validateRow(row: MatchRow, index: number): string | null {
+  if (!isFilled(row)) return null;
+  return validateRequiredRow(row, index);
 }
 
 function isReadyRow(row: MatchRow, index: number): boolean {
@@ -192,6 +200,7 @@ function SearchablePlayerInput({
   value,
   players,
   disabled = false,
+  invalid = false,
   onChange,
   onCreate,
 }: SearchablePlayerInputProps) {
@@ -212,6 +221,9 @@ function SearchablePlayerInput({
       )
     : players;
   const numericStartingJupr = Number(startingJupr);
+  const validatedInputStyle = invalid
+    ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" }
+    : inputStyle;
 
   useEffect(() => {
     setQuery(selectedName);
@@ -244,7 +256,7 @@ function SearchablePlayerInput({
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "0.35rem", alignItems: "stretch" }}>
           <div
             title={selectedName}
-            style={{ ...inputStyle, minHeight: "2.4rem", display: "flex", alignItems: "center", whiteSpace: "normal", overflowWrap: "anywhere", background: "#f8fafc" }}
+            style={{ ...validatedInputStyle, minHeight: "2.4rem", display: "flex", alignItems: "center", whiteSpace: "normal", overflowWrap: "anywhere", background: invalid ? "#fef2f2" : "#f8fafc" }}
           >
             {selectedName}
           </div>
@@ -268,6 +280,7 @@ function SearchablePlayerInput({
           placeholder="Search player…"
           autoComplete="off"
           disabled={disabled || creating}
+          aria-invalid={invalid || undefined}
           onChange={(event) => {
             const next = event.target.value;
             setQuery(next);
@@ -278,7 +291,7 @@ function SearchablePlayerInput({
             );
             onChange(match ? String(match.id) : "");
           }}
-          style={inputStyle}
+          style={validatedInputStyle}
         />
       )}
       <datalist id={`${inputId}-options`}>
@@ -465,6 +478,49 @@ function previewToSchedule(preview: AdminMatchUploaderRoundRobinPreview): RrCour
   }));
 }
 
+
+function RemoveAllMatchesDialog({
+  onClose,
+  onKeepRows,
+  onRemoveAll,
+}: {
+  onClose: () => void;
+  onKeepRows: () => void;
+  onRemoveAll: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+    return () => {
+      if (dialog?.open) dialog.close();
+    };
+  }, []);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      aria-labelledby="remove-all-matches-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      style={{ width: "min(620px, calc(100vw - 2rem))", border: 0, borderRadius: "16px", padding: 0, boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)" }}
+    >
+      <div style={{ padding: "1.25rem" }}>
+        <h2 id="remove-all-matches-title" style={{ marginTop: 0 }}>Remove entered matches?</h2>
+        <p>Choose whether to keep completed or partially entered rows, remove only blank rows, or clear the entire batch.</p>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", flexWrap: "wrap" }}>
+          <button type="button" onClick={onClose} style={ghostButtonStyle}>No, go back</button>
+          <button type="button" onClick={onKeepRows} style={ghostButtonStyle}>Keep rows with data</button>
+          <button type="button" onClick={onRemoveAll} style={dangerButtonStyle}>Yes, remove all</button>
+        </div>
+      </div>
+    </dialog>
+  );
+}
+
 function SubmissionResultDialog({
   result,
   onClose,
@@ -557,6 +613,8 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   const [message, setMessage] = useState<string | null>(null);
   const [result, setResult] = useState<AdminMatchUploaderWriteResult | null>(null);
   const [submissionKind, setSubmissionKind] = useState<"manual" | "round_robin" | "singles" | null>(null);
+  const [manualValidationAttempted, setManualValidationAttempted] = useState(false);
+  const [removeAllDialogOpen, setRemoveAllDialogOpen] = useState(false);
 
   const filledRows = rows.filter(isFilled);
   const readyRows = rows.filter((row, index) => isReadyRow(row, index));
@@ -579,6 +637,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   function resetManualRows() {
     const preservedScope = (readyRows[0] || filledRows[0])?.ratingScope || "";
     setRows([newMatchRow(defaultDate, defaultWeekTag, preservedScope)]);
+    setManualValidationAttempted(false);
   }
 
   function acknowledgeSubmission() {
@@ -611,7 +670,25 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
 
   function removeAllRows() {
     clearEntryFeedback();
+    setRemoveAllDialogOpen(false);
     resetManualRows();
+  }
+
+  function keepRowsWithData() {
+    clearEntryFeedback();
+    setRemoveAllDialogOpen(false);
+    setManualValidationAttempted(false);
+    setRows((current) => {
+      const kept = current.filter(rowHasEnteredData);
+      return kept.length ? kept : [newMatchRow(defaultDate, defaultWeekTag)];
+    });
+  }
+
+  function playerOptionsFor(row: MatchRow, currentValue: string): PublicPlayer[] {
+    const selectedElsewhere = new Set(
+      [row.t1p1, row.t1p2, row.t2p1, row.t2p2].filter((value) => value && value !== currentValue),
+    );
+    return knownPlayers.filter((player) => !selectedElsewhere.has(String(player.id)));
   }
 
   function requireReady(): boolean {
@@ -867,8 +944,11 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   async function submitManualBatch() {
     setMessage(null);
     setResult(null);
+    setManualValidationAttempted(true);
     if (!requireReady()) return;
-    const errors = rows.map(validateRow).filter(Boolean) as string[];
+    const enteredRows = rows.filter(rowHasEnteredData);
+    const validationRows = enteredRows.length ? enteredRows : rows.slice(0, 1);
+    const errors = validationRows.map((row) => validateRequiredRow(row, rows.indexOf(row))).filter(Boolean) as string[];
     if (errors.length) {
       setMessage(errors[0]);
       return;
@@ -953,7 +1033,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
           {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
-          <label><strong>Entry method</strong><br /><select value={entryMethod} onChange={(event) => { clearEntryFeedback(); setEntryMethod(event.target.value as "singles" | "manual" | "round_robin"); }} style={inputStyle}>{singlesEnabled ? <option value="singles">Singles match</option> : null}<option value="manual">Doubles manual / batch</option><option value="round_robin">Doubles round robin</option></select></label>
+          <label><strong>Entry method</strong><br /><select value={entryMethod} onChange={(event) => { clearEntryFeedback(); setManualValidationAttempted(false); setEntryMethod(event.target.value as "singles" | "manual" | "round_robin"); }} style={inputStyle}>{singlesEnabled ? <option value="singles">Singles match</option> : null}<option value="manual">Doubles manual / batch</option><option value="round_robin">Doubles round robin</option></select></label>
           {entryMethod !== "singles" ? <label><strong>Context</strong><br /><select value={context} onChange={(event) => { clearEntryFeedback(); setContext(event.target.value as "league" | "popup"); }} style={inputStyle}><option value="league">Official League</option><option value="popup">Pop-Up / Social</option></select></label> : null}
           {entryMethod !== "singles" ? <label><strong>Default date</strong><br /><input value={defaultDate} onChange={(event) => { const value = event.target.value; clearEntryFeedback(); setDefaultDate(value); setRows((current) => current.map((row) => isFilled(row) ? row : { ...row, date: value })); }} type="date" style={inputStyle} /></label> : null}
           {entryMethod !== "singles" ? <label><strong>Default league</strong><br /><select value={defaultLeague} onChange={(event) => { clearEntryFeedback(); setDefaultLeague(event.target.value); }} disabled={context === "popup"} style={inputStyle}>{status.league_options.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
@@ -1003,27 +1083,28 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
           <h2 style={{ marginTop: 0 }}>Doubles manual / batch score entry</h2>
           <p style={{ color: "#475569" }}>Empty rows are ignored. Submitted rows must have four distinct players and a non-zero score.</p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
-            <button type="button" onClick={() => { clearEntryFeedback(); setRows((current) => [...current, newMatchRow(defaultDate, defaultWeekTag)]); }} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 1 Match</button>
-            <button type="button" onClick={() => { clearEntryFeedback(); setRows((current) => [...current, ...Array.from({ length: 5 }, () => newMatchRow(defaultDate, defaultWeekTag))].slice(0, status.max_batch_rows)); }} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 5 Matches</button>
+            <button type="button" onClick={() => { clearEntryFeedback(); setManualValidationAttempted(false); setRows((current) => [...current, newMatchRow(defaultDate, defaultWeekTag)]); }} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 1 Match</button>
+            <button type="button" onClick={() => { clearEntryFeedback(); setManualValidationAttempted(false); setRows((current) => [...current, ...Array.from({ length: 5 }, () => newMatchRow(defaultDate, defaultWeekTag))].slice(0, status.max_batch_rows)); }} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 5 Matches</button>
             {rows.some(rowHasEnteredData) ? (
-              <ConfirmAction
-                triggerLabel="Remove All"
-                title="Remove all entered matches?"
-                description="This clears every entered player and score and returns the uploader to one blank match."
-                confirmLabel="Yes, remove all"
-                confirmationText="REMOVE"
-                tone="danger"
-                disabled={saving}
-                busy={saving}
-                onConfirm={() => removeAllRows()}
-              />
+              <button type="button" onClick={() => setRemoveAllDialogOpen(true)} disabled={saving} style={dangerButtonStyle}>Remove All</button>
             ) : (
               <button type="button" onClick={removeAllRows} disabled={rows.length <= 1} style={ghostButtonStyle}>Remove All</button>
             )}
+            {removeAllDialogOpen ? (
+              <RemoveAllMatchesDialog
+                onClose={() => setRemoveAllDialogOpen(false)}
+                onKeepRows={keepRowsWithData}
+                onRemoveAll={removeAllRows}
+              />
+            ) : null}
           </div>
           <div style={{ display: "grid", gap: "0.75rem" }}>
-            {rows.map((row, index) => (
-              <div key={row.rowId} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: rowHasEnteredData(row) ? "#f8fafc" : "white" }}>
+            {rows.map((row, index) => {
+              const validateThisRow = manualValidationAttempted && (rowHasEnteredData(row) || (!rows.some(rowHasEnteredData) && index === 0));
+              const rowError = validateThisRow ? validateRequiredRow(row, index) : null;
+              const scoreInvalid = validateThisRow && Number(row.s1 || 0) + Number(row.s2 || 0) <= 0;
+              return (
+              <div key={row.rowId} style={{ border: rowError ? "2px solid #dc2626" : "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: rowError ? "#fff7f7" : rowHasEnteredData(row) ? "#f8fafc" : "white" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}>
                   <strong>Match {index + 1}</strong>
                   {rowHasEnteredData(row) ? (
@@ -1049,19 +1130,28 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
                   <label><strong>Match type</strong><br /><input value={matchType} readOnly aria-readonly="true" style={{ ...inputStyle, background: "#f1f5f9" }} /></label>
                   <label><strong>Rating scope</strong><br /><select value={row.ratingScope} onChange={(event) => patchRow(row.rowId, { ratingScope: event.target.value as MatchRow["ratingScope"] })} style={inputStyle}><option value="">Overall + league</option><option value="overall_only">Overall only</option><option value="unrated">Unrated / record only</option></select></label>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.5rem", marginTop: "0.5rem" }}>
-                  <SearchablePlayerInput inputId={`${row.rowId}-t1p1`} label="Team 1 · Player 1" value={row.t1p1} players={knownPlayers} disabled={saving || creatingPlayers} onChange={(t1p1) => patchRow(row.rowId, { t1p1 })} onCreate={createAndSelectPlayer} />
-                  <SearchablePlayerInput inputId={`${row.rowId}-t1p2`} label="Team 1 · Player 2" value={row.t1p2} players={knownPlayers} disabled={saving || creatingPlayers} onChange={(t1p2) => patchRow(row.rowId, { t1p2 })} onCreate={createAndSelectPlayer} />
-                  <label><strong>Team 1 score</strong><br /><input value={row.s1} onChange={(event) => patchRow(row.rowId, { s1: event.target.value })} type="number" min={0} max={99} style={inputStyle} /></label>
-                  <label><strong>Team 2 score</strong><br /><input value={row.s2} onChange={(event) => patchRow(row.rowId, { s2: event.target.value })} type="number" min={0} max={99} style={inputStyle} /></label>
-                  <SearchablePlayerInput inputId={`${row.rowId}-t2p1`} label="Team 2 · Player 1" value={row.t2p1} players={knownPlayers} disabled={saving || creatingPlayers} onChange={(t2p1) => patchRow(row.rowId, { t2p1 })} onCreate={createAndSelectPlayer} />
-                  <SearchablePlayerInput inputId={`${row.rowId}-t2p2`} label="Team 2 · Player 2" value={row.t2p2} players={knownPlayers} disabled={saving || creatingPlayers} onChange={(t2p2) => patchRow(row.rowId, { t2p2 })} onCreate={createAndSelectPlayer} />
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}>
+                  <section aria-label={`Match ${index + 1} Team 1`} style={{ border: "1px solid #cbd5e1", borderRadius: "10px", padding: "0.75rem", display: "grid", gap: "0.6rem", alignContent: "start", background: "white" }}>
+                    <h4 style={{ margin: 0 }}>Team 1</h4>
+                    <SearchablePlayerInput inputId={`${row.rowId}-t1p1`} label="Player 1" value={row.t1p1} players={playerOptionsFor(row, row.t1p1)} invalid={validateThisRow && !row.t1p1} disabled={saving || creatingPlayers} onChange={(t1p1) => patchRow(row.rowId, { t1p1 })} onCreate={createAndSelectPlayer} />
+                    <SearchablePlayerInput inputId={`${row.rowId}-t1p2`} label="Player 2" value={row.t1p2} players={playerOptionsFor(row, row.t1p2)} invalid={validateThisRow && !row.t1p2} disabled={saving || creatingPlayers} onChange={(t1p2) => patchRow(row.rowId, { t1p2 })} onCreate={createAndSelectPlayer} />
+                    <label><strong>Score</strong><br /><input value={row.s1} onChange={(event) => patchRow(row.rowId, { s1: event.target.value })} aria-invalid={scoreInvalid || undefined} type="number" min={0} max={99} style={scoreInvalid ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" } : inputStyle} /></label>
+                  </section>
+                  <section aria-label={`Match ${index + 1} Team 2`} style={{ border: "1px solid #cbd5e1", borderRadius: "10px", padding: "0.75rem", display: "grid", gap: "0.6rem", alignContent: "start", background: "white" }}>
+                    <h4 style={{ margin: 0 }}>Team 2</h4>
+                    <SearchablePlayerInput inputId={`${row.rowId}-t2p1`} label="Player 1" value={row.t2p1} players={playerOptionsFor(row, row.t2p1)} invalid={validateThisRow && !row.t2p1} disabled={saving || creatingPlayers} onChange={(t2p1) => patchRow(row.rowId, { t2p1 })} onCreate={createAndSelectPlayer} />
+                    <SearchablePlayerInput inputId={`${row.rowId}-t2p2`} label="Player 2" value={row.t2p2} players={playerOptionsFor(row, row.t2p2)} invalid={validateThisRow && !row.t2p2} disabled={saving || creatingPlayers} onChange={(t2p2) => patchRow(row.rowId, { t2p2 })} onCreate={createAndSelectPlayer} />
+                    <label><strong>Score</strong><br /><input value={row.s2} onChange={(event) => patchRow(row.rowId, { s2: event.target.value })} aria-invalid={scoreInvalid || undefined} type="number" min={0} max={99} style={scoreInvalid ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" } : inputStyle} /></label>
+                  </section>
                 </div>
+                {rowError ? <p role="alert" style={{ color: "#b91c1c", marginBottom: 0 }}><strong>{rowError}</strong></p> : null}
               </div>
-            ))}
+              );
+            })}
           </div>
           <p><strong>Ready rows:</strong> {readyRows.length} / {rows.length}</p>
-          <button type="button" onClick={submitManualBatch} disabled={saving || !accessToken || !readyRows.length || hasInvalidFilledRows} style={buttonStyle}>{saving ? "Submitting…" : "Submit batch"}</button>
+          <button type="button" onClick={submitManualBatch} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Submitting…" : "Submit batch"}</button>
+          {message && !result ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}
         </article>
       ) : null}
 
@@ -1138,7 +1228,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
         </>
       ) : null}
 
-      {message && !result ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+      {message && !result && entryMethod !== "manual" ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}
 
       {result ? <SubmissionResultDialog result={result} onClose={acknowledgeSubmission} /> : null}
     </section>

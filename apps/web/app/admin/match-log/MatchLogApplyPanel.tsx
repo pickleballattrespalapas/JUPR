@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import type { ConfirmActionSuccess } from "@/components/ConfirmAction";
 import type {
   AdminDuplicateDeletePreview,
   AdminDuplicateGroup,
@@ -524,7 +525,7 @@ export default function MatchLogApplyPanel({
     }
   }
 
-  async function submitGuidedPatches(confirmationText: string) {
+  async function submitGuidedPatches(confirmationText: string): Promise<ConfirmActionSuccess | void> {
     setBusy(true);
     clearMessage();
     setResult(null);
@@ -538,17 +539,34 @@ export default function MatchLogApplyPanel({
         idempotency_key: idempotencyKey,
         replay_target: "ALL (Full System Reset)"
       });
+      const summary = resultSummary(payload) || "Match edits completed.";
       setResult(payload);
-      showMessage("apply", resultSummary(payload) || "Match edits completed.", payload.ok ? "success" : "error");
-      if (payload.ok) {
-        setStagedPatches([]);
-        setRecoveryOperationId(null);
-        setIdempotencyKey(requestKey());
-        onMutationComplete();
-      }
+      showMessage("apply", summary, payload.ok ? "success" : "error");
+      if (!payload.ok) throw new Error(summary);
+      setStagedPatches([]);
+      setRecoveryOperationId(null);
+      setIdempotencyKey(requestKey());
+      onMutationComplete();
+      return {
+        title: payload.mode === "applied_and_replayed" ? "Match edit and replay complete" : "Match edit complete",
+        description: (
+          <div>
+            <p role="status" style={{ color: "#166534" }}><strong>{summary}</strong></p>
+            <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem", margin: 0 }}>
+              <div><dt style={{ fontWeight: 700 }}>Matches updated</dt><dd style={{ margin: 0 }}>{payload.updated_count ?? 0}</dd></div>
+              <div><dt style={{ fontWeight: 700 }}>Ratings replay</dt><dd style={{ margin: 0 }}>{payload.replay_job_id ? "Completed" : "Not required"}</dd></div>
+              {payload.replay_job_id ? <div><dt style={{ fontWeight: 700 }}>Replay job</dt><dd style={{ margin: 0, fontFamily: "monospace", overflowWrap: "anywhere" }}>{payload.replay_job_id}</dd></div> : null}
+            </dl>
+            {payload.warnings?.length ? <ul style={{ color: "#92400e" }}>{payload.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+          </div>
+        ),
+        closeLabel: "OK",
+      };
     } catch (error) {
       if (error instanceof ApiCallError && error.operationId) setRecoveryOperationId(error.operationId);
-      showMessage("apply", error instanceof Error ? error.message : "Unable to apply match edits.");
+      const applyError = error instanceof Error ? error : new Error("Unable to apply match edits.");
+      showMessage("apply", applyError.message);
+      throw applyError;
     } finally {
       setBusy(false);
     }
