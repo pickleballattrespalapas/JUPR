@@ -33,6 +33,17 @@ jobs:
             echo "Contract patch already applied."
             exit 0
           fi
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/patch_permanent_staging_contract_tests_20260729.py")
+          text = path.read_text(encoding="utf-8")
+          old = "        '''def"
+          new = "        r'''def"
+          if text.count(old) != 4:
+              raise SystemExit(f"Unexpected replacement-body count: {text.count(old)}")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
           python scripts/patch_permanent_staging_contract_tests_20260729.py
           python -m py_compile tests/test_staging_deployment_config.py
           git diff --check
