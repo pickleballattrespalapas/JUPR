@@ -629,3 +629,13 @@ def test_team_league_staging_gates_require_the_matching_wave_and_flag(
     monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "public-intake-auth")
     assert staging_admin_team_league_writes_enabled() is False
     assert staging_public_team_league_writes_enabled() is True
+
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "open")
+    assert staging_admin_team_league_writes_enabled() is True
+    assert staging_public_team_league_writes_enabled() is True
+
+    monkeypatch.setenv(
+        "JUPR_ENABLE_STAGING_NEXT_ADMIN_LEAGUE_MANAGER_WRITES", "0"
+    )
+    assert staging_admin_team_league_writes_enabled() is False
+    assert staging_public_team_league_writes_enabled() is True

@@ -286,7 +286,7 @@ def test_invalid_team_setup_recovery_token_is_rejected_before_connectors(
     assert opened == {"club": 0, "database": 0}
 
 
-def test_public_team_writes_require_exact_public_intake_wave(monkeypatch):
+def test_public_team_writes_allow_public_intake_or_permanent_open(monkeypatch):
     monkeypatch.setenv("JUPR_ENV", "staging")
     monkeypatch.setenv("JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION", "1")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only")
@@ -297,6 +297,9 @@ def test_public_team_writes_require_exact_public_intake_wave(monkeypatch):
         require_public_team_tournament_mutation_runtime()
 
     monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "public-intake-auth")
+    require_public_team_tournament_mutation_runtime()
+
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "open")
     require_public_team_tournament_mutation_runtime()
 
 
