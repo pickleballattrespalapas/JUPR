@@ -32,7 +32,15 @@ jobs:
           python-version: "3.11"
 
       - name: Apply permanent staging mode
+        id: apply
+        shell: bash
         run: |
+          set -euo pipefail
+          if grep -q 'OPEN_WRITE_WAVE = "open"' scripts/staging_write_waves.py; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Permanent staging mode is already applied."
+            exit 0
+          fi
           python - <<'PY'
           from pathlib import Path
 
@@ -47,13 +55,20 @@ jobs:
           python -m py_compile scripts/apply_permanent_staging_writes_20260729.py
           python scripts/apply_permanent_staging_writes_20260729.py
           git diff --check
+          mkdir -p workflow-payload/.github/workflows
+          cp .github/workflows/fly_api_staging_deploy.yml workflow-payload/.github/workflows/
+          cp .github/workflows/staging-write-session.yml workflow-payload/.github/workflows/
+          cp .github/workflows/staging-write-recovery.yml workflow-payload/.github/workflows/
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Run focused Python verification
+        if: steps.apply.outputs.changed == 'true'
         run: |
           python -m pip install pytest
           python -m pytest -q tests/test_permanent_staging_write_mode.py
 
       - name: Set up Node
+        if: steps.apply.outputs.changed == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -61,23 +76,40 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
 
       - name: Install web dependencies
+        if: steps.apply.outputs.changed == 'true'
         working-directory: apps/web
         run: npm ci
 
       - name: Run component checks
+        if: steps.apply.outputs.changed == 'true'
         working-directory: apps/web
         run: npm run test:component
 
       - name: Build Next.js
+        if: steps.apply.outputs.changed == 'true'
         working-directory: apps/web
         run: npm run build
 
-      - name: Commit verified implementation
+      - name: Upload workflow changes
+        if: steps.apply.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: permanent-staging-workflow-payload
+          path: workflow-payload
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Commit verified non-workflow implementation
+        if: steps.apply.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          rm scripts/apply_permanent_staging_writes_20260729.py
-          rm .github/workflows/apply-permanent-staging-writes-20260729.yml
+          git checkout -- \
+            .github/workflows/fly_api_staging_deploy.yml \
+            .github/workflows/staging-write-session.yml \
+            .github/workflows/staging-write-recovery.yml \
+            scripts/apply_permanent_staging_writes_20260729.py
+          rm -rf workflow-payload
           git config user.name 'pickleballattrespalapas'
           git config user.email 'pickleballattrespalapas@gmail.com'
           git add -A
