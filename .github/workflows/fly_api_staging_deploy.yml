@@ -145,6 +145,54 @@ jobs:
             --fly-config fly.staging.toml \
             --github-env "$GITHUB_ENV"
 
+      - name: Resolve stable staging-only public live secrets
+        shell: bash
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          CONFIGURED_PUBLIC_LIVE_RATE_LIMIT_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET }}
+          CONFIGURED_PUBLIC_LIVE_TOKEN_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_TOKEN_SECRET }}
+        run: |
+          set -euo pipefail
+          token_secret="${CONFIGURED_PUBLIC_LIVE_TOKEN_SECRET:-}"
+          rate_limit_secret="${CONFIGURED_PUBLIC_LIVE_RATE_LIMIT_SECRET:-}"
+          if [ -z "$token_secret" ] && [ -z "$rate_limit_secret" ]; then
+            mapfile -t derived_secrets < <(
+              python - <<'PY'
+          import base64
+          import hashlib
+          import hmac
+          import os
+
+          root_secret = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip().encode("utf-8")
+          if len(root_secret) < 32:
+              raise SystemExit("Staging service role key is unavailable for public-live secret derivation")
+          for label in (
+              b"jupr:staging:public-live:token:v1",
+              b"jupr:staging:public-live:rate-limit:v1",
+          ):
+              digest = hmac.new(root_secret, label, hashlib.sha256).digest()
+              print(base64.urlsafe_b64encode(digest).decode("ascii").rstrip("="))
+          PY
+            )
+            token_secret="${derived_secrets[0]}"
+            rate_limit_secret="${derived_secrets[1]}"
+          elif [ -z "$token_secret" ] || [ -z "$rate_limit_secret" ]; then
+            echo "Both dedicated public-live staging secrets must be configured together." >&2
+            exit 1
+          fi
+          if [ "${#token_secret}" -lt 32 ] || [ "${#rate_limit_secret}" -lt 32 ] || [ "$token_secret" = "$rate_limit_secret" ]; then
+            echo "Resolved public-live staging secrets are invalid." >&2
+            exit 1
+          fi
+          echo "::add-mask::$token_secret"
+          echo "::add-mask::$rate_limit_secret"
+          {
+            printf 'STAGING_PUBLIC_LIVE_TOKEN_SECRET=%s\n' "$token_secret"
+            printf 'STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET=%s\n' "$rate_limit_secret"
+            printf 'JUPR_PUBLIC_LIVE_TOKEN_SECRET=%s\n' "$token_secret"
+            printf 'JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET=%s\n' "$rate_limit_secret"
+          } >> "$GITHUB_ENV"
+
       - name: Validate staging-only inputs and secrets
         shell: bash
         env:
@@ -155,8 +203,6 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
           STAGING_REGISTRATION_CONFIRMATION_SECRET: ${{ secrets.STAGING_REGISTRATION_CONFIRMATION_SECRET }}
           STAGING_REGISTRATION_EDIT_SECRET: ${{ secrets.STAGING_REGISTRATION_EDIT_SECRET }}
-          STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET }}
-          STAGING_PUBLIC_LIVE_TOKEN_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_TOKEN_SECRET }}
         run: |
           set -euo pipefail
           test "$APP_NAME_INPUT" = "juprleagues-api-staging"
@@ -225,8 +271,6 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
           STAGING_REGISTRATION_CONFIRMATION_SECRET: ${{ secrets.STAGING_REGISTRATION_CONFIRMATION_SECRET }}
           STAGING_REGISTRATION_EDIT_SECRET: ${{ secrets.STAGING_REGISTRATION_EDIT_SECRET }}
-          STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET }}
-          STAGING_PUBLIC_LIVE_TOKEN_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_TOKEN_SECRET }}
         run: |
           set -euo pipefail
           test -n "$FLY_API_TOKEN"
@@ -352,8 +396,6 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
           JUPR_REGISTRATION_CONFIRMATION_SECRET: ${{ secrets.STAGING_REGISTRATION_CONFIRMATION_SECRET }}
           JUPR_REGISTRATION_EDIT_SECRET: ${{ secrets.STAGING_REGISTRATION_EDIT_SECRET }}
-          JUPR_PUBLIC_LIVE_TOKEN_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_TOKEN_SECRET }}
-          JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET }}
         run: |
           set -euo pipefail
           python -m pip install -r services/api/requirements.txt
