@@ -1,4 +1,4 @@
-name: Verify closed-ledger recovery before match-player retry
+name: Verify match-player manual window v4
 
 on:
   pull_request:
@@ -9,7 +9,6 @@ on:
       - synchronize
 
 permissions:
-  actions: read
   contents: read
   issues: read
 
@@ -25,8 +24,9 @@ jobs:
     env:
       EXPECTED_SHA: 8ad7fe2b8d0c6925fc8ff5585aba24e1bc5a7db7
       EXPECTED_SUPABASE_REF: sijpxjxvdtrehmqvirfi
-      EXPECTED_EDIT_AFTER: 2026-07-29T00:55:35Z
       FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      WEB_ORIGIN: https://jupr-abej2gtyu-pickleballattrespalapas1.vercel.app
+      SESSION_NONCE: 1bcd4a2a-69df-49f6-a4c4-6070beaf795b
     steps:
       - name: Check out isolated verifier
         uses: actions/checkout@v4
@@ -49,59 +49,37 @@ jobs:
           files="$(gh api -H "X-GitHub-Api-Version: 2026-03-10" --paginate "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[].filename' | sort)"
           test "$files" = ".github/workflows/verify-match-player-window-20260728d.yml"
 
-      - name: Wait for closed edit controller and its safety recovery
+      - name: Verify protected control lease
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 90); do
-            gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/issues/1062" > issue.json
-            gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/workflows/staging-write-session.yml/runs?event=issues&per_page=20" > session-runs.json
-            SESSION_ID="$(jq -r --arg after "$EXPECTED_EDIT_AFTER" '[.workflow_runs[] | select(.display_title == "Staging write session #1062 · edited" and .created_at >= $after)] | sort_by(.created_at) | reverse | .[0].id // empty' session-runs.json)"
-            SESSION_STATUS="$(jq -r --arg after "$EXPECTED_EDIT_AFTER" '[.workflow_runs[] | select(.display_title == "Staging write session #1062 · edited" and .created_at >= $after)] | sort_by(.created_at) | reverse | .[0].status // empty' session-runs.json)"
-            SESSION_UPDATED="$(jq -r --arg after "$EXPECTED_EDIT_AFTER" '[.workflow_runs[] | select(.display_title == "Staging write session #1062 · edited" and .created_at >= $after)] | sort_by(.created_at) | reverse | .[0].updated_at // empty' session-runs.json)"
-            if [ -n "$SESSION_ID" ] && [ "$SESSION_STATUS" = "completed" ] && [ -n "$SESSION_UPDATED" ]; then
-              gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/workflows/staging-write-recovery.yml/runs?per_page=30" > recovery-runs.json
-              RECOVERY_ID="$(jq -r --arg after "$SESSION_UPDATED" '[.workflow_runs[] | select(.created_at >= $after)] | sort_by(.created_at) | .[0].id // empty' recovery-runs.json)"
-              RECOVERY_STATUS="$(jq -r --arg after "$SESSION_UPDATED" '[.workflow_runs[] | select(.created_at >= $after)] | sort_by(.created_at) | .[0].status // empty' recovery-runs.json)"
-              if [ -n "$RECOVERY_ID" ] && [ "$RECOVERY_STATUS" = "completed" ]; then
-                printf '%s\n' "$SESSION_ID" > session-run-id.txt
-                printf '%s\n' "$RECOVERY_ID" > recovery-run-id.txt
-                gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$SESSION_ID/jobs?filter=all&per_page=100" > session-jobs.json
-                gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_ID/jobs?filter=all&per_page=100" > recovery-jobs.json
-                break
-              fi
-            fi
-            if [ "$attempt" -eq 90 ]; then
-              jq '.workflow_runs[:5] | map({id, display_title, status, conclusion, created_at, updated_at})' session-runs.json || true
-              jq '.workflow_runs[:5] | map({id, display_title, status, conclusion, created_at, updated_at})' recovery-runs.json 2>/dev/null || true
-              echo "Closed-ledger controller recovery did not settle in time." >&2
-              exit 1
-            fi
-            sleep 10
-          done
-          jq -e --arg sha "$EXPECTED_SHA" 'select(
-            .state == "closed" and
+          gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/issues/1062" > issue.json
+          jq -e --arg sha "$EXPECTED_SHA" --arg nonce "$SESSION_NONCE" 'select(
+            .state == "open" and
             .locked == true and
-            (.body | contains("command: close")) and
+            (.body | contains("command: open")) and
             (.body | contains("candidate_sha: " + $sha)) and
             (.body | contains("expected_write_wave: none")) and
-            (.body | contains("write_wave: none"))
+            (.body | contains("write_wave: match-player")) and
+            (.body | contains("session_nonce: " + $nonce)) and
+            (.body | contains("lease_expires_at: 2026-07-29T01:59:00Z"))
           )' issue.json >/dev/null
 
-      - name: Verify exact candidate remains in no-write mode
+      - name: Wait for and verify match-player Fly health
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 60); do
-            if curl --fail --silent --show-error --max-time 20 "$FLY_HEALTH_URL" -o fly-health.json && \
-              jq -e --arg sha "$EXPECTED_SHA" 'select(.git_commit_sha == $sha and .staging_write_wave == "none")' fly-health.json >/dev/null; then
-              break
+          for attempt in $(seq 1 100); do
+            if curl --fail --silent --show-error --max-time 20 "$FLY_HEALTH_URL" -o fly-health.json; then
+              if jq -e --arg sha "$EXPECTED_SHA" 'select(.git_commit_sha == $sha and .staging_write_wave == "match-player")' fly-health.json >/dev/null; then
+                break
+              fi
             fi
-            if [ "$attempt" -eq 60 ]; then
+            if [ "$attempt" -eq 100 ]; then
               cat fly-health.json 2>/dev/null || true
-              echo "Staging did not remain in verified no-write mode." >&2
+              echo "Match-player wave did not become ready in time." >&2
               exit 1
             fi
             sleep 10
@@ -111,7 +89,7 @@ jobs:
           from scripts.staging_write_waves import expected_write_flags
           with open('fly-health.json', encoding='utf-8') as handle:
               health = json.load(handle)
-          expected = expected_write_flags('none')
+          expected = expected_write_flags('match-player')
           checks = {
               'ok': health.get('ok') is True,
               'environment': health.get('environment') == 'staging',
@@ -119,29 +97,36 @@ jobs:
               'image_candidate': health.get('image_build_git_sha') == '8ad7fe2b8d0c6925fc8ff5585aba24e1bc5a7db7',
               'fly_app': health.get('fly_app_name') == 'juprleagues-api-staging',
               'supabase': health.get('supabase_project_ref') == 'sijpxjxvdtrehmqvirfi',
-              'wave': health.get('write_wave') == 'none' and health.get('staging_write_wave') == 'none',
-              'business_inactive': health.get('business_data_write_wave_active') is False,
+              'wave': health.get('write_wave') == 'match-player' and health.get('staging_write_wave') == 'match-player',
+              'business_active': health.get('business_data_write_wave_active') is True,
               'flags': health.get('controlled_write_flags') == expected,
+              'destructive_off': health.get('controlled_write_flags', {}).get('JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE') is False,
               'email': health.get('write_prerequisites', {}).get('email_mode') == 'dry_run',
               'live_email_off': health.get('write_prerequisites', {}).get('live_player_update_email_enabled') is False,
           }
           failed = [name for name, accepted in checks.items() if not accepted]
           if failed:
-              raise SystemExit('No-write verification failed: ' + ', '.join(failed))
+              raise SystemExit('Match-player health verification failed: ' + ', '.join(failed))
           PY
 
-      - name: Upload closed-ledger recovery evidence
+      - name: Verify current Match Uploader and Match Log pages are reachable
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > web-status.txt
+          for path in /admin/match-uploader /admin/match-log /admin/match-log/edit; do
+            code="$(curl --silent --show-error --location --max-time 30 --output /dev/null --write-out '%{http_code}' "$WEB_ORIGIN$path")"
+            printf '%s %s\n' "$code" "$path" | tee -a web-status.txt
+            case "$code" in 200|204) ;; *) exit 1 ;; esac
+          done
+
+      - name: Upload window evidence
         uses: actions/upload-artifact@v4
         with:
-          name: match-player-closed-ledger-recovery
+          name: match-player-window-evidence-v4
           path: |
             issue.json
-            session-runs.json
-            session-run-id.txt
-            session-jobs.json
-            recovery-runs.json
-            recovery-run-id.txt
-            recovery-jobs.json
             fly-health.json
+            web-status.txt
           if-no-files-found: error
           retention-days: 2
