@@ -1,0 +1,212 @@
+name: Verify permanent-open staging c5724
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/verify-permanent-open-staging-c5724-20260729' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    environment: staging
+    env:
+      EXPECTED_SHA: c5724ba0148442d748f55c7fd1a91c5715538b8b
+      EXPECTED_DEPLOYMENT_ID: dpl_4s5HSh1KMC9LHyMAZheXWmmGzQTL
+      EXPECTED_DEPLOYMENT_ORIGIN: https://jupr-5v2rg8zvk-pickleballattrespalapas1.vercel.app
+      WEB_ORIGIN: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      API_ORIGIN: https://juprleagues-api-staging.fly.dev
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+    steps:
+      - name: Check out isolated verifier
+        uses: actions/checkout@v4
+        with:
+          ref: agent/verify-permanent-open-staging-c5724-20260729
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source and one-file diff
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$PR_BASE_SHA" = "$EXPECTED_SHA"
+          test "$PR_HEAD_SHA" = "$(git rev-parse HEAD)"
+          files="$(gh api -H "X-GitHub-Api-Version: 2026-03-10" --paginate "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[].filename' | sort)"
+          test "$files" = ".github/workflows/verify-permanent-open-staging-c5724-20260729.yml"
+
+      - name: Verify exact Vercel deployment and alias
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${VERCEL_AUTOMATION_BYPASS_SECRET:-}"
+          header="x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET"
+          curl --fail --silent --show-error --location --max-time 30 \
+            -H "$header" "$WEB_ORIGIN/api/environment" -o alias-environment.json
+          jq -e \
+            --arg sha "$EXPECTED_SHA" \
+            --arg deployment "$EXPECTED_DEPLOYMENT_ID" \
+            --arg origin "$EXPECTED_DEPLOYMENT_ORIGIN" \
+            'select(
+              .environment == "staging" and
+              .vercel_environment == "preview" and
+              .git_commit_sha == $sha and
+              .vercel_deployment_id == $deployment and
+              .vercel_deployment_origin == $origin and
+              .api_origin == "https://juprleagues-api-staging.fly.dev" and
+              .auth_origin == "https://sijpxjxvdtrehmqvirfi.supabase.co" and
+              .preview_isolation_active == true and
+              .preview_auth_isolation_active == true
+            )' alias-environment.json >/dev/null
+          curl --fail --silent --show-error --location --max-time 30 \
+            -H "$header" "$EXPECTED_DEPLOYMENT_ORIGIN/api/environment" \
+            -o immutable-environment.json
+          jq -e \
+            --arg sha "$EXPECTED_SHA" \
+            --arg deployment "$EXPECTED_DEPLOYMENT_ID" \
+            --arg origin "$EXPECTED_DEPLOYMENT_ORIGIN" \
+            'select(
+              .git_commit_sha == $sha and
+              .vercel_deployment_id == $deployment and
+              .vercel_deployment_origin == $origin
+            )' immutable-environment.json >/dev/null
+
+      - name: Verify exact Fly workflow succeeded
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 180); do
+            gh api -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/repos/$GITHUB_REPOSITORY/actions/workflows/fly_api_staging_deploy.yml/runs?branch=staging&event=push&per_page=30" \
+              > fly-runs.json
+            RUN_ID="$(jq -r --arg sha "$EXPECTED_SHA" '[.workflow_runs[] | select(.head_sha == $sha)][0].id // empty' fly-runs.json)"
+            if [ -n "$RUN_ID" ]; then
+              printf '%s\n' "$RUN_ID" > fly-run-id.txt
+              gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > fly-run.json
+              status="$(jq -r '.status' fly-run.json)"
+              conclusion="$(jq -r '.conclusion // ""' fly-run.json)"
+              if [ "$status" = "completed" ]; then
+                gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=all&per_page=100" > fly-jobs.json
+                if [ "$conclusion" != "success" ]; then
+                  gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > fly-failed.log 2>&1 || true
+                  cat fly-failed.log
+                  exit 1
+                fi
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 180 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Verify permanently-open Fly health
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 30 \
+            "$API_ORIGIN/health" -o fly-health.json
+          python - <<'PY'
+          import hashlib
+          import json
+          from scripts.staging_write_waves import expected_write_flags
+
+          expected_sha = "c5724ba0148442d748f55c7fd1a91c5715538b8b"
+          with open("fly-health.json", encoding="utf-8") as handle:
+              health = json.load(handle)
+          flags = expected_write_flags("open")
+          fingerprint = hashlib.sha256(
+              "\n".join(
+                  f"{name}={1 if enabled else 0}"
+                  for name, enabled in sorted(flags.items())
+              ).encode("utf-8")
+          ).hexdigest()
+          prerequisites = health.get("write_prerequisites") or {}
+          checks = {
+              "ok": health.get("ok") is True,
+              "service": health.get("service") == "jupr-api",
+              "environment": health.get("environment") == "staging",
+              "candidate": health.get("git_commit_sha") == expected_sha,
+              "image_candidate": health.get("image_build_git_sha") == expected_sha,
+              "app": health.get("fly_app_name") == "juprleagues-api-staging",
+              "supabase": health.get("supabase_project_ref") == "sijpxjxvdtrehmqvirfi",
+              "wave": health.get("write_wave") == "open" and health.get("staging_write_wave") == "open",
+              "business_writes": health.get("business_data_write_wave_active") is True,
+              "flags": health.get("controlled_write_flags") == flags,
+              "fingerprint": health.get("controlled_write_flag_fingerprint") == fingerprint,
+              "public_live": health.get("public_live_writes_enabled") is True,
+              "production_override": health.get("public_live_production_override_enabled") is False,
+              "web_origin": health.get("web_origin") == "https://jupr-git-staging-pickleballattrespalapas1.vercel.app",
+              "jwt": health.get("jwt_verification_configured") is True and health.get("jwt_verification_mode") == "jwks" and health.get("jwt_verification_project_ref") == "sijpxjxvdtrehmqvirfi",
+              "service_role": prerequisites.get("service_role_configured") is True,
+              "audit": prerequisites.get("api_audit_required") is True,
+              "worker_log": prerequisites.get("worker_run_log_required") is True,
+              "email": prerequisites.get("email_mode") == "dry_run",
+              "live_email": prerequisites.get("live_player_update_email_enabled") is False,
+          }
+          failed = [name for name, accepted in checks.items() if not accepted]
+          if failed:
+              raise SystemExit("Permanent-open health verification failed: " + ", ".join(failed))
+          PY
+
+      - name: Verify durability and Match Uploader status
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 30 \
+            "$API_ORIGIN/health/live-sessions" \
+            -o live-sessions-health.json
+          jq -e 'select(
+            .ok == true and
+            .service_role_configured == true and
+            .live_sessions_query_ok == true and
+            .operation_ledger_query_ok == true and
+            .durability_schema_ready == true and
+            .token_secret_configured == true and
+            .rate_limit_secret_configured == true
+          )' live-sessions-health.json >/dev/null
+          curl --fail --silent --show-error --max-time 30 \
+            "$API_ORIGIN/admin/clubs/tres_palapas/match-uploader/status" \
+            -o match-uploader-status.json
+          jq -e 'select(
+            .enabled == true and
+            .singles_write_enabled == true and
+            .status != "guarded_off"
+          )' match-uploader-status.json >/dev/null
+
+      - name: Upload final evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: permanent-open-staging-c5724-evidence
+          path: |
+            alias-environment.json
+            immutable-environment.json
+            fly-runs.json
+            fly-run-id.txt
+            fly-run.json
+            fly-jobs.json
+            fly-failed.log
+            fly-health.json
+            live-sessions-health.json
+            match-uploader-status.json
+          if-no-files-found: warn
+          retention-days: 3
