@@ -47,6 +47,7 @@ def test_open_wave_allows_every_reviewed_staging_route() -> None:
             "{operation_id}": "00000000-0000-4000-8000-000000000001",
             "{operation_key}": "test-op",
             "{subscription_id}": "1",
+            "{request_id}": "1",
             "{week_start}": "2026-07-27",
             "{session_id}": "1",
             "{round_number}": "1",
