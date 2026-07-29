@@ -1,0 +1,99 @@
+name: Fix match-player follow-up script indentation
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/match-player-session-followups-20260728'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/match-player-session-followups-20260728
+          fetch-depth: 0
+
+      - name: Repair scoped transform indentation
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('scripts/apply_match_player_session_followups_20260728.py')
+          text = path.read_text(encoding='utf-8')
+          start = text.index('    before, searchable, after = section(')
+          end = text.index("\n\n    dialog_component = '''", start)
+          lines = [
+              '    before, searchable, after = section(',
+              '        text,',
+              '        "function SearchablePlayerInput({",',
+              '        "function SearchablePlayerMultiInput({",',
+              '    )',
+              '    searchable = replace_once(',
+              '        searchable,',
+              '        """  players,',
+              '  disabled = false,',
+              '  onChange,""",',
+              '        """  players,',
+              '  disabled = false,',
+              '  invalid = false,',
+              '  onChange,""",',
+              '        "player invalid destructure",',
+              '    )',
+              '    searchable = replace_once(',
+              '        searchable,',
+              '        "  const numericStartingJupr = Number(startingJupr);",',
+              '        """  const numericStartingJupr = Number(startingJupr);',
+              '  const validatedInputStyle = invalid',
+              '    ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" }',
+              '    : inputStyle;""",',
+              '        "player invalid style",',
+              '    )',
+              '    searchable = replace_once(',
+              '        searchable,',
+              '        """            style={{ ...inputStyle, minHeight: "2.4rem", display: "flex", alignItems: "center", whiteSpace: "normal", overflowWrap: "anywhere", background: "#f8fafc" }}""",',
+              '        """            style={{ ...validatedInputStyle, minHeight: "2.4rem", display: "flex", alignItems: "center", whiteSpace: "normal", overflowWrap: "anywhere", background: invalid ? "#fef2f2" : "#f8fafc" }}""",',
+              '        "selected player invalid style",',
+              '    )',
+              '    searchable = replace_once(',
+              '        searchable,',
+              '        """          disabled={disabled || creating}',
+              '          onChange={(event) => {""",',
+              '        """          disabled={disabled || creating}',
+              '          aria-invalid={invalid || undefined}',
+              '          onChange={(event) => {""",',
+              '        "player aria invalid",',
+              '    )',
+              '    searchable = replace_once(',
+              '        searchable,',
+              '        """          style={inputStyle}',
+              '        />""",',
+              '        """          style={validatedInputStyle}',
+              '        />""",',
+              '        "player invalid input style",',
+              '    )',
+              '    text = before + searchable + after',
+          ]
+          replacement = '\n'.join(lines)
+          path.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
+          compile(path.read_text(encoding='utf-8'), str(path), 'exec')
+
+      - name: Commit repair and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/fix-match-player-script-indentation-20260728.yml
+          git config user.name 'pickleballattrespalapas'
+          git config user.email 'pickleballattrespalapas@gmail.com'
+          git add scripts/apply_match_player_session_followups_20260728.py .github/workflows/fix-match-player-script-indentation-20260728.yml
+          git commit -m 'Fix follow-up script indentation'
+          git push origin HEAD:agent/match-player-session-followups-20260728
