@@ -1,7 +1,7 @@
 name: Deploy FastAPI staging to Fly
 run-name: >-
   Fly staging ·
-  ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'none' }} ·
+  ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'open' }} ·
   ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.expected_candidate_sha || github.sha }}
 
 on:
@@ -27,15 +27,16 @@ on:
         required: true
         default: "tres-palapas"
       club_id:
-        description: "Club ID used by staging admin status verification"
+        description: "Club ID used by staging admin verification"
         required: true
         default: "tres_palapas"
       write_wave:
-        description: "One least-privilege staging write wave; none blocks business-data mutations while retaining denial audits"
+        description: "Staging write posture; open is the permanent testing default"
         required: true
         type: choice
-        default: "none"
+        default: "open"
         options:
+          - open
           - none
           - public-intake-auth
           - communications
@@ -62,12 +63,12 @@ on:
           - tournament-live-official-publish
           - tournament-commerce-admin
       expected_candidate_sha:
-        description: "Optional controller-bound canonical staging SHA"
+        description: "Optional canonical staging SHA"
         required: false
         default: ""
         type: string
       orchestration_run_id:
-        description: "Reserved controller run ID; leave empty for standalone use"
+        description: "Reserved controller run ID"
         required: false
         default: ""
         type: string
@@ -77,390 +78,158 @@ permissions:
   contents: read
 
 concurrency:
-  # Shared with parity-final-evidence.yml so evidence cannot run across a
-  # staging deployment boundary. A verified controller owns that outer lock,
-  # so its children use a private run-scoped lock instead.
-  group: >-
-    ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.orchestration_run_id != ''
-      && format('jupr-staging-orchestration-child-{0}', github.event.inputs.orchestration_run_id)
-      || 'jupr-staging-api-and-parity-evidence' }}
+  group: jupr-staging-api-and-parity-evidence
   cancel-in-progress: false
 
 jobs:
   deploy-staging:
     name: Deploy and verify isolated staging API
-    # This second lock serializes every Fly staging deployment, including
-    # controller children that use a private workflow-level lock. A recovery
-    # run therefore finishes after any child left alive by controller
-    # cancellation.
     concurrency:
       group: jupr-staging-fly-deploy
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 55
     environment: staging
     env:
       EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
-      # The staging deploy target is deliberately not derived from dispatch
-      # input, even after that input is validated below.
       FLY_APP_NAME: juprleagues-api-staging
       JUPR_ENV: staging
       JUPR_EMAIL_MODE: dry_run
       JUPR_REQUIRE_API_AUDIT_LOG: "1"
       JUPR_REQUIRE_WORKER_RUN_LOG: "1"
       JUPR_SUPABASE_JWT_MODE: jwks
-      JUPR_STAGING_WRITE_WAVE: none
-      JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT: "0"
-      JUPR_ENABLE_NEXT_ADMIN_SHELL: "1"
-      JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG: "1"
-      JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY: "0"
-      JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE: "0"
-      JUPR_ENABLE_NEXT_ADMIN_REPLAY: "0"
-      JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY: "0"
-      JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER: "0"
-      JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_PREVIEW: "0"
-      JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER_SINGLES: "0"
-      JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR: "0"
-      JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES: "1"
-      JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS: "0"
-      JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL: "0"
-      JUPR_ENABLE_NEXT_ADMIN_SUPPORT_REQUESTS: "0"
-      JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER: "1"
-      JUPR_ENABLE_STAGING_NEXT_ADMIN_LEAGUE_MANAGER_WRITES: "0"
-      JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN: "0"
-      JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT: "0"
-      JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE: "0"
-      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS: "1"
-      JUPR_ENABLE_TOURNAMENT_COMMERCE: "1"
-      JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION: "1"
-      JUPR_ENABLE_TEAM_LEAGUES: "1"
-      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS: "0"
-      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_SETUP_MUTATIONS: "0"
-      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_REGISTRATION_MUTATIONS: "0"
-      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_IMPORT_HANDOFF: "0"
-      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OPERATIONS_MUTATIONS: "0"
-      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH: "0"
-      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF: "0"
-      JUPR_ENABLE_STAGING_NEXT_ADMIN_TOURNAMENT_LIVE_WRITES: "0"
-      JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP: "1"
-      JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS: "0"
-      JUPR_ENABLE_NEXT_ADMIN_MONEYBALL: "1"
-      JUPR_ENABLE_STAGING_NEXT_ADMIN_MONEYBALL_WRITES: "0"
-      JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE: "1"
-      JUPR_ENABLE_STAGING_NEXT_ADMIN_JUPR_LIVE_WRITES: "0"
-      JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER: "1"
-      JUPR_ENABLE_STAGING_NEXT_ADMIN_CHALLENGE_LADDER_WRITES: "0"
-      JUPR_ENABLE_PUBLIC_LIVE_WRITES: "0"
-      JUPR_ENABLE_NEXT_ADMIN_MATCH_CANONICAL_AUDIT: "1"
-      JUPR_ENABLE_STAGING_NEXT_ADMIN_MATCH_CANONICAL_NORMALIZE_WRITES: "0"
-      JUPR_ENABLE_NEXT_ADMIN_TOOLS: "0"
-      JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS: "0"
-      JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES: "0"
-      JUPR_ENABLE_STAGING_TOURNAMENT_COMMERCE_WRITES: "0"
+      JUPR_STAGING_WRITE_WAVE: open
     steps:
-      - name: Check out repository
+      - name: Check out canonical staging
         uses: actions/checkout@v4
         with:
+          ref: staging
           fetch-depth: 0
           persist-credentials: false
-          ref: staging
 
-      - name: Verify canonical staging workflow provenance
+      - name: Verify exact staging candidate
         shell: bash
         env:
           EXPECTED_CANDIDATE_SHA: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.expected_candidate_sha || '' }}
         run: |
           set -euo pipefail
-          if [ "$GITHUB_REF" != "refs/heads/staging" ]; then
-            echo "::error title=Source branch rejected::Staging API deploys must run from refs/heads/staging."
-            exit 2
-          fi
+          git fetch --no-tags origin +refs/heads/staging:refs/remotes/origin/staging
           HEAD_SHA="$(git rev-parse HEAD)"
           STAGING_SHA="$(git rev-parse refs/remotes/origin/staging)"
-          if [ "$HEAD_SHA" != "$GITHUB_SHA" ] || [ "$HEAD_SHA" != "$STAGING_SHA" ]; then
-            echo "::error title=Staging provenance rejected::Checked-out HEAD, GITHUB_SHA, and canonical origin/staging must be identical."
-            exit 2
-          fi
+          test "$GITHUB_REF" = "refs/heads/staging"
+          test "$HEAD_SHA" = "$GITHUB_SHA"
+          test "$HEAD_SHA" = "$STAGING_SHA"
           if [ -n "$EXPECTED_CANDIDATE_SHA" ]; then
-            if [[ ! "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || \
-               [ "$EXPECTED_CANDIDATE_SHA" != "$HEAD_SHA" ]; then
-              echo "::error title=Controller candidate rejected::expected_candidate_sha must equal canonical staging HEAD."
-              exit 2
-            fi
+            [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            test "$EXPECTED_CANDIDATE_SHA" = "$HEAD_SHA"
           fi
-
-      - name: Verify automated controller delegation
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.orchestration_run_id != ''
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ORCHESTRATION_RUN_ID: ${{ github.event.inputs.orchestration_run_id }}
-        run: |
-          set -euo pipefail
-          if [[ ! "$ORCHESTRATION_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]; then
-            echo "::error title=Controller delegation rejected::orchestration_run_id must be a positive Actions run ID."
-            exit 2
-          fi
-          RUN_JSON="$(
-            gh api \
-              -H "X-GitHub-Api-Version: 2026-03-10" \
-              "/repos/$GITHUB_REPOSITORY/actions/runs/$ORCHESTRATION_RUN_ID"
-          )"
-          WRITE_SESSION_WORKFLOW_JSON="$(
-            gh api \
-              -H "X-GitHub-Api-Version: 2026-03-10" \
-              "/repos/$GITHUB_REPOSITORY/actions/workflows/staging-write-session.yml"
-          )"
-          WRITE_SESSION_WORKFLOW_ID="$(
-            jq -r \
-              'select(
-                .path == ".github/workflows/staging-write-session.yml" and
-                .state == "active"
-              ) | .id' \
-              <<<"$WRITE_SESSION_WORKFLOW_JSON"
-          )"
-          if [[ ! "$WRITE_SESSION_WORKFLOW_ID" =~ ^[1-9][0-9]{0,19}$ ]]; then
-            echo "::error title=Controller delegation rejected::Protected write-session workflow metadata is invalid."
-            exit 2
-          fi
-          export WRITE_SESSION_WORKFLOW_ID
-          # The run API projects run-name into .name, so bind the immutable
-          # controller workflow ID as well as its exact protected paths. The
-          # evidence workflow has an established immutable ID; the protected
-          # write-session workflow ID is resolved from its exact active path.
-          jq -e \
-            'select(
-              .id == (env.ORCHESTRATION_RUN_ID | tonumber) and
-              (
-                (
-                  .workflow_id == 320947530 and
-                  (
-                    .path == ".github/workflows/staging-evidence-automation.yml" or
-                    .path == ".github/workflows/staging-evidence-automation.yml@rollback-feb8"
-                  )
-                ) or
-                (
-                  .workflow_id == (env.WRITE_SESSION_WORKFLOW_ID | tonumber) and
-                  (
-                    .path == ".github/workflows/staging-write-session.yml" or
-                    .path == ".github/workflows/staging-write-session.yml@rollback-feb8"
-                  )
-                )
-              ) and
-              .event == "issues" and
-              .status == "in_progress" and
-              .run_attempt == 1 and
-              .head_branch == "rollback-feb8" and
-              .actor.id == 250933369 and
-              .triggering_actor.id == 250933369 and
-              .repository.id == 1120897513
-            ) | .id' <<<"$RUN_JSON" >/dev/null
-
-      - name: Configure one least-privilege staging write wave
-        shell: bash
-        env:
-          # Every automatic staging-branch deploy is forced to the no-write
-          # projection. Named write waves require an explicit dispatch, either
-          # standalone or through the protected controller.
-          SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'none' }}
-        run: |
-          set -euo pipefail
-          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$SELECTED_WRITE_WAVE" != "none" ]; then
-            echo "::error title=Automatic write wave rejected::Push-triggered staging deploys must use write_wave=none."
-            exit 2
-          fi
-          python scripts/staging_write_waves.py \
-            --wave "$SELECTED_WRITE_WAVE" \
-            --fly-config fly.staging.toml \
-            --github-env "$GITHUB_ENV"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
 
       - name: Set up flyctl
         uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
         with:
           version: "0.4.49"
 
-      - name: Resolve and validate staging deployment parameters
-        id: validate-inputs
+      - name: Configure staging write posture
         shell: bash
         env:
-          CLUB_ID_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.club_id || 'tres_palapas' }}
-          CLUB_SLUG_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.club_slug || 'tres-palapas' }}
-          FLY_APP_NAME_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.app_name || 'juprleagues-api-staging' }}
-          FLY_ORG_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.fly_org || '' }}
-          FLY_PRIMARY_REGION_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.primary_region || 'dfw' }}
+          SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'open' }}
         run: |
           set -euo pipefail
+          python scripts/staging_write_waves.py \
+            --wave "$SELECTED_WRITE_WAVE" \
+            --fly-config fly.staging.toml \
+            --github-env "$GITHUB_ENV"
 
-          if [ "$FLY_APP_NAME_INPUT" != "juprleagues-api-staging" ]; then
-            echo "::error title=Fly app rejected::app_name must equal juprleagues-api-staging."
-            exit 2
-          fi
-          if [[ ! "$FLY_PRIMARY_REGION_INPUT" =~ ^[a-z]{3}$ ]]; then
-            echo "::error title=Fly region rejected::primary_region must be a three-letter lowercase Fly region."
-            exit 2
-          fi
-          if [ -n "$FLY_ORG_INPUT" ] && [[ ! "$FLY_ORG_INPUT" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
-            echo "::error title=Fly organization rejected::fly_org must be an empty value or a lowercase Fly organization slug."
-            exit 2
-          fi
-          if [ "${#CLUB_SLUG_INPUT}" -gt 80 ] || [[ ! "$CLUB_SLUG_INPUT" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
-            echo "::error title=Club slug rejected::club_slug must be a lowercase kebab-case slug of at most 80 characters."
-            exit 2
-          fi
-          if [ "${#CLUB_ID_INPUT}" -gt 128 ] || [[ ! "$CLUB_ID_INPUT" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
-            echo "::error title=Club ID rejected::club_id must contain only letters, numbers, underscores, or hyphens."
-            exit 2
-          fi
-
-          {
-            printf 'club_id=%s\n' "$CLUB_ID_INPUT"
-            printf 'club_slug=%s\n' "$CLUB_SLUG_INPUT"
-            printf 'fly_org=%s\n' "$FLY_ORG_INPUT"
-            printf 'primary_region=%s\n' "$FLY_PRIMARY_REGION_INPUT"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Validate required staging secrets
+      - name: Validate staging-only inputs and secrets
         shell: bash
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          APP_NAME_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.app_name || 'juprleagues-api-staging' }}
+          PRIMARY_REGION_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.primary_region || 'dfw' }}
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
-          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
           STAGING_REGISTRATION_CONFIRMATION_SECRET: ${{ secrets.STAGING_REGISTRATION_CONFIRMATION_SECRET }}
           STAGING_REGISTRATION_EDIT_SECRET: ${{ secrets.STAGING_REGISTRATION_EDIT_SECRET }}
           STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET }}
           STAGING_PUBLIC_LIVE_TOKEN_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_TOKEN_SECRET }}
         run: |
           set -euo pipefail
-          missing=0
-          for name in FLY_API_TOKEN SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_ANON_KEY EXPECTED_SUPABASE_PROJECT_REF; do
-            if [ -z "${!name:-}" ]; then
-              echo "::error title=Missing staging configuration::$name is required for the staging API deploy workflow."
-              missing=1
-            fi
+          test "$APP_NAME_INPUT" = "juprleagues-api-staging"
+          [[ "$PRIMARY_REGION_INPUT" =~ ^[a-z]{3}$ ]]
+          test "$EXPECTED_SUPABASE_PROJECT_REF" = "sijpxjxvdtrehmqvirfi"
+          for name in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
+            test -n "${!name:-}"
           done
-          if [ "$JUPR_ENV" != "staging" ]; then
-            echo "::error title=Environment rejected::JUPR_ENV must equal staging."
-            missing=1
-          fi
-          python - <<'PY'
-          import os
-
-          wave = os.environ["JUPR_STAGING_WRITE_WAVE"].strip()
-
-          def require_distinct_secrets(first_name: str, second_name: str, label: str) -> None:
-              first = os.environ.get(first_name, "").strip()
-              second = os.environ.get(second_name, "").strip()
-              if len(first) < 32 or len(second) < 32:
-                  raise SystemExit(
-                      f"{label} requires two stripped staging secrets of at least 32 characters."
-                  )
-              if first == second:
-                  raise SystemExit(f"{label} staging secrets must be distinct after trimming.")
-
-          if wave in {"public-intake-auth", "tournament-registration"}:
-              require_distinct_secrets(
-                  "STAGING_REGISTRATION_EDIT_SECRET",
-                  "STAGING_REGISTRATION_CONFIRMATION_SECRET",
-                  "Registration safety",
-              )
-          if wave == "public-live":
-              require_distinct_secrets(
-                  "STAGING_PUBLIC_LIVE_TOKEN_SECRET",
-                  "STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET",
-                  "Public Live safety",
-              )
-          PY
-          exit "$missing"
-
-      - name: Verify staging Supabase isolation before deploy
-        shell: bash
-        env:
-          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
-        run: |
-          set -euo pipefail
           python - <<'PY'
           import os
           from urllib.parse import urlsplit
 
-          parsed = urlsplit(os.environ["SUPABASE_URL"])
-          host = (parsed.hostname or "").lower()
-          expected = os.environ["EXPECTED_SUPABASE_PROJECT_REF"].strip().lower()
-          expected_host = f"{expected}.supabase.co"
+          url = urlsplit(os.environ["SUPABASE_URL"])
+          expected = os.environ["EXPECTED_SUPABASE_PROJECT_REF"]
           if (
-              parsed.scheme != "https"
-              or parsed.username is not None
-              or parsed.password is not None
-              or parsed.port is not None
-              or parsed.path not in {"", "/"}
-              or parsed.query
-              or parsed.fragment
-              or host != expected_host
+              url.scheme != "https"
+              or url.hostname != f"{expected}.supabase.co"
+              or url.username is not None
+              or url.password is not None
+              or url.port is not None
+              or url.path not in {"", "/"}
+              or url.query
+              or url.fragment
           ):
-              raise SystemExit("STAGING_SUPABASE_URL must be the canonical isolated staging HTTPS origin")
-          actual = host.removesuffix(".supabase.co")
-          print(f"Verified isolated staging Supabase project ref: {actual}")
-          PY
+              raise SystemExit("Refusing any Supabase target except isolated staging")
 
-      - name: Apply deployment inputs to staging config
-        shell: bash
-        env:
-          FLY_PRIMARY_REGION: ${{ steps.validate-inputs.outputs.primary_region }}
-        run: |
-          set -euo pipefail
+          wave = os.environ["JUPR_STAGING_WRITE_WAVE"]
+          def require_pair(first: str, second: str, label: str) -> None:
+              a = os.environ.get(first, "").strip()
+              b = os.environ.get(second, "").strip()
+              if len(a) < 32 or len(b) < 32 or a == b:
+                  raise SystemExit(f"{label} staging secrets are missing or invalid")
+
+          if wave in {"open", "public-intake-auth", "tournament-registration"}:
+              require_pair(
+                  "STAGING_REGISTRATION_EDIT_SECRET",
+                  "STAGING_REGISTRATION_CONFIRMATION_SECRET",
+                  "Registration",
+              )
+          if wave in {"open", "public-live"}:
+              require_pair(
+                  "STAGING_PUBLIC_LIVE_TOKEN_SECRET",
+                  "STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET",
+                  "Public live",
+              )
+          PY
           python - <<'PY'
           from pathlib import Path
           import os
           import re
 
-          app_name = os.environ["FLY_APP_NAME"].strip()
-          primary_region = os.environ["FLY_PRIMARY_REGION"].strip()
-          if app_name != "juprleagues-api-staging":
-              raise SystemExit("Refusing to target anything except the dedicated staging Fly app")
-          if not primary_region:
-              raise SystemExit("Fly primary region is required")
-
           path = Path("fly.staging.toml")
           text = path.read_text(encoding="utf-8")
-          text = re.sub(r'^app\s*=\s*"[^"]+"', f'app = "{app_name}"', text, count=1, flags=re.MULTILINE)
-          text = re.sub(r'^primary_region\s*=\s*"[^"]+"', f'primary_region = "{primary_region}"', text, count=1, flags=re.MULTILINE)
+          region = os.environ["PRIMARY_REGION_INPUT"]
+          text = re.sub(r'^app\s*=\s*"[^"]+"', 'app = "juprleagues-api-staging"', text, count=1, flags=re.MULTILINE)
+          text = re.sub(r'^primary_region\s*=\s*"[^"]+"', f'primary_region = "{region}"', text, count=1, flags=re.MULTILINE)
           path.write_text(text, encoding="utf-8")
           PY
 
-      - name: Ensure dedicated Fly staging app exists
+      - name: Stage isolated staging secrets and flags
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          FLY_ORG: ${{ steps.validate-inputs.outputs.fly_org }}
-        run: |
-          set -euo pipefail
-          if flyctl status -a "$FLY_APP_NAME" >/dev/null 2>&1; then
-            echo "Fly staging app $FLY_APP_NAME already exists."
-          elif [ -n "${FLY_ORG:-}" ]; then
-            flyctl apps create "$FLY_APP_NAME" --org "$FLY_ORG" --yes
-          else
-            flyctl apps create "$FLY_APP_NAME" --yes
-          fi
-
-      - name: Stage staging-only runtime secrets
-        shell: bash
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
-          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
           STAGING_REGISTRATION_CONFIRMATION_SECRET: ${{ secrets.STAGING_REGISTRATION_CONFIRMATION_SECRET }}
           STAGING_REGISTRATION_EDIT_SECRET: ${{ secrets.STAGING_REGISTRATION_EDIT_SECRET }}
           STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET }}
           STAGING_PUBLIC_LIVE_TOKEN_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_TOKEN_SECRET }}
         run: |
           set -euo pipefail
+          test -n "$FLY_API_TOKEN"
           secret_args=(
             "JUPR_ENV=staging"
             "JUPR_EMAIL_MODE=dry_run"
@@ -474,26 +243,24 @@ jobs:
             "JUPR_SUPABASE_JWT_MODE=jwks"
             "JUPR_DEPLOYMENT_GIT_SHA=$GITHUB_SHA"
             "JUPR_STAGING_WRITE_WAVE=$JUPR_STAGING_WRITE_WAVE"
-            # Fly secrets override fly.staging.toml [env]. Re-project the
-            # always-on read surfaces so stale historical secrets cannot win.
-            "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=$JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"
-            "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=$JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"
-            "JUPR_ENABLE_TOURNAMENT_COMMERCE=$JUPR_ENABLE_TOURNAMENT_COMMERCE"
-            "JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION=$JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION"
-            "JUPR_ENABLE_TEAM_LEAGUES=$JUPR_ENABLE_TEAM_LEAGUES"
+            "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=1"
+            "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=1"
+            "JUPR_ENABLE_TOURNAMENT_COMMERCE=1"
+            "JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION=1"
+            "JUPR_ENABLE_TEAM_LEAGUES=1"
             "JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL=0"
             "JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION=0"
           )
           while IFS= read -r name; do
             secret_args+=("$name=${!name}")
           done < <(python -c 'from scripts.staging_write_waves import ALL_STAGING_WRITE_FLAGS; print("\n".join(ALL_STAGING_WRITE_FLAGS))')
-          if [ "$JUPR_STAGING_WRITE_WAVE" = "public-intake-auth" ] || [ "$JUPR_STAGING_WRITE_WAVE" = "tournament-registration" ]; then
+          if [ "$JUPR_STAGING_WRITE_WAVE" = "open" ] || [ "$JUPR_STAGING_WRITE_WAVE" = "public-intake-auth" ] || [ "$JUPR_STAGING_WRITE_WAVE" = "tournament-registration" ]; then
             secret_args+=(
               "JUPR_REGISTRATION_EDIT_SECRET=$STAGING_REGISTRATION_EDIT_SECRET"
               "JUPR_REGISTRATION_CONFIRMATION_SECRET=$STAGING_REGISTRATION_CONFIRMATION_SECRET"
             )
           fi
-          if [ "$JUPR_STAGING_WRITE_WAVE" = "public-live" ]; then
+          if [ "$JUPR_STAGING_WRITE_WAVE" = "open" ] || [ "$JUPR_STAGING_WRITE_WAVE" = "public-live" ]; then
             secret_args+=(
               "JUPR_PUBLIC_LIVE_TOKEN_SECRET=$STAGING_PUBLIC_LIVE_TOKEN_SECRET"
               "JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET=$STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET"
@@ -501,57 +268,95 @@ jobs:
           fi
           flyctl secrets set --stage -a "$FLY_APP_NAME" "${secret_args[@]}"
 
-      - name: Validate Fly staging config
+      - name: Validate and deploy staging API
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl config validate --config fly.staging.toml -a "$FLY_APP_NAME"
+        run: |
+          set -euo pipefail
+          flyctl config validate --config fly.staging.toml -a "$FLY_APP_NAME"
+          flyctl deploy \
+            --remote-only \
+            -a "$FLY_APP_NAME" \
+            --config fly.staging.toml \
+            --build-arg "JUPR_DEPLOYMENT_GIT_SHA=$GITHUB_SHA"
 
-      - name: Deploy staging API to Fly
-        shell: bash
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: >-
-          flyctl deploy
-          --remote-only
-          -a "$FLY_APP_NAME"
-          --config fly.staging.toml
-          --build-arg "JUPR_DEPLOYMENT_GIT_SHA=$GITHUB_SHA"
-
-      - name: Wait for staging API health
+      - name: Verify exact staging health and write posture
         shell: bash
         run: |
           set -euo pipefail
           base_url="https://${FLY_APP_NAME}.fly.dev"
-          for attempt in $(seq 1 18); do
-            if curl --fail --silent --show-error "$base_url/health"; then
-              echo
-              echo "Staging API is healthy: $base_url"
-              exit 0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 20 "$base_url/health" -o fly-health.json; then
+              if python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from scripts.staging_write_waves import expected_write_flags
+
+          with open("fly-health.json", encoding="utf-8") as handle:
+              health = json.load(handle)
+          wave = os.environ["JUPR_STAGING_WRITE_WAVE"]
+          flags = expected_write_flags(wave)
+          fingerprint = hashlib.sha256(
+              "\n".join(
+                  f"{name}={1 if enabled else 0}"
+                  for name, enabled in sorted(flags.items())
+              ).encode("utf-8")
+          ).hexdigest()
+          expected = {
+              "ok": True,
+              "environment": "staging",
+              "git_commit_sha": os.environ["GITHUB_SHA"],
+              "image_build_git_sha": os.environ["GITHUB_SHA"],
+              "fly_app_name": "juprleagues-api-staging",
+              "supabase_project_ref": "sijpxjxvdtrehmqvirfi",
+              "staging_write_wave": wave,
+              "write_wave": wave,
+              "business_data_write_wave_active": wave != "none",
+              "controlled_write_flags": flags,
+              "controlled_write_flag_fingerprint": fingerprint,
+              "public_live_production_override_enabled": False,
+              "web_origin": "https://jupr-git-staging-pickleballattrespalapas1.vercel.app",
+              "jwt_verification_configured": True,
+              "jwt_verification_mode": "jwks",
+              "jwt_verification_project_ref": "sijpxjxvdtrehmqvirfi",
+          }
+          failures = [key for key, value in expected.items() if health.get(key) != value]
+          prerequisites = health.get("write_prerequisites") or {}
+          if prerequisites.get("email_mode") != "dry_run":
+              failures.append("email_mode")
+          if prerequisites.get("live_player_update_email_enabled") is not False:
+              failures.append("live_player_update_email_enabled")
+          if failures:
+              raise SystemExit("Health mismatch: " + ", ".join(failures))
+          PY
+              then
+                cat fly-health.json
+                exit 0
+              fi
             fi
-            echo "Health attempt $attempt/18 failed; retrying in 10 seconds."
+            echo "Health verification attempt $attempt/30 failed; retrying."
             sleep 10
           done
-          echo "::error title=Staging API unhealthy::$base_url/health did not become healthy."
+          cat fly-health.json 2>/dev/null || true
           exit 1
 
-      - name: Install staging verifier dependencies
-        run: python -m pip install -r services/api/requirements.txt
-
-      - name: Verify full staging API, schema, and feature surface
+      - name: Verify full staging feature surface
         shell: bash
         env:
-          CLUB_ID: ${{ steps.validate-inputs.outputs.club_id }}
-          CLUB_SLUG: ${{ steps.validate-inputs.outputs.club_slug }}
-          JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET }}
-          JUPR_PUBLIC_LIVE_TOKEN_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_TOKEN_SECRET }}
+          CLUB_ID: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.club_id || 'tres_palapas' }}
+          CLUB_SLUG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.club_slug || 'tres-palapas' }}
+          PYTHONPATH: ${{ github.workspace }}
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
           JUPR_REGISTRATION_CONFIRMATION_SECRET: ${{ secrets.STAGING_REGISTRATION_CONFIRMATION_SECRET }}
           JUPR_REGISTRATION_EDIT_SECRET: ${{ secrets.STAGING_REGISTRATION_EDIT_SECRET }}
-          PYTHONPATH: ${{ github.workspace }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
-          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          JUPR_PUBLIC_LIVE_TOKEN_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_TOKEN_SECRET }}
+          JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET: ${{ secrets.STAGING_PUBLIC_LIVE_RATE_LIMIT_SECRET }}
         run: |
           set -euo pipefail
+          python -m pip install -r services/api/requirements.txt
           python scripts/check_staging_environment.py \
             --expect-full-next-admin \
             --require-api \

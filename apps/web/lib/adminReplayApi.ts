@@ -96,7 +96,7 @@ async function fetchJson<T>(
           }
         : options.noStore
           ? { cache: "no-store" }
-          : { next: { revalidate: 30 } }
+          : { cache: "no-store" }
     );
     if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
     return { data: (await response.json()) as T, error: null };

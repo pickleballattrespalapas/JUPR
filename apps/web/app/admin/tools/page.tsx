@@ -13,7 +13,7 @@ async function loadStatus(clubId: string): Promise<{ data: StatusResponse | null
   const base = apiBase();
   if (!base) return { data: null, error: "Missing JUPR API base URL." };
   try {
-    const response = await fetch(`${base.replace(/\/$/, "")}/admin/clubs/${encodeURIComponent(clubId)}/tools/status`, { next: { revalidate: 30 } });
+    const response = await fetch(`${base.replace(/\/$/, "")}/admin/clubs/${encodeURIComponent(clubId)}/tools/status`, { cache: "no-store" });
     if (!response.ok) return { data: null, error: `API error (${response.status}).` };
     return { data: (await response.json()) as StatusResponse, error: null };
   } catch (error) {

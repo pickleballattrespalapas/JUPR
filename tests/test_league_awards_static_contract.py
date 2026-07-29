@@ -3,6 +3,8 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+from scripts.staging_write_waves import expected_write_flags
+
 
 ROOT = Path(__file__).resolve().parents[1]
 TOP_PERFORMER_BADGE_SEED = "supabase/migrations/20260720014744_seed_top_performer_badges.sql"
@@ -53,13 +55,14 @@ def test_league_awards_mint_fails_closed_without_seeded_badge_definitions() -> N
     assert "Badge minting is blocked" in panel
 
 
-def test_league_awards_staging_gate_is_explicitly_disabled_in_production_config() -> None:
-    staging = (ROOT / "fly.staging.toml").read_text()
+def test_league_awards_staging_gate_is_open_only_in_staging_and_disabled_in_production() -> None:
+    staging = tomllib.loads((ROOT / "fly.staging.toml").read_text())
     production = tomllib.loads((ROOT / "fly.toml").read_text())
-    workflow = (ROOT / ".github/workflows/fly_api_staging_deploy.yml").read_text()
     flag = "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE"
-    assert flag in staging
-    assert flag in workflow
+
+    assert staging["env"]["JUPR_STAGING_WRITE_WAVE"] == "open"
+    assert staging["env"][flag] == "1"
+    assert expected_write_flags("open")[flag] is True
     assert production["env"][flag] == "0"
 
 

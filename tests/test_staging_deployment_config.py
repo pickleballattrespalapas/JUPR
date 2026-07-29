@@ -16,6 +16,7 @@ from scripts.run_parity_staging_wave import WAVES
 from scripts.staging_write_waves import (
     ALL_STAGING_WRITE_FLAGS,
     ALWAYS_DISABLED_FLAGS,
+    OPEN_WRITE_WAVE,
     STAGING_WRITE_WAVES,
     configure_fly_staging,
     expected_write_flags,
@@ -110,13 +111,15 @@ def test_staging_fly_config_is_isolated_and_full_surface():
     assert env["JUPR_WEB_BASE_URL"] == EXPECTED_STAGING_WEB_ORIGIN
     assert env["JUPR_REQUIRE_API_AUDIT_LOG"] == "1"
     assert env["JUPR_REQUIRE_WORKER_RUN_LOG"] == "1"
-    assert env["JUPR_STAGING_WRITE_WAVE"] == "none"
-    assert all(env.get(name) == "0" for name in ALL_STAGING_WRITE_FLAGS)
+    assert env["JUPR_STAGING_WRITE_WAVE"] == "open"
+    assert {
+        name: env[name] == "1" for name in ALL_STAGING_WRITE_FLAGS
+    } == expected_write_flags("open")
     assert all(env.get(name, "0") == "0" for name in ALWAYS_DISABLED_FLAGS)
     assert all(env.get(name) == "1" for name in FULL_NEXT_ADMIN_FLAGS)
     assert env["JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"] == "1"
     assert env["JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"] == "1"
-    assert env["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "0"
+    assert env["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "1"
     assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"] == "0"
     assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"] == "0"
     assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "0"
@@ -126,7 +129,6 @@ def test_staging_fly_config_is_isolated_and_full_surface():
         env["JUPR_ALLOWED_ORIGIN_REGEX"],
         "https://jupr-git-example-pickleballattrespalapas1.vercel.app",
     )
-
 
 def test_staging_wave_configurator_opens_only_the_selected_wave(tmp_path: Path):
     config = tmp_path / "fly.staging.toml"
@@ -170,63 +172,42 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
 
     assert "  push:\n    branches:\n      - staging\n" in workflow
     assert (
-        "SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'none' }}"
-        in workflow
-    )
-    assert (
-        '[ "$GITHUB_EVENT_NAME" = "push" ] && [ "$SELECTED_WRITE_WAVE" != "none" ]'
+        "SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'open' }}"
         in workflow
     )
     assert "${{ inputs." not in workflow
-    assert workflow.index(
-        '[ "$GITHUB_EVENT_NAME" = "push" ] && [ "$SELECTED_WRITE_WAVE" != "none" ]'
-    ) < workflow.index("python scripts/staging_write_waves.py")
     assert "STAGING_SUPABASE_URL" in workflow
     assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" in workflow
     assert "STAGING_SUPABASE_PROJECT_REF" in workflow
-    # Reject every target except the dedicated staging app. This exact allowlist
-    # is stricter than the former guard that rejected only the production name.
     assert "FLY_APP_NAME: juprleagues-api-staging" in workflow
-    for automatic_input in (
-        "CLUB_ID_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.club_id || 'tres_palapas' }}",
-        "CLUB_SLUG_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.club_slug || 'tres-palapas' }}",
-        "FLY_APP_NAME_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.app_name || 'juprleagues-api-staging' }}",
-        "FLY_ORG_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.fly_org || '' }}",
-        "FLY_PRIMARY_REGION_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.primary_region || 'dfw' }}",
-    ):
-        assert automatic_input in workflow
-    assert 'if [ "$FLY_APP_NAME_INPUT" != "juprleagues-api-staging" ]; then' in workflow
-    assert 'if [ "$GITHUB_REF" != "refs/heads/staging" ]; then' in workflow
-    assert "HEAD_SHA=\"$(git rev-parse HEAD)\"" in workflow
-    assert "STAGING_SHA=\"$(git rev-parse refs/remotes/origin/staging)\"" in workflow
-    assert '[ "$HEAD_SHA" != "$GITHUB_SHA" ] || [ "$HEAD_SHA" != "$STAGING_SHA" ]' in workflow
-    assert workflow.index('if [ "$GITHUB_REF" != "refs/heads/staging" ]; then') < workflow.index(
+    assert "APP_NAME_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.app_name || 'juprleagues-api-staging' }}" in workflow
+    assert "PRIMARY_REGION_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.primary_region || 'dfw' }}" in workflow
+    assert 'test "$APP_NAME_INPUT" = "juprleagues-api-staging"' in workflow
+    assert 'test "$EXPECTED_SUPABASE_PROJECT_REF" = "sijpxjxvdtrehmqvirfi"' in workflow
+    assert "Refusing any Supabase target except isolated staging" in workflow
+    assert 'test "$GITHUB_REF" = "refs/heads/staging"' in workflow
+    assert 'HEAD_SHA="$(git rev-parse HEAD)"' in workflow
+    assert 'STAGING_SHA="$(git rev-parse refs/remotes/origin/staging)"' in workflow
+    assert 'test "$HEAD_SHA" = "$GITHUB_SHA"' in workflow
+    assert 'test "$HEAD_SHA" = "$STAGING_SHA"' in workflow
+    assert workflow.index('test "$GITHUB_REF" = "refs/heads/staging"') < workflow.index(
         "flyctl secrets set --stage"
     )
-    assert 'if app_name != "juprleagues-api-staging":' in workflow
     assert "--require-supabase-isolation" in workflow
     assert "--expect-full-next-admin" in workflow
-    assert "--write-wave \"$JUPR_STAGING_WRITE_WAVE\"" in workflow
+    assert '--write-wave "$JUPR_STAGING_WRITE_WAVE"' in workflow
     assert "scripts/staging_write_waves.py" in workflow
     assert "expected_candidate_sha:" in workflow
     assert "orchestration_run_id:" in workflow
-    assert "jupr-staging-orchestration-child-{0}" in workflow
-    assert ".workflow_id == 320947530" in workflow
-    assert (
-        ".github/workflows/staging-evidence-automation.yml@rollback-feb8"
-        in workflow
-    )
-    assert ".actor.id == 250933369" in workflow
-    assert ".repository.id == 1120897513" in workflow
-    assert "expected_candidate_sha must equal canonical staging HEAD" in workflow
-    assert "timeout-minutes: 45" in workflow
-    assert 'JUPR_REQUIRE_WORKER_RUN_LOG: "1"' in workflow
+    assert "timeout-minutes: 55" in workflow
     for staged_safety_value in (
         '"JUPR_ENV=staging"',
         '"JUPR_EMAIL_MODE=dry_run"',
         '"JUPR_REQUIRE_API_AUDIT_LOG=1"',
         '"JUPR_REQUIRE_WORKER_RUN_LOG=1"',
         f'"JUPR_WEB_BASE_URL={EXPECTED_STAGING_WEB_ORIGIN}"',
+        '"JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL=0"',
+        '"JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION=0"',
     ):
         assert staged_safety_value in workflow
     assert '"SUPABASE_JWKS_URL=${SUPABASE_URL%/}/auth/v1/.well-known/jwks.json"' in workflow
@@ -234,7 +215,6 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
     assert '--build-arg "JUPR_DEPLOYMENT_GIT_SHA=$GITHUB_SHA"' in workflow
     assert f'--expected-web-origin "{EXPECTED_STAGING_WEB_ORIGIN}"' in workflow
     assert "fly.staging.toml" in workflow
-
 
 def test_staging_deploy_projects_always_on_read_flags_over_stale_fly_secrets():
     workflow = (ROOT / ".github/workflows/fly_api_staging_deploy.yml").read_text(
@@ -245,9 +225,8 @@ def test_staging_deploy_projects_always_on_read_flags_over_stale_fly_secrets():
         "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES",
         "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
     ):
-        assert f'"{name}=${name}"' in workflow
+        assert f'"{name}=1"' in workflow
         assert name not in ALL_STAGING_WRITE_FLAGS
-
 
 def test_staging_deploy_wave_choices_exactly_match_the_code_ledger():
     workflow = (ROOT / ".github/workflows/fly_api_staging_deploy.yml").read_text(
@@ -263,9 +242,10 @@ def test_staging_deploy_wave_choices_exactly_match_the_code_ledger():
         if line.strip().startswith("- ")
     )
 
-    assert 'default: "none"' in write_wave
-    assert choices == tuple(STAGING_WRITE_WAVES)
-
+    assert 'default: "open"' in write_wave
+    assert choices[0] == "open"
+    assert set(choices) == {OPEN_WRITE_WAVE, *STAGING_WRITE_WAVES}
+    assert len(choices) == len(STAGING_WRITE_WAVES) + 1
 
 def test_production_cors_includes_both_public_domains():
     production_env = _toml("fly.toml")["env"]

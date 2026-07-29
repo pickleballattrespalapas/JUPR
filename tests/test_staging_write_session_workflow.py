@@ -1,340 +1,62 @@
-import ast
 from pathlib import Path
-
-import scripts.staging_write_session as write_session
-from scripts.staging_write_waves import NO_WRITE_WAVE, STAGING_WRITE_WAVES
 
 
 WORKFLOW_PATH = ".github/workflows/staging-write-session.yml"
 RECOVERY_PATH = ".github/workflows/staging-write-recovery.yml"
 FLY_PATH = ".github/workflows/fly_api_staging_deploy.yml"
-EVIDENCE_PATH = ".github/workflows/staging-evidence-automation.yml"
-HELPER_PATH = "scripts/staging_write_session.py"
 
 
 def _read(path: str) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
-def _between(text: str, start: str, end: str) -> str:
-    start_index = text.index(start)
-    end_index = text.index(end, start_index)
-    return text[start_index:end_index]
-
-
-def _literal_assignment(source: str, name: str) -> object:
-    module = ast.parse(source)
-    for statement in module.body:
-        if (
-            isinstance(statement, ast.Assign)
-            and any(
-                isinstance(target, ast.Name) and target.id == name
-                for target in statement.targets
-            )
-        ):
-            return ast.literal_eval(statement.value)
-    raise AssertionError(f"Missing literal assignment: {name}")
-
-
-def test_controller_has_only_exact_owner_issue_events() -> None:
+def test_temporary_write_session_controller_is_retired() -> None:
     workflow = _read(WORKFLOW_PATH)
-    helper = _read(HELPER_PATH)
-    trigger = _between(workflow, "\non:\n", "\npermissions:")
 
-    assert trigger == (
-        "\non:\n"
-        "  issues:\n"
-        "    types:\n"
-        "      - reopened\n"
-        "      - edited\n"
-    )
-    assert "workflow_dispatch:" not in workflow
-    assert "github.event.repository.id == 1120897513" in workflow
-    assert "github.event.sender.id == 250933369" in workflow
-    assert "github.event.issue.number == 1062" in workflow
-    assert "github.event.issue.state == 'open'" in workflow
-    assert (
-        "github.event.issue.title == "
-        "'Protected staging write session control'"
-    ) in workflow
-    assert _literal_assignment(helper, "CONTROL_ISSUE_NUMBER") == 1062
-    assert (
-        _literal_assignment(helper, "CONTROL_ISSUE_TITLE")
-        == "Protected staging write session control"
-    )
-    assert write_session.OWNER_ID == 250933369
-    assert write_session.REPOSITORY_ID == 1120897513
+    assert workflow.startswith("name: Retired Staging Write Session\n")
+    assert "workflow_dispatch:" in workflow
+    assert "issues:" not in workflow
+    assert "schedule:" not in workflow
+    assert "workflow_run:" not in workflow
+    assert "Temporary staging write leases are retired." in workflow
+    assert "Staging is permanently writable for authenticated testing." in workflow
+    assert "flyctl" not in workflow
+    assert "SUPABASE" not in workflow
 
 
-def test_controller_syncs_every_protected_registry_dependency() -> None:
-    workflow = _read(WORKFLOW_PATH)
-    authorize = _between(workflow, "  authorize:\n", "\n  apply-command:\n")
-
-    assert "environment: staging" not in authorize
-    assert "${{ secrets." not in authorize
-    assert "ref: rollback-feb8" in authorize
-    assert "cmp --silent" in authorize
-    assert '<(git show "refs/remotes/origin/staging:$path")' in authorize
-    for path in (
-        FLY_PATH,
-        EVIDENCE_PATH,
-        RECOVERY_PATH,
-        WORKFLOW_PATH,
-        "scripts/staging_evidence_automation.py",
-        HELPER_PATH,
-        "scripts/staging_write_waves.py",
-    ):
-        assert path in authorize
-
-
-def test_all_existing_waves_are_supported_but_never_combined() -> None:
-    helper = _read(HELPER_PATH)
-    active = tuple(
-        wave for wave in STAGING_WRITE_WAVES if wave != NO_WRITE_WAVE
-    )
-
-    assert "ACTIVE_WRITE_WAVES" in helper
-    assert len(active) == len(STAGING_WRITE_WAVES) - 1
-    assert '"all"' not in helper
-    assert "enable-all" not in helper.lower()
-    assert "write_wave is not allowlisted" in helper
-    assert (
-        "advance must name two distinct active allowlisted waves"
-        in helper
-    )
-
-
-def test_open_advance_close_are_candidate_bound_and_fail_closed() -> None:
-    workflow = _read(WORKFLOW_PATH)
-    apply_job = _between(
-        workflow,
-        "  apply-command:\n",
-        "\n  wait-for-lease:\n",
-    )
-
-    assert "group: jupr-staging-api-and-parity-evidence" in apply_job
-    assert "cancel-in-progress: false" in apply_job
-    assert "ref: staging" in apply_job
-    assert '"$(git rev-parse HEAD)" != "$CANDIDATE_SHA"' in apply_job
-    assert "--expected-write-wave \"$EXPECTED_WRITE_WAVE\"" in apply_job
-    assert "live-command-before-activation.json" in apply_job
-    assert '.session_nonce == $nonce' in apply_job
-    assert (
-        apply_job.index("- name: Restore none before advance or close")
-        < apply_job.index("- name: Activate exactly one allowlisted write wave")
-    )
-    transition = _between(
-        apply_job,
-        "      - name: Restore none before advance or close\n",
-        "\n      - name: Ensure lease remains live before activation\n",
-    )
-    assert "--input write_wave=none" in transition
-    assert "verify-final-none" in transition
-    activation = _between(
-        apply_job,
-        "      - name: Activate exactly one allowlisted write wave\n",
-        "\n      - name: Attest active wave and dry-run email\n",
-    )
-    assert '--input "write_wave=$WRITE_WAVE"' in activation
-    assert '--input "orchestration_run_id=$GITHUB_RUN_ID"' in activation
-    failure = _between(
-        apply_job,
-        "      - name: Restore none after any failed transition\n",
-        "\n      - name: Record failed command and close control issue\n",
-    )
-    assert "if: failure()" in failure
-    assert "--input write_wave=none" in failure
-    assert "verify-final-none" in failure
-    assert "-f state=closed" in apply_job
-
-
-def test_locked_issue_comments_are_summary_mirrors_and_never_block() -> None:
-    workflow = _read(WORKFLOW_PATH)
+def test_emergency_disable_is_manual_owner_only_and_staging_only() -> None:
     recovery = _read(RECOVERY_PATH)
-    evidence = _read(EVIDENCE_PATH)
 
-    for source, expected_comments in (
-        (workflow, 5),
-        (recovery, 1),
-    ):
-        assert source.count("/comments") == expected_comments
-        assert source.count("if ! gh api \\") == expected_comments
-        assert (
-            source.count(
-                'printf \'%s\\n\' "$STATUS" >> "$GITHUB_STEP_SUMMARY"'
-            )
-            == expected_comments
-        )
-        assert (
-            source.count(
-                "::warning::Protected issue comment unavailable; "
-                "status is preserved in the workflow summary."
-            )
-            == expected_comments
-        )
-
-    assert "/comments" not in evidence
-    assert "github.event.sender.id == 250933369" in workflow
+    assert recovery.startswith("name: Staging Emergency Write Disable\n")
+    assert "workflow_dispatch:" in recovery
+    assert "schedule:" not in recovery
+    assert "workflow_run:" not in recovery
+    assert "issues:" not in recovery
+    assert "github.actor_id == 250933369" in recovery
+    assert "environment: staging" in recovery
+    assert "ref: staging" in recovery
+    assert "DISABLE STAGING WRITES" in recovery
+    assert "--input write_wave=none" in recovery
+    assert "--workflow fly_api_staging_deploy.yml" in recovery
+    assert "verify-final-none" in recovery
+    assert "juprleagues-api" not in recovery
+    assert "dnoockbwfenunhcibwfn" not in recovery
+    assert "environment: production" not in recovery
 
 
-def test_comment_tolerance_never_weakens_strict_issue_close() -> None:
-    workflow = _read(WORKFLOW_PATH)
-    recovery = _read(RECOVERY_PATH)
-    evidence = _read(EVIDENCE_PATH)
-
-    session_close_steps = (
-        _between(
-            workflow,
-            "      - name: Record safe close and close control issue\n",
-            "\n      - name: Restore none after any failed transition\n",
-        ),
-        _between(
-            workflow,
-            "      - name: Record failed command and close control issue\n",
-            "\n  wait-for-lease:\n",
-        ),
-        workflow[
-            workflow.index(
-                "      - name: Close only the unchanged expired control\n"
-            ) :
-        ],
-    )
-    recovery_close = _between(
-        recovery,
-        "      - name: Close invalid or recovered write-session control\n",
-        "\n      - name: Record recovery result\n",
-    )
-
-    for close_step in (*session_close_steps, recovery_close):
-        comment_index = close_step.index("/comments")
-        wrapper_end = close_step.index("\n          fi", comment_index)
-        patch_index = close_step.index("--method PATCH", wrapper_end)
-        assert comment_index < wrapper_end < patch_index
-        assert "continue-on-error" not in close_step
-        assert "|| true" not in close_step
-
-    assert "/comments" not in evidence
-    assert "--method PATCH" in evidence
-    assert "-f state=closed" in evidence
-    assert "continue-on-error" not in evidence
-    assert "|| true" not in evidence
-
-
-def test_lease_wait_does_not_hold_lock_and_expiry_rechecks_nonce() -> None:
-    workflow = _read(WORKFLOW_PATH)
-    waiter = _between(
-        workflow,
-        "  wait-for-lease:\n",
-        "\n  expire-lease:\n",
-    )
-    expiry = workflow[workflow.index("  expire-lease:\n") :]
-
-    assert "concurrency:" not in waiter
-    assert "permissions: {}" in waiter
-    assert "timeout-minutes: 65" in waiter
-    assert 'date -u -d "$LEASE_EXPIRES_AT" +%s' in waiter
-    assert "group: jupr-staging-api-and-parity-evidence" in expiry
-    assert "ref: ${{ github.sha }}" in expiry
-    assert "ref: rollback-feb8" not in expiry
-    assert "staging_write_session.py should-expire" in expiry
-    assert '--session-nonce "$SESSION_NONCE"' in expiry
-    assert "steps.lease.outputs.expire == 'true'" in expiry
-    assert "--input write_wave=none" in expiry
-    assert "verify-final-none" in expiry
-    assert "A newer owner command superseded this lease" in expiry
-
-
-def test_expiry_normalizes_the_control_body_before_closing() -> None:
-    workflow = _read(WORKFLOW_PATH)
-    expiry_close = workflow[
-        workflow.index(
-            "      - name: Close only the unchanged expired control\n"
-        ) :
-    ]
-
-    second_recheck = expiry_close.index(
-        '"$RUNNER_TEMP/lease-expiry-after-restore.json"'
-    )
-    close_body = expiry_close.index('CLOSE_BODY="$(')
-    patch = expiry_close.index("--method PATCH")
-    assert second_recheck < close_body < patch
-    assert (
-        "'.close_body | select(type == \"string\" and length > 0)'"
-        in expiry_close
-    )
-    assert expiry_close.count("--method PATCH") == 1
-    assert expiry_close.index('-f body="$CLOSE_BODY"') < expiry_close.index(
-        "-f state=closed"
-    )
-
-
-def test_safety_recovery_understands_valid_lease_and_failed_controller() -> None:
-    recovery = _read(RECOVERY_PATH)
-    trigger = _between(recovery, "\non:\n", "\npermissions:")
-    check = _between(
-        recovery,
-        "      - name: Check whether recovery is required\n",
-        "\n      - name: Dispatch canonical no-write recovery\n",
-    )
-
-    assert "      - Protected Staging Write Session" in trigger
-    assert 'cron: "7,37 * * * *"' in trigger
-    assert "staging-write-session.yml@rollback-feb8" in recovery
-    assert "write_session_controller_failed" in check
-    assert "staging_write_session.py inspect" in check
-    assert "valid_exact_write_session_lease" in check
-    assert "invalid_or_expired_write_session" in check
-    assert "lease_inspection_failed" in check
-    assert "verify-final-none" in check
-    assert "issues: write" in recovery
-    assert "issues/1062/comments" in recovery
-    assert "issues/1062" in recovery
-
-
-def test_fly_child_delegation_binds_exact_active_controller_path() -> None:
+def test_normal_staging_deploy_is_permanently_open_but_email_stays_dry_run() -> None:
     fly = _read(FLY_PATH)
-    delegation = _between(
-        fly,
-        "      - name: Verify automated controller delegation\n",
-        "\n      - name: Configure one least-privilege staging write wave\n",
-    )
 
-    assert (
-        "/actions/workflows/staging-write-session.yml" in delegation
-    )
-    assert (
-        '.path == ".github/workflows/staging-write-session.yml"'
-        in delegation
-    )
-    assert (
-        '.path == ".github/workflows/staging-write-session.yml@rollback-feb8"'
-        in delegation
-    )
-    assert (
-        ".workflow_id == (env.WRITE_SESSION_WORKFLOW_ID | tonumber)"
-        in delegation
-    )
-    assert '.state == "active"' in delegation
-    assert ".actor.id == 250933369" in delegation
-    assert ".triggering_actor.id == 250933369" in delegation
-    assert ".repository.id == 1120897513" in delegation
-
-
-def test_controller_surfaces_cannot_target_production_or_live_email() -> None:
-    surfaces = {
-        path: _read(path)
-        for path in (
-            WORKFLOW_PATH,
-            RECOVERY_PATH,
-            HELPER_PATH,
-        )
-    }
-    for path, source in surfaces.items():
-        assert "fly_api_deploy.yml" not in source, path
-        assert "environment: production" not in source, path
-        assert "refs/heads/production" not in source, path
-
-    assert "email_mode" in surfaces[HELPER_PATH]
-    assert '"dry_run"' in surfaces[HELPER_PATH]
-    assert "live_player_update_email_enabled" in surfaces[HELPER_PATH]
-    assert "public_live_production_override_enabled" in surfaces[HELPER_PATH]
+    assert "  push:\n    branches:\n      - staging\n" in fly
+    assert "|| 'open'" in fly
+    assert 'default: "open"' in fly
+    assert "SELECTED_WRITE_WAVE:" in fly
+    assert "JUPR_EMAIL_MODE: dry_run" in fly
+    assert '"JUPR_EMAIL_MODE=dry_run"' in fly
+    assert '"JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL=0"' in fly
+    assert '"JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION=0"' in fly
+    assert "FLY_APP_NAME: juprleagues-api-staging" in fly
+    assert 'test "$EXPECTED_SUPABASE_PROJECT_REF" = "sijpxjxvdtrehmqvirfi"' in fly
+    assert "Refusing any Supabase target except isolated staging" in fly
+    assert "environment: production" not in fly
+    assert "dnoockbwfenunhcibwfn" not in fly
