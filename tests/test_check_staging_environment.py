@@ -243,6 +243,7 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", f"https://{project_ref}.supabase.co")
     for name in cse.FULL_NEXT_ADMIN_FLAGS:
         monkeypatch.setenv(name, "1")
+    monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES", raising=False)
     for name, enabled in expected_gates.items():
         monkeypatch.setenv(name, "1" if enabled else "0")
     for name in cse.ALWAYS_DISABLED_FLAGS:
@@ -516,3 +517,19 @@ def test_open_write_wave_is_a_supported_full_staging_posture(monkeypatch):
     assert summary["staging_write_wave"]["actual"] == "open"
     assert summary["staging_write_wave"]["public_live_token_secret_configured"] is True
     assert summary["staging_write_wave"]["public_live_rate_limit_secret_configured"] is True
+
+
+def test_full_next_flag_check_can_defer_to_required_live_api(monkeypatch):
+    for name in cse.FULL_NEXT_ADMIN_FLAGS:
+        monkeypatch.delenv(name, raising=False)
+    summary = {"errors": [], "warnings": []}
+
+    cse._check_full_next_flags(
+        summary,
+        expect_full_next_admin=True,
+        defer_to_api=True,
+    )
+
+    assert summary["errors"] == []
+    assert len(summary["warnings"]) == 1
+    assert "live API status checks are authoritative" in summary["warnings"][0]

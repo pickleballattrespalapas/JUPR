@@ -198,7 +198,12 @@ def _flag_status(names: tuple[str, ...]) -> dict[str, bool]:
     return {name: _truthy(os.getenv(name)) for name in names}
 
 
-def _check_full_next_flags(summary: dict[str, Any], *, expect_full_next_admin: bool) -> None:
+def _check_full_next_flags(
+    summary: dict[str, Any],
+    *,
+    expect_full_next_admin: bool,
+    defer_to_api: bool = False,
+) -> None:
     required = _flag_status(FULL_NEXT_ADMIN_FLAGS)
     summary["next_admin_flags"] = {
         "required": required,
@@ -206,10 +211,21 @@ def _check_full_next_flags(summary: dict[str, Any], *, expect_full_next_admin: b
         "required_total_count": len(required),
     }
     missing = [name for name, enabled in required.items() if not enabled]
-    if missing and expect_full_next_admin:
-        summary["errors"].append("Full Next admin staging requested, but these flags are disabled: " + ", ".join(missing))
+    if missing and expect_full_next_admin and not defer_to_api:
+        summary["errors"].append(
+            "Full Next admin staging requested, but these flags are disabled: "
+            + ", ".join(missing)
+        )
+    elif missing and expect_full_next_admin:
+        summary["warnings"].append(
+            "Verifier process does not project every Next admin read flag; "
+            "required live API status checks are authoritative: "
+            + ", ".join(missing)
+        )
     elif missing:
-        summary["warnings"].append("Some Next admin workflow flags are disabled: " + ", ".join(missing))
+        summary["warnings"].append(
+            "Some Next admin workflow flags are disabled: " + ", ".join(missing)
+        )
 
 
 def _check_staging_write_wave(
@@ -389,6 +405,8 @@ def _check_api(
 
         if flag_name in expected_gates:
             return expected_gates[flag_name]
+        if expect_full_next_admin and flag_name in FULL_NEXT_ADMIN_FLAGS:
+            return True
         return _truthy(os.getenv(flag_name))
 
     def require_bool(path: str, payload: Any, key: str, expected: bool) -> None:
@@ -727,7 +745,11 @@ def run_checks(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         expected_project_ref=args.expected_supabase_project_ref,
         require_isolation=bool(args.require_supabase_isolation),
     )
-    _check_full_next_flags(summary, expect_full_next_admin=bool(args.expect_full_next_admin))
+    _check_full_next_flags(
+        summary,
+        expect_full_next_admin=bool(args.expect_full_next_admin),
+        defer_to_api=bool(api_base and args.require_api),
+    )
     expected_wave = _check_staging_write_wave(
         summary,
         expected_wave=args.write_wave,
