@@ -229,49 +229,56 @@ function validateRow(row: MatchRow, index: number): string | null {
 }''',
         "required row validation",
     )
-    text = replace_once(
-        text,
-        '''  players,
+    before, searchable, after = section(
+    text,
+    "function SearchablePlayerInput({",
+    "function SearchablePlayerMultiInput({",
+)
+searchable = replace_once(
+    searchable,
+    """  players,
   disabled = false,
-  onChange,''',
-        '''  players,
+  onChange,""",
+    """  players,
   disabled = false,
   invalid = false,
-  onChange,''',
-        "player invalid destructure",
-    )
-    text = replace_once(
-        text,
-        '''  const numericStartingJupr = Number(startingJupr);''',
-        '''  const numericStartingJupr = Number(startingJupr);
+  onChange,""",
+    "player invalid destructure",
+)
+searchable = replace_once(
+    searchable,
+    "  const numericStartingJupr = Number(startingJupr);",
+    """  const numericStartingJupr = Number(startingJupr);
   const validatedInputStyle = invalid
     ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" }
-    : inputStyle;''',
-        "player invalid style",
-    )
-    text = replace_once(
-        text,
-        '''            style={{ ...inputStyle, minHeight: "2.4rem", display: "flex", alignItems: "center", whiteSpace: "normal", overflowWrap: "anywhere", background: "#f8fafc" }}''',
-        '''            style={{ ...validatedInputStyle, minHeight: "2.4rem", display: "flex", alignItems: "center", whiteSpace: "normal", overflowWrap: "anywhere", background: invalid ? "#fef2f2" : "#f8fafc" }}''',
-        "selected player invalid style",
-    )
-    text = replace_once(
-        text,
-        '''          disabled={disabled || creating}
-          onChange={(event) => {''',
-        '''          disabled={disabled || creating}
-          aria-invalid={invalid || undefined}
-          onChange={(event) => {''',
-        "player aria invalid",
-    )
-    text = replace_once(
-        text,
-        '''          style={inputStyle}
-        />''',
-        '''          style={validatedInputStyle}
-        />''',
-        "player invalid input style",
-    )
+    : inputStyle;""",
+    "player invalid style",
+)
+searchable = replace_once(
+    searchable,
+    """            style={{ ...inputStyle, minHeight: "2.4rem", display: "flex", alignItems: "center", whiteSpace: "normal", overflowWrap: "anywhere", background: "#f8fafc" }}""",
+    """            style={{ ...validatedInputStyle, minHeight: "2.4rem", display: "flex", alignItems: "center", whiteSpace: "normal", overflowWrap: "anywhere", background: invalid ? "#fef2f2" : "#f8fafc" }}""",
+    "selected player invalid style",
+)
+searchable = replace_once(
+    searchable,
+    """          disabled={disabled || creating}
+  onChange={(event) => {""",
+    """          disabled={disabled || creating}
+  aria-invalid={invalid || undefined}
+  onChange={(event) => {""",
+    "player aria invalid",
+)
+searchable = replace_once(
+    searchable,
+    """          style={inputStyle}
+        />""",
+    """          style={validatedInputStyle}
+        />""",
+    "player invalid input style",
+)
+text = before + searchable + after
+
 
     dialog_component = '''
 function RemoveAllMatchesDialog({
