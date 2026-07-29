@@ -96,6 +96,7 @@ jobs:
         with:
           name: permanent-staging-workflow-payload
           path: workflow-payload
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 3
 
