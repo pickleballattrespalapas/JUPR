@@ -111,15 +111,8 @@ STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
     ),
 }
 
-STAGING_WRITE_WAVES[OPEN_WRITE_WAVE] = tuple(
-    sorted(
-        {
-            flag
-            for wave, flags in STAGING_WRITE_WAVES.items()
-            if wave != NO_WRITE_WAVE
-            for flag in flags
-        }
-    )
+OPEN_WRITE_FLAGS = tuple(
+    sorted({flag for flags in STAGING_WRITE_WAVES.values() for flag in flags})
 )
 
 DORMANT_STAGING_WRITE_FLAGS = (
@@ -365,12 +358,11 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
-STAGING_WRITE_WAVE_ROUTES[OPEN_WRITE_WAVE] = tuple(
+OPEN_WRITE_ROUTES = tuple(
     sorted(
         {
             route
-            for wave, routes in STAGING_WRITE_WAVE_ROUTES.items()
-            if wave != NO_WRITE_WAVE
+            for routes in STAGING_WRITE_WAVE_ROUTES.values()
             for route in routes
         }
     )
@@ -383,7 +375,7 @@ def _route_template_pattern(template: str) -> str:
 
 
 def wave_allows_request(wave: str, method: str, path: str) -> bool:
-    routes = STAGING_WRITE_WAVE_ROUTES.get(wave, ())
+    routes = OPEN_WRITE_ROUTES if wave == OPEN_WRITE_WAVE else STAGING_WRITE_WAVE_ROUTES.get(wave, ())
     clean_method = str(method or "").strip().upper()
     clean_path = str(path or "").strip()
     return any(
@@ -413,9 +405,12 @@ PUBLIC_LIVE_SECRET_WAVES = frozenset({"public-live", OPEN_WRITE_WAVE})
 
 
 def expected_write_flags(wave: str) -> dict[str, bool]:
-    if wave not in STAGING_WRITE_WAVES:
+    if wave == OPEN_WRITE_WAVE:
+        enabled = set(OPEN_WRITE_FLAGS)
+    elif wave in STAGING_WRITE_WAVES:
+        enabled = set(STAGING_WRITE_WAVES[wave])
+    else:
         raise ValueError(f"Unknown staging write wave: {wave}")
-    enabled = set(STAGING_WRITE_WAVES[wave])
     return {flag: flag in enabled for flag in ALL_STAGING_WRITE_FLAGS}
 
 
@@ -453,7 +448,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Configure the Fly staging write posture; open is the permanent test default."
     )
-    parser.add_argument("--wave", required=True, choices=tuple(STAGING_WRITE_WAVES))
+    parser.add_argument("--wave", required=True, choices=(OPEN_WRITE_WAVE, *tuple(STAGING_WRITE_WAVES)))
     parser.add_argument("--fly-config", type=Path, required=True)
     parser.add_argument("--github-env", type=Path)
     return parser

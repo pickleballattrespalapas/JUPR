@@ -16,6 +16,7 @@ from scripts.run_parity_staging_wave import WAVES
 from scripts.staging_write_waves import (
     ALL_STAGING_WRITE_FLAGS,
     ALWAYS_DISABLED_FLAGS,
+    OPEN_WRITE_WAVE,
     STAGING_WRITE_WAVES,
     configure_fly_staging,
     expected_write_flags,
@@ -243,8 +244,8 @@ def test_staging_deploy_wave_choices_exactly_match_the_code_ledger():
 
     assert 'default: "open"' in write_wave
     assert choices[0] == "open"
-    assert set(choices) == set(STAGING_WRITE_WAVES)
-    assert len(choices) == len(STAGING_WRITE_WAVES)
+    assert set(choices) == {OPEN_WRITE_WAVE, *STAGING_WRITE_WAVES}
+    assert len(choices) == len(STAGING_WRITE_WAVES) + 1
 
 def test_production_cors_includes_both_public_domains():
     production_env = _toml("fly.toml")["env"]
