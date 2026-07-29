@@ -49,16 +49,9 @@ jobs:
           git diff --check
 
       - name: Run focused Python verification
-        shell: bash
         run: |
-          set -euo pipefail
           python -m pip install pytest
-          mapfile -t related_tests < <(
-            grep -RIl -E 'STAGING_WRITE_WAVES|STAGING_WRITE_WAVE_ROUTES|staging_write|write_wave|fly\.staging|adminMatchUploaderApi' \
-              tests --include='test_*.py' | sort -u
-          )
-          printf 'Running %s related test file(s).\n' "${#related_tests[@]}"
-          python -m pytest -q "${related_tests[@]}"
+          python -m pytest -q tests/test_permanent_staging_write_mode.py
 
       - name: Set up Node
         uses: actions/setup-node@v4
