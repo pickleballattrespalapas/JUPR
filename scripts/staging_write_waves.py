@@ -6,17 +6,16 @@ import re
 
 
 NO_WRITE_WAVE = "none"
+OPEN_WRITE_WAVE = "open"
 ADMIN_WRITE_PILOT_FLAG = "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT"
 
 
 def _admin_wave(*flags: str) -> tuple[str, ...]:
     return (ADMIN_WRITE_PILOT_FLAG, *flags)
 
-# Each deployment may open exactly one reviewed staging wave. `none` blocks
-# business-data mutation routes; append-only permission-denial auditing remains
-# active as a security control. Values include
-# dependency gates that must be open for that wave; every other controlled gate
-# is forced off before Fly builds the release.
+# Named waves remain available for diagnosis and emergency isolation. The `open`
+# wave is the normal staging posture and enables every reviewed staging mutation
+# gate. Production-only email and public-live override flags remain disabled.
 STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
     NO_WRITE_WAVE: (),
     "public-intake-auth": (
@@ -111,6 +110,17 @@ STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
         "JUPR_ENABLE_STAGING_TOURNAMENT_COMMERCE_WRITES",
     ),
 }
+
+STAGING_WRITE_WAVES[OPEN_WRITE_WAVE] = tuple(
+    sorted(
+        {
+            flag
+            for wave, flags in STAGING_WRITE_WAVES.items()
+            if wave != NO_WRITE_WAVE
+            for flag in flags
+        }
+    )
+)
 
 DORMANT_STAGING_WRITE_FLAGS = (
     # The current import handoff is a GET-only, write_count=0 projection. Keep
@@ -355,6 +365,17 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
+STAGING_WRITE_WAVE_ROUTES[OPEN_WRITE_WAVE] = tuple(
+    sorted(
+        {
+            route
+            for wave, routes in STAGING_WRITE_WAVE_ROUTES.items()
+            if wave != NO_WRITE_WAVE
+            for route in routes
+        }
+    )
+)
+
 
 def _route_template_pattern(template: str) -> str:
     parts = re.split(r"(\{[^{}]+\})", str(template))
@@ -386,8 +407,9 @@ ALWAYS_DISABLED_FLAGS = (
 )
 
 REGISTRATION_SECRET_WAVES = frozenset(
-    {"public-intake-auth", "tournament-registration"}
+    {"public-intake-auth", "tournament-registration", OPEN_WRITE_WAVE}
 )
+PUBLIC_LIVE_SECRET_WAVES = frozenset({"public-live", OPEN_WRITE_WAVE})
 
 
 def expected_write_flags(wave: str) -> dict[str, bool]:
@@ -429,7 +451,7 @@ def append_github_env(path: Path, *, wave: str) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Configure one allowlisted, least-privilege Fly staging write wave."
+        description="Configure the Fly staging write posture; open is the permanent test default."
     )
     parser.add_argument("--wave", required=True, choices=tuple(STAGING_WRITE_WAVES))
     parser.add_argument("--fly-config", type=Path, required=True)
