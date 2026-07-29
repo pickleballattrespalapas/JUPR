@@ -1,0 +1,80 @@
+name: Apply open Fly verifier environment
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/fix-open-fly-verifier-env-20260729' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/fix-open-fly-verifier-env-20260729
+          fetch-depth: 0
+
+      - name: Project always-on staging read surfaces into verification
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path(".github/workflows/fly_api_staging_deploy.yml")
+          text = path.read_text(encoding="utf-8")
+          marker = '      JUPR_STAGING_WRITE_WAVE: open\n'
+          addition = '''      JUPR_ENABLE_NEXT_ADMIN_SHELL: "1"
+          JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG: "1"
+          JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER: "1"
+          JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES: "1"
+          JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS: "1"
+          JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP: "1"
+          JUPR_ENABLE_NEXT_ADMIN_MONEYBALL: "1"
+          JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE: "1"
+          JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER: "1"
+          JUPR_ENABLE_NEXT_ADMIN_MATCH_CANONICAL_AUDIT: "1"
+          '''
+          if addition in text:
+              print("Always-on verifier environment is already present.")
+          else:
+              if text.count(marker) != 1:
+                  raise SystemExit(f"Unexpected staging wave marker count: {text.count(marker)}")
+              path.write_text(text.replace(marker, marker + addition, 1), encoding="utf-8")
+
+      - name: Run focused verification
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r services/api/requirements.txt
+          python -m pip install pytest
+          python -m pytest -q \
+            tests/test_staging_deployment_config.py \
+            tests/test_check_staging_environment.py \
+            tests/test_permanent_staging_write_mode.py \
+            tests/test_league_awards_static_contract.py
+          git diff --check
+
+      - name: Commit verified implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- .github/workflows/fly_api_staging_deploy.yml; then
+            exit 0
+          fi
+          git config user.name 'pickleballattrespalapas'
+          git config user.email 'pickleballattrespalapas@gmail.com'
+          git add .github/workflows/fly_api_staging_deploy.yml
+          git commit -m 'Project staging read flags into Fly verification'
+          git push origin HEAD:agent/fix-open-fly-verifier-env-20260729
