@@ -21,3 +21,7 @@ The write window was closed before this staging-only implementation began.
 - Compact single-match editor with working filters.
 - Notes-only edits and rating-affecting edits with durable Replay ALL.
 - Recent durable edit operations collapsed by default.
+
+## Staging publication
+
+Focused source contracts, component checks, and the full Next.js build passed before merge. This documentation-only publication commit reasserts the canonical staging branch after verification; it does not alter application behavior, database schema, or write permissions.
