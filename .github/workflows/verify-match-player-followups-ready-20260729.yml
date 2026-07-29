@@ -1,0 +1,316 @@
+name: Verify match-player follow-ups ready
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  actions: write
+  contents: read
+  issues: read
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/verify-match-player-window-20260728d' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    environment: staging
+    concurrency:
+      group: jupr-staging-api-and-parity-evidence
+      cancel-in-progress: false
+    env:
+      EXPECTED_SHA: f6b2b0ce6fe9521b0b907fbb2dee808efc1d8bc0
+      EXPECTED_DEPLOYMENT_ID: dpl_9o8URnZo6vzjEtfdWGVKzxhzT3hG
+      EXPECTED_DEPLOYMENT_ORIGIN: https://jupr-gai8gn3m8-pickleballattrespalapas1.vercel.app
+      EXPECTED_SUPABASE_REF: sijpxjxvdtrehmqvirfi
+      FLY_APP: juprleagues-api-staging
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      WEB_ORIGIN: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      SESSION_NONCE: 859709bc-4959-4453-9a43-e9589ac7be7f
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+    steps:
+      - name: Check out isolated verifier
+        uses: actions/checkout@v4
+        with:
+          ref: agent/verify-match-player-window-20260728d
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source and one-file diff
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$PR_BASE_SHA" = "$EXPECTED_SHA"
+          test "$PR_HEAD_SHA" = "$(git rev-parse HEAD)"
+          files="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              --paginate \
+              "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+              --jq '.[].filename' | sort
+          )"
+          test "$files" = ".github/workflows/verify-match-player-followups-ready-20260729.yml"
+
+      - name: Verify protected controller is closed and locked
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "/repos/$GITHUB_REPOSITORY/issues/1062" > issue.json
+          jq -e \
+            --arg sha "$EXPECTED_SHA" \
+            --arg nonce "$SESSION_NONCE" \
+            'select(
+              .number == 1062 and
+              .title == "Protected staging write session control" and
+              .state == "closed" and
+              .locked == true and
+              .author_association == "OWNER" and
+              (.body | contains("command: close")) and
+              (.body | contains("candidate_sha: " + $sha)) and
+              (.body | contains("expected_write_wave: none")) and
+              (.body | contains("write_wave: none")) and
+              (.body | contains("session_nonce: " + $nonce))
+            )' issue.json >/dev/null
+
+      - name: Verify exact Vercel staging identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" ]; then
+            echo "Missing Vercel automation bypass secret." >&2
+            exit 1
+          fi
+          header="x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error --location --max-time 30 \
+              -H "$header" "$WEB_ORIGIN/api/environment" -o alias-environment.json && \
+              jq -e \
+                --arg sha "$EXPECTED_SHA" \
+                --arg deployment "$EXPECTED_DEPLOYMENT_ID" \
+                --arg origin "$EXPECTED_DEPLOYMENT_ORIGIN" \
+                --arg fly "https://$FLY_APP.fly.dev" \
+                --arg auth "https://$EXPECTED_SUPABASE_REF.supabase.co" \
+                'select(
+                  .environment == "staging" and
+                  .vercel_environment == "preview" and
+                  .git_commit_sha == $sha and
+                  .vercel_deployment_id == $deployment and
+                  .vercel_deployment_origin == $origin and
+                  .api_origin == $fly and
+                  .auth_origin == $auth and
+                  .preview_isolation_active == true and
+                  .preview_auth_isolation_active == true
+                )' alias-environment.json >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              cat alias-environment.json 2>/dev/null || true
+              echo "Canonical Vercel staging alias did not attest the exact candidate." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          curl --fail --silent --show-error --location --max-time 30 \
+            -H "$header" "$EXPECTED_DEPLOYMENT_ORIGIN/api/environment" \
+            -o immutable-environment.json
+          jq -e \
+            --arg sha "$EXPECTED_SHA" \
+            --arg deployment "$EXPECTED_DEPLOYMENT_ID" \
+            --arg origin "$EXPECTED_DEPLOYMENT_ORIGIN" \
+            'select(
+              .git_commit_sha == $sha and
+              .vercel_deployment_id == $deployment and
+              .vercel_deployment_origin == $origin
+            )' immutable-environment.json >/dev/null
+
+      - name: Restore or confirm exact Fly no-write release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          needs_deploy=true
+          if curl --fail --silent --show-error --max-time 20 \
+              "$FLY_HEALTH_URL" -o fly-before.json && \
+             jq -e --arg sha "$EXPECTED_SHA" 'select(
+               .git_commit_sha == $sha and
+               .image_build_git_sha == $sha and
+               .staging_write_wave == "none"
+             )' fly-before.json >/dev/null; then
+            needs_deploy=false
+          fi
+
+          if [ "$needs_deploy" = true ]; then
+            python scripts/staging_evidence_automation.py dispatch \
+              --workflow fly_api_staging_deploy.yml \
+              --input write_wave=none \
+              --input "expected_candidate_sha=$EXPECTED_SHA" \
+              --input "orchestration_run_id=$GITHUB_RUN_ID" \
+              > fly-none-dispatch.json
+            run_id="$(jq -r '.workflow_run_id' fly-none-dispatch.json)"
+            python scripts/staging_evidence_automation.py wait-run \
+              --workflow fly_api_staging_deploy.yml \
+              --run-id "$run_id" \
+              --candidate-sha "$EXPECTED_SHA" \
+              --timeout-seconds 5400
+          else
+            printf '{"skipped":true,"reason":"already_exact_none"}\n' > fly-none-dispatch.json
+          fi
+
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --show-error --max-time 20 \
+                "$FLY_HEALTH_URL" -o fly-health.json && \
+               jq -e --arg sha "$EXPECTED_SHA" 'select(
+                 .git_commit_sha == $sha and
+                 .image_build_git_sha == $sha and
+                 .staging_write_wave == "none"
+               )' fly-health.json >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 90 ]; then
+              cat fly-health.json 2>/dev/null || true
+              echo "Fly staging did not reach the exact no-write candidate." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          python - <<'PY'
+          import hashlib
+          import json
+          from scripts.staging_write_waves import expected_write_flags
+
+          with open("fly-health.json", encoding="utf-8") as handle:
+              health = json.load(handle)
+
+          expected_flags = expected_write_flags("none")
+          fingerprint = hashlib.sha256(
+              "\n".join(
+                  f"{name}={1 if enabled else 0}"
+                  for name, enabled in sorted(expected_flags.items())
+              ).encode("utf-8")
+          ).hexdigest()
+          checks = {
+              "ok": health.get("ok") is True,
+              "service": health.get("service") == "jupr-api",
+              "environment": health.get("environment") == "staging",
+              "candidate": health.get("git_commit_sha") == "f6b2b0ce6fe9521b0b907fbb2dee808efc1d8bc0",
+              "image_candidate": health.get("image_build_git_sha") == "f6b2b0ce6fe9521b0b907fbb2dee808efc1d8bc0",
+              "app": health.get("fly_app_name") == "juprleagues-api-staging",
+              "supabase": health.get("supabase_project_ref") == "sijpxjxvdtrehmqvirfi",
+              "wave": health.get("write_wave") == "none" and health.get("staging_write_wave") == "none",
+              "business_writes": health.get("business_data_write_wave_active") is False,
+              "flags": health.get("controlled_write_flags") == expected_flags,
+              "flag_fingerprint": health.get("controlled_write_flag_fingerprint") == fingerprint,
+              "public_live": health.get("public_live_writes_enabled") is False,
+              "production_override": health.get("public_live_production_override_enabled") is False,
+              "web_origin": health.get("web_origin") == "https://jupr-git-staging-pickleballattrespalapas1.vercel.app",
+              "jwt": health.get("jwt_verification_configured") is True and health.get("jwt_verification_mode") == "jwks" and health.get("jwt_verification_project_ref") == "sijpxjxvdtrehmqvirfi",
+              "service_role": health.get("write_prerequisites", {}).get("service_role_configured") is True,
+              "audit": health.get("write_prerequisites", {}).get("api_audit_required") is True,
+              "worker_log": health.get("write_prerequisites", {}).get("worker_run_log_required") is True,
+              "email": health.get("write_prerequisites", {}).get("email_mode") == "dry_run",
+              "live_email": health.get("write_prerequisites", {}).get("live_player_update_email_enabled") is False,
+          }
+          failed = [name for name, accepted in checks.items() if not accepted]
+          if failed:
+              raise SystemExit("Fly no-write verification failed: " + ", ".join(failed))
+          PY
+
+      - name: Verify repaired staging pages and deployed UI markers
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+          from pathlib import Path
+          from urllib.parse import urljoin
+          from urllib.request import Request, urlopen
+
+          alias = os.environ["WEB_ORIGIN"]
+          immutable = os.environ["EXPECTED_DEPLOYMENT_ORIGIN"]
+          bypass = os.environ["VERCEL_AUTOMATION_BYPASS_SECRET"]
+          headers = {
+              "User-Agent": "JUPR-staging-followup-readiness/1.0",
+              "x-vercel-protection-bypass": bypass,
+          }
+          pages = [
+              "/admin/match-uploader",
+              "/admin/match-log/edit",
+              "/admin/match-log/replay",
+          ]
+          markers = {
+              "required_field_feedback": "complete the highlighted player fields",
+              "duplicate_prevention": "each player may appear only once",
+              "remove_blank_rows": "Keep rows with data",
+              "edit_success_dialog": "Match edit and replay complete",
+              "replay_history_link": "Open Replay History",
+          }
+          forbidden = [
+              "JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS is not enabled",
+          ]
+
+          def fetch(url: str) -> str:
+              with urlopen(Request(url, headers=headers), timeout=30) as response:
+                  if response.status not in {200, 204}:
+                      raise RuntimeError(f"Unexpected HTTP {response.status}: {url}")
+                  return response.read().decode("utf-8", errors="replace")
+
+          report = {"pages": {}, "markers": {}, "forbidden": {}}
+          texts = []
+          for origin_name, origin in (("alias", alias), ("immutable", immutable)):
+              origin_texts = []
+              status = {}
+              scripts = set()
+              for page in pages:
+                  html = fetch(origin + page)
+                  status[page] = 200
+                  origin_texts.append(html)
+                  scripts.update(re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', html))
+              for src in sorted(scripts):
+                  origin_texts.append(fetch(urljoin(origin + "/", src)))
+              combined = "\n".join(origin_texts)
+              texts.append(combined)
+              report["pages"][origin_name] = status
+          combined = "\n".join(texts)
+          report["markers"] = {name: value in combined for name, value in markers.items()}
+          report["forbidden"] = {value: value in combined for value in forbidden}
+          missing = [name for name, present in report["markers"].items() if not present]
+          present_forbidden = [name for name, present in report["forbidden"].items() if present]
+          Path("ui-readiness.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps(report, indent=2, sort_keys=True))
+          if missing:
+              raise SystemExit("Missing repaired UI markers: " + ", ".join(missing))
+          if present_forbidden:
+              raise SystemExit("Stale UI markers remain: " + ", ".join(present_forbidden))
+
+      - name: Upload staging readiness evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: match-player-followups-ready-evidence
+          path: |
+            issue.json
+            alias-environment.json
+            immutable-environment.json
+            fly-before.json
+            fly-none-dispatch.json
+            fly-health.json
+            ui-readiness.json
+          if-no-files-found: warn
+          retention-days: 3
