@@ -1,4 +1,4 @@
-name: Monitor active match-player write session
+name: Diagnose skipped protected write session
 
 on:
   pull_request:
@@ -13,160 +13,47 @@ permissions:
   issues: read
 
 jobs:
-  monitor:
+  diagnose:
     if: >-
       github.repository == 'pickleballattrespalapas/JUPR' &&
       github.event.pull_request.head.ref == 'agent/verify-match-player-window-20260728d' &&
       github.event.pull_request.base.ref == 'staging'
     runs-on: ubuntu-latest
-    timeout-minutes: 75
-    environment: staging
-    concurrency:
-      group: jupr-staging-match-player-monitor-20260729
-      cancel-in-progress: true
+    timeout-minutes: 10
     env:
-      EXPECTED_SHA: f6b2b0ce6fe9521b0b907fbb2dee808efc1d8bc0
-      EXPECTED_WAVE: match-player
-      SESSION_NONCE: 527634a4-5060-4af0-a210-32ca65a17cd2
       LEASE_STARTED_AT: 2026-07-29T13:30:19Z
-      LEASE_EXPIRES_AT: 2026-07-29T14:30:19Z
-      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
     steps:
-      - name: Check out isolated monitor
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: agent/verify-match-player-window-20260728d
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Verify isolated one-file monitor
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          test "$PR_BASE_SHA" = "$EXPECTED_SHA"
-          test "$PR_HEAD_SHA" = "$(git rev-parse HEAD)"
-          files="$(gh api -H "X-GitHub-Api-Version: 2026-03-10" --paginate "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[].filename' | sort)"
-          test "$files" = ".github/workflows/verify-match-player-followups-ready-20260729.yml"
-
-      - name: Wait for the protected write-session controller
+      - name: Capture latest protected write-session event
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          RUN_ID=""
-          for attempt in $(seq 1 60); do
-            gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/workflows/staging-write-session.yml/runs?event=issues&per_page=30" > session-runs.json
-            RUN_ID="$(jq -r --arg started "$LEASE_STARTED_AT" '[.workflow_runs[] | select(.created_at >= $started and .head_branch == "rollback-feb8" and (.display_title | contains("#1062")))][0].id // empty' session-runs.json)"
-            if [ -n "$RUN_ID" ]; then
-              break
-            fi
-            if [ "$attempt" -eq 60 ]; then
-              echo "Protected write-session run was not found." >&2
-              exit 1
-            fi
-            sleep 5
-          done
+          gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/workflows/staging-write-session.yml/runs?event=issues&per_page=30" > session-runs.json
+          RUN_ID="$(jq -er --arg started "$LEASE_STARTED_AT" '[.workflow_runs[] | select(.created_at >= $started and .head_branch == "rollback-feb8" and (.display_title | contains("#1062")))][0].id' session-runs.json)"
           printf '%s\n' "$RUN_ID" > session-run-id.txt
-
-          for attempt in $(seq 1 720); do
-            gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > session-run.json
-            status="$(jq -r '.status' session-run.json)"
-            conclusion="$(jq -r '.conclusion // ""' session-run.json)"
-            if [ "$status" = "completed" ]; then
-              if [ "$conclusion" != "success" ]; then
-                gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=all&per_page=100" > session-jobs.json
-                gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > session-failed.log 2>&1 || true
-                echo "Protected write-session run concluded $conclusion." >&2
-                exit 1
-              fi
-              break
-            fi
-            if [ "$attempt" -eq 720 ]; then
-              echo "Protected write-session run did not complete before monitor timeout." >&2
-              exit 1
-            fi
-            sleep 5
-          done
+          gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > session-run.json
           gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=all&per_page=100" > session-jobs.json
-
-      - name: Verify active match-player state
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
           gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/issues/1062" > issue.json
-          jq -e --arg sha "$EXPECTED_SHA" --arg wave "$EXPECTED_WAVE" --arg nonce "$SESSION_NONCE" --arg expires "$LEASE_EXPIRES_AT" 'select(
-            .state == "open" and
-            .locked == true and
-            (.body | contains("command: open")) and
-            (.body | contains("candidate_sha: " + $sha)) and
-            (.body | contains("expected_write_wave: none")) and
-            (.body | contains("write_wave: " + $wave)) and
-            (.body | contains("session_nonce: " + $nonce)) and
-            (.body | contains("lease_expires_at: " + $expires))
-          )' issue.json >/dev/null
+          jq '{id, name, display_title, event, status, conclusion, head_branch, head_sha, actor, triggering_actor, run_attempt, created_at, updated_at, path, html_url}' session-run.json
+          jq '[.jobs[] | {id, name, status, conclusion, steps: [.steps[]? | {name, status, conclusion}]}]' session-jobs.json
+          jq '{number, state, locked, user, author_association, updated_at, body}' issue.json
 
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent --show-error --max-time 20 "$FLY_HEALTH_URL" -o fly-health.json && \
-               jq -e --arg sha "$EXPECTED_SHA" --arg wave "$EXPECTED_WAVE" 'select(
-                 .ok == true and
-                 .environment == "staging" and
-                 .git_commit_sha == $sha and
-                 .image_build_git_sha == $sha and
-                 .fly_app_name == "juprleagues-api-staging" and
-                 .supabase_project_ref == "sijpxjxvdtrehmqvirfi" and
-                 .staging_write_wave == $wave and
-                 .write_wave == $wave and
-                 .business_data_write_wave_active == true and
-                 .public_live_production_override_enabled == false and
-                 .write_prerequisites.email_mode == "dry_run" and
-                 .write_prerequisites.live_player_update_email_enabled == false
-               )' fly-health.json >/dev/null; then
-              break
-            fi
-            if [ "$attempt" -eq 30 ]; then
-              cat fly-health.json 2>/dev/null || true
-              echo "Fly staging did not attest the active match-player wave." >&2
-              exit 1
-            fi
-            sleep 5
-          done
-
-          python - <<'PY'
-          import hashlib
-          import json
-          from scripts.staging_write_waves import expected_write_flags
-
-          with open("fly-health.json", encoding="utf-8") as handle:
-              health = json.load(handle)
-          expected = expected_write_flags("match-player")
-          fingerprint = hashlib.sha256(
-              "\n".join(f"{name}={1 if enabled else 0}" for name, enabled in sorted(expected.items())).encode("utf-8")
-          ).hexdigest()
-          if health.get("controlled_write_flags") != expected:
-              raise SystemExit("Controlled write flags do not match match-player.")
-          if health.get("controlled_write_flag_fingerprint") != fingerprint:
-              raise SystemExit("Controlled write fingerprint mismatch.")
-          PY
-
-      - name: Upload active-session evidence
+      - name: Upload diagnosis
         uses: actions/upload-artifact@v4
         with:
-          name: active-match-player-session-evidence
+          name: skipped-protected-session-diagnosis
           path: |
             session-runs.json
             session-run-id.txt
             session-run.json
             session-jobs.json
-            session-failed.log
             issue.json
-            fly-health.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 2
