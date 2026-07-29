@@ -1,0 +1,81 @@
+name: Apply permanent staging writes
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/permanent-staging-writes-20260729' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/permanent-staging-writes-20260729
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Apply permanent staging mode
+        run: |
+          python -m py_compile scripts/apply_permanent_staging_writes_20260729.py
+          python scripts/apply_permanent_staging_writes_20260729.py
+          git diff --check
+
+      - name: Run focused Python verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install pytest
+          mapfile -t related_tests < <(
+            grep -RIl -E 'STAGING_WRITE_WAVES|STAGING_WRITE_WAVE_ROUTES|staging_write|write_wave|fly\.staging|adminMatchUploaderApi' \
+              tests --include='test_*.py' | sort -u
+          )
+          printf 'Running %s related test file(s).\n' "${#related_tests[@]}"
+          python -m pytest -q "${related_tests[@]}"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Run component checks
+        working-directory: apps/web
+        run: npm run test:component
+
+      - name: Build Next.js
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Commit verified implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm scripts/apply_permanent_staging_writes_20260729.py
+          rm .github/workflows/apply-permanent-staging-writes-20260729.yml
+          git config user.name 'pickleballattrespalapas'
+          git config user.email 'pickleballattrespalapas@gmail.com'
+          git add -A
+          git commit -m 'Keep staging permanently writable for testing'
+          git push origin HEAD:agent/permanent-staging-writes-20260729
