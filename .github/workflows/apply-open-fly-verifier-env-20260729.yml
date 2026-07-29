@@ -33,104 +33,110 @@ jobs:
 
           path = Path("scripts/check_staging_environment.py")
           text = path.read_text(encoding="utf-8")
-          replacements = (
-              (
-                  '''def _check_full_next_flags(summary: dict[str, Any], *, expect_full_next_admin: bool) -> None:
-          ''',
-                  '''def _check_full_next_flags(
-              summary: dict[str, Any],
-              *,
-              expect_full_next_admin: bool,
-              defer_to_api: bool = False,
-          ) -> None:
-          ''',
-              ),
-              (
-                  '''    if missing and expect_full_next_admin:
-              summary["errors"].append("Full Next admin staging requested, but these flags are disabled: " + ", ".join(missing))
-              elif missing:
-              summary["warnings"].append("Some Next admin workflow flags are disabled: " + ", ".join(missing))
-          ''',
-                  '''    if missing and expect_full_next_admin and not defer_to_api:
-              summary["errors"].append(
-                  "Full Next admin staging requested, but these flags are disabled: "
-                  + ", ".join(missing)
-              )
-              elif missing and expect_full_next_admin:
-              summary["warnings"].append(
-                  "Verifier process does not project every Next admin read flag; "
-                  "required live API status checks are authoritative: "
-                  + ", ".join(missing)
-              )
-              elif missing:
-              summary["warnings"].append(
-                  "Some Next admin workflow flags are disabled: " + ", ".join(missing)
-              )
-          ''',
-              ),
-              (
-                  '''        if flag_name in expected_gates:
-                  return expected_gates[flag_name]
-              return _truthy(os.getenv(flag_name))
-          ''',
-                  '''        if flag_name in expected_gates:
-                  return expected_gates[flag_name]
-              if expect_full_next_admin and flag_name in FULL_NEXT_ADMIN_FLAGS:
-                  return True
-              return _truthy(os.getenv(flag_name))
-          ''',
-              ),
-              (
-                  '''    _check_full_next_flags(summary, expect_full_next_admin=bool(args.expect_full_next_admin))
-          ''',
-                  '''    _check_full_next_flags(
-              summary,
-              expect_full_next_admin=bool(args.expect_full_next_admin),
-              defer_to_api=bool(api_base and args.require_api),
+
+          old = "def _check_full_next_flags(summary: dict[str, Any], *, expect_full_next_admin: bool) -> None:\n"
+          new = (
+              "def _check_full_next_flags(\n"
+              "    summary: dict[str, Any],\n"
+              "    *,\n"
+              "    expect_full_next_admin: bool,\n"
+              "    defer_to_api: bool = False,\n"
+              ") -> None:\n"
           )
-          ''',
-              ),
+          if text.count(old) != 1:
+              raise SystemExit("Unexpected _check_full_next_flags signature")
+          text = text.replace(old, new, 1)
+
+          old = (
+              "    if missing and expect_full_next_admin:\n"
+              "        summary[\"errors\"].append(\"Full Next admin staging requested, but these flags are disabled: \" + \", \".join(missing))\n"
+              "    elif missing:\n"
+              "        summary[\"warnings\"].append(\"Some Next admin workflow flags are disabled: \" + \", \".join(missing))\n"
           )
-          for old, new in replacements:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"Unexpected replacement count {count} for: {old[:100]!r}")
-              text = text.replace(old, new, 1)
-          path.write_text(text, encoding="utf-8")
+          new = (
+              "    if missing and expect_full_next_admin and not defer_to_api:\n"
+              "        summary[\"errors\"].append(\n"
+              "            \"Full Next admin staging requested, but these flags are disabled: \"\n"
+              "            + \", \".join(missing)\n"
+              "        )\n"
+              "    elif missing and expect_full_next_admin:\n"
+              "        summary[\"warnings\"].append(\n"
+              "            \"Verifier process does not project every Next admin read flag; \"\n"
+              "            \"required live API status checks are authoritative: \"\n"
+              "            + \", \".join(missing)\n"
+              "        )\n"
+              "    elif missing:\n"
+              "        summary[\"warnings\"].append(\n"
+              "            \"Some Next admin workflow flags are disabled: \" + \", \".join(missing)\n"
+              "        )\n"
+          )
+          if text.count(old) != 1:
+              raise SystemExit("Unexpected missing-read-flags block")
+          text = text.replace(old, new, 1)
+
+          old = (
+              "        if flag_name in expected_gates:\n"
+              "            return expected_gates[flag_name]\n"
+              "        return _truthy(os.getenv(flag_name))\n"
+          )
+          new = (
+              "        if flag_name in expected_gates:\n"
+              "            return expected_gates[flag_name]\n"
+              "        if expect_full_next_admin and flag_name in FULL_NEXT_ADMIN_FLAGS:\n"
+              "            return True\n"
+              "        return _truthy(os.getenv(flag_name))\n"
+          )
+          if text.count(old) != 1:
+              raise SystemExit("Unexpected expected_surface_flag block")
+          text = text.replace(old, new, 1)
+
+          old = "    _check_full_next_flags(summary, expect_full_next_admin=bool(args.expect_full_next_admin))\n"
+          new = (
+              "    _check_full_next_flags(\n"
+              "        summary,\n"
+              "        expect_full_next_admin=bool(args.expect_full_next_admin),\n"
+              "        defer_to_api=bool(api_base and args.require_api),\n"
+              "    )\n"
+          )
+          if text.count(old) != 1:
+              raise SystemExit("Unexpected run_checks full-next call")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
           test_path = Path("tests/test_check_staging_environment.py")
           tests = test_path.read_text(encoding="utf-8")
-          marker = '''    for name in cse.FULL_NEXT_ADMIN_FLAGS:
-              monkeypatch.setenv(name, "1")
-              for name, enabled in expected_gates.items():
-          '''
-          replacement = '''    for name in cse.FULL_NEXT_ADMIN_FLAGS:
-              monkeypatch.setenv(name, "1")
-              monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES", raising=False)
-              for name, enabled in expected_gates.items():
-          '''
-          if tests.count(marker) != 1:
-              raise SystemExit(f"Unexpected full API flag setup count: {tests.count(marker)}")
-          tests = tests.replace(marker, replacement, 1)
+          old = (
+              "    for name in cse.FULL_NEXT_ADMIN_FLAGS:\n"
+              "        monkeypatch.setenv(name, \"1\")\n"
+              "    for name, enabled in expected_gates.items():\n"
+          )
+          new = (
+              "    for name in cse.FULL_NEXT_ADMIN_FLAGS:\n"
+              "        monkeypatch.setenv(name, \"1\")\n"
+              "    monkeypatch.delenv(\"JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES\", raising=False)\n"
+              "    for name, enabled in expected_gates.items():\n"
+          )
+          if tests.count(old) != 1:
+              raise SystemExit(f"Unexpected full API flag setup count: {tests.count(old)}")
+          tests = tests.replace(old, new, 1)
           new_test_name = "test_full_next_flag_check_can_defer_to_required_live_api"
           if new_test_name not in tests:
-              tests += '''
-
-          def test_full_next_flag_check_can_defer_to_required_live_api(monkeypatch):
-              for name in cse.FULL_NEXT_ADMIN_FLAGS:
-                  monkeypatch.delenv(name, raising=False)
-              summary = {"errors": [], "warnings": []}
-
-              cse._check_full_next_flags(
-                  summary,
-                  expect_full_next_admin=True,
-                  defer_to_api=True,
+              tests += (
+                  "\n\n"
+                  "def test_full_next_flag_check_can_defer_to_required_live_api(monkeypatch):\n"
+                  "    for name in cse.FULL_NEXT_ADMIN_FLAGS:\n"
+                  "        monkeypatch.delenv(name, raising=False)\n"
+                  "    summary = {\"errors\": [], \"warnings\": []}\n"
+                  "\n"
+                  "    cse._check_full_next_flags(\n"
+                  "        summary,\n"
+                  "        expect_full_next_admin=True,\n"
+                  "        defer_to_api=True,\n"
+                  "    )\n"
+                  "\n"
+                  "    assert summary[\"errors\"] == []\n"
+                  "    assert len(summary[\"warnings\"]) == 1\n"
+                  "    assert \"live API status checks are authoritative\" in summary[\"warnings\"][0]\n"
               )
-
-              assert summary["errors"] == []
-              assert len(summary["warnings"]) == 1
-              assert "live API status checks are authoritative" in summary["warnings"][0]
-          '''
           test_path.write_text(tests, encoding="utf-8")
 
       - name: Run focused verification
