@@ -1,0 +1,63 @@
+name: Patch permanent open flag contracts
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/permanent-staging-writes-20260729' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/permanent-staging-writes-20260729
+          fetch-depth: 0
+
+      - name: Update dynamic flag projection assertions
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("tests/test_staging_write_wave_guards.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''    assert flag in (
+              ROOT / ".github/workflows/fly_api_staging_deploy.yml"
+          ).read_text(encoding="utf-8")'''
+          new = '''    workflow = (
+              ROOT / ".github/workflows/fly_api_staging_deploy.yml"
+          ).read_text(encoding="utf-8")
+              assert "from scripts.staging_write_waves import ALL_STAGING_WRITE_FLAGS" in workflow
+              assert 'secret_args+=("$name=${!name}")' in workflow'''
+          if text.count(old) == 0:
+              print("Dynamic flag contracts already updated.")
+          elif text.count(old) == 3:
+              path.write_text(text.replace(old, new), encoding="utf-8")
+          else:
+              raise SystemExit(f"Unexpected dynamic flag assertion count: {text.count(old)}")
+
+      - name: Verify and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile tests/test_staging_write_wave_guards.py
+          if git diff --quiet -- tests/test_staging_write_wave_guards.py; then
+            exit 0
+          fi
+          git diff --check
+          git config user.name 'pickleballattrespalapas'
+          git config user.email 'pickleballattrespalapas@gmail.com'
+          git add tests/test_staging_write_wave_guards.py
+          git commit -m 'Validate dynamic staging flag projection'
+          git push origin HEAD:agent/permanent-staging-writes-20260729
