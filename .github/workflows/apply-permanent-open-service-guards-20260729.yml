@@ -1,0 +1,350 @@
+name: Apply permanent-open service guards
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/allow-permanent-open-service-guards-20260729' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/allow-permanent-open-service-guards-20260729
+          fetch-depth: 0
+
+      - name: Allow permanent-open staging in service-level guards
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str, label: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"Unexpected replacement count {count} for {path}: {label}"
+                  )
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          guard = Path("jupr_app/services/staging_write_guard.py")
+          replace_once(
+              guard,
+              'COMMUNICATIONS_MUTATION_FLAG = "JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"\nTRUTHY = {"1", "true", "yes", "y", "on"}\n',
+              'COMMUNICATIONS_MUTATION_FLAG = "JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"\nPERMANENT_OPEN_WRITE_WAVE = "open"\nTRUTHY = {"1", "true", "yes", "y", "on"}\n',
+              "open-wave constant",
+          )
+          replace_once(
+              guard,
+              'def staging_public_intake_writes_enabled() -> bool:\n',
+              '''def staging_write_wave_allows(*waves: str) -> bool:
+              """Return whether the active staging posture permits a named write surface.
+
+              Named waves remain available for focused diagnosis. The permanent ``open``
+              posture is the normal staging state and deliberately includes every reviewed
+              named wave. Callers must continue to enforce their independent feature flag
+              and environment checks.
+              """
+
+              current = os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip()
+              allowed = {
+                  str(wave or "").strip()
+                  for wave in waves
+                  if str(wave or "").strip()
+              }
+              return current == PERMANENT_OPEN_WRITE_WAVE or current in allowed
+
+
+              def staging_public_intake_writes_enabled() -> bool:
+              ''',
+              "open-wave helper",
+          )
+          replace_once(
+              guard,
+              '''        os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip()
+                      == TEAM_LEAGUE_ADMIN_WRITE_WAVE
+              ''',
+              '''        staging_write_wave_allows(TEAM_LEAGUE_ADMIN_WRITE_WAVE)
+              ''',
+              "admin team-league wave",
+          )
+          replace_once(
+              guard,
+              '''        os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip()
+                      == TEAM_LEAGUE_PUBLIC_WRITE_WAVE
+              ''',
+              '''        staging_write_wave_allows(TEAM_LEAGUE_PUBLIC_WRITE_WAVE)
+              ''',
+              "public team-league wave",
+          )
+          replace_once(
+              guard,
+              '        os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip() == "communications"\n',
+              '        staging_write_wave_allows("communications")\n',
+              "communications wave",
+          )
+          replace_once(
+              guard,
+              '''        "Communications mutations are disabled. Open only the isolated staging "
+                      f"communications wave with {COMMUNICATIONS_MUTATION_FLAG}=1."
+              ''',
+              '''        "Communications mutations are disabled. Use permanent-open staging or "
+                      f"the communications wave with {COMMUNICATIONS_MUTATION_FLAG}=1."
+              ''',
+              "communications message",
+          )
+
+          team = Path("jupr_app/services/public_tournament_team_service.py")
+          replace_once(
+              team,
+              '''from jupr_app.services.admin_tournament_team_competition_service import (
+                  _rpc_data,
+                  _rows,
+                  create_four_player_team,
+                  is_admin_team_tournament_enabled,
+              )
+              ''',
+              '''from jupr_app.services.admin_tournament_team_competition_service import (
+                  _rpc_data,
+                  _rows,
+                  create_four_player_team,
+                  is_admin_team_tournament_enabled,
+              )
+              from jupr_app.services.staging_write_guard import staging_write_wave_allows
+              ''',
+              "team service import",
+          )
+          replace_once(
+              team,
+              '''        os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip()
+                      != PUBLIC_TEAM_WRITE_WAVE
+              ''',
+              '''        not staging_write_wave_allows(PUBLIC_TEAM_WRITE_WAVE)
+              ''',
+              "public tournament team wave",
+          )
+          replace_once(
+              team,
+              '''            "Four-player team writes are disabled. Open only the approved "
+                          f"{PUBLIC_TEAM_WRITE_WAVE} staging wave."
+              ''',
+              '''            "Four-player team writes are disabled. Use permanent-open staging "
+                          f"or the approved {PUBLIC_TEAM_WRITE_WAVE} wave."
+              ''',
+              "public tournament team message",
+          )
+
+          commerce = Path("jupr_app/services/public_tournament_commerce_service.py")
+          replace_once(
+              commerce,
+              '''from jupr_app.domain.tournament_commerce import (
+                  TournamentCommerceValidationError,
+                  normalize_tournament_commerce_catalog,
+                  quote_tournament_commerce,
+                  stable_fingerprint,
+              )
+              ''',
+              '''from jupr_app.domain.tournament_commerce import (
+                  TournamentCommerceValidationError,
+                  normalize_tournament_commerce_catalog,
+                  quote_tournament_commerce,
+                  stable_fingerprint,
+              )
+              from jupr_app.services.staging_write_guard import staging_write_wave_allows
+              ''',
+              "commerce service import",
+          )
+          replace_once(
+              commerce,
+              '            and wave == ADMIN_WRITE_WAVE\n',
+              '            and staging_write_wave_allows(ADMIN_WRITE_WAVE)\n',
+              "admin commerce status",
+          )
+          replace_once(
+              commerce,
+              '            and wave == PUBLIC_WRITE_WAVE\n',
+              '            and staging_write_wave_allows(PUBLIC_WRITE_WAVE)\n',
+              "public commerce status",
+          )
+          replace_once(
+              commerce,
+              '        os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip() != expected_wave\n',
+              '        not staging_write_wave_allows(expected_wave)\n',
+              "commerce mutation wave",
+          )
+          replace_once(
+              commerce,
+              '''            "Tournament commerce writes are disabled. Open only the approved "
+                          f"{expected_wave} staging wave."
+              ''',
+              '''            "Tournament commerce writes are disabled. Use permanent-open staging "
+                          f"or the approved {expected_wave} wave."
+              ''',
+              "commerce message",
+          )
+
+          guards_test = Path("tests/test_staging_write_wave_guards.py")
+          replace_once(
+              guards_test,
+              '''    staging_communications_mutations_enabled,
+                  staging_match_canonical_normalize_writes_enabled,
+              ''',
+              '''    staging_communications_mutations_enabled,
+                  staging_match_canonical_normalize_writes_enabled,
+                  staging_write_wave_allows,
+              ''',
+              "guard test import",
+          )
+          replace_once(
+              guards_test,
+              'def test_communications_mutation_guard_is_local_friendly_and_staging_exact(\n',
+              'def test_communications_mutation_guard_is_local_friendly_and_permanent_open(\n',
+              "guard test name",
+          )
+          replace_once(
+              guards_test,
+              '''    monkeypatch.setenv(COMMUNICATIONS_MUTATION_FLAG, "yes")
+                  assert staging_communications_mutations_enabled() is True
+                  require_staging_communications_mutations()
+              ''',
+              '''    monkeypatch.setenv(COMMUNICATIONS_MUTATION_FLAG, "yes")
+                  assert staging_communications_mutations_enabled() is True
+                  require_staging_communications_mutations()
+
+                  monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "open")
+                  assert staging_write_wave_allows("communications") is True
+                  assert staging_communications_mutations_enabled() is True
+                  require_staging_communications_mutations()
+              ''',
+              "open communications test",
+          )
+
+          league_test = Path("tests/test_team_league_service.py")
+          replace_once(
+              league_test,
+              '''    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "public-intake-auth")
+                  assert staging_admin_team_league_writes_enabled() is False
+                  assert staging_public_team_league_writes_enabled() is True
+              ''',
+              '''    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "public-intake-auth")
+                  assert staging_admin_team_league_writes_enabled() is False
+                  assert staging_public_team_league_writes_enabled() is True
+
+                  monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "open")
+                  assert staging_admin_team_league_writes_enabled() is True
+                  assert staging_public_team_league_writes_enabled() is True
+
+                  monkeypatch.setenv(
+                      "JUPR_ENABLE_STAGING_NEXT_ADMIN_LEAGUE_MANAGER_WRITES", "0"
+                  )
+                  assert staging_admin_team_league_writes_enabled() is False
+                  assert staging_public_team_league_writes_enabled() is True
+              ''',
+              "open team-league test",
+          )
+
+          tournament_team_test = Path("tests/test_tournament_team_runtime_security.py")
+          replace_once(
+              tournament_team_test,
+              'def test_public_team_writes_require_exact_public_intake_wave(monkeypatch):\n',
+              'def test_public_team_writes_allow_public_intake_or_permanent_open(monkeypatch):\n',
+              "public team test name",
+          )
+          replace_once(
+              tournament_team_test,
+              '''    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "public-intake-auth")
+                  require_public_team_tournament_mutation_runtime()
+              ''',
+              '''    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "public-intake-auth")
+                  require_public_team_tournament_mutation_runtime()
+
+                  monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "open")
+                  require_public_team_tournament_mutation_runtime()
+              ''',
+              "open public tournament team test",
+          )
+
+          commerce_test = Path("tests/test_public_tournament_commerce_service.py")
+          replace_once(
+              commerce_test,
+              'def test_public_and_admin_waves_are_distinct_and_production_is_refused(\n',
+              'def test_named_commerce_waves_remain_distinct_and_open_allows_both(\n',
+              "commerce test name",
+          )
+          replace_once(
+              commerce_test,
+              '''    with pytest.raises(PermissionError, match="public-intake-auth"):
+                      service.require_tournament_commerce_mutation_runtime(
+                          actor_type="PUBLIC_REGISTRANT"
+                      )
+              ''',
+              '''    with pytest.raises(PermissionError, match="public-intake-auth"):
+                      service.require_tournament_commerce_mutation_runtime(
+                          actor_type="PUBLIC_REGISTRANT"
+                      )
+
+                  monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "open")
+                  service.require_tournament_commerce_mutation_runtime(actor_type="ADMIN")
+                  service.require_tournament_commerce_mutation_runtime(
+                      actor_type="PUBLIC_REGISTRANT"
+                  )
+                  status = service.tournament_commerce_runtime_status()
+                  assert status["admin_write_ready"] is True
+                  assert status["public_registration_write_ready"] is True
+              ''',
+              "open commerce test",
+          )
+
+      - name: Run focused permanent-open verification
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r services/api/requirements.txt
+          python -m pip install pytest
+          python -m py_compile \
+            jupr_app/services/staging_write_guard.py \
+            jupr_app/services/public_tournament_team_service.py \
+            jupr_app/services/public_tournament_commerce_service.py
+          python -m pytest -q \
+            tests/test_staging_write_wave_guards.py \
+            tests/test_team_league_service.py \
+            tests/test_tournament_team_runtime_security.py \
+            tests/test_public_tournament_commerce_service.py \
+            tests/test_api_contract_admin_player_updates.py \
+            tests/test_api_contract_admin_weekly_recap.py \
+            tests/test_api_contract_verified_updates.py \
+            tests/test_api_contract_team_leagues.py \
+            tests/test_api_contract_tournament_registration.py \
+            tests/test_admin_tournament_commerce_safeguards.py
+          git diff --check
+
+      - name: Commit verified non-workflow implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'pickleballattrespalapas'
+          git config user.email 'pickleballattrespalapas@gmail.com'
+          git add \
+            jupr_app/services/staging_write_guard.py \
+            jupr_app/services/public_tournament_team_service.py \
+            jupr_app/services/public_tournament_commerce_service.py \
+            tests/test_staging_write_wave_guards.py \
+            tests/test_team_league_service.py \
+            tests/test_tournament_team_runtime_security.py \
+            tests/test_public_tournament_commerce_service.py
+          git commit -m 'Allow permanent-open staging in service guards'
+          git push origin HEAD:agent/allow-permanent-open-service-guards-20260729
