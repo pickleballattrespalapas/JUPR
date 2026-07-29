@@ -77,3 +77,5 @@ jobs:
             .github/workflows/apply-match-player-session-followups-20260728.yml
           git commit -m 'Implement match-player acceptance follow-ups'
           git push origin HEAD:agent/match-player-session-followups-20260728
+
+# Manual retrigger after scoping the player-input transforms.
