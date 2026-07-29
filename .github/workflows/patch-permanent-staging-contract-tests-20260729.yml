@@ -1,0 +1,44 @@
+name: Patch permanent staging contract tests
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/permanent-staging-writes-20260729' &&
+      github.event.pull_request.base.ref == 'staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/permanent-staging-writes-20260729
+          fetch-depth: 0
+
+      - name: Patch permanent-open contracts
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/patch_permanent_staging_contract_tests_20260729.py ]; then
+            echo "Contract patch already applied."
+            exit 0
+          fi
+          python scripts/patch_permanent_staging_contract_tests_20260729.py
+          python -m py_compile tests/test_staging_deployment_config.py
+          git diff --check
+          rm scripts/patch_permanent_staging_contract_tests_20260729.py
+          git config user.name 'pickleballattrespalapas'
+          git config user.email 'pickleballattrespalapas@gmail.com'
+          git add tests/test_staging_deployment_config.py scripts/patch_permanent_staging_contract_tests_20260729.py
+          git commit -m 'Update staging deployment contracts for permanent writes'
+          git push origin HEAD:agent/permanent-staging-writes-20260729
