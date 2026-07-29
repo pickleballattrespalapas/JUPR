@@ -6,6 +6,12 @@ import { createPortal } from "react-dom";
 
 import styles from "./ConfirmAction.module.css";
 
+export type ConfirmActionSuccess = {
+  title?: string;
+  description: ReactNode;
+  closeLabel?: string;
+};
+
 export type ConfirmActionProps = {
   triggerLabel: string;
   title: string;
@@ -16,7 +22,7 @@ export type ConfirmActionProps = {
   tone?: "default" | "danger";
   disabled?: boolean;
   busy?: boolean;
-  onConfirm: (confirmationText: string) => void | Promise<void>;
+  onConfirm: (confirmationText: string) => void | ConfirmActionSuccess | Promise<void | ConfirmActionSuccess>;
 };
 
 function errorMessage(error: unknown): string {
@@ -66,6 +72,7 @@ export function ConfirmAction({
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<ConfirmActionSuccess | null>(null);
   const [portalContainer, setPortalContainer] = useState<HTMLElement | null>(null);
   const actionBusy = busy || submitting;
 
@@ -91,13 +98,14 @@ export function ConfirmAction({
     if (!dialog.open) dialog.showModal();
     const focusFrame = window.requestAnimationFrame(() => cancelRef.current?.focus());
     return () => window.cancelAnimationFrame(focusFrame);
-  }, [open, portalContainer]);
+  }, [open, portalContainer, success]);
 
   function openDialog() {
     if (disabled || busy || submittingRef.current) return;
     fallbackFocusRef.current = triggerRef.current?.closest<HTMLElement>("article, section, main") || document.querySelector<HTMLElement>("main");
     wasOpenRef.current = true;
     setError(null);
+    setSuccess(null);
     setOpen(true);
   }
 
@@ -124,8 +132,9 @@ export function ConfirmAction({
     setSubmitting(true);
     setError(null);
     try {
-      await onConfirm(confirmationText);
-      setOpen(false);
+      const completion = await onConfirm(confirmationText);
+      if (completion) setSuccess(completion);
+      else setOpen(false);
     } catch (actionError) {
       setError(errorMessage(actionError));
       window.requestAnimationFrame(() => cancelRef.current?.focus());
@@ -162,28 +171,48 @@ export function ConfirmAction({
           onClose={handleDialogClose}
         >
           <div className={styles.content}>
-            <h2 id={titleId} className={styles.title}>{title}</h2>
-            <div id={descriptionId} className={styles.description}>{description}</div>
-            {error ? <p id={errorId} className={styles.error} role="alert">{error}</p> : null}
-            <div className={styles.actions}>
-              <button
-                ref={cancelRef}
-                type="button"
-                className={styles.cancelButton}
-                disabled={actionBusy}
-                onClick={closeDialog}
-              >
-                {cancelLabel}
-              </button>
-              <button
-                type="button"
-                className={`${styles.confirmButton} ${tone === "danger" ? styles.dangerConfirm : ""}`}
-                disabled={disabled || actionBusy}
-                onClick={() => void handleConfirm()}
-              >
-                {actionBusy ? "Working…" : confirmLabel}
-              </button>
-            </div>
+            {success ? (
+              <>
+                <h2 id={titleId} className={styles.title}>{success.title || "Action complete"}</h2>
+                <div id={descriptionId} className={styles.description}>{success.description}</div>
+                <div className={styles.actions}>
+                  <button
+                    ref={cancelRef}
+                    type="button"
+                    className={styles.confirmButton}
+                    disabled={actionBusy}
+                    onClick={closeDialog}
+                  >
+                    {success.closeLabel || "OK"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 id={titleId} className={styles.title}>{title}</h2>
+                <div id={descriptionId} className={styles.description}>{description}</div>
+                {error ? <p id={errorId} className={styles.error} role="alert">{error}</p> : null}
+                <div className={styles.actions}>
+                  <button
+                    ref={cancelRef}
+                    type="button"
+                    className={styles.cancelButton}
+                    disabled={actionBusy}
+                    onClick={closeDialog}
+                  >
+                    {cancelLabel}
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.confirmButton} ${tone === "danger" ? styles.dangerConfirm : ""}`}
+                    disabled={disabled || actionBusy}
+                    onClick={() => void handleConfirm()}
+                  >
+                    {actionBusy ? "Working…" : confirmLabel}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </dialog>,
         portalContainer

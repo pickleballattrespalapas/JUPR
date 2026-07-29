@@ -8,7 +8,8 @@ def test_match_uploader_manual_acceptance_fixes_are_present() -> None:
     assert "const readyRows = rows.filter" in source
     assert "hasInvalidFilledRows" in source
     assert 'triggerLabel="Remove match"' in source
-    assert 'triggerLabel="Remove All"' in source
+    assert "RemoveAllMatchesDialog" in source
+    assert "Keep rows with data" in source
     assert "SubmissionResultDialog" in source
     assert "Successfully inserted" in source
     assert "Player-update email was not sent in staging." in source

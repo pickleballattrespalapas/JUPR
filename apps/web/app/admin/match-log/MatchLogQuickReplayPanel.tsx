@@ -152,6 +152,7 @@ export default function MatchLogQuickReplayPanel({
         busy={pending}
         onConfirm={onSubmit}
       />
+      <p style={{ margin: 0 }}><Link href="/admin/replay-history"><strong>Open Replay History</strong></Link> to view recent jobs and their status.</p>
       {message ? <p style={{ color: result?.ok ? "#166534" : "#b91c1c" }}>{message}</p> : null}
       {result ? (
         <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", margin: 0 }}>
