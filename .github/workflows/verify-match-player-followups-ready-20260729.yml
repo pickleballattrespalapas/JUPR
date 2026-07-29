@@ -1,4 +1,4 @@
-name: Verify match-player follow-ups ready
+name: Monitor active match-player write session
 
 on:
   pull_request:
@@ -8,41 +8,38 @@ on:
       - synchronize
 
 permissions:
-  actions: write
+  actions: read
   contents: read
   issues: read
 
 jobs:
-  verify:
+  monitor:
     if: >-
       github.repository == 'pickleballattrespalapas/JUPR' &&
       github.event.pull_request.head.ref == 'agent/verify-match-player-window-20260728d' &&
       github.event.pull_request.base.ref == 'staging'
     runs-on: ubuntu-latest
-    timeout-minutes: 110
+    timeout-minutes: 75
     environment: staging
     concurrency:
-      group: jupr-staging-followup-final-20260729
+      group: jupr-staging-match-player-monitor-20260729
       cancel-in-progress: true
     env:
       EXPECTED_SHA: f6b2b0ce6fe9521b0b907fbb2dee808efc1d8bc0
-      EXPECTED_DEPLOYMENT_ID: dpl_9o8URnZo6vzjEtfdWGVKzxhzT3hG
-      EXPECTED_DEPLOYMENT_ORIGIN: https://jupr-gai8gn3m8-pickleballattrespalapas1.vercel.app
-      EXPECTED_SUPABASE_REF: sijpxjxvdtrehmqvirfi
-      FLY_APP: juprleagues-api-staging
+      EXPECTED_WAVE: match-player
+      SESSION_NONCE: 527634a4-5060-4af0-a210-32ca65a17cd2
+      LEASE_STARTED_AT: 2026-07-29T13:30:19Z
+      LEASE_EXPIRES_AT: 2026-07-29T14:30:19Z
       FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
-      WEB_ORIGIN: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
-      SESSION_NONCE: 859709bc-4959-4453-9a43-e9589ac7be7f
-      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
     steps:
-      - name: Check out isolated verifier
+      - name: Check out isolated monitor
         uses: actions/checkout@v4
         with:
           ref: agent/verify-match-player-window-20260728d
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Verify exact source and one-file diff
+      - name: Verify isolated one-file monitor
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -56,89 +53,92 @@ jobs:
           files="$(gh api -H "X-GitHub-Api-Version: 2026-03-10" --paginate "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[].filename' | sort)"
           test "$files" = ".github/workflows/verify-match-player-followups-ready-20260729.yml"
 
-      - name: Verify protected controller is closed and locked
+      - name: Wait for the protected write-session controller
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN_ID=""
+          for attempt in $(seq 1 60); do
+            gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/workflows/staging-write-session.yml/runs?event=issues&per_page=30" > session-runs.json
+            RUN_ID="$(jq -r --arg started "$LEASE_STARTED_AT" '[.workflow_runs[] | select(.created_at >= $started and .head_branch == "rollback-feb8" and (.display_title | contains("#1062")))][0].id // empty' session-runs.json)"
+            if [ -n "$RUN_ID" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "Protected write-session run was not found." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          printf '%s\n' "$RUN_ID" > session-run-id.txt
+
+          for attempt in $(seq 1 720); do
+            gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > session-run.json
+            status="$(jq -r '.status' session-run.json)"
+            conclusion="$(jq -r '.conclusion // ""' session-run.json)"
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" != "success" ]; then
+                gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=all&per_page=100" > session-jobs.json
+                gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > session-failed.log 2>&1 || true
+                echo "Protected write-session run concluded $conclusion." >&2
+                exit 1
+              fi
+              break
+            fi
+            if [ "$attempt" -eq 720 ]; then
+              echo "Protected write-session run did not complete before monitor timeout." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=all&per_page=100" > session-jobs.json
+
+      - name: Verify active match-player state
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/issues/1062" > issue.json
-          jq -e --arg sha "$EXPECTED_SHA" --arg nonce "$SESSION_NONCE" 'select(
-            .number == 1062 and
-            .title == "Protected staging write session control" and
-            .state == "closed" and
+          jq -e --arg sha "$EXPECTED_SHA" --arg wave "$EXPECTED_WAVE" --arg nonce "$SESSION_NONCE" --arg expires "$LEASE_EXPIRES_AT" 'select(
+            .state == "open" and
             .locked == true and
-            .author_association == "OWNER" and
-            (.body | contains("command: close")) and
+            (.body | contains("command: open")) and
             (.body | contains("candidate_sha: " + $sha)) and
             (.body | contains("expected_write_wave: none")) and
-            (.body | contains("write_wave: none")) and
-            (.body | contains("session_nonce: " + $nonce))
+            (.body | contains("write_wave: " + $wave)) and
+            (.body | contains("session_nonce: " + $nonce)) and
+            (.body | contains("lease_expires_at: " + $expires))
           )' issue.json >/dev/null
 
-      - name: Verify exact Vercel staging identity
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${VERCEL_AUTOMATION_BYPASS_SECRET:-}"
-          header="x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET"
-          curl --fail --silent --show-error --location --max-time 30 -H "$header" "$WEB_ORIGIN/api/environment" -o alias-environment.json
-          jq -e --arg sha "$EXPECTED_SHA" --arg deployment "$EXPECTED_DEPLOYMENT_ID" --arg origin "$EXPECTED_DEPLOYMENT_ORIGIN" --arg fly "https://$FLY_APP.fly.dev" --arg auth "https://$EXPECTED_SUPABASE_REF.supabase.co" 'select(
-            .environment == "staging" and
-            .vercel_environment == "preview" and
-            .git_commit_sha == $sha and
-            .vercel_deployment_id == $deployment and
-            .vercel_deployment_origin == $origin and
-            .api_origin == $fly and
-            .auth_origin == $auth and
-            .preview_isolation_active == true and
-            .preview_auth_isolation_active == true
-          )' alias-environment.json >/dev/null
-          curl --fail --silent --show-error --location --max-time 30 -H "$header" "$EXPECTED_DEPLOYMENT_ORIGIN/api/environment" -o immutable-environment.json
-          jq -e --arg sha "$EXPECTED_SHA" --arg deployment "$EXPECTED_DEPLOYMENT_ID" --arg origin "$EXPECTED_DEPLOYMENT_ORIGIN" 'select(
-            .git_commit_sha == $sha and
-            .vercel_deployment_id == $deployment and
-            .vercel_deployment_origin == $origin
-          )' immutable-environment.json >/dev/null
-
-      - name: Deploy exact Fly candidate with no writes
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if curl --fail --silent --show-error --max-time 20 "$FLY_HEALTH_URL" -o fly-before.json && \
-             jq -e --arg sha "$EXPECTED_SHA" 'select(.git_commit_sha == $sha and .image_build_git_sha == $sha and .staging_write_wave == "none")' fly-before.json >/dev/null; then
-            printf '{"skipped":true,"reason":"already_exact_none"}\n' > fly-none-dispatch.json
-          else
-            python scripts/staging_evidence_automation.py dispatch \
-              --workflow fly_api_staging_deploy.yml \
-              --input write_wave=none \
-              --input "expected_candidate_sha=$EXPECTED_SHA" \
-              > fly-none-dispatch.json
-            run_id="$(jq -r '.workflow_run_id' fly-none-dispatch.json)"
-            python scripts/staging_evidence_automation.py wait-run \
-              --workflow fly_api_staging_deploy.yml \
-              --run-id "$run_id" \
-              --candidate-sha "$EXPECTED_SHA" \
-              --timeout-seconds 5400
-          fi
-
-      - name: Verify exact Fly no-write state
-        shell: bash
-        run: |
-          set -euo pipefail
-          for attempt in $(seq 1 90); do
+          for attempt in $(seq 1 30); do
             if curl --fail --silent --show-error --max-time 20 "$FLY_HEALTH_URL" -o fly-health.json && \
-               jq -e --arg sha "$EXPECTED_SHA" 'select(.git_commit_sha == $sha and .image_build_git_sha == $sha and .staging_write_wave == "none")' fly-health.json >/dev/null; then
+               jq -e --arg sha "$EXPECTED_SHA" --arg wave "$EXPECTED_WAVE" 'select(
+                 .ok == true and
+                 .environment == "staging" and
+                 .git_commit_sha == $sha and
+                 .image_build_git_sha == $sha and
+                 .fly_app_name == "juprleagues-api-staging" and
+                 .supabase_project_ref == "sijpxjxvdtrehmqvirfi" and
+                 .staging_write_wave == $wave and
+                 .write_wave == $wave and
+                 .business_data_write_wave_active == true and
+                 .public_live_production_override_enabled == false and
+                 .write_prerequisites.email_mode == "dry_run" and
+                 .write_prerequisites.live_player_update_email_enabled == false
+               )' fly-health.json >/dev/null; then
               break
             fi
-            if [ "$attempt" -eq 90 ]; then
+            if [ "$attempt" -eq 30 ]; then
               cat fly-health.json 2>/dev/null || true
+              echo "Fly staging did not attest the active match-player wave." >&2
               exit 1
             fi
-            sleep 10
+            sleep 5
           done
+
           python - <<'PY'
           import hashlib
           import json
@@ -146,102 +146,27 @@ jobs:
 
           with open("fly-health.json", encoding="utf-8") as handle:
               health = json.load(handle)
-          expected_flags = expected_write_flags("none")
+          expected = expected_write_flags("match-player")
           fingerprint = hashlib.sha256(
-              "\n".join(f"{name}={1 if enabled else 0}" for name, enabled in sorted(expected_flags.items())).encode("utf-8")
+              "\n".join(f"{name}={1 if enabled else 0}" for name, enabled in sorted(expected.items())).encode("utf-8")
           ).hexdigest()
-          checks = {
-              "ok": health.get("ok") is True,
-              "service": health.get("service") == "jupr-api",
-              "environment": health.get("environment") == "staging",
-              "candidate": health.get("git_commit_sha") == "f6b2b0ce6fe9521b0b907fbb2dee808efc1d8bc0",
-              "image_candidate": health.get("image_build_git_sha") == "f6b2b0ce6fe9521b0b907fbb2dee808efc1d8bc0",
-              "app": health.get("fly_app_name") == "juprleagues-api-staging",
-              "supabase": health.get("supabase_project_ref") == "sijpxjxvdtrehmqvirfi",
-              "wave": health.get("write_wave") == "none" and health.get("staging_write_wave") == "none",
-              "business_writes": health.get("business_data_write_wave_active") is False,
-              "flags": health.get("controlled_write_flags") == expected_flags,
-              "flag_fingerprint": health.get("controlled_write_flag_fingerprint") == fingerprint,
-              "public_live": health.get("public_live_writes_enabled") is False,
-              "production_override": health.get("public_live_production_override_enabled") is False,
-              "web_origin": health.get("web_origin") == "https://jupr-git-staging-pickleballattrespalapas1.vercel.app",
-              "jwt": health.get("jwt_verification_configured") is True and health.get("jwt_verification_mode") == "jwks" and health.get("jwt_verification_project_ref") == "sijpxjxvdtrehmqvirfi",
-              "service_role": health.get("write_prerequisites", {}).get("service_role_configured") is True,
-              "audit": health.get("write_prerequisites", {}).get("api_audit_required") is True,
-              "worker_log": health.get("write_prerequisites", {}).get("worker_run_log_required") is True,
-              "email": health.get("write_prerequisites", {}).get("email_mode") == "dry_run",
-              "live_email": health.get("write_prerequisites", {}).get("live_player_update_email_enabled") is False,
-          }
-          failed = [name for name, accepted in checks.items() if not accepted]
-          if failed:
-              raise SystemExit("Fly no-write verification failed: " + ", ".join(failed))
+          if health.get("controlled_write_flags") != expected:
+              raise SystemExit("Controlled write flags do not match match-player.")
+          if health.get("controlled_write_flag_fingerprint") != fingerprint:
+              raise SystemExit("Controlled write fingerprint mismatch.")
           PY
 
-      - name: Verify deployed follow-up UI markers
-        shell: python
-        run: |
-          import json
-          import os
-          import re
-          from pathlib import Path
-          from urllib.parse import urljoin
-          from urllib.request import Request, urlopen
-
-          headers = {
-              "User-Agent": "JUPR-staging-followup-readiness/1.0",
-              "x-vercel-protection-bypass": os.environ["VERCEL_AUTOMATION_BYPASS_SECRET"],
-          }
-          origins = {
-              "alias": os.environ["WEB_ORIGIN"],
-              "immutable": os.environ["EXPECTED_DEPLOYMENT_ORIGIN"],
-          }
-          pages = ["/admin/match-uploader", "/admin/match-log/edit", "/admin/match-log/replay"]
-          markers = {
-              "required_field_feedback": "complete the highlighted player fields",
-              "duplicate_prevention": "each player may appear only once",
-              "remove_blank_rows": "Keep rows with data",
-              "edit_success_dialog": "Match edit and replay complete",
-              "replay_history_link": "Open Replay History",
-          }
-
-          def fetch(url: str) -> str:
-              with urlopen(Request(url, headers=headers), timeout=30) as response:
-                  if response.status not in {200, 204}:
-                      raise RuntimeError(f"Unexpected HTTP {response.status}: {url}")
-                  return response.read().decode("utf-8", errors="replace")
-
-          report = {"pages": {}, "markers": {}}
-          texts = []
-          for name, origin in origins.items():
-              origin_texts = []
-              scripts = set()
-              report["pages"][name] = {}
-              for page in pages:
-                  html = fetch(origin + page)
-                  report["pages"][name][page] = 200
-                  origin_texts.append(html)
-                  scripts.update(re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', html))
-              for src in sorted(scripts):
-                  origin_texts.append(fetch(urljoin(origin + "/", src)))
-              texts.append("\n".join(origin_texts))
-          combined = "\n".join(texts)
-          report["markers"] = {name: value in combined for name, value in markers.items()}
-          Path("ui-readiness.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-          missing = [name for name, present in report["markers"].items() if not present]
-          if missing:
-              raise SystemExit("Missing deployed markers: " + ", ".join(missing))
-
-      - name: Upload final readiness evidence
+      - name: Upload active-session evidence
         uses: actions/upload-artifact@v4
         with:
-          name: match-player-followups-ready-evidence
+          name: active-match-player-session-evidence
           path: |
+            session-runs.json
+            session-run-id.txt
+            session-run.json
+            session-jobs.json
+            session-failed.log
             issue.json
-            alias-environment.json
-            immutable-environment.json
-            fly-before.json
-            fly-none-dispatch.json
             fly-health.json
-            ui-readiness.json
           if-no-files-found: warn
-          retention-days: 3
+          retention-days: 2
