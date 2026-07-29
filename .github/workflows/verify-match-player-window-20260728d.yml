@@ -1,4 +1,4 @@
-name: Verify match-player manual window v4
+name: Diagnose safe match-player controller recovery
 
 on:
   pull_request:
@@ -9,6 +9,7 @@ on:
       - synchronize
 
 permissions:
+  actions: read
   contents: read
   issues: read
 
@@ -19,14 +20,12 @@ jobs:
       github.event.pull_request.head.ref == 'agent/verify-match-player-window-20260728d' &&
       github.event.pull_request.base.ref == 'staging'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     environment: staging
     env:
       EXPECTED_SHA: 8ad7fe2b8d0c6925fc8ff5585aba24e1bc5a7db7
       EXPECTED_SUPABASE_REF: sijpxjxvdtrehmqvirfi
       FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
-      WEB_ORIGIN: https://jupr-abej2gtyu-pickleballattrespalapas1.vercel.app
-      SESSION_NONCE: a107ee93-a0c2-4b81-b5ba-b6c72759d942
     steps:
       - name: Check out isolated verifier
         uses: actions/checkout@v4
@@ -49,36 +48,38 @@ jobs:
           files="$(gh api -H "X-GitHub-Api-Version: 2026-03-10" --paginate "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[].filename' | sort)"
           test "$files" = ".github/workflows/verify-match-player-window-20260728d.yml"
 
-      - name: Verify protected control lease
+      - name: Capture controller issue and latest session run
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/issues/1062" > issue.json
-          jq -e --arg sha "$EXPECTED_SHA" --arg nonce "$SESSION_NONCE" 'select(
-            .state == "open" and
+          jq -e --arg sha "$EXPECTED_SHA" 'select(
+            .state == "closed" and
             .locked == true and
-            (.body | contains("command: open")) and
-            (.body | contains("candidate_sha: " + $sha)) and
-            (.body | contains("expected_write_wave: none")) and
-            (.body | contains("write_wave: match-player")) and
-            (.body | contains("session_nonce: " + $nonce))
+            (.body | contains("candidate_sha: " + $sha))
           )' issue.json >/dev/null
+          gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/workflows/staging-write-session.yml/runs?event=issues&per_page=10" > session-runs.json
+          RUN_ID="$(jq -er '.workflow_runs[0].id' session-runs.json)"
+          printf '%s\n' "$RUN_ID" > session-run-id.txt
+          gh api -H "X-GitHub-Api-Version: 2026-03-10" "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=all&per_page=100" > session-jobs.json
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > session-failed.log 2>&1 || true
+          jq '{id: .workflow_runs[0].id, status: .workflow_runs[0].status, conclusion: .workflow_runs[0].conclusion, created_at: .workflow_runs[0].created_at, updated_at: .workflow_runs[0].updated_at, html_url: .workflow_runs[0].html_url}' session-runs.json
+          jq '[.jobs[] | {name, status, conclusion, steps: [.steps[]? | {name, status, conclusion}]}]' session-jobs.json
 
-      - name: Wait for and verify match-player Fly health
+      - name: Verify exact candidate returned to no-write mode
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 90); do
-            if curl --fail --silent --show-error --max-time 20 "$FLY_HEALTH_URL" -o fly-health.json; then
-              if jq -e --arg sha "$EXPECTED_SHA" 'select(.git_commit_sha == $sha and .staging_write_wave == "match-player")' fly-health.json >/dev/null; then
-                break
-              fi
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error --max-time 20 "$FLY_HEALTH_URL" -o fly-health.json && \
+              jq -e --arg sha "$EXPECTED_SHA" 'select(.git_commit_sha == $sha and .staging_write_wave == "none")' fly-health.json >/dev/null; then
+              break
             fi
-            if [ "$attempt" -eq 90 ]; then
+            if [ "$attempt" -eq 60 ]; then
               cat fly-health.json 2>/dev/null || true
-              echo "Match-player wave did not become ready in time." >&2
+              echo "Staging did not return to verified no-write mode." >&2
               exit 1
             fi
             sleep 10
@@ -88,7 +89,7 @@ jobs:
           from scripts.staging_write_waves import expected_write_flags
           with open('fly-health.json', encoding='utf-8') as handle:
               health = json.load(handle)
-          expected = expected_write_flags('match-player')
+          expected = expected_write_flags('none')
           checks = {
               'ok': health.get('ok') is True,
               'environment': health.get('environment') == 'staging',
@@ -96,36 +97,27 @@ jobs:
               'image_candidate': health.get('image_build_git_sha') == '8ad7fe2b8d0c6925fc8ff5585aba24e1bc5a7db7',
               'fly_app': health.get('fly_app_name') == 'juprleagues-api-staging',
               'supabase': health.get('supabase_project_ref') == 'sijpxjxvdtrehmqvirfi',
-              'wave': health.get('write_wave') == 'match-player' and health.get('staging_write_wave') == 'match-player',
-              'business_active': health.get('business_data_write_wave_active') is True,
+              'wave': health.get('write_wave') == 'none' and health.get('staging_write_wave') == 'none',
+              'business_inactive': health.get('business_data_write_wave_active') is False,
               'flags': health.get('controlled_write_flags') == expected,
-              'destructive_off': health.get('controlled_write_flags', {}).get('JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE') is False,
               'email': health.get('write_prerequisites', {}).get('email_mode') == 'dry_run',
               'live_email_off': health.get('write_prerequisites', {}).get('live_player_update_email_enabled') is False,
           }
           failed = [name for name, accepted in checks.items() if not accepted]
           if failed:
-              raise SystemExit('Match-player health verification failed: ' + ', '.join(failed))
+              raise SystemExit('No-write recovery verification failed: ' + ', '.join(failed))
           PY
 
-      - name: Verify current Match Uploader and Match Log pages are reachable
-        shell: bash
-        run: |
-          set -euo pipefail
-          : > web-status.txt
-          for path in /admin/match-uploader /admin/match-log /admin/match-log/edit; do
-            code="$(curl --silent --show-error --location --max-time 30 --output /dev/null --write-out '%{http_code}' "$WEB_ORIGIN$path")"
-            printf '%s %s\n' "$code" "$path" | tee -a web-status.txt
-            case "$code" in 200|204) ;; *) exit 1 ;; esac
-          done
-
-      - name: Upload window evidence
+      - name: Upload recovery diagnosis
         uses: actions/upload-artifact@v4
         with:
-          name: match-player-window-evidence-v4
+          name: match-player-controller-recovery-diagnosis
           path: |
             issue.json
+            session-runs.json
+            session-run-id.txt
+            session-jobs.json
+            session-failed.log
             fly-health.json
-            web-status.txt
           if-no-files-found: error
           retention-days: 2
