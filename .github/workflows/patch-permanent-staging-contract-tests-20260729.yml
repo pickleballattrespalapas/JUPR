@@ -38,11 +38,16 @@ jobs:
 
           path = Path("scripts/patch_permanent_staging_contract_tests_20260729.py")
           text = path.read_text(encoding="utf-8")
-          old = "        '''def"
-          new = "        r'''def"
-          if text.count(old) != 4:
-              raise SystemExit(f"Unexpected replacement-body count: {text.count(old)}")
-          path.write_text(text.replace(old, new), encoding="utf-8")
+          raw_old = "        '''def"
+          raw_new = "        r'''def"
+          if text.count(raw_old) != 4:
+              raise SystemExit(f"Unexpected replacement-body count: {text.count(raw_old)}")
+          text = text.replace(raw_old, raw_new)
+          sub_old = "    updated, count = re.subn(pattern, body.rstrip(), text, count=1, flags=re.DOTALL)"
+          sub_new = "    updated, count = re.subn(pattern, lambda _match: body.rstrip(), text, count=1, flags=re.DOTALL)"
+          if text.count(sub_old) != 1:
+              raise SystemExit("Unexpected replace_function implementation")
+          path.write_text(text.replace(sub_old, sub_new, 1), encoding="utf-8")
           PY
           python scripts/patch_permanent_staging_contract_tests_20260729.py
           python -m py_compile tests/test_staging_deployment_config.py
