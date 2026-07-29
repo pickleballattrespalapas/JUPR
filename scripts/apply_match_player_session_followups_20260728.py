@@ -24,6 +24,12 @@ def sub_once(text: str, pattern: str, replacement: str, label: str) -> str:
     return text[:match.start()] + rendered + text[match.end():]
 
 
+def section(text: str, start_marker: str, end_marker: str) -> tuple[str, str, str]:
+    start = text.index(start_marker)
+    end = text.index(end_marker, start)
+    return text[:start], text[start:end], text[end:]
+
+
 def update_confirm_action() -> None:
     path = ROOT / "apps/web/components/ConfirmAction.tsx"
     text = path.read_text(encoding="utf-8")
