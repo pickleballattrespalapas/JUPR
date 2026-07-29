@@ -23,6 +23,7 @@ from jupr_app.services.admin_tournament_team_competition_service import (
     create_four_player_team,
     is_admin_team_tournament_enabled,
 )
+from jupr_app.services.staging_write_guard import staging_write_wave_allows
 
 PUBLIC_TEAM_WRITE_WAVE = "public-intake-auth"
 PUBLIC_INTAKE_WRITE_FLAG = "JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES"
@@ -43,13 +44,12 @@ def require_public_team_tournament_mutation_runtime() -> None:
     if environment != "staging":
         return
     if (
-        os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip()
-        != PUBLIC_TEAM_WRITE_WAVE
+        not staging_write_wave_allows(PUBLIC_TEAM_WRITE_WAVE)
         or os.getenv(PUBLIC_INTAKE_WRITE_FLAG, "").strip().lower() not in TRUTHY
     ):
         raise PermissionError(
-            "Four-player team writes are disabled. Open only the approved "
-            f"{PUBLIC_TEAM_WRITE_WAVE} staging wave."
+            "Four-player team writes are disabled. Use permanent-open staging "
+            f"or the approved {PUBLIC_TEAM_WRITE_WAVE} wave."
         )
     if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
         raise RuntimeError(

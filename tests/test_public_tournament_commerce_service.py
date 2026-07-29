@@ -113,7 +113,7 @@ def test_public_quote_route_does_not_expose_existing_order_state(monkeypatch):
     assert "current_order" not in response
 
 
-def test_public_and_admin_waves_are_distinct_and_production_is_refused(
+def test_named_commerce_waves_remain_distinct_and_open_allows_both(
     monkeypatch,
 ):
     monkeypatch.setenv("JUPR_ENABLE_TOURNAMENT_COMMERCE", "1")
@@ -144,6 +144,15 @@ def test_public_and_admin_waves_are_distinct_and_production_is_refused(
         service.require_tournament_commerce_mutation_runtime(
             actor_type="PUBLIC_REGISTRANT"
         )
+
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "open")
+    service.require_tournament_commerce_mutation_runtime(actor_type="ADMIN")
+    service.require_tournament_commerce_mutation_runtime(
+        actor_type="PUBLIC_REGISTRANT"
+    )
+    status = service.tournament_commerce_runtime_status()
+    assert status["admin_write_ready"] is True
+    assert status["public_registration_write_ready"] is True
 
 
 def test_public_bundle_components_include_concrete_event_and_option_labels(

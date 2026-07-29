@@ -13,6 +13,7 @@ from jupr_app.domain.tournament_commerce import (
     quote_tournament_commerce,
     stable_fingerprint,
 )
+from jupr_app.services.staging_write_guard import staging_write_wave_allows
 
 
 FEATURE_FLAG = "JUPR_ENABLE_TOURNAMENT_COMMERCE"
@@ -66,12 +67,12 @@ def tournament_commerce_runtime_status() -> dict[str, Any]:
         "write_wave": wave,
         "admin_write_ready": (
             environment == "staging"
-            and wave == ADMIN_WRITE_WAVE
+            and staging_write_wave_allows(ADMIN_WRITE_WAVE)
             and _truthy(MUTATION_FLAG)
         ),
         "public_registration_write_ready": (
             environment == "staging"
-            and wave == PUBLIC_WRITE_WAVE
+            and staging_write_wave_allows(PUBLIC_WRITE_WAVE)
             and _truthy(MUTATION_FLAG)
         ),
         "offline_payment_only": True,
@@ -95,12 +96,12 @@ def require_tournament_commerce_mutation_runtime(*, actor_type: str) -> None:
         else ADMIN_WRITE_WAVE
     )
     if (
-        os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip() != expected_wave
+        not staging_write_wave_allows(expected_wave)
         or not _truthy(MUTATION_FLAG)
     ):
         raise PermissionError(
-            "Tournament commerce writes are disabled. Open only the approved "
-            f"{expected_wave} staging wave."
+            "Tournament commerce writes are disabled. Use permanent-open staging "
+            f"or the approved {expected_wave} wave."
         )
     if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
         raise TournamentCommerceUnavailableError(

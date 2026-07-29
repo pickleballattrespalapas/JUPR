@@ -19,6 +19,7 @@ from jupr_app.services.staging_write_guard import (
     require_staging_match_canonical_normalize_writes,
     staging_communications_mutations_enabled,
     staging_match_canonical_normalize_writes_enabled,
+    staging_write_wave_allows,
 )
 from scripts.staging_write_waves import (
     ALL_STAGING_WRITE_FLAGS,
@@ -370,7 +371,7 @@ def test_canonical_normalize_status_and_guard_are_staging_only(monkeypatch) -> N
     require_staging_match_canonical_normalize_writes()
 
 
-def test_communications_mutation_guard_is_local_friendly_and_staging_exact(
+def test_communications_mutation_guard_is_local_friendly_and_permanent_open(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv(COMMUNICATIONS_MUTATION_FLAG, "1")
@@ -399,6 +400,11 @@ def test_communications_mutation_guard_is_local_friendly_and_staging_exact(
     assert staging_communications_mutations_enabled() is False
 
     monkeypatch.setenv(COMMUNICATIONS_MUTATION_FLAG, "yes")
+    assert staging_communications_mutations_enabled() is True
+    require_staging_communications_mutations()
+
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "open")
+    assert staging_write_wave_allows("communications") is True
     assert staging_communications_mutations_enabled() is True
     require_staging_communications_mutations()
 

@@ -11,8 +11,27 @@ MATCH_CANONICAL_NORMALIZE_WRITE_FLAG = (
     "JUPR_ENABLE_STAGING_NEXT_ADMIN_MATCH_CANONICAL_NORMALIZE_WRITES"
 )
 COMMUNICATIONS_MUTATION_FLAG = "JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"
+PERMANENT_OPEN_WRITE_WAVE = "open"
 TRUTHY = {"1", "true", "yes", "y", "on"}
 NON_STAGING_WRITE_ENVIRONMENTS = {"local", "test", "development", "dev", "production"}
+
+
+def staging_write_wave_allows(*waves: str) -> bool:
+    """Return whether the active staging posture permits a named write surface.
+
+    Named waves remain available for focused diagnosis. The permanent ``open``
+    posture is the normal staging state and deliberately includes every reviewed
+    named wave. Callers must continue to enforce their independent feature flag
+    and environment checks.
+    """
+
+    current = os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip()
+    allowed = {
+        str(wave or "").strip()
+        for wave in waves
+        if str(wave or "").strip()
+    }
+    return current == PERMANENT_OPEN_WRITE_WAVE or current in allowed
 
 
 def staging_public_intake_writes_enabled() -> bool:
@@ -78,8 +97,7 @@ def staging_admin_team_league_writes_enabled() -> bool:
     if environment != "staging":
         return False
     return (
-        os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip()
-        == TEAM_LEAGUE_ADMIN_WRITE_WAVE
+        staging_write_wave_allows(TEAM_LEAGUE_ADMIN_WRITE_WAVE)
         and os.getenv(LEAGUE_MANAGER_WRITE_FLAG, "").strip().lower() in TRUTHY
     )
 
@@ -101,8 +119,7 @@ def staging_public_team_league_writes_enabled() -> bool:
     if environment != "staging":
         return False
     return (
-        os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip()
-        == TEAM_LEAGUE_PUBLIC_WRITE_WAVE
+        staging_write_wave_allows(TEAM_LEAGUE_PUBLIC_WRITE_WAVE)
         and os.getenv(PUBLIC_INTAKE_WRITE_FLAG, "").strip().lower() in TRUTHY
     )
 
@@ -144,7 +161,7 @@ def staging_communications_mutations_enabled() -> bool:
     if environment != "staging":
         return False
     return (
-        os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip() == "communications"
+        staging_write_wave_allows("communications")
         and os.getenv(COMMUNICATIONS_MUTATION_FLAG, "").strip().lower() in TRUTHY
     )
 
@@ -153,6 +170,6 @@ def require_staging_communications_mutations() -> None:
     if staging_communications_mutations_enabled():
         return
     raise PermissionError(
-        "Communications mutations are disabled. Open only the isolated staging "
-        f"communications wave with {COMMUNICATIONS_MUTATION_FLAG}=1."
+        "Communications mutations are disabled. Use permanent-open staging or "
+        f"the communications wave with {COMMUNICATIONS_MUTATION_FLAG}=1."
     )
