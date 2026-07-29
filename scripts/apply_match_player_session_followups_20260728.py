@@ -8,6 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
     count = text.count(old)
+    if label == "avoid duplicate manual feedback" and count >= 1:
+        prefix, separator, suffix = text.rpartition(old)
+        if not separator:
+            raise RuntimeError(f"{label}: final occurrence was not found")
+        return prefix + new + suffix
     if count != 1:
         raise RuntimeError(f"{label}: expected one exact match, found {count}")
     return text.replace(old, new, 1)
