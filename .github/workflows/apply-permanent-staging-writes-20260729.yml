@@ -33,6 +33,17 @@ jobs:
 
       - name: Apply permanent staging mode
         run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/apply_permanent_staging_writes_20260729.py")
+          text = path.read_text(encoding="utf-8")
+          old = "    old = 'fetch(url, { next: { revalidate: 30 } })'\n    new = 'fetch(url, { cache: \"no-store\" })'\n"
+          new = "    old = 'next: { revalidate: 30 }'\n    new = 'cache: \"no-store\"'\n"
+          if text.count(old) != 1:
+              raise SystemExit("Unexpected admin-fetch conversion block")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
           python -m py_compile scripts/apply_permanent_staging_writes_20260729.py
           python scripts/apply_permanent_staging_writes_20260729.py
           git diff --check
