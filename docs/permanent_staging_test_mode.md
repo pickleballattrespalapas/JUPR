@@ -10,6 +10,7 @@ Staging is intentionally writable at all times for acceptance testing. The forme
 - Admin pages continue to require admin authentication.
 - API audit logs, idempotency, transaction guards, recovery locks, and confirmation dialogs remain in place.
 - Email remains `dry_run`; live player-update email is disabled.
+- Dedicated public-live staging secrets take precedence when configured. When both are absent, Fly derives a stable, domain-separated pair from the existing staging service-role secret without printing or committing either value.
 
 ## Hard boundaries retained
 
