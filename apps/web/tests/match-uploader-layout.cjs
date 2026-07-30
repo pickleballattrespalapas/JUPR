@@ -23,6 +23,7 @@ assert.match(form, /<strong>Context<\/strong>[\s\S]*Official League[\s\S]*Pop-Up
 assert.match(form, /Singles match entry[\s\S]*styles\.metadataGrid[\s\S]*styles\.teamsGrid/, "singles entry must use the doubles metadata and player-score layout");
 assert.match(form, /league: context === "popup" \? "POPUP" : \(singlesRow\.league \|\| defaultLeague\)/, "singles payload must preserve official or social context");
 assert.match(form, /week_tag: context === "popup" \? "" : \(singlesRow\.weekTag \|\| defaultWeekTag\)/, "social singles must omit week tags");
+assert.match(form, /match_type: context === "popup" \? "PopUp" : "Singles"/, "social singles must carry the correct match-history context without changing rating mode");
 assert.doesNotMatch(form, /Singles league\/tag/, "singles must not use its old one-off metadata labels");
 assert.match(form, /rating changes always use the separate singles rating/, "singles context copy must clarify that ratings remain separate");
 assert.match(form, /setSinglesValidationAttempted\(false\)/, "switching context or entry method must clear stale singles validation");
