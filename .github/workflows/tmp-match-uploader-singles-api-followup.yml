@@ -1,0 +1,63 @@
+name: Temporary Match Uploader Singles API Follow-up
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temporary-match-uploader-singles-api-followup
+  cancel-in-progress: false
+
+jobs:
+  apply-test-publish:
+    if: github.head_ref == 'agent/match-uploader-singles-context-feedback' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/match-uploader-singles-context-feedback
+          fetch-depth: 0
+
+      - name: Reconstruct and apply reviewed patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/tmp/match-uploader-singles-api-followup.patch.gz.b64 "$RUNNER_TEMP/fix.patch.gz.b64"
+          echo '4c2db001a225f9698823c0b269377b6783e66c71da248ed6c5882309ce5c4dff  fix.patch.gz.b64' | (cd "$RUNNER_TEMP" && sha256sum --check)
+          base64 --decode "$RUNNER_TEMP/fix.patch.gz.b64" > "$RUNNER_TEMP/fix.patch.gz"
+          echo 'f55cb615124a2b0673be60068211d59a9de9172fb7c6d3c2b279fe2377589be2  fix.patch.gz' | (cd "$RUNNER_TEMP" && sha256sum --check)
+          gzip --decompress --stdout "$RUNNER_TEMP/fix.patch.gz" > "$RUNNER_TEMP/fix.patch"
+          echo '64053a2b26e063a19f5919e0a8a743451c1c4d0bafddd32b021c41491e814816  fix.patch' | (cd "$RUNNER_TEMP" && sha256sum --check)
+          git apply --check "$RUNNER_TEMP/fix.patch"
+          git apply "$RUNNER_TEMP/fix.patch"
+          git diff --check
+
+      - name: Validate Python syntax
+        run: |
+          python -m py_compile \
+            jupr_app/domain/singles_match_processing.py \
+            tests/test_api_contract_admin_match_uploader_singles.py
+
+      - name: Publish clean follow-up commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/tmp/match-uploader-singles-api-followup.patch.gz.b64
+          rmdir .github/tmp 2>/dev/null || true
+          rm -f .github/workflows/tmp-match-uploader-singles-api-followup.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Preserve singles social context metadata'
+          git fetch origin staging --no-tags
+          actual="$(git diff --name-only origin/staging...HEAD | sort | tr '\n' ' ')"
+          expected='apps/web/app/admin/match-uploader/MatchUploaderForm.tsx apps/web/tests/match-uploader-layout.cjs jupr_app/domain/singles_match_processing.py jupr_app/services/admin_singles_match_service.py services/api/admin_match_uploader_routes.py tests/test_api_contract_admin_match_uploader_singles.py '
+          test "$actual" = "$expected"
+          git push origin HEAD:agent/match-uploader-singles-context-feedback
