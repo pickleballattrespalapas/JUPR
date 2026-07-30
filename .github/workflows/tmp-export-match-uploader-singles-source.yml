@@ -1,0 +1,35 @@
+name: Temporary Match Uploader Singles Source Export
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    if: github.head_ref == 'agent/match-uploader-singles-context-feedback'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/match-uploader-singles-context-feedback
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Upload reviewed source files
+        uses: actions/upload-artifact@v4
+        with:
+          name: match-uploader-singles-source
+          retention-days: 2
+          if-no-files-found: error
+          path: |
+            apps/web/app/admin/match-uploader/MatchUploaderForm.tsx
+            apps/web/app/admin/match-uploader/layout.module.css
+            apps/web/tests/match-uploader-layout.cjs
+            services/api/admin_match_uploader_routes.py
+            jupr_app/services/admin_singles_match_service.py
+            tests/test_api_contract_admin_match_uploader_singles.py
