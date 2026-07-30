@@ -16,7 +16,7 @@ jobs:
   apply-test-publish:
     if: github.head_ref == 'agent/match-uploader-singles-context-feedback' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out fix branch
         uses: actions/checkout@v4
@@ -24,19 +24,81 @@ jobs:
           ref: agent/match-uploader-singles-context-feedback
           fetch-depth: 0
 
-      - name: Reconstruct and apply reviewed patch
+      - name: Apply reviewed API follow-up
         shell: bash
         run: |
           set -euo pipefail
-          cp .github/tmp/match-uploader-singles-api-followup.patch.gz.b64 "$RUNNER_TEMP/fix.patch.gz.b64"
-          echo '4c2db001a225f9698823c0b269377b6783e66c71da248ed6c5882309ce5c4dff  fix.patch.gz.b64' | (cd "$RUNNER_TEMP" && sha256sum --check)
-          base64 --decode "$RUNNER_TEMP/fix.patch.gz.b64" > "$RUNNER_TEMP/fix.patch.gz"
-          echo 'f55cb615124a2b0673be60068211d59a9de9172fb7c6d3c2b279fe2377589be2  fix.patch.gz' | (cd "$RUNNER_TEMP" && sha256sum --check)
-          gzip --decompress --stdout "$RUNNER_TEMP/fix.patch.gz" > "$RUNNER_TEMP/fix.patch"
-          echo '64053a2b26e063a19f5919e0a8a743451c1c4d0bafddd32b021c41491e814816  fix.patch' | (cd "$RUNNER_TEMP" && sha256sum --check)
-          git apply --check "$RUNNER_TEMP/fix.patch"
-          git apply "$RUNNER_TEMP/fix.patch"
+          python - <<'PY'
+          from pathlib import Path
+
+          processing_path = Path("jupr_app/domain/singles_match_processing.py")
+          processing = processing_path.read_text(encoding="utf-8")
+          old_week = '            week_tag=str(match.get("week_tag") or "Singles"),'
+          new_week = '''            week_tag=(
+                          "Singles"
+                          if match.get("week_tag") is None
+                          else str(match.get("week_tag"))
+                      ),'''
+          if processing.count(old_week) != 1:
+              raise SystemExit("Expected one singles week-tag fallback line")
+          processing_path.write_text(
+              processing.replace(old_week, new_week),
+              encoding="utf-8",
+          )
+
+          test_path = Path("tests/test_api_contract_admin_match_uploader_singles.py")
+          test_text = test_path.read_text(encoding="utf-8")
+          old_fixture = '''    players = pd.DataFrame(supabase.tables["players"])
+              empty = pd.DataFrame()
+              name_to_id = {"Alex": 1, "Blair": 2}
+              id_to_name = {1: "Alex", 2: "Blair"}
+              return (players, players, empty, empty, empty, empty, empty, name_to_id, id_to_name, False, "")'''
+          new_fixture = '''    players = pd.DataFrame(supabase.tables["players"])
+              empty = pd.DataFrame()
+              metadata = pd.DataFrame(
+                  [
+                      {
+                          "id": "league-summer-social",
+                          "club_id": club_id,
+                          "league_name": "Summer Social",
+                          "k_factor": 32,
+                          "status": "active",
+                          "is_active": True,
+                          "ended_at": None,
+                      }
+                  ]
+              )
+              name_to_id = {"Alex": 1, "Blair": 2}
+              id_to_name = {1: "Alex", 2: "Blair"}
+              return (
+                  players,
+                  players,
+                  empty,
+                  empty,
+                  metadata,
+                  empty,
+                  empty,
+                  name_to_id,
+                  id_to_name,
+                  False,
+                  "",
+              )'''
+          if test_text.count(old_fixture) != 1:
+              raise SystemExit("Expected one singles fake load-data fixture")
+          test_path.write_text(
+              test_text.replace(old_fixture, new_fixture),
+              encoding="utf-8",
+          )
+          PY
           git diff --check
+
+      - name: Install focused API dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r services/api/requirements.txt pytest
+
+      - name: Run focused singles API contract
+        run: python -m pytest -q tests/test_api_contract_admin_match_uploader_singles.py
 
       - name: Validate Python syntax
         run: |
