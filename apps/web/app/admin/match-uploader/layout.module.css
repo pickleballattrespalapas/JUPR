@@ -1,0 +1,113 @@
+.root {
+  min-width: 0;
+}
+
+/* Internal database fields remain available to submission logic without
+   cluttering the score-entry surface. */
+.root :global(label:has(> input[aria-readonly="true"])) {
+  display: none !important;
+}
+
+/* The fixed POPUP league value is intentionally hidden for social entries. */
+.root :global(label:has(> select:disabled)) {
+  display: none !important;
+}
+
+/* Keep both teams on one horizontal score-entry line. The match card owns
+   horizontal scrolling on genuinely narrow screens rather than dropping
+   Team 2 underneath Team 1. */
+.root :global(div:has(> div > section[aria-label$="Team 1"]):has(> div > section[aria-label$="Team 2"])) {
+  overflow-x: auto;
+}
+
+.root :global(div:has(> section[aria-label$="Team 1"]):has(> section[aria-label$="Team 2"])) {
+  grid-template-columns: repeat(2, minmax(320px, 1fr)) !important;
+  gap: 0.5rem !important;
+  min-width: 680px;
+}
+
+/* Team 1 keeps its vertically stacked players on the left and places its
+   score on the inside edge, nearest Team 2. */
+.root :global(section[aria-label$="Team 1"]) {
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 0.35fr) !important;
+  grid-template-rows: auto auto auto !important;
+  align-items: start !important;
+}
+
+.root :global(section[aria-label$="Team 1"] > h4) {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.root :global(section[aria-label$="Team 1"] > div:nth-of-type(1)) {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.root :global(section[aria-label$="Team 1"] > div:nth-of-type(2)) {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.root :global(section[aria-label$="Team 1"] > label) {
+  grid-column: 2;
+  grid-row: 2 / span 2;
+  align-self: center;
+  display: grid;
+  align-content: center;
+  text-align: center;
+}
+
+/* Team 2 mirrors Team 1: score on the inside edge, players stacked at right. */
+.root :global(section[aria-label$="Team 2"]) {
+  grid-template-columns: minmax(96px, 0.35fr) minmax(0, 1fr) !important;
+  grid-template-rows: auto auto auto !important;
+  align-items: start !important;
+}
+
+.root :global(section[aria-label$="Team 2"] > h4) {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.root :global(section[aria-label$="Team 2"] > div:nth-of-type(1)) {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.root :global(section[aria-label$="Team 2"] > div:nth-of-type(2)) {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+.root :global(section[aria-label$="Team 2"] > label) {
+  grid-column: 1;
+  grid-row: 2 / span 2;
+  align-self: center;
+  display: grid;
+  align-content: center;
+  text-align: center;
+}
+
+.root :global(section[aria-label$="Team 1"] > label > strong),
+.root :global(section[aria-label$="Team 1"] > label > br),
+.root :global(section[aria-label$="Team 2"] > label > strong),
+.root :global(section[aria-label$="Team 2"] > label > br) {
+  display: none;
+}
+
+.root :global(section[aria-label$="Team 1"] > label)::before,
+.root :global(section[aria-label$="Team 2"] > label)::before {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.root :global(section[aria-label$="Team 1"] > label)::before {
+  content: "Team 1 score";
+}
+
+.root :global(section[aria-label$="Team 2"] > label)::before {
+  content: "Team 2 score";
+}
