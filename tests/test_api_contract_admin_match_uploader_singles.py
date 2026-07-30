@@ -179,9 +179,34 @@ def _fake_load_data(supabase, club_id):
 
     players = pd.DataFrame(supabase.tables["players"])
     empty = pd.DataFrame()
+    metadata = pd.DataFrame(
+        [
+            {
+                "id": "league-summer-social",
+                "club_id": club_id,
+                "league_name": "Summer Social",
+                "k_factor": 32,
+                "status": "active",
+                "is_active": True,
+                "ended_at": None,
+            }
+        ]
+    )
     name_to_id = {"Alex": 1, "Blair": 2}
     id_to_name = {1: "Alex", 2: "Blair"}
-    return (players, players, empty, empty, empty, empty, empty, name_to_id, id_to_name, False, "")
+    return (
+        players,
+        players,
+        empty,
+        empty,
+        metadata,
+        empty,
+        empty,
+        name_to_id,
+        id_to_name,
+        False,
+        "",
+    )
 
 
 def test_admin_match_uploader_singles_contract(monkeypatch):

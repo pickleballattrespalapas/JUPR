@@ -291,7 +291,11 @@ def process_singles_matches(
             scores=(int(score_t1), int(score_t2)),
             stored_elo_delta=stored_delta,
             match_type=str(match.get("match_type") or "Singles"),
-            week_tag=str(match.get("week_tag") or "Singles"),
+            week_tag=(
+                "Singles"
+                if match.get("week_tag") is None
+                else str(match.get("week_tag"))
+            ),
             start_ratings=(r1, None, r2, None),
             end_ratings=(end_r1, None, end_r2, None),
             context={**match, "match_format": "singles"},
