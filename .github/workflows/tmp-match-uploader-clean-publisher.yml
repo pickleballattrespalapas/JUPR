@@ -1,0 +1,70 @@
+name: Temporary Match Uploader Clean Publisher
+
+on:
+  pull_request:
+    branches:
+      - staging
+    paths:
+      - ".github/tmp/match-uploader-clean.patch.gz.b64.part*"
+      - ".github/workflows/tmp-match-uploader-clean-publisher.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temporary-match-uploader-clean-publisher
+  cancel-in-progress: false
+
+jobs:
+  apply-test-publish:
+    if: github.head_ref == 'agent/match-uploader-context-layout-clean' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out clean fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/match-uploader-context-layout-clean
+          fetch-depth: 0
+
+      - name: Reconstruct and apply reviewed patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/tmp/match-uploader-clean.patch.gz.b64.part* > "$RUNNER_TEMP/match-uploader-clean.patch.gz.b64"
+          echo 'c495df9d2f0b6d030779dfa6a80b743d3a11164ae716b05dc893975f8b27a385  '"$RUNNER_TEMP"'/match-uploader-clean.patch.gz.b64' | sha256sum --check
+          base64 --decode "$RUNNER_TEMP/match-uploader-clean.patch.gz.b64" > "$RUNNER_TEMP/match-uploader-clean.patch.gz"
+          echo 'deeff95f7f03c5d47312f8a5730208f48776ce6135dd2bf28ca0fc02b1d4ab93  '"$RUNNER_TEMP"'/match-uploader-clean.patch.gz' | sha256sum --check
+          gzip --decompress --stdout "$RUNNER_TEMP/match-uploader-clean.patch.gz" > "$RUNNER_TEMP/match-uploader-clean.patch"
+          echo 'a6ebd4d3a2a704d63af307bb5d7966a174900e34440df304fd4144f647a105c6  '"$RUNNER_TEMP"'/match-uploader-clean.patch' | sha256sum --check
+          git apply --check "$RUNNER_TEMP/match-uploader-clean.patch"
+          git apply "$RUNNER_TEMP/match-uploader-clean.patch"
+          git diff --check
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Run focused component checks
+        working-directory: apps/web
+        run: npm run test:component
+
+      - name: Build Next.js
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Publish clean application commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/tmp/match-uploader-clean.patch.gz.b64.part*
+          rmdir .github/tmp 2>/dev/null || true
+          rm -f .github/workflows/tmp-match-uploader-clean-publisher.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Fix Match Uploader league, pop-up, and responsive layout'
+          git push origin HEAD:agent/match-uploader-context-layout-clean
+          git fetch origin staging --no-tags
+          test "$(git diff --name-only origin/staging...HEAD | sort | tr '\n' ' ')" = "apps/web/app/admin/match-uploader/MatchUploaderForm.tsx apps/web/app/admin/match-uploader/layout.module.css apps/web/tests/match-uploader-layout.cjs "
