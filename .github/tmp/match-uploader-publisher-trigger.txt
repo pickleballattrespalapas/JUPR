@@ -1,1 +1,0 @@
-Trigger the temporary Match Uploader follow-up publisher.
