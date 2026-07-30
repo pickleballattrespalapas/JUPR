@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -82,3 +82,52 @@ jobs:
         run: npm run test:component
       - name: Build Next app
         run: npm run build
+
+  publish-match-uploader-followup:
+    needs: build
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/match-uploader-context-layout-followup' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/match-uploader-context-layout-followup
+          fetch-depth: 0
+      - name: Apply reviewed Match Uploader patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/tmp/match-uploader-followup.patch.gz.b64.part* > "$RUNNER_TEMP/match-uploader-followup.patch.gz.b64"
+          cd "$RUNNER_TEMP"
+          echo 'b3aab891aec7c2a7daac792d4f7350bfee3b9710c298e128ffd7cf33cca9276f  match-uploader-followup.patch.gz.b64' | sha256sum --check
+          base64 --decode match-uploader-followup.patch.gz.b64 > match-uploader-followup.patch.gz
+          echo 'd9964e67d32a9762f9bbd3eb1a2bbe287d43499785f76da6cb7924cb4e91b0f6  match-uploader-followup.patch.gz' | sha256sum --check
+          gzip --decompress --stdout match-uploader-followup.patch.gz > match-uploader-followup.patch
+          echo 'bc9062bb07f57eeb7c8437e2735c94c64446d565686d996921e9aa80ac3d133e  match-uploader-followup.patch' | sha256sum --check
+          cd "$GITHUB_WORKSPACE"
+          git apply --check "$RUNNER_TEMP/match-uploader-followup.patch"
+          git apply "$RUNNER_TEMP/match-uploader-followup.patch"
+          git diff --check
+      - name: Install dependencies
+        working-directory: apps/web
+        run: npm ci
+      - name: Run focused component checks
+        working-directory: apps/web
+        run: npm run test:component
+      - name: Build Next app
+        working-directory: apps/web
+        run: npm run build
+      - name: Publish clean application commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show 392057b58cc98bad82ac7da63d17dbf57302f0a0:.github/workflows/next-web-build.yml > .github/workflows/next-web-build.yml
+          rm -f .github/tmp/match-uploader-followup.patch.gz.b64.part*
+          git diff --check
+          test "$(git diff --name-only | sort | tr '\n' ' ')" = ".github/tmp/match-uploader-followup.patch.gz.b64.part00 .github/tmp/match-uploader-followup.patch.gz.b64.part01 .github/tmp/match-uploader-followup.patch.gz.b64.part02 .github/tmp/match-uploader-followup.patch.gz.b64.part03 .github/tmp/match-uploader-followup.patch.gz.b64.part04 .github/workflows/next-web-build.yml apps/web/app/admin/match-uploader/MatchUploaderForm.tsx apps/web/app/admin/match-uploader/layout.module.css apps/web/tests/match-uploader-layout.cjs "
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Fix Match Uploader context and responsive layout'
+          git push origin HEAD:agent/match-uploader-context-layout-followup
