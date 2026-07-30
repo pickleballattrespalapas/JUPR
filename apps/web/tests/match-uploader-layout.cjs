@@ -25,6 +25,7 @@ assert.match(form, /league: context === "popup" \? "POPUP" : \(singlesRow\.leagu
 assert.match(form, /week_tag: context === "popup" \? "" : \(singlesRow\.weekTag \|\| defaultWeekTag\)/, "social singles must omit week tags");
 assert.doesNotMatch(form, /Singles league\/tag/, "singles must not use its old one-off metadata labels");
 assert.match(form, /rating changes always use the separate singles rating/, "singles context copy must clarify that ratings remain separate");
+assert.match(form, /setSinglesValidationAttempted\(false\)/, "switching context or entry method must clear stale singles validation");
 assert.match(css, /grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/, "desktop metadata fields must have explicit columns");
 assert.match(css, /overflow-x: auto/, "narrow team layouts must scroll instead of overlapping");
 assert.match(css, /grid-template-columns: minmax\(230px, 1fr\) minmax\(170px, 0\.65fr\) minmax\(230px, 1fr\)/, "teams and scores need three explicit columns");
