@@ -16,9 +16,6 @@ from jupr_app.domain.matches import (
 )
 from jupr_app.domain.notifications.player_profile_update_repo import queue_player_updates_for_affected_subscribers
 from jupr_app.domain.player_activity import build_player_activity_update, coerce_utc_datetime, max_activity_time
-from jupr_app.domain.match_processing import (
-    build_active_league_metadata_expectations,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +288,11 @@ def process_singles_matches(
             scores=(int(score_t1), int(score_t2)),
             stored_elo_delta=stored_delta,
             match_type=str(match.get("match_type") or "Singles"),
-            week_tag=str(match.get("week_tag") or "Singles"),
+            week_tag=(
+                "Singles"
+                if match.get("week_tag") is None
+                else str(match.get("week_tag"))
+            ),
             start_ratings=(r1, None, r2, None),
             end_ratings=(end_r1, None, end_r2, None),
             context={**match, "match_format": "singles"},
@@ -344,17 +345,10 @@ def process_singles_matches(
             planned_player_updates.append(
                 {"player_id": int(pid), "rating_mode": "singles", "expected": expected, "after": after}
             )
-        league_metadata_expectations = (
-            build_active_league_metadata_expectations(
-                df_meta,
-                club_id=str(club_id),
-                league_names={
-                    str(row.get("league") or "")
-                    for row in db_matches
-                },
-                default_k_factor=int(default_k_factor),
-            )
-        )
+        # League and social labels organize singles match history only.
+        # Singles never mutate a league-rating island, so the atomic write
+        # must not require doubles-league metadata for those labels.
+        league_metadata_expectations: list[dict[str, Any]] = []
         return {
             "inserted": len(db_matches),
             "match_format": "singles",

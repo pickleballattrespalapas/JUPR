@@ -179,9 +179,34 @@ def _fake_load_data(supabase, club_id):
 
     players = pd.DataFrame(supabase.tables["players"])
     empty = pd.DataFrame()
+    metadata = pd.DataFrame(
+        [
+            {
+                "id": "league-summer-social",
+                "club_id": club_id,
+                "league_name": "Summer Social",
+                "k_factor": 32,
+                "status": "active",
+                "is_active": True,
+                "ended_at": None,
+            }
+        ]
+    )
     name_to_id = {"Alex": 1, "Blair": 2}
     id_to_name = {1: "Alex", 2: "Blair"}
-    return (players, players, empty, empty, empty, empty, empty, name_to_id, id_to_name, False, "")
+    return (
+        players,
+        players,
+        empty,
+        empty,
+        metadata,
+        empty,
+        empty,
+        name_to_id,
+        id_to_name,
+        False,
+        "",
+    )
 
 
 def test_admin_match_uploader_singles_contract(monkeypatch):
@@ -196,8 +221,8 @@ def test_admin_match_uploader_singles_contract(monkeypatch):
         headers={"Authorization": "Bearer local"},
         json={
             "date": "2026-05-01",
-            "league": "Singles",
-            "week_tag": "Challenge",
+            "league": "Summer Social",
+            "week_tag": "Week 1",
             "t1_p1": 1,
             "t2_p1": 2,
             "score_t1": 11,
@@ -214,6 +239,8 @@ def test_admin_match_uploader_singles_contract(monkeypatch):
     assert payload["recovery"]["match_log_route"] == "/admin/match-log"
     assert payload["result"]["match_format"] == "singles"
     assert tables["matches"][0]["match_format"] == "singles"
+    assert tables["matches"][0]["league"] == "Summer Social"
+    assert tables["matches"][0]["week_tag"] == "Week 1"
     assert tables["matches"][0]["t1_p1"] == 1
     assert tables["matches"][0]["t2_p1"] == 2
     assert (
@@ -343,3 +370,45 @@ def test_admin_match_uploader_first_singles_uses_preserved_seed_and_keeps_latest
         tables["players"][1]["singles_last_game_at"]
         == "2026-06-01T12:00:00+00:00"
     )
+
+
+def test_admin_match_uploader_singles_popup_context_omits_week_tag(monkeypatch):
+    tables = singles_tables()
+    supabase = AtomicSinglesSupabase(tables)
+    _install_env(monkeypatch, supabase)
+    monkeypatch.setattr(
+        "jupr_app.services.admin_singles_match_service.load_data",
+        _fake_load_data,
+    )
+    monkeypatch.setattr(
+        "jupr_app.services.admin_singles_match_service.upsert_or_get_active_event",
+        lambda _supabase, *, club_id, name: f"event:{club_id}:{name}",
+    )
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-uploader/singles",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "date": "2026-05-02",
+            "league": "POPUP",
+            "week_tag": "Week 9",
+            "match_type": "PopUp",
+            "is_popup": True,
+            "context_type": "event",
+            "context_name": "Saturday Singles Social",
+            "t1_p1": 1,
+            "t2_p1": 2,
+            "score_t1": 11,
+            "score_t2": 7,
+            "idempotency_key": "test:singles-popup-context",
+        },
+    )
+
+    assert response.status_code == 200
+    stored = tables["matches"][0]
+    assert stored["match_format"] == "singles"
+    assert stored["league"] == "POPUP"
+    assert stored["match_type"] == "PopUp"
+    assert stored["week_tag"] == ""
+    assert stored["context_type"] == "event"
+    assert stored["context_id"] == "event:club:Saturday Singles Social"
