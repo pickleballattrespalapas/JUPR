@@ -132,3 +132,5 @@ jobs:
           git add -A
           git commit -m 'Fix Match Uploader context and responsive layout'
           git push origin HEAD:agent/match-uploader-context-layout-followup
+
+# trigger publisher
