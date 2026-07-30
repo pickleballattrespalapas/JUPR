@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from jupr_app.data.load import load_data
+from jupr_app.domain.events import upsert_or_get_active_event
 from jupr_app.services.admin_match_uploader_service import (
     is_admin_match_uploader_singles_enabled,
 )
@@ -106,19 +107,36 @@ def _normalize_single_match(match: dict[str, Any]) -> dict[str, Any]:
     if int(score_t1) + int(score_t2) <= 0:
         raise ValueError("Enter a non-zero singles score.")
     rating_scope = _clean_text(match.get("rating_scope"), limit=40)
+    league = _clean_text(match.get("league") or "Singles", limit=120) or "Singles"
+    match_type = _clean_text(match.get("match_type") or "Singles", limit=80) or "Singles"
+    context_type = _clean_text(match.get("context_type"), limit=80) or None
+    is_popup = bool(
+        match.get("is_popup")
+        or league.upper() == "POPUP"
+        or match_type == "PopUp"
+        or context_type == "event"
+    )
+    if is_popup:
+        league = "POPUP"
+        match_type = "PopUp"
+        week_tag = ""
+    else:
+        week_tag = _clean_text(match.get("week_tag") or "Singles", limit=80)
     return {
         "date": _clean_text(match.get("date"), limit=80) or None,
-        "league": _clean_text(match.get("league") or "Singles", limit=120) or "Singles",
-        "match_type": _clean_text(match.get("match_type") or "Singles", limit=80) or "Singles",
-        "week_tag": _clean_text(match.get("week_tag") or "Singles", limit=80),
+        "league": league,
+        "match_type": match_type,
+        "week_tag": week_tag,
         "t1_p1": int(p1),
         "t2_p1": int(p2),
         "score_t1": int(score_t1),
         "score_t2": int(score_t2),
         "match_format": "singles",
         "rating_scope": rating_scope or "",
-        "context_type": _clean_text(match.get("context_type"), limit=80) or None,
+        "is_popup": is_popup,
+        "context_type": "event" if is_popup else context_type,
         "context_id": match.get("context_id"),
+        "context_name": _clean_text(match.get("context_name"), limit=160) or None,
     }
 
 
@@ -137,6 +155,14 @@ def submit_admin_singles_match(
             "Direct singles submission is disabled for the current write wave."
         )
     clean_match = _normalize_single_match(match)
+    context_name = clean_match.pop("context_name", None)
+    if clean_match.get("is_popup") and context_name and not clean_match.get("context_id"):
+        clean_match["context_type"] = "event"
+        clean_match["context_id"] = upsert_or_get_active_event(
+            supabase,
+            club_id=str(club_id),
+            name=str(context_name),
+        )
     (
         df_players_all,
         _df_players_active,

@@ -123,8 +123,12 @@ function newMatchRow(
   return { rowId: randomId("row"), date, league, weekTag, ratingScope, t1p1: "", t1p2: "", t2p1: "", t2p2: "", s1: "0", s2: "0" };
 }
 
-function newSinglesRow(): SinglesRow {
-  return { date: todayIsoDate(), league: "Singles", weekTag: "Singles", playerA: "", playerB: "", scoreA: "0", scoreB: "0", ratingScope: "" };
+function newSinglesRow(
+  date: string = todayIsoDate(),
+  league: string = "Open",
+  weekTag: string = "Week 1",
+): SinglesRow {
+  return { date, league, weekTag, playerA: "", playerB: "", scoreA: "0", scoreB: "0", ratingScope: "" };
 }
 
 function newRoundRobin(formatType: string): RrCourtInput {
@@ -190,6 +194,17 @@ function validateSingles(row: SinglesRow): string | null {
   return null;
 }
 
+function validateStartingJupr(value: string): string | null {
+  const numericValue = Number(value);
+  if (!value.trim() || !Number.isFinite(numericValue)) {
+    return "Enter a Starting JUPR from 1.00 to 7.00.";
+  }
+  if (numericValue < 1 || numericValue > 7) {
+    return "Starting JUPR must be between 1.00 and 7.00.";
+  }
+  return null;
+}
+
 function mergePlayers(current: PublicPlayer[], incoming: NonNullable<AdminMatchUploaderCreatePlayersResult["players"]>): PublicPlayer[] {
   const byId = new Map<string, PublicPlayer>();
   for (const player of current) byId.set(String(player.id), player);
@@ -224,6 +239,9 @@ function SearchablePlayerInput({
       )
     : players;
   const numericStartingJupr = Number(startingJupr);
+  const startingJuprMessage = cleanedQuery && !exactPlayer && matchingPlayers.length === 0
+    ? validateStartingJupr(startingJupr)
+    : null;
   const validatedInputStyle = invalid
     ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" }
     : inputStyle;
@@ -236,9 +254,7 @@ function SearchablePlayerInput({
     if (
       !cleanedQuery
       || exactPlayer
-      || !Number.isFinite(numericStartingJupr)
-      || numericStartingJupr < 1
-      || numericStartingJupr > 7
+      || startingJuprMessage
     ) return;
     setCreating(true);
     try {
@@ -314,18 +330,20 @@ function SearchablePlayerInput({
               step={0.01}
               value={startingJupr}
               disabled={disabled || creating}
+              aria-invalid={Boolean(startingJuprMessage) || undefined}
               onChange={(event) => setStartingJupr(event.target.value)}
-              style={inputStyle}
+              style={startingJuprMessage ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" } : inputStyle}
             />
           </label>
           <button
             type="button"
             onClick={createAndSelect}
-            disabled={disabled || creating}
+            disabled={disabled || creating || Boolean(startingJuprMessage)}
             style={ghostButtonStyle}
           >
             {creating ? "Creating…" : `Create “${cleanedQuery}”`}
           </button>
+          {startingJuprMessage ? <p role="alert" style={{ gridColumn: "1 / -1", color: "#b91c1c", margin: 0, fontWeight: 700 }}>{startingJuprMessage}</p> : null}
         </div>
       ) : null}
     </div>
@@ -354,6 +372,9 @@ function SearchablePlayerMultiInput({
       === cleanedQuery.toLocaleLowerCase(),
   );
   const numericStartingJupr = Number(startingJupr);
+  const startingJuprMessage = cleanedQuery && !exactPlayer
+    ? validateStartingJupr(startingJupr)
+    : null;
 
   function addPlayerName(name: string) {
     const cleanedName = name.replace(/\s+/g, " ").trim();
@@ -369,9 +390,7 @@ function SearchablePlayerMultiInput({
     if (
       !cleanedQuery
       || exactPlayer
-      || !Number.isFinite(numericStartingJupr)
-      || numericStartingJupr < 1
-      || numericStartingJupr > 7
+      || startingJuprMessage
     ) return;
     setCreating(true);
     try {
@@ -448,12 +467,14 @@ function SearchablePlayerMultiInput({
               value={startingJupr}
               onChange={(event) => setStartingJupr(event.target.value)}
               disabled={disabled || creating}
-              style={inputStyle}
+              aria-invalid={Boolean(startingJuprMessage) || undefined}
+              style={startingJuprMessage ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" } : inputStyle}
             />
           </label>
-          <button type="button" onClick={createAndAdd} disabled={disabled || creating} style={ghostButtonStyle}>
+          <button type="button" onClick={createAndAdd} disabled={disabled || creating || Boolean(startingJuprMessage)} style={ghostButtonStyle}>
             {creating ? "Creating…" : `Create & add “${cleanedQuery}”`}
           </button>
+          {startingJuprMessage ? <p role="alert" style={{ gridColumn: "1 / -1", color: "#b91c1c", margin: 0, fontWeight: 700 }}>{startingJuprMessage}</p> : null}
         </div>
       ) : null}
     </div>
@@ -607,7 +628,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   const [defaultLeague, setDefaultLeague] = useState(initialLeague);
   const [defaultWeekTag, setDefaultWeekTag] = useState(initialWeekTag);
   const [popupEventName, setPopupEventName] = useState("Saturday Social");
-  const [singlesRow, setSinglesRow] = useState<SinglesRow>(() => newSinglesRow());
+  const [singlesRow, setSinglesRow] = useState<SinglesRow>(() => newSinglesRow(todayIsoDate(), initialLeague, initialWeekTag));
   const [rows, setRows] = useState<MatchRow[]>(() => [newMatchRow(todayIsoDate(), initialWeekTag, "", initialLeague)]);
   const [rrCourts, setRrCourts] = useState<RrCourtInput[]>(() => [newRoundRobin(firstFormat)]);
   const [rrCustomSchedule, setRrCustomSchedule] = useState("");
@@ -621,6 +642,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   const [result, setResult] = useState<AdminMatchUploaderWriteResult | null>(null);
   const [submissionKind, setSubmissionKind] = useState<"manual" | "round_robin" | "singles" | null>(null);
   const [manualValidationAttempted, setManualValidationAttempted] = useState(false);
+  const [singlesValidationAttempted, setSinglesValidationAttempted] = useState(false);
   const [removeAllDialogOpen, setRemoveAllDialogOpen] = useState(false);
 
   const filledRows = rows.filter(isFilled);
@@ -628,6 +650,8 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   const hasInvalidFilledRows = filledRows.length !== readyRows.length;
   const defaultManualWeekTag = context === "popup" ? "" : defaultWeekTag;
   const defaultManualRatingScope: MatchRow["ratingScope"] = context === "popup" ? "overall_only" : "";
+  const singlesError = singlesValidationAttempted ? validateSingles(singlesRow) : null;
+  const singlesScoreInvalid = Boolean(singlesError && /score|tied/i.test(singlesError));
   const rowHasEnteredData = (row: MatchRow) =>
     isFilled(row)
     || row.date !== defaultDate
@@ -655,6 +679,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   function changeContext(nextContext: "league" | "popup") {
     clearEntryFeedback();
     setManualValidationAttempted(false);
+    setSinglesValidationAttempted(false);
     setContext(nextContext);
     setRows((current) => current.map((row) => ({
       ...row,
@@ -664,6 +689,21 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
         ? (row.ratingScope === "unrated" ? "unrated" : "overall_only")
         : (row.ratingScope === "unrated" ? "unrated" : ""),
     })));
+    setSinglesRow((current) => ({
+      ...current,
+      league: nextContext === "popup"
+        ? "POPUP"
+        : (!current.league || current.league === "POPUP" ? defaultLeague : current.league),
+      weekTag: nextContext === "popup" ? "" : (current.weekTag || defaultWeekTag),
+    }));
+  }
+
+  function changeDefaultDate(nextDate: string) {
+    const previousDate = defaultDate;
+    clearEntryFeedback();
+    setDefaultDate(nextDate);
+    setRows((current) => current.map((row) => isFilled(row) ? row : { ...row, date: nextDate }));
+    setSinglesRow((current) => !current.date || current.date === previousDate ? { ...current, date: nextDate } : current);
   }
 
   function changeDefaultLeague(nextLeague: string) {
@@ -675,6 +715,11 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
         ? { ...row, league: nextLeague }
         : row
     ));
+    setSinglesRow((current) =>
+      !current.league || current.league === previousLeague
+        ? { ...current, league: nextLeague }
+        : current
+    );
   }
 
   function changeDefaultWeekTag(nextWeekTag: string) {
@@ -686,18 +731,21 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
         ? { ...row, weekTag: nextWeekTag }
         : row
     ));
+    setSinglesRow((current) =>
+      !current.weekTag || current.weekTag === previousWeekTag
+        ? { ...current, weekTag: nextWeekTag }
+        : current
+    );
   }
 
   function acknowledgeSubmission() {
     if (submissionKind === "manual") resetManualRows();
     if (submissionKind === "singles") {
       setSinglesRow((current) => ({
-        ...newSinglesRow(),
-        date: current.date,
-        league: current.league,
-        weekTag: current.weekTag,
+        ...newSinglesRow(current.date, current.league, current.weekTag),
         ratingScope: current.ratingScope,
       }));
+      setSinglesValidationAttempted(false);
     }
     if (submissionKind === "round_robin") {
       setRrSchedule([]);
@@ -735,6 +783,13 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   function playerOptionsFor(row: MatchRow, currentValue: string): PublicPlayer[] {
     const selectedElsewhere = new Set(
       [row.t1p1, row.t1p2, row.t2p1, row.t2p2].filter((value) => value && value !== currentValue),
+    );
+    return knownPlayers.filter((player) => !selectedElsewhere.has(String(player.id)));
+  }
+
+  function singlesPlayerOptions(currentValue: string): PublicPlayer[] {
+    const selectedElsewhere = new Set(
+      [singlesRow.playerA, singlesRow.playerB].filter((value) => value && value !== currentValue),
     );
     return knownPlayers.filter((player) => !selectedElsewhere.has(String(player.id)));
   }
@@ -852,6 +907,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   async function submitSinglesMatch() {
     setMessage(null);
     setResult(null);
+    setSinglesValidationAttempted(true);
     if (!requireReady()) return;
     if (!singlesEnabled) {
       setMessage("Direct singles submission is unavailable until its transactional write and replay path is complete.");
@@ -866,8 +922,12 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     const request = {
       source: "next_match_uploader_singles",
       date: singlesRow.date,
-      league: singlesRow.league || "Singles",
-      week_tag: singlesRow.weekTag || "Singles",
+      league: context === "popup" ? "POPUP" : (singlesRow.league || defaultLeague),
+      week_tag: context === "popup" ? "" : (singlesRow.weekTag || defaultWeekTag),
+      match_type: context === "popup" ? "PopUp" : "Singles",
+      is_popup: context === "popup",
+      context_type: context === "popup" ? "event" : null,
+      context_name: context === "popup" ? popupEventName : undefined,
       t1_p1: Number(singlesRow.playerA),
       t2_p1: Number(singlesRow.playerB),
       score_t1: Number(singlesRow.scoreA),
@@ -1084,47 +1144,42 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
           {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
         </div>
         <div className={styles.setupGrid}>
-          <label className={styles.field}><strong>Entry method</strong><br /><select value={entryMethod} onChange={(event) => { clearEntryFeedback(); setManualValidationAttempted(false); setEntryMethod(event.target.value as "singles" | "manual" | "round_robin"); }} style={inputStyle}>{singlesEnabled ? <option value="singles">Singles match</option> : null}<option value="manual">Doubles manual / batch</option><option value="round_robin">Doubles round robin</option></select></label>
-          {entryMethod !== "singles" ? <label className={styles.field}><strong>Context</strong><br /><select value={context} onChange={(event) => changeContext(event.target.value as "league" | "popup")} style={inputStyle}><option value="league">Official League</option><option value="popup">Pop-Up / Social</option></select></label> : null}
-          {entryMethod !== "singles" ? <label className={styles.field}><strong>Default date</strong><br /><input value={defaultDate} onChange={(event) => { const value = event.target.value; clearEntryFeedback(); setDefaultDate(value); setRows((current) => current.map((row) => isFilled(row) ? row : { ...row, date: value })); }} type="date" style={inputStyle} /></label> : null}
-          {entryMethod !== "singles" && context === "league" ? <label className={styles.field}><strong>Default league</strong><br /><select value={defaultLeague} onChange={(event) => changeDefaultLeague(event.target.value)} style={inputStyle}>{selectableLeagueOptions.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
-          {entryMethod !== "singles" && context === "league" ? <label className={styles.field}><strong>Default week/session</strong><br /><select value={defaultWeekTag} onChange={(event) => changeDefaultWeekTag(event.target.value)} style={inputStyle}>{status.week_tag_options.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
-          {entryMethod !== "singles" && context === "popup" ? <label className={styles.field}><strong>Pop-Up event name</strong><br /><input value={popupEventName} onChange={(event) => { clearEntryFeedback(); setPopupEventName(event.target.value); }} style={inputStyle} /></label> : null}
+          <label className={styles.field}><strong>Entry method</strong><br /><select value={entryMethod} onChange={(event) => { clearEntryFeedback(); setManualValidationAttempted(false); setSinglesValidationAttempted(false); setEntryMethod(event.target.value as "singles" | "manual" | "round_robin"); }} style={inputStyle}>{singlesEnabled ? <option value="singles">Singles match</option> : null}<option value="manual">Doubles manual / batch</option><option value="round_robin">Doubles round robin</option></select></label>
+          <label className={styles.field}><strong>Context</strong><br /><select value={context} onChange={(event) => changeContext(event.target.value as "league" | "popup")} style={inputStyle}><option value="league">Official League</option><option value="popup">Pop-Up / Social</option></select></label>
+          <label className={styles.field}><strong>Default date</strong><br /><input value={defaultDate} onChange={(event) => changeDefaultDate(event.target.value)} type="date" style={inputStyle} /></label>
+          {context === "league" ? <label className={styles.field}><strong>Default league</strong><br /><select value={defaultLeague} onChange={(event) => changeDefaultLeague(event.target.value)} style={inputStyle}>{selectableLeagueOptions.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
+          {context === "league" ? <label className={styles.field}><strong>Default week/session</strong><br /><select value={defaultWeekTag} onChange={(event) => changeDefaultWeekTag(event.target.value)} style={inputStyle}>{status.week_tag_options.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
+          {context === "popup" ? <label className={styles.field}><strong>Pop-Up event name</strong><br /><input value={popupEventName} onChange={(event) => { clearEntryFeedback(); setPopupEventName(event.target.value); }} style={inputStyle} /></label> : null}
         </div>
       </article>
 
       {entryMethod === "singles" && singlesEnabled ? (
         <article style={{ ...cardStyle, background: "#f8fafc" }}>
-          <h2 style={{ marginTop: 0 }}>Singles match input</h2>
-          <p style={{ color: "#475569" }}>Use this for one-on-one games only. This updates each player’s singles rating and writes an official match row with <code>match_format=singles</code>.</p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem" }}>
-            <label><strong>Date</strong><br /><input type="date" value={singlesRow.date} onChange={(event) => patchSingles({ date: event.target.value })} style={inputStyle} /></label>
-            <label><strong>Singles league/tag</strong><br /><input value={singlesRow.league} onChange={(event) => patchSingles({ league: event.target.value })} style={inputStyle} /></label>
-            <label><strong>Session</strong><br /><input value={singlesRow.weekTag} onChange={(event) => patchSingles({ weekTag: event.target.value })} style={inputStyle} /></label>
-            <label><strong>Rating scope</strong><br /><select value={singlesRow.ratingScope} onChange={(event) => patchSingles({ ratingScope: event.target.value as SinglesRow["ratingScope"] })} style={inputStyle}><option value="">Rated singles</option><option value="unrated">Unrated / record only</option></select></label>
+          <h2 style={{ marginTop: 0 }}>Singles match entry</h2>
+          <p style={{ color: "#475569" }}>Use this for one-on-one games only. Official League and Pop-Up / Social control match organization; rating changes always use the separate singles rating.</p>
+          <div className={`${styles.metadataGrid} ${context === "popup" ? styles.popupMetadataGrid : ""}`}>
+            <label className={styles.field}><strong>Date</strong><br /><input type="date" value={singlesRow.date} onChange={(event) => patchSingles({ date: event.target.value })} style={inputStyle} /></label>
+            {context === "league" ? <label className={styles.field}><strong>League</strong><br /><select value={singlesRow.league} onChange={(event) => patchSingles({ league: event.target.value })} style={inputStyle}>{selectableLeagueOptions.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
+            {context === "league" ? <label className={styles.field}><strong>Week / session</strong><br /><input value={singlesRow.weekTag} onChange={(event) => patchSingles({ weekTag: event.target.value })} style={inputStyle} /></label> : null}
+            <label className={styles.field}><strong>Rating scope</strong><br /><select value={singlesRow.ratingScope} onChange={(event) => patchSingles({ ratingScope: event.target.value as SinglesRow["ratingScope"] })} style={inputStyle}><option value="">Rated singles</option><option value="unrated">Unrated / record only</option></select></label>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
-            <SearchablePlayerInput
-              inputId="singles-player-a"
-              label="Player A"
-              value={singlesRow.playerA}
-              players={knownPlayers}
-              disabled={saving || creatingPlayers}
-              onChange={(playerA) => patchSingles({ playerA })}
-              onCreate={createAndSelectPlayer}
-            />
-            <label><strong>Score A</strong><br /><input type="number" min={0} max={99} value={singlesRow.scoreA} onChange={(event) => patchSingles({ scoreA: event.target.value })} style={inputStyle} /></label>
-            <label><strong>Score B</strong><br /><input type="number" min={0} max={99} value={singlesRow.scoreB} onChange={(event) => patchSingles({ scoreB: event.target.value })} style={inputStyle} /></label>
-            <SearchablePlayerInput
-              inputId="singles-player-b"
-              label="Player B"
-              value={singlesRow.playerB}
-              players={knownPlayers}
-              disabled={saving || creatingPlayers}
-              onChange={(playerB) => patchSingles({ playerB })}
-              onCreate={createAndSelectPlayer}
-            />
+          <div className={styles.teamsViewport}>
+            <div className={styles.teamsGrid}>
+              <section aria-label="Singles Player 1" className={styles.teamPanel}>
+                <h4 style={{ margin: 0 }}>Player 1</h4>
+                <SearchablePlayerInput inputId="singles-player-a" label="Player" value={singlesRow.playerA} players={singlesPlayerOptions(singlesRow.playerA)} invalid={singlesValidationAttempted && !singlesRow.playerA} disabled={saving || creatingPlayers} onChange={(playerA) => patchSingles({ playerA })} onCreate={createAndSelectPlayer} />
+              </section>
+              <section aria-label="Singles scores" className={styles.scorePanel}>
+                <label className={styles.scoreField}><strong>Player 1 score</strong><br /><input type="number" min={0} max={99} value={singlesRow.scoreA} onChange={(event) => patchSingles({ scoreA: event.target.value })} aria-invalid={singlesScoreInvalid || undefined} style={singlesScoreInvalid ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" } : inputStyle} /></label>
+                <label className={styles.scoreField}><strong>Player 2 score</strong><br /><input type="number" min={0} max={99} value={singlesRow.scoreB} onChange={(event) => patchSingles({ scoreB: event.target.value })} aria-invalid={singlesScoreInvalid || undefined} style={singlesScoreInvalid ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" } : inputStyle} /></label>
+              </section>
+              <section aria-label="Singles Player 2" className={styles.teamPanel}>
+                <h4 style={{ margin: 0 }}>Player 2</h4>
+                <SearchablePlayerInput inputId="singles-player-b" label="Player" value={singlesRow.playerB} players={singlesPlayerOptions(singlesRow.playerB)} invalid={singlesValidationAttempted && !singlesRow.playerB} disabled={saving || creatingPlayers} onChange={(playerB) => patchSingles({ playerB })} onCreate={createAndSelectPlayer} />
+              </section>
+            </div>
           </div>
+          {singlesError ? <p role="alert" style={{ color: "#b91c1c", marginBottom: 0 }}><strong>{singlesError}</strong></p> : null}
           <p><button type="button" onClick={submitSinglesMatch} disabled={saving || !accessToken || !singlesEnabled} style={buttonStyle}>{saving ? "Submitting…" : "Submit singles match"}</button></p>
         </article>
       ) : null}

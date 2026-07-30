@@ -39,6 +39,11 @@ class AdminMatchUploaderSinglesRequest(BaseModel):
     date: str | None = None
     league: str = "Singles"
     week_tag: str = "Singles"
+    match_type: str = "Singles"
+    is_popup: bool = False
+    context_type: str | None = None
+    context_id: str | None = None
+    context_name: str | None = None
     t1_p1: int
     t2_p1: int
     score_t1: int
