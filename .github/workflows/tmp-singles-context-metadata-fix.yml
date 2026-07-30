@@ -31,37 +31,28 @@ jobs:
           from pathlib import Path
 
           path = Path('jupr_app/domain/singles_match_processing.py')
-          text = path.read_text(encoding='utf-8')
+          lines = path.read_text(encoding='utf-8').splitlines()
 
-          old_import = '''from jupr_app.domain.match_processing import (
-              build_active_league_metadata_expectations,
-          )
-          '''
-          if old_import not in text:
-              raise SystemExit('expected league metadata import was not found')
-          text = text.replace(old_import, '', 1)
+          import_start = lines.index('from jupr_app.domain.match_processing import (')
+          expected_import = [
+              'from jupr_app.domain.match_processing import (',
+              '    build_active_league_metadata_expectations,',
+              ')',
+          ]
+          if lines[import_start:import_start + 3] != expected_import:
+              raise SystemExit('unexpected league metadata import block')
+          del lines[import_start:import_start + 3]
 
-          old_block = '''        league_metadata_expectations = (
-              build_active_league_metadata_expectations(
-                  df_meta,
-                  club_id=str(club_id),
-                  league_names={
-                      str(row.get("league") or "")
-                      for row in db_matches
-                  },
-                  default_k_factor=int(default_k_factor),
-              )
-          )
-          '''
-          new_block = '''        # League and social labels organize singles match history only.
-              # Singles never mutate a league-rating island, so the atomic write
-              # must not require doubles-league metadata for those labels.
-              league_metadata_expectations: list[dict[str, Any]] = []
-          '''
-          if old_block not in text:
-              raise SystemExit('expected league metadata expectation block was not found')
-          text = text.replace(old_block, new_block, 1)
-          path.write_text(text, encoding='utf-8')
+          block_start = lines.index('        league_metadata_expectations = (')
+          return_start = lines.index('        return {', block_start)
+          lines[block_start:return_start] = [
+              '        # League and social labels organize singles match history only.',
+              '        # Singles never mutate a league-rating island, so the atomic write',
+              '        # must not require doubles-league metadata for those labels.',
+              '        league_metadata_expectations: list[dict[str, Any]] = []',
+          ]
+
+          path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
           PY
           git diff --check
 
