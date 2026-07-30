@@ -15,6 +15,7 @@ import {
   directMatchIdempotencyKey
 } from "@/lib/directMatchIdempotency";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import styles from "./layout.module.css";
 
 type Props = {
   apiBase: string | null;
@@ -26,6 +27,7 @@ type Props = {
 type MatchRow = {
   rowId: string;
   date: string;
+  league: string;
   weekTag: string;
   ratingScope: "" | "overall_only" | "unrated";
   t1p1: string;
@@ -95,7 +97,7 @@ type SearchablePlayerMultiInputProps = {
 };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
-const inputStyle = { width: "100%", padding: "0.5rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
+const inputStyle = { width: "100%", minWidth: 0, boxSizing: "border-box" as const, padding: "0.5rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 const dangerButtonStyle = { ...buttonStyle, background: "#b91c1c", borderColor: "#b91c1c" };
@@ -116,8 +118,9 @@ function newMatchRow(
   date: string = todayIsoDate(),
   weekTag: string = "Week 1",
   ratingScope: MatchRow["ratingScope"] = "",
+  league: string = "Open",
 ): MatchRow {
-  return { rowId: randomId("row"), date, weekTag, ratingScope, t1p1: "", t1p2: "", t2p1: "", t2p2: "", s1: "0", s2: "0" };
+  return { rowId: randomId("row"), date, league, weekTag, ratingScope, t1p1: "", t1p2: "", t2p1: "", t2p2: "", s1: "0", s2: "0" };
 }
 
 function newSinglesRow(): SinglesRow {
@@ -591,17 +594,21 @@ function SubmissionResultDialog({
 
 export default function MatchUploaderForm({ apiBase, clubId, players, status }: Props) {
   const firstFormat = status.round_robin_format_options?.[0] || "4-Player";
+  const officialLeagueOptions = status.league_options.filter((item) => item.trim().toUpperCase() !== "POPUP");
+  const selectableLeagueOptions = officialLeagueOptions.length ? officialLeagueOptions : ["Open"];
+  const initialLeague = selectableLeagueOptions[0];
+  const initialWeekTag = status.week_tag_options[0] || "Week 1";
   const singlesEnabled = Boolean(status.singles_write_enabled && status.singles_submit_endpoint);
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [knownPlayers, setKnownPlayers] = useState<PublicPlayer[]>(players);
   const [entryMethod, setEntryMethod] = useState<"singles" | "manual" | "round_robin">("manual");
   const [context, setContext] = useState<"league" | "popup">("league");
   const [defaultDate, setDefaultDate] = useState(todayIsoDate());
-  const [defaultLeague, setDefaultLeague] = useState(status.league_options[0] || "Open");
-  const [defaultWeekTag, setDefaultWeekTag] = useState(status.week_tag_options[0] || "Week 1");
+  const [defaultLeague, setDefaultLeague] = useState(initialLeague);
+  const [defaultWeekTag, setDefaultWeekTag] = useState(initialWeekTag);
   const [popupEventName, setPopupEventName] = useState("Saturday Social");
   const [singlesRow, setSinglesRow] = useState<SinglesRow>(() => newSinglesRow());
-  const [rows, setRows] = useState<MatchRow[]>(() => [newMatchRow(todayIsoDate(), status.week_tag_options[0] || "Week 1")]);
+  const [rows, setRows] = useState<MatchRow[]>(() => [newMatchRow(todayIsoDate(), initialWeekTag, "", initialLeague)]);
   const [rrCourts, setRrCourts] = useState<RrCourtInput[]>(() => [newRoundRobin(firstFormat)]);
   const [rrCustomSchedule, setRrCustomSchedule] = useState("");
   const [rrSchedule, setRrSchedule] = useState<RrCourtSchedule[]>([]);
@@ -619,13 +626,15 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   const filledRows = rows.filter(isFilled);
   const readyRows = rows.filter((row, index) => isReadyRow(row, index));
   const hasInvalidFilledRows = filledRows.length !== readyRows.length;
+  const defaultManualWeekTag = context === "popup" ? "" : defaultWeekTag;
+  const defaultManualRatingScope: MatchRow["ratingScope"] = context === "popup" ? "overall_only" : "";
   const rowHasEnteredData = (row: MatchRow) =>
     isFilled(row)
     || row.date !== defaultDate
-    || row.weekTag !== defaultWeekTag
-    || row.ratingScope !== "";
+    || (context === "league" && row.league !== defaultLeague)
+    || (context === "league" && row.weekTag !== defaultWeekTag)
+    || row.ratingScope !== defaultManualRatingScope;
   const scoredRrRows = rrSchedule.flatMap((court) => court.matches).filter((match) => Number(match.s1 || 0) + Number(match.s2 || 0) > 0);
-  const league = context === "popup" ? "POPUP" : defaultLeague;
   const matchType = context === "popup" ? "PopUp" : "Live Match";
   const messageIsError = Boolean(message && (result?.ok === false || isUploaderErrorMessage(message)));
 
@@ -635,9 +644,48 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   }
 
   function resetManualRows() {
-    const preservedScope = (readyRows[0] || filledRows[0])?.ratingScope || "";
-    setRows([newMatchRow(defaultDate, defaultWeekTag, preservedScope)]);
+    const priorScope = (readyRows[0] || filledRows[0])?.ratingScope;
+    const preservedScope = context === "popup"
+      ? (priorScope === "unrated" ? "unrated" : "overall_only")
+      : (priorScope || "");
+    setRows([newMatchRow(defaultDate, defaultManualWeekTag, preservedScope, defaultLeague)]);
     setManualValidationAttempted(false);
+  }
+
+  function changeContext(nextContext: "league" | "popup") {
+    clearEntryFeedback();
+    setManualValidationAttempted(false);
+    setContext(nextContext);
+    setRows((current) => current.map((row) => ({
+      ...row,
+      league: row.league || defaultLeague,
+      weekTag: nextContext === "popup" ? "" : (row.weekTag || defaultWeekTag),
+      ratingScope: nextContext === "popup"
+        ? (row.ratingScope === "unrated" ? "unrated" : "overall_only")
+        : (row.ratingScope === "unrated" ? "unrated" : ""),
+    })));
+  }
+
+  function changeDefaultLeague(nextLeague: string) {
+    const previousLeague = defaultLeague;
+    clearEntryFeedback();
+    setDefaultLeague(nextLeague);
+    setRows((current) => current.map((row) =>
+      !row.league || row.league === previousLeague
+        ? { ...row, league: nextLeague }
+        : row
+    ));
+  }
+
+  function changeDefaultWeekTag(nextWeekTag: string) {
+    const previousWeekTag = defaultWeekTag;
+    clearEntryFeedback();
+    setDefaultWeekTag(nextWeekTag);
+    setRows((current) => current.map((row) =>
+      !row.weekTag || row.weekTag === previousWeekTag
+        ? { ...row, weekTag: nextWeekTag }
+        : row
+    ));
   }
 
   function acknowledgeSubmission() {
@@ -664,7 +712,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     clearEntryFeedback();
     setRows((current) => {
       const remaining = current.filter((row) => row.rowId !== rowId);
-      return remaining.length ? remaining : [newMatchRow(defaultDate, defaultWeekTag)];
+      return remaining.length ? remaining : [newMatchRow(defaultDate, defaultManualWeekTag, defaultManualRatingScope, defaultLeague)];
     });
   }
 
@@ -680,7 +728,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     setManualValidationAttempted(false);
     setRows((current) => {
       const kept = current.filter(rowHasEnteredData);
-      return kept.length ? kept : [newMatchRow(defaultDate, defaultWeekTag)];
+      return kept.length ? kept : [newMatchRow(defaultDate, defaultManualWeekTag, defaultManualRatingScope, defaultLeague)];
     });
   }
 
@@ -955,10 +1003,12 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     }
     const matches = readyRows.map((row) => ({
       date: row.date,
-      league,
-      week_tag: row.weekTag,
+      league: context === "popup" ? "POPUP" : (row.league || defaultLeague),
+      week_tag: context === "popup" ? "" : row.weekTag,
       match_type: matchType,
-      rating_scope: row.ratingScope || undefined,
+      rating_scope: context === "popup"
+        ? (row.ratingScope === "unrated" ? "unrated" : "overall_only")
+        : (row.ratingScope || undefined),
       is_popup: context === "popup",
       context_type: context === "popup" ? "event" : null,
       context_name: context === "popup" ? popupEventName : undefined,
@@ -982,9 +1032,10 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     if (!requireReady()) return;
     const matches = scoredRrRows.map((row) => ({
       date: defaultDate,
-      league,
-      week_tag: defaultWeekTag,
+      league: context === "popup" ? "POPUP" : defaultLeague,
+      week_tag: context === "popup" ? "" : defaultWeekTag,
       match_type: matchType,
+      rating_scope: context === "popup" ? "overall_only" : undefined,
       is_popup: context === "popup",
       context_type: context === "popup" ? "event" : null,
       context_name: context === "popup" ? popupEventName : undefined,
@@ -1032,13 +1083,13 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
           {sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}
           {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
-          <label><strong>Entry method</strong><br /><select value={entryMethod} onChange={(event) => { clearEntryFeedback(); setManualValidationAttempted(false); setEntryMethod(event.target.value as "singles" | "manual" | "round_robin"); }} style={inputStyle}>{singlesEnabled ? <option value="singles">Singles match</option> : null}<option value="manual">Doubles manual / batch</option><option value="round_robin">Doubles round robin</option></select></label>
-          {entryMethod !== "singles" ? <label><strong>Context</strong><br /><select value={context} onChange={(event) => { clearEntryFeedback(); setContext(event.target.value as "league" | "popup"); }} style={inputStyle}><option value="league">Official League</option><option value="popup">Pop-Up / Social</option></select></label> : null}
-          {entryMethod !== "singles" ? <label><strong>Default date</strong><br /><input value={defaultDate} onChange={(event) => { const value = event.target.value; clearEntryFeedback(); setDefaultDate(value); setRows((current) => current.map((row) => isFilled(row) ? row : { ...row, date: value })); }} type="date" style={inputStyle} /></label> : null}
-          {entryMethod !== "singles" ? <label><strong>Default league</strong><br /><select value={defaultLeague} onChange={(event) => { clearEntryFeedback(); setDefaultLeague(event.target.value); }} disabled={context === "popup"} style={inputStyle}>{status.league_options.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
-          {entryMethod !== "singles" ? <label><strong>Default week/session</strong><br /><select value={defaultWeekTag} onChange={(event) => { const value = event.target.value; clearEntryFeedback(); setDefaultWeekTag(value); setRows((current) => current.map((row) => isFilled(row) ? row : { ...row, weekTag: value })); }} style={inputStyle}>{status.week_tag_options.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
-          {entryMethod !== "singles" && context === "popup" ? <label><strong>Pop-Up event name</strong><br /><input value={popupEventName} onChange={(event) => { clearEntryFeedback(); setPopupEventName(event.target.value); }} style={inputStyle} /></label> : null}
+        <div className={styles.setupGrid}>
+          <label className={styles.field}><strong>Entry method</strong><br /><select value={entryMethod} onChange={(event) => { clearEntryFeedback(); setManualValidationAttempted(false); setEntryMethod(event.target.value as "singles" | "manual" | "round_robin"); }} style={inputStyle}>{singlesEnabled ? <option value="singles">Singles match</option> : null}<option value="manual">Doubles manual / batch</option><option value="round_robin">Doubles round robin</option></select></label>
+          {entryMethod !== "singles" ? <label className={styles.field}><strong>Context</strong><br /><select value={context} onChange={(event) => changeContext(event.target.value as "league" | "popup")} style={inputStyle}><option value="league">Official League</option><option value="popup">Pop-Up / Social</option></select></label> : null}
+          {entryMethod !== "singles" ? <label className={styles.field}><strong>Default date</strong><br /><input value={defaultDate} onChange={(event) => { const value = event.target.value; clearEntryFeedback(); setDefaultDate(value); setRows((current) => current.map((row) => isFilled(row) ? row : { ...row, date: value })); }} type="date" style={inputStyle} /></label> : null}
+          {entryMethod !== "singles" && context === "league" ? <label className={styles.field}><strong>Default league</strong><br /><select value={defaultLeague} onChange={(event) => changeDefaultLeague(event.target.value)} style={inputStyle}>{selectableLeagueOptions.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
+          {entryMethod !== "singles" && context === "league" ? <label className={styles.field}><strong>Default week/session</strong><br /><select value={defaultWeekTag} onChange={(event) => changeDefaultWeekTag(event.target.value)} style={inputStyle}>{status.week_tag_options.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
+          {entryMethod !== "singles" && context === "popup" ? <label className={styles.field}><strong>Pop-Up event name</strong><br /><input value={popupEventName} onChange={(event) => { clearEntryFeedback(); setPopupEventName(event.target.value); }} style={inputStyle} /></label> : null}
         </div>
       </article>
 
@@ -1083,8 +1134,8 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
           <h2 style={{ marginTop: 0 }}>Doubles manual / batch score entry</h2>
           <p style={{ color: "#475569" }}>Empty rows are ignored. Submitted rows must have four distinct players and a non-zero score.</p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
-            <button type="button" onClick={() => { clearEntryFeedback(); setManualValidationAttempted(false); setRows((current) => [...current, newMatchRow(defaultDate, defaultWeekTag)]); }} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 1 Match</button>
-            <button type="button" onClick={() => { clearEntryFeedback(); setManualValidationAttempted(false); setRows((current) => [...current, ...Array.from({ length: 5 }, () => newMatchRow(defaultDate, defaultWeekTag))].slice(0, status.max_batch_rows)); }} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 5 Matches</button>
+            <button type="button" onClick={() => { clearEntryFeedback(); setManualValidationAttempted(false); setRows((current) => [...current, newMatchRow(defaultDate, defaultManualWeekTag, defaultManualRatingScope, defaultLeague)]); }} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 1 Match</button>
+            <button type="button" onClick={() => { clearEntryFeedback(); setManualValidationAttempted(false); setRows((current) => [...current, ...Array.from({ length: 5 }, () => newMatchRow(defaultDate, defaultManualWeekTag, defaultManualRatingScope, defaultLeague))].slice(0, status.max_batch_rows)); }} disabled={rows.length >= status.max_batch_rows} style={ghostButtonStyle}>Add 5 Matches</button>
             {rows.some(rowHasEnteredData) ? (
               <button type="button" onClick={() => setRemoveAllDialogOpen(true)} disabled={saving} style={dangerButtonStyle}>Remove All</button>
             ) : (
@@ -1123,26 +1174,29 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
                     <button type="button" onClick={() => removeRow(row.rowId)} disabled={rows.length <= 1}>Remove match</button>
                   )}
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "0.5rem" }}>
-                  <label><strong>Date</strong><br /><input type="date" value={row.date} onChange={(event) => patchRow(row.rowId, { date: event.target.value })} style={inputStyle} /></label>
-                  <label><strong>League</strong><br /><input value={league} readOnly aria-readonly="true" style={{ ...inputStyle, background: "#f1f5f9" }} /></label>
-                  <label><strong>Week / session</strong><br /><input value={row.weekTag} onChange={(event) => patchRow(row.rowId, { weekTag: event.target.value })} style={inputStyle} /></label>
-                  <label><strong>Match type</strong><br /><input value={matchType} readOnly aria-readonly="true" style={{ ...inputStyle, background: "#f1f5f9" }} /></label>
-                  <label><strong>Rating scope</strong><br /><select value={row.ratingScope} onChange={(event) => patchRow(row.rowId, { ratingScope: event.target.value as MatchRow["ratingScope"] })} style={inputStyle}><option value="">Overall + league</option><option value="overall_only">Overall only</option><option value="unrated">Unrated / record only</option></select></label>
+                <div className={`${styles.metadataGrid} ${context === "popup" ? styles.popupMetadataGrid : ""}`}>
+                  <label className={styles.field}><strong>Date</strong><br /><input type="date" value={row.date} onChange={(event) => patchRow(row.rowId, { date: event.target.value })} style={inputStyle} /></label>
+                  {context === "league" ? <label className={styles.field}><strong>League</strong><br /><select value={row.league} onChange={(event) => patchRow(row.rowId, { league: event.target.value })} style={inputStyle}>{selectableLeagueOptions.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
+                  {context === "league" ? <label className={styles.field}><strong>Week / session</strong><br /><input value={row.weekTag} onChange={(event) => patchRow(row.rowId, { weekTag: event.target.value })} style={inputStyle} /></label> : null}
+                  <label className={styles.field}><strong>Rating scope</strong><br /><select value={row.ratingScope} onChange={(event) => patchRow(row.rowId, { ratingScope: event.target.value as MatchRow["ratingScope"] })} style={inputStyle}>{context === "popup" ? <><option value="overall_only">Overall only (rated)</option><option value="unrated">Unrated / record only</option></> : <><option value="">Overall + league</option><option value="overall_only">Overall only</option><option value="unrated">Unrated / record only</option></>}</select></label>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}>
-                  <section aria-label={`Match ${index + 1} Team 1`} style={{ border: "1px solid #cbd5e1", borderRadius: "10px", padding: "0.75rem", display: "grid", gap: "0.6rem", alignContent: "start", background: "white" }}>
-                    <h4 style={{ margin: 0 }}>Team 1</h4>
-                    <SearchablePlayerInput inputId={`${row.rowId}-t1p1`} label="Player 1" value={row.t1p1} players={playerOptionsFor(row, row.t1p1)} invalid={validateThisRow && !row.t1p1} disabled={saving || creatingPlayers} onChange={(t1p1) => patchRow(row.rowId, { t1p1 })} onCreate={createAndSelectPlayer} />
-                    <SearchablePlayerInput inputId={`${row.rowId}-t1p2`} label="Player 2" value={row.t1p2} players={playerOptionsFor(row, row.t1p2)} invalid={validateThisRow && !row.t1p2} disabled={saving || creatingPlayers} onChange={(t1p2) => patchRow(row.rowId, { t1p2 })} onCreate={createAndSelectPlayer} />
-                    <label><strong>Score</strong><br /><input value={row.s1} onChange={(event) => patchRow(row.rowId, { s1: event.target.value })} aria-invalid={scoreInvalid || undefined} type="number" min={0} max={99} style={scoreInvalid ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" } : inputStyle} /></label>
-                  </section>
-                  <section aria-label={`Match ${index + 1} Team 2`} style={{ border: "1px solid #cbd5e1", borderRadius: "10px", padding: "0.75rem", display: "grid", gap: "0.6rem", alignContent: "start", background: "white" }}>
-                    <h4 style={{ margin: 0 }}>Team 2</h4>
-                    <SearchablePlayerInput inputId={`${row.rowId}-t2p1`} label="Player 1" value={row.t2p1} players={playerOptionsFor(row, row.t2p1)} invalid={validateThisRow && !row.t2p1} disabled={saving || creatingPlayers} onChange={(t2p1) => patchRow(row.rowId, { t2p1 })} onCreate={createAndSelectPlayer} />
-                    <SearchablePlayerInput inputId={`${row.rowId}-t2p2`} label="Player 2" value={row.t2p2} players={playerOptionsFor(row, row.t2p2)} invalid={validateThisRow && !row.t2p2} disabled={saving || creatingPlayers} onChange={(t2p2) => patchRow(row.rowId, { t2p2 })} onCreate={createAndSelectPlayer} />
-                    <label><strong>Score</strong><br /><input value={row.s2} onChange={(event) => patchRow(row.rowId, { s2: event.target.value })} aria-invalid={scoreInvalid || undefined} type="number" min={0} max={99} style={scoreInvalid ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" } : inputStyle} /></label>
-                  </section>
+                <div className={styles.teamsViewport}>
+                  <div className={styles.teamsGrid}>
+                    <section aria-label={`Match ${index + 1} Team 1`} className={styles.teamPanel}>
+                      <h4 style={{ margin: 0 }}>Team 1</h4>
+                      <SearchablePlayerInput inputId={`${row.rowId}-t1p1`} label="Player 1" value={row.t1p1} players={playerOptionsFor(row, row.t1p1)} invalid={validateThisRow && !row.t1p1} disabled={saving || creatingPlayers} onChange={(t1p1) => patchRow(row.rowId, { t1p1 })} onCreate={createAndSelectPlayer} />
+                      <SearchablePlayerInput inputId={`${row.rowId}-t1p2`} label="Player 2" value={row.t1p2} players={playerOptionsFor(row, row.t1p2)} invalid={validateThisRow && !row.t1p2} disabled={saving || creatingPlayers} onChange={(t1p2) => patchRow(row.rowId, { t1p2 })} onCreate={createAndSelectPlayer} />
+                    </section>
+                    <section aria-label={`Match ${index + 1} scores`} className={styles.scorePanel}>
+                      <label className={styles.scoreField}><strong>Team 1 score</strong><br /><input value={row.s1} onChange={(event) => patchRow(row.rowId, { s1: event.target.value })} aria-invalid={scoreInvalid || undefined} type="number" min={0} max={99} style={scoreInvalid ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" } : inputStyle} /></label>
+                      <label className={styles.scoreField}><strong>Team 2 score</strong><br /><input value={row.s2} onChange={(event) => patchRow(row.rowId, { s2: event.target.value })} aria-invalid={scoreInvalid || undefined} type="number" min={0} max={99} style={scoreInvalid ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" } : inputStyle} /></label>
+                    </section>
+                    <section aria-label={`Match ${index + 1} Team 2`} className={styles.teamPanel}>
+                      <h4 style={{ margin: 0 }}>Team 2</h4>
+                      <SearchablePlayerInput inputId={`${row.rowId}-t2p1`} label="Player 1" value={row.t2p1} players={playerOptionsFor(row, row.t2p1)} invalid={validateThisRow && !row.t2p1} disabled={saving || creatingPlayers} onChange={(t2p1) => patchRow(row.rowId, { t2p1 })} onCreate={createAndSelectPlayer} />
+                      <SearchablePlayerInput inputId={`${row.rowId}-t2p2`} label="Player 2" value={row.t2p2} players={playerOptionsFor(row, row.t2p2)} invalid={validateThisRow && !row.t2p2} disabled={saving || creatingPlayers} onChange={(t2p2) => patchRow(row.rowId, { t2p2 })} onCreate={createAndSelectPlayer} />
+                    </section>
+                  </div>
                 </div>
                 {rowError ? <p role="alert" style={{ color: "#b91c1c", marginBottom: 0 }}><strong>{rowError}</strong></p> : null}
               </div>
