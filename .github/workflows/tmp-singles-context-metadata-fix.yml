@@ -27,8 +27,42 @@ jobs:
       - name: Apply reviewed metadata fix
         run: |
           set -euo pipefail
-          git apply --check .github/tmp/singles-context-metadata-fix.patch
-          git apply .github/tmp/singles-context-metadata-fix.patch
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('jupr_app/domain/singles_match_processing.py')
+          text = path.read_text(encoding='utf-8')
+
+          old_import = '''from jupr_app.domain.match_processing import (
+              build_active_league_metadata_expectations,
+          )
+          '''
+          if old_import not in text:
+              raise SystemExit('expected league metadata import was not found')
+          text = text.replace(old_import, '', 1)
+
+          old_block = '''        league_metadata_expectations = (
+              build_active_league_metadata_expectations(
+                  df_meta,
+                  club_id=str(club_id),
+                  league_names={
+                      str(row.get("league") or "")
+                      for row in db_matches
+                  },
+                  default_k_factor=int(default_k_factor),
+              )
+          )
+          '''
+          new_block = '''        # League and social labels organize singles match history only.
+              # Singles never mutate a league-rating island, so the atomic write
+              # must not require doubles-league metadata for those labels.
+              league_metadata_expectations: list[dict[str, Any]] = []
+          '''
+          if old_block not in text:
+              raise SystemExit('expected league metadata expectation block was not found')
+          text = text.replace(old_block, new_block, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
           git diff --check
 
       - name: Set up Python
