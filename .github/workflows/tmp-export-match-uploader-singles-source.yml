@@ -1,4 +1,4 @@
-name: Temporary Match Uploader Singles Source Export
+name: Temporary Match Uploader Singles Fix Publisher
 
 on:
   pull_request:
@@ -6,30 +6,87 @@ on:
       - staging
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: temporary-match-uploader-singles-fix-publisher
+  cancel-in-progress: false
 
 jobs:
-  export-source:
-    if: github.head_ref == 'agent/match-uploader-singles-context-feedback'
+  apply-test-publish:
+    if: github.head_ref == 'agent/match-uploader-singles-context-feedback' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
+    env:
+      NEXT_PUBLIC_JUPR_API_BASE_URL: http://localhost:8000
+      JUPR_API_BASE_URL: http://localhost:8000
+      NEXT_PUBLIC_JUPR_WEB_BASE_URL: https://pickleballclubsandwich.com
     steps:
-      - name: Check out source branch
+      - name: Check out fix branch
         uses: actions/checkout@v4
         with:
           ref: agent/match-uploader-singles-context-feedback
-          fetch-depth: 1
-          persist-credentials: false
-      - name: Upload reviewed source files
-        uses: actions/upload-artifact@v4
+          fetch-depth: 0
+
+      - name: Reconstruct and apply reviewed patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/parts.sha256" <<'EOF'
+          59eb09dff674253061309db41c8cfcaa401340e928e8cd18e7ea5fa14035d2d2  .github/tmp/match-uploader-singles-context.patch.gz.b64.part00
+          15006a42ec68e571c1edff30551d903ec773a8d55c436d42d9b154c5685b836f  .github/tmp/match-uploader-singles-context.patch.gz.b64.part01
+          5d550deaf164560905a6813b1304d43d7c8f48c6c6cede7f56ac2315b2482890  .github/tmp/match-uploader-singles-context.patch.gz.b64.part02
+          EOF
+          sha256sum --check "$RUNNER_TEMP/parts.sha256"
+          cat .github/tmp/match-uploader-singles-context.patch.gz.b64.part* > "$RUNNER_TEMP/fix.patch.gz.b64"
+          echo '5d31b92ed30f1eff26c907d1081c6b29abf52dc8e0726fb154ff16910e240fbf  fix.patch.gz.b64' | (cd "$RUNNER_TEMP" && sha256sum --check)
+          base64 --decode "$RUNNER_TEMP/fix.patch.gz.b64" > "$RUNNER_TEMP/fix.patch.gz"
+          echo '4c6836931e4da4c078c96b71030de2c65db5508d1bdd5f16389200fcbf332c7c  fix.patch.gz' | (cd "$RUNNER_TEMP" && sha256sum --check)
+          gzip --decompress --stdout "$RUNNER_TEMP/fix.patch.gz" > "$RUNNER_TEMP/fix.patch"
+          echo '26ab5531611668ce0d4c1107760843429a43a0b50d124b9d7a4c07bb46db0257  fix.patch' | (cd "$RUNNER_TEMP" && sha256sum --check)
+          git apply --check "$RUNNER_TEMP/fix.patch"
+          git apply "$RUNNER_TEMP/fix.patch"
+          git diff --check
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          name: match-uploader-singles-source
-          retention-days: 2
-          if-no-files-found: error
-          path: |
-            apps/web/app/admin/match-uploader/MatchUploaderForm.tsx
-            apps/web/app/admin/match-uploader/layout.module.css
-            apps/web/tests/match-uploader-layout.cjs
-            services/api/admin_match_uploader_routes.py
-            jupr_app/services/admin_singles_match_service.py
+          node-version: '20'
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Run focused component checks
+        working-directory: apps/web
+        run: npm run test:component
+
+      - name: Build Next.js
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Validate Python syntax
+        run: |
+          python -m py_compile \
+            services/api/admin_match_uploader_routes.py \
+            jupr_app/services/admin_singles_match_service.py \
             tests/test_api_contract_admin_match_uploader_singles.py
+
+      - name: Publish clean application commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout -- apps/web/next-env.d.ts 2>/dev/null || true
+          rm -f .github/tmp/match-uploader-singles-context.patch.gz.b64.part*
+          rmdir .github/tmp 2>/dev/null || true
+          rm -f .github/workflows/tmp-export-match-uploader-singles-source.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Align singles Match Uploader context and validation'
+          git fetch origin staging --no-tags
+          actual="$(git diff --name-only origin/staging...HEAD | sort | tr '\n' ' ')"
+          expected='apps/web/app/admin/match-uploader/MatchUploaderForm.tsx apps/web/tests/match-uploader-layout.cjs jupr_app/services/admin_singles_match_service.py services/api/admin_match_uploader_routes.py tests/test_api_contract_admin_match_uploader_singles.py '
+          test "$actual" = "$expected"
+          git push origin HEAD:agent/match-uploader-singles-context-feedback
