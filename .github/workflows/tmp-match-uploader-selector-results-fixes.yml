@@ -1,0 +1,307 @@
+name: Temporary Match Uploader selector and result fixes
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temporary-match-uploader-selector-results-fixes
+  cancel-in-progress: false
+
+jobs:
+  apply-test-publish:
+    if: github.head_ref == 'agent/match-uploader-selector-results-fixes' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/match-uploader-selector-results-fixes
+          fetch-depth: 0
+
+      - name: Apply reviewed Match Uploader fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          form_path = Path('apps/web/app/admin/match-uploader/MatchUploaderForm.tsx')
+          test_path = Path('apps/web/tests/match-uploader-layout.cjs')
+          form = form_path.read_text(encoding='utf-8')
+          tests = test_path.read_text(encoding='utf-8')
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if text.count(old) != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {text.count(old)}')
+              return text.replace(old, new, 1)
+
+          form = replace_once(
+              form,
+              'type RrPayload = { source: string; custom_schedule: string; schedule_mode: string; courts: Array<{ court: number; format_type: string; player_names: string[] }> };\ntype NewPlayerDraft = { name: string; startingJupr: string };\ntype SearchablePlayerInputProps = {',
+              'type RrPayload = { source: string; custom_schedule: string; schedule_mode: string; courts: Array<{ court: number; format_type: string; player_names: string[] }> };\ntype NewPlayerDraft = { name: string; startingJupr: string };\ntype PlayerRoundRobinRecord = { wins: number; losses: number };\ntype PlayerRoundRobinRecords = Record<string, PlayerRoundRobinRecord>;\ntype SearchablePlayerInputProps = {',
+              'round-robin result types',
+          )
+
+          form = replace_once(
+              form,
+              'type SearchablePlayerInputProps = {\n  inputId: string;\n  label: string;\n  value: string;\n  players: PublicPlayer[];\n  disabled?: boolean;',
+              'type SearchablePlayerInputProps = {\n  inputId: string;\n  label: string;\n  value: string;\n  players: PublicPlayer[];\n  allPlayers?: PublicPlayer[];\n  disabled?: boolean;',
+              'all-player selector prop',
+          )
+
+          form = replace_once(
+              form,
+              '  players,\n  disabled = false,\n  invalid = false,',
+              '  players,\n  allPlayers,\n  disabled = false,\n  invalid = false,',
+              'selector destructuring',
+          )
+
+          form = replace_once(
+              form,
+              '}: SearchablePlayerInputProps) {\n  const selected = players.find((player) => String(player.id) === value);',
+              '}: SearchablePlayerInputProps) {\n  const playerUniverse = allPlayers || players;\n  const selected = playerUniverse.find((player) => String(player.id) === value);',
+              'selector player universe',
+          )
+
+          first_exact = '''  const exactPlayer = players.find(
+              (player) =>
+                String(player.name).trim().toLocaleLowerCase()
+                === cleanedQuery.toLocaleLowerCase(),
+            );
+          '''
+          first_exact_new = first_exact + '''  const existingClubPlayer = playerUniverse.find(
+              (player) =>
+                String(player.name).trim().toLocaleLowerCase()
+                === cleanedQuery.toLocaleLowerCase(),
+            );
+            const unavailableExactPlayer = existingClubPlayer && !exactPlayer
+              ? existingClubPlayer
+              : null;
+          '''
+          if form.count(first_exact) < 2:
+              raise SystemExit('selector exact-player block was not found twice')
+          form = form.replace(first_exact, first_exact_new, 1)
+
+          form = replace_once(
+              form,
+              '  const startingJuprMessage = cleanedQuery && !exactPlayer && matchingPlayers.length === 0\n    ? validateStartingJupr(startingJupr)\n    : null;',
+              '  const startingJuprMessage = cleanedQuery && !existingClubPlayer && matchingPlayers.length === 0\n    ? validateStartingJupr(startingJupr)\n    : null;',
+              'existing-player creation guard',
+          )
+
+          form = replace_once(
+              form,
+              '  useEffect(() => {\n    setQuery(selectedName);\n  }, [selectedName]);\n\n  async function createAndSelect() {',
+              '''  useEffect(() => {
+              setQuery(selectedName);
+            }, [selectedName]);
+
+            useEffect(() => {
+              if (!value && exactPlayer && cleanedQuery) {
+                onChange(String(exactPlayer.id));
+              }
+            }, [cleanedQuery, exactPlayer, onChange, value]);
+
+            async function createAndSelect() {''',
+              'released-player auto-selection',
+          )
+
+          form = replace_once(
+              form,
+              '      || exactPlayer\n      || startingJuprMessage',
+              '      || existingClubPlayer\n      || startingJuprMessage',
+              'create guard uses club roster',
+          )
+
+          form = replace_once(
+              form,
+              '      </datalist>\n      {cleanedQuery && !exactPlayer && matchingPlayers.length === 0 ? (',
+              '''      </datalist>
+                  {unavailableExactPlayer ? (
+                    <p role="status" style={{ color: "#92400e", margin: "0.35rem 0 0", fontWeight: 700 }}>
+                      {String(unavailableExactPlayer.name)} is already used in this match. Clear that position before selecting this player here.
+                    </p>
+                  ) : null}
+                  {cleanedQuery && !existingClubPlayer && matchingPlayers.length === 0 ? (''',
+              'unavailable-player feedback',
+          )
+
+          form = replace_once(
+              form,
+              '          onChange={(event) => setQuery(event.target.value)}\n          onKeyDown={(event) => {',
+              '''          onChange={(event) => {
+                    const next = event.target.value;
+                    setQuery(next);
+                    const normalizedNext = next.replace(/\\s+/g, " ").trim().toLocaleLowerCase();
+                    const match = players.find((player) =>
+                      String(player.name).trim().toLocaleLowerCase() === normalizedNext
+                      && !selectedNames.has(String(player.name).trim().toLocaleLowerCase()),
+                    );
+                    if (match) addPlayerName(String(match.name));
+                  }}
+                  onKeyDown={(event) => {''',
+              'round-robin suggestion auto-add',
+          )
+
+          form = replace_once(
+              form,
+              '  }));\n}\n\n\nfunction RemoveAllMatchesDialog({',
+              '''  }));
+            }
+
+            function roundRobinPlayerRecords(schedule: RrCourtSchedule[]): PlayerRoundRobinRecords {
+              const records: PlayerRoundRobinRecords = {};
+              const increment = (playerId: number, field: keyof PlayerRoundRobinRecord) => {
+                const key = String(playerId);
+                records[key] = records[key] || { wins: 0, losses: 0 };
+                records[key][field] += 1;
+              };
+              for (const court of schedule) {
+                for (const match of court.matches) {
+                  const score1 = Number(match.s1 || 0);
+                  const score2 = Number(match.s2 || 0);
+                  if (!Number.isFinite(score1) || !Number.isFinite(score2) || score1 < 0 || score2 < 0 || score1 + score2 <= 0 || score1 === score2) continue;
+                  const winners = score1 > score2 ? match.t1 : match.t2;
+                  const losers = score1 > score2 ? match.t2 : match.t1;
+                  for (const player of winners) increment(player.id, "wins");
+                  for (const player of losers) increment(player.id, "losses");
+                }
+              }
+              return records;
+            }
+
+
+            function RemoveAllMatchesDialog({''',
+              'round-robin player record helper',
+          )
+
+          form = replace_once(
+              form,
+              'function SubmissionResultDialog({\n  result,\n  onClose,\n}: {\n  result: AdminMatchUploaderWriteResult;\n  onClose: () => void;\n}) {',
+              '''function SubmissionResultDialog({
+              result,
+              roundRobinRecords,
+              onClose,
+            }: {
+              result: AdminMatchUploaderWriteResult;
+              roundRobinRecords?: PlayerRoundRobinRecords | null;
+              onClose: () => void;
+            }) {''',
+              'result dialog props',
+          )
+
+          form = replace_once(
+              form,
+              '  const emailSummary = email?.mode === "auto_sent"\n    ? `${email.sent ?? 0} sent, ${email.skipped ?? 0} skipped, ${email.errors ?? 0} error(s).`\n    : "Not sent in staging.";\n\n  return (',
+              '''  const emailSummary = email?.mode === "auto_sent"
+                ? `${email.sent ?? 0} sent, ${email.skipped ?? 0} skipped, ${email.errors ?? 0} error(s).`
+                : "Not sent in staging.";
+              const matchIds = (result.operation?.match_ids || []).map((value) => String(value)).filter(Boolean);
+              const correctionMatchId = matchIds[0] || (result.feedback?.latest_match_id == null ? "" : String(result.feedback.latest_match_id));
+              const correctionHref = correctionMatchId
+                ? `/admin/match-log/edit?match_id=${encodeURIComponent(correctionMatchId)}`
+                : (result.recovery?.match_log_route || "/admin/match-log");
+              const showRoundRobinRecords = Boolean(roundRobinRecords && Object.keys(roundRobinRecords).length);
+
+              return (''',
+              'result dialog metadata',
+          )
+
+          form = replace_once(
+              form,
+              '        {email ? <p style={{ marginTop: "1rem" }}><strong>Player-update email:</strong> {emailSummary}</p> : null}\n        {result.feedback?.affected_players?.length ? (',
+              '        {email ? <p style={{ marginTop: "1rem" }}><strong>Player-update email:</strong> {emailSummary}</p> : null}\n        {matchIds.length ? <p><strong>Created match IDs:</strong> {matchIds.map((id) => `#${id}`).join(", ")}</p> : null}\n        {result.feedback?.affected_players?.length ? (',
+              'created match IDs',
+          )
+
+          old_header = '              <thead><tr><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Before</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>After</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Change</th></tr></thead>'
+          new_header = '''              <thead><tr><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player</th>{showRoundRobinRecords ? <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Wins</th> : null}{showRoundRobinRecords ? <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Losses</th> : null}<th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Before</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>After</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Change</th></tr></thead>'''
+          form = replace_once(form, old_header, new_header, 'wins and losses headers')
+
+          old_row = '''                {result.feedback.affected_players.map((player) => (
+                  <tr key={player.id}><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{player.name}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_before)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_after)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{deltaLabel(player.rating_delta)}</td></tr>
+                ))}'''
+          new_row = '''                {result.feedback.affected_players.map((player) => {
+                  const record = roundRobinRecords?.[String(player.id)];
+                  return (
+                    <tr key={player.id}><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{player.name}</td>{showRoundRobinRecords ? <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{record?.wins ?? 0}</td> : null}{showRoundRobinRecords ? <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{record?.losses ?? 0}</td> : null}<td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_before)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_after)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{deltaLabel(player.rating_delta)}</td></tr>
+                  );
+                })}'''
+          form = replace_once(form, old_row, new_row, 'wins and losses rows')
+
+          form = replace_once(
+              form,
+              '        <p style={{ display: "flex", justifyContent: "flex-end", marginBottom: 0 }}>\n          <button type="button" onClick={onClose} style={buttonStyle}>OK</button>\n        </p>',
+              '''        <p style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", flexWrap: "wrap", marginBottom: 0 }}>
+                  {correctionMatchId ? <Link href={correctionHref} style={{ ...ghostButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Correct results</Link> : null}
+                  <button type="button" onClick={onClose} style={buttonStyle}>OK</button>
+                </p>''',
+              'correction button',
+          )
+
+          form = replace_once(
+              form,
+              '  const scoredRrRows = rrSchedule.flatMap((court) => court.matches).filter((match) => Number(match.s1 || 0) + Number(match.s2 || 0) > 0);\n  const matchType = context === "popup" ? "PopUp" : "Live Match";',
+              '  const scoredRrRows = rrSchedule.flatMap((court) => court.matches).filter((match) => Number(match.s1 || 0) + Number(match.s2 || 0) > 0);\n  const rrResultRecords = submissionKind === "round_robin" ? roundRobinPlayerRecords(rrSchedule) : null;\n  const matchType = context === "popup" ? "PopUp" : "Live Match";',
+              'round-robin result state',
+          )
+
+          player_prop_replacements = [
+              ('players={singlesPlayerOptions(singlesRow.playerA)}', 'players={singlesPlayerOptions(singlesRow.playerA)} allPlayers={knownPlayers}'),
+              ('players={singlesPlayerOptions(singlesRow.playerB)}', 'players={singlesPlayerOptions(singlesRow.playerB)} allPlayers={knownPlayers}'),
+              ('players={playerOptionsFor(row, row.t1p1)}', 'players={playerOptionsFor(row, row.t1p1)} allPlayers={knownPlayers}'),
+              ('players={playerOptionsFor(row, row.t1p2)}', 'players={playerOptionsFor(row, row.t1p2)} allPlayers={knownPlayers}'),
+              ('players={playerOptionsFor(row, row.t2p1)}', 'players={playerOptionsFor(row, row.t2p1)} allPlayers={knownPlayers}'),
+              ('players={playerOptionsFor(row, row.t2p2)}', 'players={playerOptionsFor(row, row.t2p2)} allPlayers={knownPlayers}'),
+          ]
+          for old, new in player_prop_replacements:
+              form = replace_once(form, old, new, f'allPlayers for {old}')
+
+          form = replace_once(
+              form,
+              '      {result ? <SubmissionResultDialog result={result} onClose={acknowledgeSubmission} /> : null}',
+              '      {result ? <SubmissionResultDialog result={result} roundRobinRecords={rrResultRecords} onClose={acknowledgeSubmission} /> : null}',
+              'result dialog round-robin records',
+          )
+
+          new_assertions = '''assert.match(form, /allPlayers\\?: PublicPlayer\\[\\]/, "manual selectors must know the full club roster");
+          assert.match(form, /is already used in this match/, "selected-elsewhere players must not trigger player creation");
+          assert.match(form, /if \\(!value && exactPlayer && cleanedQuery\\)/, "released exact-name players must become selectable without editing text");
+          assert.match(form, /if \\(match\\) addPlayerName\\(String\\(match\\.name\\)\\)/, "round-robin suggestion selection must add the player immediately");
+          assert.match(form, /function roundRobinPlayerRecords/, "round-robin results must calculate player records");
+          assert.match(form, />Wins<\\/th>/, "round-robin result modal must show wins");
+          assert.match(form, />Losses<\\/th>/, "round-robin result modal must show losses");
+          assert.match(form, /Correct results/, "submission result modal must offer a correction path");
+          '''
+          form_log = 'console.log("Match Uploader context and responsive layout checks passed.");'
+          tests = replace_once(tests, form_log, new_assertions + '\n' + form_log, 'focused source assertions')
+
+          form_path.write_text(form, encoding='utf-8')
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Run focused Match Uploader source checks
+        run: node apps/web/tests/match-uploader-layout.cjs
+
+      - name: Publish clean application commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/tmp-match-uploader-selector-results-fixes.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Fix Match Uploader selectors and result actions'
+          git fetch origin staging --no-tags
+          actual="$(git diff --name-only origin/staging...HEAD | sort | tr '\n' ' ')"
+          expected='apps/web/app/admin/match-uploader/MatchUploaderForm.tsx apps/web/tests/match-uploader-layout.cjs '
+          test "$actual" = "$expected"
+          git push origin HEAD:agent/match-uploader-selector-results-fixes
