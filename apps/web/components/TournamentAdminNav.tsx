@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import styles from "./TournamentAdminNav.module.css";
 
 type NavigationItem = {
@@ -13,51 +13,52 @@ type NavigationItem = {
 
 const exact = (href: string) => (pathname: string) => pathname === href;
 
-const tournamentItems: NavigationItem[] = [
-  { href: "/admin/tournament-setup", label: "Setup", match: exact("/admin/tournament-setup") },
-  { href: "/admin/tournaments", label: "Tournament home", match: exact("/admin/tournaments") },
-  { href: "/admin/tournaments/registrations", label: "Registration reports", match: exact("/admin/tournaments/registrations") },
-  { href: "/admin/tournaments/bulk", label: "Bulk actions", match: exact("/admin/tournaments/bulk") },
-  { href: "/admin/tournaments/commerce", label: "Extras & fulfillment", match: exact("/admin/tournaments/commerce") },
-  { href: "/admin/tournaments/team-competition", label: "Ratings & team play", match: exact("/admin/tournaments/team-competition") },
-  { href: "/admin/tournaments/status", label: "Status", match: exact("/admin/tournaments/status") },
-  {
-    href: "/admin/tournaments/ops",
-    label: "Operations",
-    match: (pathname) => pathname === "/admin/tournaments/ops" || pathname.startsWith("/admin/tournaments/ops/")
-  },
-  { href: "/admin/tournament-live", label: "Live runner", match: exact("/admin/tournament-live") },
-  { href: "/admin/tournaments/delete-draft", label: "Delete draft", match: exact("/admin/tournaments/delete-draft"), danger: true }
-];
+function selectedHref(path: string, tournamentId: string, tournamentName: string): string {
+  const params = new URLSearchParams({ tournament: tournamentId });
+  if (tournamentName) params.set("name", tournamentName);
+  return `${path}?${params.toString()}`;
+}
 
-const operationItems: NavigationItem[] = [
-  { href: "/admin/tournaments/ops", label: "Overview", match: exact("/admin/tournaments/ops") },
-  { href: "/admin/tournaments/ops/draws", label: "Draws and scoring", match: exact("/admin/tournaments/ops/draws") },
-  { href: "/admin/tournaments/ops/import", label: "Team imports", match: exact("/admin/tournaments/ops/import") },
-  { href: "/admin/tournaments/ops/results", label: "Results CSV", match: exact("/admin/tournaments/ops/results") },
-  { href: "/admin/tournaments/ops/publish", label: "Official publish", match: exact("/admin/tournaments/ops/publish") }
-];
+function selectedItems(tournamentId: string, tournamentName: string): NavigationItem[] {
+  return [
+    { href: selectedHref("/admin/tournaments/tournament", tournamentId, tournamentName), label: "Tournament Home", match: exact("/admin/tournaments/tournament") },
+    { href: selectedHref("/admin/tournament-setup", tournamentId, tournamentName), label: "Setup", match: exact("/admin/tournament-setup") },
+    { href: selectedHref("/admin/tournaments/registrations", tournamentId, tournamentName), label: "Registrations", match: exact("/admin/tournaments/registrations") },
+    { href: selectedHref("/admin/tournaments/reports", tournamentId, tournamentName), label: "Reports", match: exact("/admin/tournaments/reports") },
+    { href: selectedHref("/admin/tournaments/bulk", tournamentId, tournamentName), label: "Bulk actions", match: exact("/admin/tournaments/bulk") },
+    { href: selectedHref("/admin/tournaments/commerce", tournamentId, tournamentName), label: "Extras & fulfillment", match: exact("/admin/tournaments/commerce") },
+    { href: selectedHref("/admin/tournaments/team-competition", tournamentId, tournamentName), label: "Ratings & team play", match: exact("/admin/tournaments/team-competition") },
+    {
+      href: selectedHref("/admin/tournaments/ops", tournamentId, tournamentName),
+      label: "Operations",
+      match: (pathname) => pathname === "/admin/tournaments/ops" || pathname.startsWith("/admin/tournaments/ops/")
+    },
+    { href: selectedHref("/admin/tournaments/ops/results", tournamentId, tournamentName), label: "Results", match: exact("/admin/tournaments/ops/results") },
+    { href: selectedHref("/admin/tournament-live", tournamentId, tournamentName), label: "Live runner", match: exact("/admin/tournament-live") },
+    { href: selectedHref("/admin/tournaments/ops/publish", tournamentId, tournamentName), label: "Official publish", match: exact("/admin/tournaments/ops/publish") },
+    { href: selectedHref("/admin/tournaments/status", tournamentId, tournamentName), label: "Status & recovery", match: exact("/admin/tournaments/status") }
+  ];
+}
+
+function operationsItems(tournamentId: string, tournamentName: string): NavigationItem[] {
+  return [
+    { href: selectedHref("/admin/tournaments/ops", tournamentId, tournamentName), label: "Operations home", match: exact("/admin/tournaments/ops") },
+    { href: selectedHref("/admin/tournaments/ops/draws", tournamentId, tournamentName), label: "Draws & scoring", match: exact("/admin/tournaments/ops/draws") },
+    { href: selectedHref("/admin/tournaments/ops/import", tournamentId, tournamentName), label: "Team imports", match: exact("/admin/tournaments/ops/import") },
+    { href: selectedHref("/admin/tournaments/ops/results", tournamentId, tournamentName), label: "Results CSV", match: exact("/admin/tournaments/ops/results") },
+    { href: selectedHref("/admin/tournaments/ops/publish", tournamentId, tournamentName), label: "Official publish", match: exact("/admin/tournaments/ops/publish") }
+  ];
+}
 
 function NavigationLinks({ items, pathname }: { items: NavigationItem[]; pathname: string }) {
   return (
     <ul className={styles.list}>
       {items.map((item) => {
         const active = item.match(pathname);
-        const classNames = [
-          styles.link,
-          active ? styles.active : "",
-          item.danger ? styles.danger : ""
-        ].filter(Boolean).join(" ");
-
+        const classNames = [styles.link, active ? styles.active : "", item.danger ? styles.danger : ""].filter(Boolean).join(" ");
         return (
-          <li key={item.href}>
-            <Link
-              href={item.href}
-              aria-current={
-                active ? (item.href === pathname ? "page" : "location") : undefined
-              }
-              className={classNames}
-            >
+          <li key={`${item.href}-${item.label}`}>
+            <Link href={item.href} aria-current={active ? "page" : undefined} className={classNames}>
               {item.label}
             </Link>
           </li>
@@ -69,18 +70,26 @@ function NavigationLinks({ items, pathname }: { items: NavigationItem[]; pathnam
 
 export default function TournamentAdminNav() {
   const pathname = usePathname() || "";
+  const searchParams = useSearchParams();
+  const tournamentId = String(searchParams.get("tournament") || "").trim();
+  const tournamentName = String(searchParams.get("name") || "").trim();
+  const hasTournament = Boolean(tournamentId);
+  const managerItems: NavigationItem[] = [
+    { href: "/admin/tournaments", label: "Tournament Manager Home", match: exact("/admin/tournaments") }
+  ];
+  const tournamentItems = hasTournament ? selectedItems(tournamentId, tournamentName) : [];
+  const operationItems = hasTournament ? operationsItems(tournamentId, tournamentName) : [];
 
   return (
     <div className={styles.shell} data-testid="tournament-admin-navigation">
       <nav aria-label="Tournament administration" className={styles.nav}>
-        <div className={styles.headingRow}>
-          <p className={styles.eyebrow}>Tournament workspace</p>
-          <p className={styles.hint}>Setup, registrations, event operations, and live play</p>
-        </div>
-        <NavigationLinks items={tournamentItems} pathname={pathname} />
+        <NavigationLinks items={[...managerItems, ...tournamentItems]} pathname={pathname} />
       </nav>
-
-      {pathname.startsWith("/admin/tournaments/ops") ? <nav aria-label="Tournament operations workflows" className={`${styles.nav} ${styles.subnav}`}><p className={styles.subnavLabel}>Operations workflows</p><NavigationLinks items={operationItems} pathname={pathname} /></nav> : null}
+      {hasTournament && pathname.startsWith("/admin/tournaments/ops") ? (
+        <nav aria-label="Tournament operations workflows" className={`${styles.nav} ${styles.subnav}`}>
+          <NavigationLinks items={operationItems} pathname={pathname} />
+        </nav>
+      ) : null}
     </div>
   );
 }
