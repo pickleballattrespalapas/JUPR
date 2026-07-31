@@ -1,0 +1,91 @@
+name: Temporary Match Uploader bulk edit routing
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temporary-match-uploader-bulk-edit-routing
+  cancel-in-progress: false
+
+jobs:
+  apply-test-publish:
+    if: github.head_ref == 'agent/match-uploader-bulk-edit-routing' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/match-uploader-bulk-edit-routing
+          fetch-depth: 0
+
+      - name: Apply reviewed bulk edit routing changes
+        run: |
+          set -euo pipefail
+          python .github/tmp/apply_match_uploader_bulk_edit_routing.py
+          git diff --check
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Run focused web checks
+        working-directory: apps/web
+        run: node tests/match-uploader-layout.cjs
+
+      - name: Build Next.js
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install focused Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r services/api/requirements.txt
+          pip install pytest
+
+      - name: Run focused Match Log checks
+        run: |
+          python -m pytest -q \
+            tests/test_admin_match_log_service.py \
+            tests/test_api_contract_admin_match_log.py \
+            tests/test_manual_acceptance_ux_regressions.py
+          python -m py_compile \
+            jupr_app/services/admin_match_log_service.py \
+            services/api/admin_match_log_routes.py
+
+      - name: Publish clean application commit
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/tmp/apply_match_uploader_bulk_edit_routing.py \
+            .github/workflows/tmp-match-uploader-bulk-edit-routing.yml
+          rmdir .github/tmp 2>/dev/null || true
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Route uploaded matches into bulk editing'
+          git fetch origin staging --no-tags
+          actual="$(git diff --name-only origin/staging...HEAD | sort | tr '\n' ' ')"
+          expected='apps/web/app/admin/match-log/MatchLogApplyPanel.tsx apps/web/app/admin/match-log/MatchLogWorkspace.tsx apps/web/app/admin/match-uploader/MatchUploaderForm.tsx apps/web/lib/adminMatchLogApi.ts apps/web/tests/match-uploader-layout.cjs jupr_app/services/admin_match_log_service.py services/api/admin_match_log_routes.py tests/test_admin_match_log_service.py tests/test_api_contract_admin_match_log.py '
+          test "$actual" = "$expected"
+          git push origin HEAD:agent/match-uploader-bulk-edit-routing
