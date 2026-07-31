@@ -5,13 +5,16 @@ on:
   push:
     branches:
       - agent/league-manager-home-rebuild
+  pull_request:
+    branches:
+      - staging
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]' && (github.ref_name == 'agent/league-manager-home-rebuild' || github.head_ref == 'agent/league-manager-home-rebuild')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
