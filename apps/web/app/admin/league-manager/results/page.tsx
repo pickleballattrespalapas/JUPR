@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getClubLeagueResults } from "@/lib/api";
 import LeagueManagerNav from "../LeagueManagerNav";
 
@@ -16,7 +17,10 @@ function rating(value?: number | null): string {
 
 export default async function AdminLeagueResultsPage({ searchParams }: Props) {
   const requestedLeague = first(searchParams?.league).trim();
-  const { data, error } = await getClubLeagueResults("tres-palapas", requestedLeague || null);
+  const leagueType = first(searchParams?.mode).trim();
+  if (!requestedLeague) redirect("/admin/league-manager");
+
+  const { data, error } = await getClubLeagueResults("tres-palapas", requestedLeague);
   const selectedLeague = data?.selected_league || requestedLeague;
   const selectedWeek = data?.selected_week || null;
   const weeklyRows = (data?.weekly_results || []).filter((row) => selectedWeek == null || row.week_num === selectedWeek);
@@ -24,30 +28,18 @@ export default async function AdminLeagueResultsPage({ searchParams }: Props) {
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Admin League Manager</p>
-      <h1 style={{ marginTop: 0 }}>League results</h1>
-      <LeagueManagerNav />
-      <p style={{ color: "#334155", maxWidth: "900px" }}>Review one league’s current standings, ratings, record, weekly results, and public result detail from a dedicated league workspace.</p>
-
-      <form method="get" style={{ ...cardStyle, display: "grid", gridTemplateColumns: "minmax(240px, 1fr) auto", gap: "0.75rem", alignItems: "end", marginBottom: "1rem" }}>
-        <label><strong>League</strong><br />
-          <select name="league" defaultValue={selectedLeague || ""} style={{ width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" }}>
-            {(data?.leagues || []).map((league) => <option key={league.name} value={league.name}>{league.name}</option>)}
-          </select>
-        </label>
-        <button type="submit" style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 }}>Load results</button>
-      </form>
+      <h1 style={{ marginTop: 0 }}>{selectedLeague} results</h1>
+      <LeagueManagerNav leagueName={selectedLeague} leagueType={leagueType || null} />
 
       {error ? <p role="alert" style={{ color: "#b91c1c" }}>{error}</p> : null}
-      {!error && !data?.leagues?.length ? <p>No leagues are available.</p> : null}
 
-      {data && selectedLeague ? (
+      {data ? (
         <>
           <article style={{ ...cardStyle, marginBottom: "1rem" }}>
-            <h2 style={{ marginTop: 0 }}>{selectedLeague}</h2>
-            <p style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+            <p style={{ display: "flex", gap: "1rem", flexWrap: "wrap", margin: 0 }}>
               <span><strong>Players:</strong> {data.standings.length}</span>
               <span><strong>Latest week:</strong> {selectedWeek ? `Week ${selectedWeek}` : "No weekly results"}</span>
-              <Link href={`/clubs/tres-palapas/league-results?league=${encodeURIComponent(selectedLeague)}`}>Open full public league results</Link>
+              <Link href={`/clubs/tres-palapas/league-results?league=${encodeURIComponent(selectedLeague)}`}>Open public league results</Link>
             </p>
           </article>
 
