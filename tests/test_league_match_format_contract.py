@@ -100,6 +100,9 @@ def test_source_contract_carries_league_format_everywhere():
     create = Path("jupr_app/services/admin_league_manager_create_service.py").read_text()
     routes = Path("services/api/admin_league_manager_routes.py").read_text()
     assert "add column if not exists match_format" in migration
+    assert "admin_apply_direct_match_entry_atomic_v1_base_20260731_format" in migration
+    assert "JUPR_DIRECT_MATCH_LEAGUE_FORMAT_MISMATCH" in migration
+    assert "expected->>'match_format'" in migration
     assert "expected_match_format=\"singles\"" in singles
     assert '"match_format": clean_match_format' in create
     assert 'pattern=r"^(doubles|singles)$"' in routes
