@@ -75,17 +75,20 @@ jobs:
       - name: Publish clean application commit
         run: |
           set -euo pipefail
+          git restore --source=HEAD -- apps/web/next-env.d.ts apps/web/package-lock.json 2>/dev/null || true
           rm -f \
             .github/tmp/apply_match_uploader_bulk_edit_routing.py \
             .github/workflows/tmp-match-uploader-bulk-edit-routing.yml
           rmdir .github/tmp 2>/dev/null || true
           git diff --check
+          git status --short
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git commit -m 'Route uploaded matches into bulk editing'
           git fetch origin staging --no-tags
           actual="$(git diff --name-only origin/staging...HEAD | sort | tr '\n' ' ')"
+          echo "Published scope: $actual"
           expected='apps/web/app/admin/match-log/MatchLogApplyPanel.tsx apps/web/app/admin/match-log/MatchLogWorkspace.tsx apps/web/app/admin/match-uploader/MatchUploaderForm.tsx apps/web/lib/adminMatchLogApi.ts apps/web/tests/match-uploader-layout.cjs jupr_app/services/admin_match_log_service.py services/api/admin_match_log_routes.py tests/test_admin_match_log_service.py tests/test_api_contract_admin_match_log.py tests/test_manual_acceptance_ux_regressions.py '
           test "$actual" = "$expected"
           git push origin HEAD:agent/match-uploader-bulk-edit-routing
