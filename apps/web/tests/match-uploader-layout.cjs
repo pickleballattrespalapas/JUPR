@@ -31,6 +31,7 @@ assert.match(css, /grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/, "deskt
 assert.match(css, /overflow-x: auto/, "narrow team layouts must scroll instead of overlapping");
 assert.match(css, /grid-template-columns: minmax\(230px, 1fr\) minmax\(170px, 0\.65fr\) minmax\(230px, 1fr\)/, "teams and scores need three explicit columns");
 
+// Manual acceptance coverage for selector restoration and round-robin result actions.
 assert.match(form, /allPlayers\?: PublicPlayer\[\]/, "manual selectors must know the full club roster");
 assert.match(form, /is already used in this match/, "selected-elsewhere players must not trigger player creation");
 assert.match(form, /if \(!value && exactPlayer && cleanedQuery\)/, "released exact-name players must become selectable without editing text");
