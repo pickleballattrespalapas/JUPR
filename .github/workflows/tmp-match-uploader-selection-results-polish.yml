@@ -42,6 +42,11 @@ jobs:
               line[10:] if line.startswith("          ") else line
               for line in raw_script.splitlines()
           )
+          bad = r'=== next.replace(/\\s+/g, \" \"").trim()'
+          good = r'=== next.replace(/\\s+/g, \" \").trim()'
+          if bad not in script:
+              raise SystemExit('expected malformed suggestion-selection source was not found')
+          script = script.replace(bad, good, 1)
           exec(compile(script, '<reviewed-match-uploader-fix>', 'exec'))
           RUNNER
           git diff --check
