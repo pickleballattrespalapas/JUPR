@@ -1,10 +1,19 @@
-import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getAdminLeagueManagerApiBaseUrl, getAdminLeagueManagerStatus } from "@/lib/adminLeagueManagerApi";
+import LeagueManagerNav from "../LeagueManagerNav";
 import LeaguePrintoutPanel from "./LeaguePrintoutPanel";
 
-const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
+type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
-export default async function LeagueManagerPrintPage() {
+function first(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? String(value[0] || "") : String(value || "");
+}
+
+export default async function LeagueManagerPrintPage({ searchParams }: Props) {
+  const leagueName = first(searchParams?.league).trim();
+  const leagueType = first(searchParams?.mode).trim();
+  if (!leagueName) redirect("/admin/league-manager");
+
   const clubId = "tres_palapas";
   const { data: status, error } = await getAdminLeagueManagerStatus(clubId);
 
@@ -12,19 +21,13 @@ export default async function LeagueManagerPrintPage() {
     <section>
       <style>{`@media print { nav, header, footer, .no-print { display: none !important; } @page { margin: 10mm; } }`}</style>
       <p className="no-print" style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        League Manager Printout
+        Admin League Manager
       </p>
-      <h1 className="no-print" style={{ marginTop: 0 }}>League night printout</h1>
-      <p className="no-print" style={{ color: "#334155", maxWidth: "860px" }}>
-        Browser-printable schedule, weekly rating/win leaders, configured season Top Performers, standings, and attendance roster. FastAPI computes the leader model; this export never mutates league, match, award, or rating data.
-      </p>
+      <h1 className="no-print" style={{ marginTop: 0 }}>{leagueName} league night printout</h1>
+      <div className="no-print"><LeagueManagerNav leagueName={leagueName} leagueType={leagueType || null} /></div>
 
-      {error ? <p style={{ color: "#b91c1c" }}>League Manager status is unavailable. {error}</p> : null}
-      {status ? <LeaguePrintoutPanel apiBase={getAdminLeagueManagerApiBaseUrl()} clubId={clubId} status={status} /> : null}
-
-      <article className="no-print" style={{ ...cardStyle, marginTop: "1rem" }}>
-        <Link href="/admin/league-manager">Back to League Manager</Link> · <Link href="/admin">Operations cockpit</Link>
-      </article>
+      {error ? <p role="alert" style={{ color: "#b91c1c" }}>League Manager is unavailable. {error}</p> : null}
+      {status ? <LeaguePrintoutPanel apiBase={getAdminLeagueManagerApiBaseUrl()} clubId={clubId} status={status} initialLeague={leagueName} /> : null}
     </section>
   );
 }
