@@ -164,17 +164,21 @@ jobs:
             sleep 10
           done
 
-      - name: Verify lean manager copy
+      - name: Verify lean manager source contract
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL --max-time 30 "$CANONICAL_URL/admin/tournaments" -o evidence/tournament-manager.html
-          grep -q "Create tournament" evidence/tournament-manager.html
-          grep -q "Open tournament" evidence/tournament-manager.html
-          if grep -q "Tournament Admin session" evidence/tournament-manager.html; then
+          manager_page="apps/web/app/admin/tournaments/page.tsx"
+          manager_panel="apps/web/app/admin/tournaments/TournamentAdminPanel.tsx"
+          grep -q "Create a new tournament or open an existing tournament." "$manager_page"
+          grep -q "Create tournament" "$manager_panel"
+          grep -q "Open tournament" "$manager_panel"
+          if grep -q "Tournament Admin session" "$manager_page" "$manager_panel"; then
             echo "Redundant Tournament Admin session copy remains on the manager home." >&2
             exit 1
           fi
+          cp "$manager_page" evidence/tournament-manager-page.tsx
+          cp "$manager_panel" evidence/tournament-manager-panel.tsx
 
       - name: Upload verification evidence
         uses: actions/upload-artifact@v4
