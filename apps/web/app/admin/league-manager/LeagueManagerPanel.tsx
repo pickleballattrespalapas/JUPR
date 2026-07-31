@@ -157,7 +157,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
             ))}
           </select>
         </label>
-        <p><button type="button" onClick={() => void loadLeagues()} disabled={busy} style={ghostButtonStyle}>{busy ? "Refreshing…" : "Refresh list"}</button></p>
+        <p><button type="button" onClick={() => void loadLeagues()} disabled={busy} style={ghostButtonStyle}>{busy ? "Refreshing…" : "Refresh leagues"}</button></p>
         {message ? <p role="status" style={{ color: /unable|error|required/i.test(message) ? "#b91c1c" : "#475569" }}>{message}</p> : null}
       </article>
     </div>
