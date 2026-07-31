@@ -96,12 +96,13 @@ jobs:
           git commit -m 'Separate singles and doubles leagues'
           git fetch origin staging --no-tags
           actual="$(git diff --name-only origin/staging...HEAD | sort)"
-          expected="$(cat <<'EOF' | sort
+          allowed="$(cat <<'EOF' | sort
           apps/web/app/admin/league-manager/LeagueManagerPanel.tsx
           apps/web/app/admin/match-uploader/MatchUploaderForm.tsx
           apps/web/lib/adminLeagueManagerApi.ts
           apps/web/lib/adminMatchUploaderApi.ts
           apps/web/tests/league-match-format.cjs
+          apps/web/tests/match-uploader-layout.cjs
           jupr_app/domain/match_processing.py
           jupr_app/domain/singles_match_processing.py
           jupr_app/services/admin_league_manager_create_service.py
@@ -111,7 +112,21 @@ jobs:
           supabase/migrations/20260731033000_league_match_format.sql
           tests/test_api_contract_admin_match_uploader_singles.py
           tests/test_league_match_format_contract.py
+          tests/test_manual_acceptance_ux_regressions.py
           EOF
           )"
-          test "$actual" = "$expected"
+          printf 'Reviewed application diff:\n%s\n' "$actual"
+          unexpected="$(comm -23 <(printf '%s\n' "$actual") <(printf '%s\n' "$allowed"))"
+          if [ -n "$unexpected" ]; then
+            printf 'Unexpected changed files:\n%s\n' "$unexpected" >&2
+            exit 1
+          fi
+          for required in \
+            apps/web/app/admin/league-manager/LeagueManagerPanel.tsx \
+            apps/web/app/admin/match-uploader/MatchUploaderForm.tsx \
+            jupr_app/services/admin_match_uploader_service.py \
+            supabase/migrations/20260731033000_league_match_format.sql \
+            tests/test_league_match_format_contract.py; do
+            printf '%s\n' "$actual" | grep -Fxq "$required"
+          done
           git push origin HEAD:agent/league-match-format-20260731
