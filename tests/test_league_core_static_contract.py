@@ -4,34 +4,38 @@ from pathlib import Path
 def test_top_players_page_uses_authenticated_python_export() -> None:
     page = Path("apps/web/app/admin/top-players-printable/page.tsx").read_text(encoding="utf-8")
     panel = Path("apps/web/app/admin/top-players-printable/TopPlayersPrintablePanel.tsx").read_text(encoding="utf-8")
+    tools = Path("apps/web/app/admin/tools/page.tsx").read_text(encoding="utf-8")
 
     assert "getClubPlayers" not in page
     assert "league-manager/top-players-printable" in panel
     assert "Authorization" in panel
     assert "previous UTC calendar month" in panel
     assert "@media print" in panel
-    assert "@page" in panel
+    assert "Previous-month Top 50" in tools
+    assert 'href="/admin/top-players-printable"' in tools
 
 
 def test_league_printout_renders_true_leaders_and_print_contract() -> None:
     panel = Path("apps/web/app/admin/league-manager/print/LeaguePrintoutPanel.tsx").read_text(encoding="utf-8")
+    page = Path("apps/web/app/admin/league-manager/print/page.tsx").read_text(encoding="utf-8")
+    home = Path("apps/web/app/admin/league-manager/league/LeagueHomePanel.tsx").read_text(encoding="utf-8")
     service = Path("jupr_app/services/admin_league_print_service.py").read_text(encoding="utf-8")
 
     assert "/printout" in panel
-    assert "selectLeague(event.target.value)" in panel
-    assert 'void loadDetail(selectedLeague, "")' in panel
-    assert "useAuthenticatedAutoLoad(status.enabled ? accessToken : \"\", loadLeagues)" in panel
-    assert "Refresh leagues" in panel
-    assert ">Load leagues<" not in panel
+    assert "initialLeague" in panel
+    assert "encodeURIComponent(initialLeague)" in panel
+    assert 'useAuthenticatedAutoLoad(status.enabled ? `${accessToken}\\u0000${initialLeague}` : "", () => loadDetail(""))' in panel
+    assert "Select league" not in panel
+    assert "Refresh leagues" not in panel
     assert "Reload printout" in panel
     assert "Load selected" not in panel
     assert 'disabled={busy || !printout}' in panel
-    assert "setPrintout(null);" in panel
-    assert "Loading {leagueName || \"selected league\"}…" in panel
     assert "Weekly leaders" in panel
-    assert "Season leaders (Top Performers)" in panel
+    assert "Season leaders" in panel
     assert "data-print-surface" in panel
     assert "@media print" in panel
+    assert 'redirect("/admin/league-manager")' in page
+    assert "League night printout" in home
     assert "calculate_hybrid_elo" in service
     assert "preview_admin_league_awards" in service
 
