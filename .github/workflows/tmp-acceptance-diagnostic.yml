@@ -1,0 +1,65 @@
+name: Temporary acceptance diagnostics
+
+on:
+  push:
+    branches:
+      - agent/acceptance-fixes-20260731
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/acceptance-fixes-20260731
+          fetch-depth: 1
+      - name: Locate acceptance targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          needles = [
+              'team_league_operations',
+              'Tournament Admin session',
+              'Tournament workspace',
+              'Registration editor',
+              'Loaded 4 league',
+              'Save team league setup',
+              'Player saved. Use Match Log',
+              'Match edit and replay complete',
+              'LeagueManagerNav',
+              'league cards',
+          ]
+          roots = [Path('apps/web'), Path('jupr_app'), Path('services/api')]
+          for needle in needles:
+              print(f'\n=== {needle} ===')
+              for root in roots:
+                  if not root.exists():
+                      continue
+                  for path in root.rglob('*'):
+                      if not path.is_file() or path.suffix not in {'.ts', '.tsx', '.py'}:
+                          continue
+                      try:
+                          text = path.read_text()
+                      except Exception:
+                          continue
+                      if needle.lower() in text.lower():
+                          for idx, line in enumerate(text.splitlines(), 1):
+                              if needle.lower() in line.lower():
+                                  print(f'{path}:{idx}:{line.strip()}')
+          print('\n=== team league service files ===')
+          for path in sorted(Path('jupr_app/services').glob('*team*league*.py')):
+              print(path)
+          for path in sorted(Path('services/api').glob('*team*league*.py')):
+              print(path)
+          print('\n=== tournament admin files ===')
+          for path in sorted(Path('apps/web/app/admin').rglob('*Tournament*.tsx')):
+              print(path)
+          for path in sorted(Path('apps/web/app/admin/tournaments').rglob('*.tsx')):
+              print(path)
+          PY
