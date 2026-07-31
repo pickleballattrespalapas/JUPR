@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import TournamentAdminNav from "@/components/TournamentAdminNav";
 import SelectedTournamentPanelScope from "../tournaments/SelectedTournamentPanelScope";
@@ -35,7 +36,9 @@ export default async function TournamentSetupPage({ searchParams }: Props) {
   const { data: status, error } = await loadStatus(clubId);
   return (
     <>
-      <TournamentAdminNav />
+      <Suspense fallback={<div aria-hidden="true" style={{ minHeight: "42px", marginBottom: "1rem" }} />}>
+        <TournamentAdminNav />
+      </Suspense>
       <section>
         <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Tournament Manager</p>
         <h1 style={{ marginTop: 0 }}>{tournamentName || "Tournament"} setup</h1>
