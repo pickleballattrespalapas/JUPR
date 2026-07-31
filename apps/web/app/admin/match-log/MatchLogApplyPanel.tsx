@@ -572,8 +572,8 @@ export default function MatchLogApplyPanel({
         if (scoreT1 !== Number(match.score?.team1 ?? 0)) patch.score_t1 = scoreT1;
         if (scoreT2 !== Number(match.score?.team2 ?? 0)) patch.score_t2 = scoreT2;
         return patch;
-      });
-      if (generated.every((patch) => patchFields(patch).length === 0)) throw new Error("Choose at least one bulk field change.");
+      }).filter((patch) => patchFields(patch).length > 0);
+      if (!generated.length) throw new Error("Choose at least one bulk field change.");
       setStagedPatches((current) => {
         const byId = new Map(current.map((patch) => [patch.id, patch]));
         for (const patch of generated) byId.set(patch.id, { ...(byId.get(patch.id) || { id: patch.id }), ...patch });

@@ -55,6 +55,7 @@ assert.match(matchLogWorkspace, /initialSelectedIds=\{initialSelectedIds\}/, "Bu
 assert.match(matchLogPanel, /initialSelectedIds\?: string\[\]/, "Bulk editor must accept initial selected IDs");
 assert.match(matchLogPanel, /Individual score corrections/, "Bulk editor must expose per-match score controls");
 assert.match(matchLogPanel, /bulkScoreEdits/, "Bulk editor must stage independent score changes");
+assert.match(matchLogPanel, /\.filter\(\(patch\) => patchFields\(patch\)\.length > 0\)/, "Bulk editor must omit unchanged selected matches from staged patches");
 assert.match(matchLogApi, /matchIds\?: string \| Array<string \| number>/, "Match Log client must send multiple IDs");
 
 console.log("Match Uploader context and responsive layout checks passed.");
