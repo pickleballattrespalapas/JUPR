@@ -13,10 +13,10 @@ export default function SelectedLeaguePanelScope({ leagueName, children }: Props
   const lastDispatchRef = useRef(0);
 
   useEffect(() => {
-    const container = rootRef.current;
-    if (!container) return;
-
     function applySelectedLeague() {
+      const container = rootRef.current;
+      if (!container) return;
+
       const articles = Array.from(container.querySelectorAll("article"));
       for (const article of articles) {
         const heading = article.querySelector("h2");
@@ -54,6 +54,8 @@ export default function SelectedLeaguePanelScope({ leagueName, children }: Props
       select.dispatchEvent(new Event("change", { bubbles: true }));
     }
 
+    const container = rootRef.current;
+    if (!container) return;
     applySelectedLeague();
     const observer = new MutationObserver(applySelectedLeague);
     observer.observe(container, { childList: true, subtree: true });
