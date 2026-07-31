@@ -32,7 +32,32 @@ jobs:
         run: |
           set -euo pipefail
           test -f .github/tmp/apply_acceptance_fixes.py.gz.b64
-          base64 --decode .github/tmp/apply_acceptance_fixes.py.gz.b64 | gzip --decompress > /tmp/apply_acceptance_fixes.py
+          python - <<'PY'
+          import base64
+          import gzip
+          import re
+          import zlib
+          from pathlib import Path
+
+          source = Path('.github/tmp/apply_acceptance_fixes.py.gz.b64').read_text()
+          clean = ''.join(source.split())
+          invalid = sorted(set(re.sub(r'[A-Za-z0-9+/=]', '', clean)))
+          print({'encoded_chars': len(clean), 'mod4': len(clean) % 4, 'invalid_chars': invalid})
+          clean += '=' * ((-len(clean)) % 4)
+          raw = base64.b64decode(clean, validate=False)
+          print({'decoded_bytes': len(raw), 'header': raw[:10].hex(), 'tail': raw[-10:].hex()})
+          try:
+              payload = gzip.decompress(raw)
+              print({'gzip_complete': True, 'payload_bytes': len(payload)})
+          except Exception as exc:
+              print({'gzip_complete': False, 'error': repr(exc)})
+              decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+              payload = decoder.decompress(raw)
+              payload += decoder.flush()
+              print({'gzip_eof': decoder.eof, 'payload_bytes': len(payload), 'unused_bytes': len(decoder.unused_data), 'unconsumed_bytes': len(decoder.unconsumed_tail)})
+          compile(payload, '/tmp/apply_acceptance_fixes.py', 'exec')
+          Path('/tmp/apply_acceptance_fixes.py').write_bytes(payload)
+          PY
           python /tmp/apply_acceptance_fixes.py
           git diff --check
           echo '=== changed files ==='
@@ -67,9 +92,7 @@ jobs:
           set -euo pipefail
           mapfile -t tests < <(git diff --name-only -- 'apps/web/tests/*.cjs' | sort)
           if [ "${#tests[@]}" -gt 0 ]; then
-            for test_file in "${tests[@]}"; do
-              node "$test_file"
-            done
+            for test_file in "${tests[@]}"; do node "$test_file"; done
           else
             echo 'No changed CJS source-contract tests.'
           fi
@@ -97,11 +120,7 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t pyfiles < <(git diff --name-only -- '*.py' | sort)
-          if [ "${#pyfiles[@]}" -gt 0 ]; then
-            python -m py_compile "${pyfiles[@]}"
-          else
-            echo 'No changed Python files.'
-          fi
+          if [ "${#pyfiles[@]}" -gt 0 ]; then python -m py_compile "${pyfiles[@]}"; else echo 'No changed Python files.'; fi
 
       - name: Run changed focused Python tests
         shell: bash
@@ -111,11 +130,7 @@ jobs:
           if [ "${#tests[@]}" -gt 0 ]; then
             python -m pytest -q "${tests[@]}"
           else
-            python -m pytest -q \
-              tests/test_admin_league_manager_service.py \
-              tests/test_api_contract_admin_league_manager.py \
-              tests/test_team_league_service.py \
-              tests/test_api_contract_admin_team_league.py
+            python -m pytest -q tests/test_admin_league_manager_service.py tests/test_api_contract_admin_league_manager.py tests/test_team_league_service.py tests/test_api_contract_admin_team_league.py
           fi
 
       - name: Preserve validation summary
