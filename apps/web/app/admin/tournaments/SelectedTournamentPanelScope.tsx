@@ -13,6 +13,7 @@ const HIDDEN_CONTEXT_HEADINGS = new Set([
   "admin session",
   "tournament admin session",
   "registration reporting session",
+  "bulk registration actions",
   "create or open a tournament",
   "1. create tournament shell",
   "2. select tournament",
@@ -42,6 +43,14 @@ function preserveTournamentContext(anchor: HTMLAnchorElement, tournamentId: stri
   anchor.setAttribute("href", `${url.pathname}${url.search}${url.hash}`);
 }
 
+function hideEmbeddedSessionSummary(container: HTMLDivElement) {
+  for (const strong of Array.from(container.querySelectorAll<HTMLElement>("strong"))) {
+    if (!normalized(strong.textContent).startsWith("admin session:")) continue;
+    const summary = strong.parentElement;
+    if (summary) summary.style.display = "none";
+  }
+}
+
 export default function SelectedTournamentPanelScope({ tournamentId, tournamentName, children }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const lastDispatchRef = useRef(0);
@@ -51,19 +60,18 @@ export default function SelectedTournamentPanelScope({ tournamentId, tournamentN
       const container = rootRef.current;
       if (!container) return;
 
-      for (const anchor of Array.from(container.querySelectorAll("a[href]"))) {
+      for (const anchor of Array.from(container.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
         preserveTournamentContext(anchor, tournamentId, tournamentName || "");
       }
+      hideEmbeddedSessionSummary(container);
 
-      for (const article of Array.from(container.querySelectorAll("article"))) {
+      for (const article of Array.from(container.querySelectorAll<HTMLElement>("article"))) {
         const heading = article.querySelector("h2");
         const headingText = normalized(heading?.textContent);
-        if (HIDDEN_CONTEXT_HEADINGS.has(headingText)) {
-          (article as HTMLElement).style.display = "none";
-        }
+        if (HIDDEN_CONTEXT_HEADINGS.has(headingText)) article.style.display = "none";
       }
 
-      const candidate = Array.from(container.querySelectorAll("select")).find((select) => {
+      const candidate = Array.from(container.querySelectorAll<HTMLSelectElement>("select")).find((select) => {
         const aria = normalized(select.getAttribute("aria-label"));
         const label = normalized(select.closest("label")?.textContent);
         const looksLikeTournament = aria.includes("tournament") || label.includes("tournament");
@@ -82,11 +90,9 @@ export default function SelectedTournamentPanelScope({ tournamentId, tournamentN
         (article as HTMLElement).style.display = "none";
       }
 
-      for (const button of Array.from(container.querySelectorAll("button"))) {
+      for (const button of Array.from(container.querySelectorAll<HTMLButtonElement>("button"))) {
         const text = normalized(button.textContent);
-        if (["refresh tournaments", "refresh list", "load selected", "load tournament"].includes(text)) {
-          (button as HTMLElement).style.display = "none";
-        }
+        if (["refresh tournaments", "refresh list", "load selected", "load tournament"].includes(text)) button.style.display = "none";
       }
 
       if (candidate.value === option.value || Date.now() - lastDispatchRef.current < 500) return;
