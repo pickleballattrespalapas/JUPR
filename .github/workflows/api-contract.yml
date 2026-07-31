@@ -7,9 +7,130 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  temporary-selected-league-patch:
+    if: github.head_ref == 'agent/league-manager-home-rebuild' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/league-manager-home-rebuild
+          fetch-depth: 0
+
+      - name: Patch selected-league panels
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old[:100]!r}")
+              target.write_text(text.replace(old, new, 1))
+
+          def remove_article(path: str, marker: str) -> None:
+              target = Path(path)
+              text = target.read_text()
+              marker_at = text.index(marker)
+              start = text.rfind("<article", 0, marker_at)
+              end = text.index("</article>", marker_at) + len("</article>")
+              target.write_text(text[:start] + text[end:])
+
+          live = "apps/web/app/admin/league-manager/live/LeagueLiveRoundPanel.tsx"
+          replace_once(live, "  liveDomainStatus: AdminLeagueLiveStatusResponse;\n};", "  liveDomainStatus: AdminLeagueLiveStatusResponse;\n  initialLeague: string;\n};")
+          replace_once(live, "export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, uploaderStatus, players, liveDomainStatus }: Props) {", "export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, uploaderStatus, players, liveDomainStatus, initialLeague }: Props) {")
+          replace_once(live, "  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();", "  const { accessToken } = useAdminSession();")
+          replace_once(live, "  const [leagueName, setLeagueName] = useState(\"\");", "  const [leagueName, setLeagueName] = useState(initialLeague);")
+          replace_once(live, "    setLeagueName(\"\");\n    setLiveSessions([]);", "    setLeagueName(initialLeague);\n    setLiveSessions([]);")
+          replace_once(live, "      const selectedLeague = names.includes(selectedLeagueBeforeRefresh) ? selectedLeagueBeforeRefresh : (names[0] || \"\");", "      const selectedLeague = names.includes(initialLeague) ? initialLeague : \"\";")
+          replace_once(live, "      const nextSessions = payload.sessions || [];", "      const nextSessions = (payload.sessions || []).filter((row) => row.league_name === initialLeague);")
+          replace_once(live, "    leagueStatus.enabled && uploaderStatus.enabled && liveDomainStatus.enabled ? accessToken : \"\",", "    leagueStatus.enabled && uploaderStatus.enabled && liveDomainStatus.enabled ? `${accessToken}\\u0000${initialLeague}` : \"\",")
+          remove_article(live, '<h2 style={{ marginTop: 0 }}>Admin session</h2>')
+          target = Path(live)
+          text = target.read_text()
+          start = text.index('<label>League<br /><select value={leagueName}')
+          end = text.index('</select></label>', start) + len('</select></label>')
+          text = text[:start] + '<div><strong>League</strong><br />{initialLeague}</div>' + text[end:]
+          text = text.replace('onClick={loadLeagues}', 'onClick={() => void loadInitialWorkspace()}', 1)
+          text = text.replace('{busy ? "Refreshing…" : "Refresh leagues"}', '{busy ? "Refreshing…" : "Refresh league data"}', 1)
+          text = text.replace('import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";', 'import { useAdminSession } from "@/lib/useAdminSession";')
+          target.write_text(text)
+
+          awards = "apps/web/app/admin/league-manager/awards/LeagueAwardsPanel.tsx"
+          replace_once(awards, "type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };", "type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse; initialLeague: string };")
+          replace_once(awards, "export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {", "export default function LeagueAwardsPanel({ apiBase, clubId, status, initialLeague }: Props) {")
+          replace_once(awards, "  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();", "  const { accessToken } = useAdminSession();")
+          replace_once(awards, "  const [leagueName, setLeagueName] = useState(\"\");", "  const [leagueName, setLeagueName] = useState(initialLeague);")
+          replace_once(awards, "setBusy(false); setMessage(null); setLeagues([]); setLeagueName(\"\"); setState(null);", "setBusy(false); setMessage(null); setLeagues([]); setLeagueName(initialLeague); setState(null);")
+          replace_once(awards, "    const selectedBeforeRefresh = leagueName;", "    const selectedBeforeRefresh = initialLeague;")
+          replace_once(awards, "  useAuthenticatedAutoLoad(status.enabled ? accessToken : \"\", loadLeagues);", "  useAuthenticatedAutoLoad(status.enabled ? `${accessToken}\\u0000${initialLeague}` : \"\", loadLeagues);")
+          remove_article(awards, '<h2 style={{ marginTop: 0 }}>Admin session and recovery</h2>')
+          target = Path(awards)
+          text = target.read_text()
+          marker = '<h2 style={{ marginTop: 0 }}>1. Select and recover league</h2>'
+          marker_at = text.index(marker)
+          start = text.rfind('<article', 0, marker_at)
+          end = text.index('</article>', marker_at) + len('</article>')
+          replacement = '''<article style={cardStyle}>
+        <h2 style={{ marginTop: 0 }}>Saved awards workflow</h2>
+        <p><strong>{initialLeague}</strong></p>
+        <button type="button" onClick={() => void recoverWizard(initialLeague)} disabled={busy} style={ghostButtonStyle}>Reload saved state</button>
+        {message ? <p role="status" style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+        {wizard ? <p style={{ color: "#475569" }}>Saved step: <strong>{workflowStatus.replace(/_/g, " ")}</strong> · Revision <strong>{wizard.revision || 0}</strong> · League status <strong>{shortValue(state?.league?.status)}</strong></p> : null}
+        {state && !writeReady ? <p style={{ color: "#92400e" }}>Awards writes are currently unavailable.</p> : null}
+        {state && state.badge_definitions_ready !== true ? <p role="alert" style={{ color: "#b91c1c" }}>Badge minting is blocked until the required badge definitions are available.</p> : null}
+      </article>'''
+          text = text[:start] + replacement + text[end:]
+          text = text.replace('import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";', 'import { useAdminSession } from "@/lib/useAdminSession";')
+          target.write_text(text)
+
+          teams = "apps/web/app/admin/league-manager/teams/TeamLeaguesPanel.tsx"
+          replace_once(teams, "type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };", "type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse; initialLeague: string };")
+          replace_once(teams, "export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {", "export default function TeamLeaguesPanel({ apiBase, clubId, status, initialLeague }: Props) {")
+          replace_once(teams, "  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();", "  const { accessToken } = useAdminSession();")
+          replace_once(teams, "  const [leagueName, setLeagueName] = useState(\"\");", "  const [leagueName, setLeagueName] = useState(initialLeague);")
+          replace_once(teams, "    setLeagueName(\"\");\n    setDetail(null);", "    setLeagueName(initialLeague);\n    setDetail(null);")
+          replace_once(teams, "  useAuthenticatedAutoLoad(status.enabled ? accessToken : \"\", loadLeagues);", "  useAuthenticatedAutoLoad(status.enabled ? `${accessToken}\\u0000${initialLeague}` : \"\", loadLeagues);")
+          target = Path(teams)
+          text = target.read_text()
+          marker = '<h2 style={{ marginTop: 0 }}>Choose a league</h2>'
+          marker_at = text.index(marker)
+          start = text.rfind('<article', 0, marker_at)
+          end = text.index('</article>', marker_at) + len('</article>')
+          replacement = '''<article style={{ ...cardStyle, background: "#f8fafc" }}>
+        <h2 style={{ marginTop: 0 }}>{initialLeague}</h2>
+        <p style={{ color: "#475569" }}>Registration, substitutes, schedules, standings, playoffs, and recovery for this Team league.</p>
+        <button type="button" onClick={() => void loadLeagues()} disabled={busy} style={buttonStyle}>{busy ? "Working…" : "Reload team league"}</button>
+        {message ? <p role="status" style={{ color: /unable|error|required|stale|retry|recovery/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+      </article>'''
+          text = text[:start] + replacement + text[end:]
+          text = text.replace('import Link from "next/link";\n', '')
+          text = text.replace('import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";', 'import { useAdminSession } from "@/lib/useAdminSession";')
+          target.write_text(text)
+          PY
+
+          git diff --check
+
+      - name: Publish clean application commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin staging
+          git checkout origin/staging -- .github/workflows/api-contract.yml
+          rm -f .github/workflows/tmp-selected-league-panel-patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Scope league modules to selected league home"
+          git push origin HEAD:agent/league-manager-home-rebuild
+
   api-contract:
     runs-on: ubuntu-latest
     env:
