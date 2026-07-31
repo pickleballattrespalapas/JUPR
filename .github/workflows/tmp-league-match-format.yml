@@ -89,6 +89,7 @@ jobs:
             .github/tmp/patch_league_match_format_test.py \
             .github/workflows/tmp-league-match-format.yml
           rmdir .github/tmp 2>/dev/null || true
+          git checkout -- apps/web/next-env.d.ts
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
