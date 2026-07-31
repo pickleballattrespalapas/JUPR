@@ -1,0 +1,80 @@
+name: Verify current Match Uploader staging candidate
+
+on:
+  pull_request:
+    branches:
+      - staging
+    paths:
+      - ".github/workflows/verify-match-uploader-staging-37589d.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.head_ref == 'agent/verify-match-uploader-staging-37589d'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EXPECTED_SHA: 37589d83c4788ba00cdda07de919517b3be631d9
+      API_ORIGIN: https://juprleagues-api-staging.fly.dev
+    steps:
+      - name: Check out isolated verifier
+        uses: actions/checkout@v4
+        with:
+          ref: agent/verify-match-uploader-staging-37589d
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact permanently-open staging health
+        shell: bash
+        run: |
+          set -euo pipefail
+          matched=0
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error --max-time 30 "$API_ORIGIN/health" -o fly-health.json; then
+              if jq -e --arg expected "$EXPECTED_SHA" 'select(
+                .ok == true and
+                .service == "jupr-api" and
+                .environment == "staging" and
+                .git_commit_sha == $expected and
+                .image_build_git_sha == $expected and
+                .fly_app_name == "juprleagues-api-staging" and
+                .supabase_project_ref == "sijpxjxvdtrehmqvirfi" and
+                .write_wave == "open" and
+                .staging_write_wave == "open" and
+                .business_data_write_wave_active == true and
+                ((.email_mode // .write_prerequisites.email_mode) == "dry_run") and
+                ((.live_player_update_email_enabled // .write_prerequisites.live_player_update_email_enabled) == false) and
+                .public_live_production_override_enabled == false
+              )' fly-health.json >/dev/null; then
+                matched=1
+                break
+              fi
+            fi
+            sleep 15
+          done
+          test "$matched" = 1
+
+      - name: Verify Match Uploader remains enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 30 \
+            "$API_ORIGIN/admin/clubs/tres_palapas/match-uploader/status" \
+            -o match-uploader-status.json
+          jq -e 'select(
+            .enabled == true and
+            .singles_write_enabled == true and
+            .status != "guarded_off"
+          )' match-uploader-status.json >/dev/null
+
+      - name: Upload verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: match-uploader-staging-37589d-evidence
+          path: |
+            fly-health.json
+            match-uploader-status.json
+          retention-days: 3
+          if-no-files-found: error
