@@ -149,10 +149,6 @@ def test_selection_changes_clear_old_records_and_ignore_late_responses() -> None
 
 def test_refresh_preserves_valid_tournament_selections_and_reloads_current_detail() -> None:
     expectations = {
-        "apps/web/app/admin/tournaments/TournamentAdminPanel.tsx": (
-            'setSelectedId("");',
-            "await loadDetail(selectedBeforeRefresh, selectedRegistrationBeforeRefresh, selectedSelectionBeforeRefresh)",
-        ),
         "apps/web/app/admin/tournaments/bulk/BulkRegistrationPanel.tsx": (
             'setSelectedTournamentId("");',
             "await loadDetail(selectedBeforeRefresh)",

@@ -35,10 +35,15 @@ TOKEN_ACTIONS: dict[str, tuple[str, ...]] = {
     "apps/web/app/admin/tournaments/delete-draft/DeleteDraftPanel.tsx": (
         "deleteDraft",
     ),
-    "apps/web/app/admin/tournaments/TournamentAdminPanel.tsx": (
-        "saveTournamentEdit",
-        "saveRegistrationEdit",
-        "saveSelectionEdit",
+    "apps/web/app/admin/tournaments/create/TournamentCreatePanel.tsx": (
+        "createTournament",
+    ),
+    "apps/web/app/admin/tournaments/tournament/TournamentHomePanel.tsx": (
+        "saveTournament",
+    ),
+    "apps/web/app/admin/tournaments/editor/TournamentRegistrationEditorPanel.tsx": (
+        "saveRegistration",
+        "saveSelection",
     ),
     "apps/web/app/admin/tournaments/registrations/RegistrationManagementPanel.tsx": (
         "exportCsv",

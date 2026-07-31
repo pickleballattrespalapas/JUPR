@@ -60,12 +60,13 @@ def test_tournament_ops_read_only_mode_hides_post_backed_controls_but_keeps_snap
         assert f">{read_only_table}</h2><GenericRowsTable" in panel
 
 
-def test_tournament_ops_workflow_header_reports_ops_specific_mode() -> None:
+def test_tournament_ops_workflow_header_preserves_selected_tournament_context() -> None:
     page = _read("apps/web/app/admin/tournaments/ops/TournamentOpsWorkflowPage.tsx")
 
-    assert "Tournament Ops status is temporarily unavailable" in page
-    assert "Tournament Ops mode" in page
-    assert "Operations runtime" in page
-    assert "Guarded writes ready" in page
-    assert "Read-only" in page
-    assert "data.operations_runtime?.operations_mutations_enabled" in page
+    assert "tournamentId: string;" in page
+    assert "SelectedTournamentPanelScope" in page
+    assert "getAdminTournamentStatus" in page
+    assert "Tournament Operations are unavailable" in page
+    assert "TournamentOpsPanel" in page
+    assert "tournamentId={tournamentId}" in page
+    assert "operationsWriteReady" not in page
