@@ -70,11 +70,14 @@ type RrScoreRow = {
 type RrCourtSchedule = { court: number; formatType: string; expectedGames?: number | null; matches: RrScoreRow[] };
 type RrPayload = { source: string; custom_schedule: string; schedule_mode: string; courts: Array<{ court: number; format_type: string; player_names: string[] }> };
 type NewPlayerDraft = { name: string; startingJupr: string };
+type PlayerRoundRobinRecord = { wins: number; losses: number };
+type PlayerRoundRobinRecords = Record<string, PlayerRoundRobinRecord>;
 type SearchablePlayerInputProps = {
   inputId: string;
   label: string;
   value: string;
   players: PublicPlayer[];
+  allPlayers?: PublicPlayer[];
   disabled?: boolean;
   invalid?: boolean;
   onChange: (playerId: string) => void;
@@ -217,12 +220,14 @@ function SearchablePlayerInput({
   label,
   value,
   players,
+  allPlayers,
   disabled = false,
   invalid = false,
   onChange,
   onCreate,
 }: SearchablePlayerInputProps) {
-  const selected = players.find((player) => String(player.id) === value);
+  const playerUniverse = allPlayers || players;
+  const selected = playerUniverse.find((player) => String(player.id) === value);
   const selectedName = selected ? String(selected.name) : "";
   const [query, setQuery] = useState(selectedName);
   const [startingJupr, setStartingJupr] = useState("3.5");
@@ -233,13 +238,21 @@ function SearchablePlayerInput({
       String(player.name).trim().toLocaleLowerCase()
       === cleanedQuery.toLocaleLowerCase(),
   );
+  const existingClubPlayer = playerUniverse.find(
+    (player) =>
+      String(player.name).trim().toLocaleLowerCase()
+      === cleanedQuery.toLocaleLowerCase(),
+  );
+  const unavailableExactPlayer = existingClubPlayer && !exactPlayer
+    ? existingClubPlayer
+    : null;
   const matchingPlayers = cleanedQuery
     ? players.filter((player) =>
         String(player.name).trim().toLocaleLowerCase().includes(cleanedQuery.toLocaleLowerCase()),
       )
     : players;
   const numericStartingJupr = Number(startingJupr);
-  const startingJuprMessage = cleanedQuery && !exactPlayer && matchingPlayers.length === 0
+  const startingJuprMessage = cleanedQuery && !existingClubPlayer && matchingPlayers.length === 0
     ? validateStartingJupr(startingJupr)
     : null;
   const validatedInputStyle = invalid
@@ -250,10 +263,16 @@ function SearchablePlayerInput({
     setQuery(selectedName);
   }, [selectedName]);
 
+  useEffect(() => {
+    if (!value && exactPlayer && cleanedQuery) {
+      onChange(String(exactPlayer.id));
+    }
+  }, [cleanedQuery, exactPlayer, onChange, value]);
+
   async function createAndSelect() {
     if (
       !cleanedQuery
-      || exactPlayer
+      || existingClubPlayer
       || startingJuprMessage
     ) return;
     setCreating(true);
@@ -318,7 +337,12 @@ function SearchablePlayerInput({
           <option key={String(player.id)} value={String(player.name)} />
         ))}
       </datalist>
-      {cleanedQuery && !exactPlayer && matchingPlayers.length === 0 ? (
+        {unavailableExactPlayer ? (
+          <p role="status" style={{ color: "#92400e", margin: "0.35rem 0 0", fontWeight: 700 }}>
+            {String(unavailableExactPlayer.name)} is already used in this match. Clear that position before selecting this player here.
+          </p>
+        ) : null}
+        {cleanedQuery && !existingClubPlayer && matchingPlayers.length === 0 ? (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(100px, 1fr) auto", gap: "0.35rem", marginTop: "0.35rem", alignItems: "end" }}>
           <label htmlFor={`${inputId}-starting-jupr`}>
             <span style={{ display: "block", color: "#475569", fontSize: "0.8rem" }}>Starting JUPR</span>
@@ -428,8 +452,17 @@ function SearchablePlayerMultiInput({
           id={inputId}
           list={`${inputId}-options`}
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
+          onChange={(event) => {
+          const next = event.target.value;
+          setQuery(next);
+          const normalizedNext = next.replace(/\s+/g, " ").trim().toLocaleLowerCase();
+          const match = players.find((player) =>
+            String(player.name).trim().toLocaleLowerCase() === normalizedNext
+            && !selectedNames.has(String(player.name).trim().toLocaleLowerCase()),
+          );
+          if (match) addPlayerName(String(match.name));
+        }}
+        onKeyDown={(event) => {
             if (event.key === "Enter" && exactPlayer) {
               event.preventDefault();
               addPlayerName(String(exactPlayer.name));
@@ -500,10 +533,31 @@ function previewToSchedule(preview: AdminMatchUploaderRoundRobinPreview): RrCour
       s2: "0"
     }))
   }));
-}
+  }
+
+  function roundRobinPlayerRecords(schedule: RrCourtSchedule[]): PlayerRoundRobinRecords {
+    const records: PlayerRoundRobinRecords = {};
+    const increment = (playerId: number, field: keyof PlayerRoundRobinRecord) => {
+      const key = String(playerId);
+      records[key] = records[key] || { wins: 0, losses: 0 };
+      records[key][field] += 1;
+    };
+    for (const court of schedule) {
+      for (const match of court.matches) {
+        const score1 = Number(match.s1 || 0);
+        const score2 = Number(match.s2 || 0);
+        if (!Number.isFinite(score1) || !Number.isFinite(score2) || score1 < 0 || score2 < 0 || score1 + score2 <= 0 || score1 === score2) continue;
+        const winners = score1 > score2 ? match.t1 : match.t2;
+        const losers = score1 > score2 ? match.t2 : match.t1;
+        for (const player of winners) increment(player.id, "wins");
+        for (const player of losers) increment(player.id, "losses");
+      }
+    }
+    return records;
+  }
 
 
-function RemoveAllMatchesDialog({
+  function RemoveAllMatchesDialog({
   onClose,
   onKeepRows,
   onRemoveAll,
@@ -546,12 +600,14 @@ function RemoveAllMatchesDialog({
 }
 
 function SubmissionResultDialog({
-  result,
-  onClose,
-}: {
-  result: AdminMatchUploaderWriteResult;
-  onClose: () => void;
-}) {
+    result,
+    roundRobinRecords,
+    onClose,
+  }: {
+    result: AdminMatchUploaderWriteResult;
+    roundRobinRecords?: PlayerRoundRobinRecords | null;
+    onClose: () => void;
+  }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -565,10 +621,16 @@ function SubmissionResultDialog({
   const inserted = result.result?.inserted ?? 0;
   const email = result.auto_player_updates;
   const emailSummary = email?.mode === "auto_sent"
-    ? `${email.sent ?? 0} sent, ${email.skipped ?? 0} skipped, ${email.errors ?? 0} error(s).`
-    : "Not sent in staging.";
+      ? `${email.sent ?? 0} sent, ${email.skipped ?? 0} skipped, ${email.errors ?? 0} error(s).`
+      : "Not sent in staging.";
+    const matchIds = (result.operation?.match_ids || []).map((value) => String(value)).filter(Boolean);
+    const correctionMatchId = matchIds[0] || (result.feedback?.latest_match_id == null ? "" : String(result.feedback.latest_match_id));
+    const correctionHref = correctionMatchId
+      ? `/admin/match-log/edit?match_id=${encodeURIComponent(correctionMatchId)}`
+      : (result.recovery?.match_log_route || "/admin/match-log");
+    const showRoundRobinRecords = Boolean(roundRobinRecords && Object.keys(roundRobinRecords).length);
 
-  return (
+    return (
     <dialog
       ref={dialogRef}
       aria-labelledby="match-submission-result-title"
@@ -592,22 +654,27 @@ function SubmissionResultDialog({
           <div><strong>Skipped unrated</strong><br />{result.result?.skipped_unrated ?? 0}</div>
         </div>
         {email ? <p style={{ marginTop: "1rem" }}><strong>Player-update email:</strong> {emailSummary}</p> : null}
+        {matchIds.length ? <p><strong>Created match IDs:</strong> {matchIds.map((id) => `#${id}`).join(", ")}</p> : null}
         {result.feedback?.affected_players?.length ? (
           <div style={{ overflowX: "auto", marginTop: "1rem" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Before</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>After</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Change</th></tr></thead>
+              <thead><tr><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player</th>{showRoundRobinRecords ? <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Wins</th> : null}{showRoundRobinRecords ? <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Losses</th> : null}<th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Before</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>After</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Change</th></tr></thead>
               <tbody>
-                {result.feedback.affected_players.map((player) => (
-                  <tr key={player.id}><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{player.name}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_before)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_after)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{deltaLabel(player.rating_delta)}</td></tr>
-                ))}
+                {result.feedback.affected_players.map((player) => {
+        const record = roundRobinRecords?.[String(player.id)];
+        return (
+          <tr key={player.id}><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{player.name}</td>{showRoundRobinRecords ? <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{record?.wins ?? 0}</td> : null}{showRoundRobinRecords ? <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{record?.losses ?? 0}</td> : null}<td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_before)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(player.rating_after)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{deltaLabel(player.rating_delta)}</td></tr>
+        );
+      })}
               </tbody>
             </table>
           </div>
         ) : null}
         {result.warnings?.length ? <ul style={{ color: "#92400e" }}>{result.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
-        <p style={{ display: "flex", justifyContent: "flex-end", marginBottom: 0 }}>
-          <button type="button" onClick={onClose} style={buttonStyle}>OK</button>
-        </p>
+        <p style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", flexWrap: "wrap", marginBottom: 0 }}>
+        {correctionMatchId ? <Link href={correctionHref} style={{ ...ghostButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Correct results</Link> : null}
+        <button type="button" onClick={onClose} style={buttonStyle}>OK</button>
+      </p>
       </div>
     </dialog>
   );
@@ -659,6 +726,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     || (context === "league" && row.weekTag !== defaultWeekTag)
     || row.ratingScope !== defaultManualRatingScope;
   const scoredRrRows = rrSchedule.flatMap((court) => court.matches).filter((match) => Number(match.s1 || 0) + Number(match.s2 || 0) > 0);
+  const rrResultRecords = submissionKind === "round_robin" ? roundRobinPlayerRecords(rrSchedule) : null;
   const matchType = context === "popup" ? "PopUp" : "Live Match";
   const messageIsError = Boolean(message && (result?.ok === false || isUploaderErrorMessage(message)));
 
@@ -1167,7 +1235,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
             <div className={styles.teamsGrid}>
               <section aria-label="Singles Player 1" className={styles.teamPanel}>
                 <h4 style={{ margin: 0 }}>Player 1</h4>
-                <SearchablePlayerInput inputId="singles-player-a" label="Player" value={singlesRow.playerA} players={singlesPlayerOptions(singlesRow.playerA)} invalid={singlesValidationAttempted && !singlesRow.playerA} disabled={saving || creatingPlayers} onChange={(playerA) => patchSingles({ playerA })} onCreate={createAndSelectPlayer} />
+                <SearchablePlayerInput inputId="singles-player-a" label="Player" value={singlesRow.playerA} players={singlesPlayerOptions(singlesRow.playerA)} allPlayers={knownPlayers} invalid={singlesValidationAttempted && !singlesRow.playerA} disabled={saving || creatingPlayers} onChange={(playerA) => patchSingles({ playerA })} onCreate={createAndSelectPlayer} />
               </section>
               <section aria-label="Singles scores" className={styles.scorePanel}>
                 <label className={styles.scoreField}><strong>Player 1 score</strong><br /><input type="number" min={0} max={99} value={singlesRow.scoreA} onChange={(event) => patchSingles({ scoreA: event.target.value })} aria-invalid={singlesScoreInvalid || undefined} style={singlesScoreInvalid ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" } : inputStyle} /></label>
@@ -1175,7 +1243,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
               </section>
               <section aria-label="Singles Player 2" className={styles.teamPanel}>
                 <h4 style={{ margin: 0 }}>Player 2</h4>
-                <SearchablePlayerInput inputId="singles-player-b" label="Player" value={singlesRow.playerB} players={singlesPlayerOptions(singlesRow.playerB)} invalid={singlesValidationAttempted && !singlesRow.playerB} disabled={saving || creatingPlayers} onChange={(playerB) => patchSingles({ playerB })} onCreate={createAndSelectPlayer} />
+                <SearchablePlayerInput inputId="singles-player-b" label="Player" value={singlesRow.playerB} players={singlesPlayerOptions(singlesRow.playerB)} allPlayers={knownPlayers} invalid={singlesValidationAttempted && !singlesRow.playerB} disabled={saving || creatingPlayers} onChange={(playerB) => patchSingles({ playerB })} onCreate={createAndSelectPlayer} />
               </section>
             </div>
           </div>
@@ -1239,8 +1307,8 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
                   <div className={styles.teamsGrid}>
                     <section aria-label={`Match ${index + 1} Team 1`} className={styles.teamPanel}>
                       <h4 style={{ margin: 0 }}>Team 1</h4>
-                      <SearchablePlayerInput inputId={`${row.rowId}-t1p1`} label="Player 1" value={row.t1p1} players={playerOptionsFor(row, row.t1p1)} invalid={validateThisRow && !row.t1p1} disabled={saving || creatingPlayers} onChange={(t1p1) => patchRow(row.rowId, { t1p1 })} onCreate={createAndSelectPlayer} />
-                      <SearchablePlayerInput inputId={`${row.rowId}-t1p2`} label="Player 2" value={row.t1p2} players={playerOptionsFor(row, row.t1p2)} invalid={validateThisRow && !row.t1p2} disabled={saving || creatingPlayers} onChange={(t1p2) => patchRow(row.rowId, { t1p2 })} onCreate={createAndSelectPlayer} />
+                      <SearchablePlayerInput inputId={`${row.rowId}-t1p1`} label="Player 1" value={row.t1p1} players={playerOptionsFor(row, row.t1p1)} allPlayers={knownPlayers} invalid={validateThisRow && !row.t1p1} disabled={saving || creatingPlayers} onChange={(t1p1) => patchRow(row.rowId, { t1p1 })} onCreate={createAndSelectPlayer} />
+                      <SearchablePlayerInput inputId={`${row.rowId}-t1p2`} label="Player 2" value={row.t1p2} players={playerOptionsFor(row, row.t1p2)} allPlayers={knownPlayers} invalid={validateThisRow && !row.t1p2} disabled={saving || creatingPlayers} onChange={(t1p2) => patchRow(row.rowId, { t1p2 })} onCreate={createAndSelectPlayer} />
                     </section>
                     <section aria-label={`Match ${index + 1} scores`} className={styles.scorePanel}>
                       <label className={styles.scoreField}><strong>Team 1 score</strong><br /><input value={row.s1} onChange={(event) => patchRow(row.rowId, { s1: event.target.value })} aria-invalid={scoreInvalid || undefined} type="number" min={0} max={99} style={scoreInvalid ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" } : inputStyle} /></label>
@@ -1248,8 +1316,8 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
                     </section>
                     <section aria-label={`Match ${index + 1} Team 2`} className={styles.teamPanel}>
                       <h4 style={{ margin: 0 }}>Team 2</h4>
-                      <SearchablePlayerInput inputId={`${row.rowId}-t2p1`} label="Player 1" value={row.t2p1} players={playerOptionsFor(row, row.t2p1)} invalid={validateThisRow && !row.t2p1} disabled={saving || creatingPlayers} onChange={(t2p1) => patchRow(row.rowId, { t2p1 })} onCreate={createAndSelectPlayer} />
-                      <SearchablePlayerInput inputId={`${row.rowId}-t2p2`} label="Player 2" value={row.t2p2} players={playerOptionsFor(row, row.t2p2)} invalid={validateThisRow && !row.t2p2} disabled={saving || creatingPlayers} onChange={(t2p2) => patchRow(row.rowId, { t2p2 })} onCreate={createAndSelectPlayer} />
+                      <SearchablePlayerInput inputId={`${row.rowId}-t2p1`} label="Player 1" value={row.t2p1} players={playerOptionsFor(row, row.t2p1)} allPlayers={knownPlayers} invalid={validateThisRow && !row.t2p1} disabled={saving || creatingPlayers} onChange={(t2p1) => patchRow(row.rowId, { t2p1 })} onCreate={createAndSelectPlayer} />
+                      <SearchablePlayerInput inputId={`${row.rowId}-t2p2`} label="Player 2" value={row.t2p2} players={playerOptionsFor(row, row.t2p2)} allPlayers={knownPlayers} invalid={validateThisRow && !row.t2p2} disabled={saving || creatingPlayers} onChange={(t2p2) => patchRow(row.rowId, { t2p2 })} onCreate={createAndSelectPlayer} />
                     </section>
                   </div>
                 </div>
@@ -1339,7 +1407,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
 
       {message && !result && entryMethod !== "manual" ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}
 
-      {result ? <SubmissionResultDialog result={result} onClose={acknowledgeSubmission} /> : null}
+      {result ? <SubmissionResultDialog result={result} roundRobinRecords={rrResultRecords} onClose={acknowledgeSubmission} /> : null}
     </section>
   );
 }
