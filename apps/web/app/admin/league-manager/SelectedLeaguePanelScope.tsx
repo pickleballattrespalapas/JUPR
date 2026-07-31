@@ -13,11 +13,11 @@ export default function SelectedLeaguePanelScope({ leagueName, children }: Props
   const lastDispatchRef = useRef(0);
 
   useEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
+    const container = rootRef.current;
+    if (!container) return;
 
     function applySelectedLeague() {
-      const articles = Array.from(root.querySelectorAll("article"));
+      const articles = Array.from(container.querySelectorAll("article"));
       for (const article of articles) {
         const heading = article.querySelector("h2");
         const headingText = heading?.textContent?.trim() || "";
@@ -30,7 +30,7 @@ export default function SelectedLeaguePanelScope({ leagueName, children }: Props
         }
       }
 
-      const select = Array.from(root.querySelectorAll("select")).find((candidate) => {
+      const select = Array.from(container.querySelectorAll("select")).find((candidate) => {
         const labelText = candidate.closest("label")?.textContent || "";
         return /league/i.test(labelText)
           && Array.from(candidate.options).some((option) => option.value === leagueName);
@@ -40,7 +40,7 @@ export default function SelectedLeaguePanelScope({ leagueName, children }: Props
       const label = select.closest("label");
       if (label) (label as HTMLElement).style.display = "none";
 
-      for (const button of Array.from(root.querySelectorAll("button"))) {
+      for (const button of Array.from(container.querySelectorAll("button"))) {
         if ((button.textContent || "").trim() === "Refresh leagues") {
           (button as HTMLElement).style.display = "none";
         }
@@ -56,7 +56,7 @@ export default function SelectedLeaguePanelScope({ leagueName, children }: Props
 
     applySelectedLeague();
     const observer = new MutationObserver(applySelectedLeague);
-    observer.observe(root, { childList: true, subtree: true });
+    observer.observe(container, { childList: true, subtree: true });
     return () => observer.disconnect();
   }, [leagueName]);
 
