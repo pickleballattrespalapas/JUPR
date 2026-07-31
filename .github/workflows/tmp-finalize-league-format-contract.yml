@@ -25,7 +25,7 @@ jobs:
           ref: agent/league-match-format-20260731
           fetch-depth: 0
 
-      - name: Refresh production migration contract
+      - name: Refresh production migration contract and inventory assertions
         shell: bash
         run: |
           set -euo pipefail
@@ -42,6 +42,22 @@ jobs:
           payload['required_ledger_names'] = sorted(names)
           payload['repository_migration_content_sha256'] = repository_migration_content_fingerprint(migrations_dir)
           contract_path.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+
+          test_path = Path('tests/test_production_deployment_hardening.py')
+          text = test_path.read_text(encoding='utf-8')
+          text = text.replace('assert len(versions) == 52', 'assert len(versions) == 53', 1)
+          text = text.replace(
+              '''assert versions[-5:] == (\n        "20260728020000",\n        "20260728030000",\n        "20260728040000",\n        "20260728041000",\n        "20261020000000",\n    )''',
+              '''assert versions[-5:] == (\n        "20260728030000",\n        "20260728040000",\n        "20260728041000",\n        "20260731033000",\n        "20261020000000",\n    )''',
+              1,
+          )
+          text = text.replace('assert len(names) == 52', 'assert len(names) == 53', 1)
+          text = text.replace(
+              'assert len(contract["required_ledger_names"]) == 52',
+              'assert len(contract["required_ledger_names"]) == 53',
+              1,
+          )
+          test_path.write_text(text, encoding='utf-8')
           PY
           git diff --check
 
@@ -92,6 +108,7 @@ jobs:
           supabase/migrations/20260731033000_league_match_format.sql
           tests/test_api_contract_admin_match_uploader_singles.py
           tests/test_league_match_format_contract.py
+          tests/test_production_deployment_hardening.py
           EOF
           )"
           test "$actual" = "$allowed"
