@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-team-competition-2026-07-28",
-  "repository_migration_content_sha256": "1484d78e9e200f2abe80543a923b7da9aab1739fc5f773f5fc2504b0920200ec",
+  "repository_migration_content_sha256": "32b5365251fa7cdbc4af124088ba2b04af24deb5a4092936b3d7bc694ea1a6ae",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -26,6 +26,7 @@
     "enforce_next_schema_contract",
     "fix_public_function_search_paths",
     "harden_public_data_api",
+    "league_competition_mode",
     "league_live_domain_contract",
     "league_live_publish_reconciliation",
     "league_match_format",
