@@ -1,0 +1,93 @@
+name: Temporary exact acceptance candidate verifier
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.head_ref == 'agent/verify-acceptance-83d0a2'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPECTED_SHA: 83d0a2231175e8adbf465c540ab8e4b5177f76ba
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      MATCH_UPLOADER_STATUS_URL: https://juprleagues-api-staging.fly.dev/admin/clubs/tres_palapas/match-uploader/status
+      CANONICAL_URL: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 1
+
+      - name: Wait for exact Fly candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          for attempt in $(seq 1 60); do
+            if curl -fsS --max-time 15 "$FLY_HEALTH_URL" -o evidence/health.json; then
+              actual="$(jq -r '.git_commit_sha // .source_commit_sha // .source_sha // .commit_sha // empty' evidence/health.json)"
+              image="$(jq -r '.image_build_git_sha // .image_git_sha // empty' evidence/health.json)"
+              echo "attempt=$attempt source=$actual image=$image"
+              if [ "$actual" = "$EXPECTED_SHA" ] && { [ -z "$image" ] || [ "$image" = "$EXPECTED_SHA" ]; }; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "Fly did not reach the exact staging candidate." >&2
+              cat evidence/health.json >&2 || true
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Verify permanent-open staging safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e --arg sha "$EXPECTED_SHA" '
+            (.environment == "staging") and
+            ((.git_commit_sha // .source_commit_sha // .source_sha // .commit_sha) == $sha) and
+            ((.image_build_git_sha // .image_git_sha // $sha) == $sha) and
+            ((.fly_app_name // .app_name // .app) == "juprleagues-api-staging") and
+            (.write_wave == "open") and
+            (.staging_write_wave == "open") and
+            (.business_data_write_wave_active == true) and
+            (.email_mode == "dry_run") and
+            (.live_player_update_email_enabled == false) and
+            (.public_live_production_override_enabled == false) and
+            ((.supabase_project_ref // .supabase_project) == "sijpxjxvdtrehmqvirfi")
+          ' evidence/health.json
+
+      - name: Verify Match Uploader status
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 20 "$MATCH_UPLOADER_STATUS_URL" -o evidence/match-uploader-status.json
+          jq -e '
+            (.enabled == true) and
+            (.singles_write_enabled == true) and
+            ((.status // "") != "guarded_off")
+          ' evidence/match-uploader-status.json
+
+      - name: Verify canonical Vercel routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in /admin/league-manager /admin/league-manager/results /admin/players /admin/tournaments /admin/match-uploader; do
+            status="$(curl -L -sS -o /dev/null -w '%{http_code}' --max-time 30 "$CANONICAL_URL$path")"
+            echo "$path $status" | tee -a evidence/vercel-routes.txt
+            test "$status" = "200"
+          done
+
+      - name: Upload verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-candidate-evidence
+          path: evidence
+          if-no-files-found: error
