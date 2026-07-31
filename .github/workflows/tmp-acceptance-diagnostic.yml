@@ -4,12 +4,16 @@ on:
   push:
     branches:
       - agent/acceptance-fixes-20260731
+  pull_request:
+    branches:
+      - staging
 
 permissions:
   contents: read
 
 jobs:
   inspect:
+    if: github.head_ref == 'agent/acceptance-fixes-20260731' || github.ref_name == 'agent/acceptance-fixes-20260731'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -28,12 +32,11 @@ jobs:
               'Tournament Admin session',
               'Tournament workspace',
               'Registration editor',
-              'Loaded 4 league',
               'Save team league setup',
               'Player saved. Use Match Log',
               'Match edit and replay complete',
               'LeagueManagerNav',
-              'league cards',
+              'league_type',
           ]
           roots = [Path('apps/web'), Path('jupr_app'), Path('services/api')]
           for needle in needles:
