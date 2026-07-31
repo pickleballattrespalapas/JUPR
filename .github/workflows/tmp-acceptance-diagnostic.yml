@@ -76,8 +76,8 @@ jobs:
         run: npm ci
 
       - name: Run focused source-contract tests
-        shell: bash
-        run: node apps/web/tests/acceptance-fixes-20260731.cjs
+        working-directory: apps/web
+        run: node tests/acceptance-fixes-20260731.cjs
 
       - name: Build Next.js
         working-directory: apps/web
