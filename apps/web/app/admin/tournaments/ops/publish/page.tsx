@@ -1,5 +1,12 @@
+import { redirect } from "next/navigation";
 import TournamentOpsWorkflowPage from "../TournamentOpsWorkflowPage";
 
-export default function TournamentOfficialPublishPage() {
-  return <TournamentOpsWorkflowPage workflow="publish" kicker="Tournament Ops / Official publish" title="Publish official tournament matches" description="Publish finalized singles and doubles games through Match Log and rating processing. This destructive boundary has its own staging gate, dual permission requirement, confirmation, email safety check, and replay-safe operation record." />;
+type Props = { searchParams?: Record<string, string | string[] | undefined> };
+function first(value: string | string[] | undefined): string { return Array.isArray(value) ? String(value[0] || "") : String(value || ""); }
+
+export default function TournamentOfficialPublishPage({ searchParams }: Props) {
+  const tournamentId = first(searchParams?.tournament).trim();
+  const tournamentName = first(searchParams?.name).trim();
+  if (!tournamentId) redirect("/admin/tournaments");
+  return <TournamentOpsWorkflowPage workflow="publish" kicker="Tournament Manager / Official publish" title="publish official tournament matches" description="Publish finalized singles and doubles games through Match Log and rating processing with a separate staging gate, confirmation, email safety check, and replay-safe operation record." tournamentId={tournamentId} tournamentName={tournamentName || null} />;
 }

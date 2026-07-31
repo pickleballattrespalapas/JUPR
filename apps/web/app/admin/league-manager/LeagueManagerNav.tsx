@@ -41,7 +41,8 @@ export default function LeagueManagerNav({ leagueName, leagueType, managerOnly =
       { href: leagueHref("/admin/league-manager/settings", leagueName, leagueType), label: "Settings" },
       { href: leagueHref("/admin/league-manager/roster", leagueName, leagueType), label: "Roster" },
       { href: leagueHref("/admin/league-manager/live", leagueName, leagueType), label: "Live rounds" },
-      { href: leagueHref("/admin/league-manager/awards", leagueName, leagueType), label: "Awards" }
+      { href: leagueHref("/admin/league-manager/awards", leagueName, leagueType), label: "Awards" },
+      { href: leagueHref("/admin/league-manager/print", leagueName, leagueType), label: "League night printout" }
     );
     if (String(leagueType || "Individual") === "Team") {
       links.splice(5, 0, {

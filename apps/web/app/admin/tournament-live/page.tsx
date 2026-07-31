@@ -1,36 +1,40 @@
-import Link from "next/link";
+import { Suspense } from "react";
+import { redirect } from "next/navigation";
 import TournamentAdminNav from "@/components/TournamentAdminNav";
 import { getAdminTournamentApiBaseUrl, getAdminTournamentLiveStatus } from "@/lib/adminTournamentApi";
+import SelectedTournamentPanelScope from "../tournaments/SelectedTournamentPanelScope";
 import TournamentLivePanel from "./TournamentLivePanel";
 
-const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
+type Props = { searchParams?: Record<string, string | string[] | undefined> };
+function first(value: string | string[] | undefined): string { return Array.isArray(value) ? String(value[0] || "") : String(value || ""); }
 
-export default async function AdminTournamentLivePage() {
+export default async function AdminTournamentLivePage({ searchParams }: Props) {
+  const tournamentId = first(searchParams?.tournament).trim();
+  const tournamentName = first(searchParams?.name).trim();
+  if (!tournamentId) redirect("/admin/tournaments");
+
   const clubId = "tres_palapas";
   const { data: status, error: statusError } = await getAdminTournamentLiveStatus(clubId);
 
   return (
     <>
-      <TournamentAdminNav />
+      <Suspense fallback={<div aria-hidden="true" style={{ minHeight: "42px", marginBottom: "1rem" }} />}>
+        <TournamentAdminNav />
+      </Suspense>
       <section>
         <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-          Tournament Live
+          Tournament Manager
         </p>
-        <h1 style={{ marginTop: 0 }}>Tournament Live runner</h1>
-        <p style={{ color: "#334155", maxWidth: "880px" }}>
-          A draw-scoped control room for running a prepared tournament during play. FastAPI/Python owns scoring and progression; the browser submits reviewed commands and displays durable recovery evidence. This is explicitly separate from the one-off JUPR Live product.
+        <h1 style={{ marginTop: 0 }}>{tournamentName || "Tournament"} live runner</h1>
+        <p style={{ color: "#334155", maxWidth: "850px" }}>
+          Run the selected tournament draw, scoring, progression, publication evidence, and recovery from one draw-scoped control room.
         </p>
-
-        {statusError ? <p style={{ color: "#b91c1c" }}>Tournament Admin status is unavailable. {statusError}</p> : null}
-        {!status ? (
-          <article style={cardStyle}>Tournament Live status is temporarily unavailable. Use the Streamlit fallback and do not attempt a write.</article>
-        ) : (
-          <TournamentLivePanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={status} />
-        )}
-
-        <p style={{ marginTop: "1rem" }}>
-          <Link href="/admin/player-updates">Player Updates</Link> · <Link href="/admin">Operations cockpit</Link>
-        </p>
+        {statusError ? <p role="alert" style={{ color: "#b91c1c" }}>Tournament Live is unavailable. {statusError}</p> : null}
+        {status ? (
+          <SelectedTournamentPanelScope tournamentId={tournamentId} tournamentName={tournamentName || null}>
+            <TournamentLivePanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={status} />
+          </SelectedTournamentPanelScope>
+        ) : null}
       </section>
     </>
   );
