@@ -31,4 +31,13 @@ assert.match(css, /grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/, "deskt
 assert.match(css, /overflow-x: auto/, "narrow team layouts must scroll instead of overlapping");
 assert.match(css, /grid-template-columns: minmax\(230px, 1fr\) minmax\(170px, 0\.65fr\) minmax\(230px, 1fr\)/, "teams and scores need three explicit columns");
 
+assert.match(form, /allPlayers\?: PublicPlayer\[\]/, "manual selectors must know the full club roster");
+assert.match(form, /is already used in this match/, "selected-elsewhere players must not trigger player creation");
+assert.match(form, /if \(!value && exactPlayer && cleanedQuery\)/, "released exact-name players must become selectable without editing text");
+assert.match(form, /if \(match\) addPlayerName\(String\(match\.name\)\)/, "round-robin suggestion selection must add the player immediately");
+assert.match(form, /function roundRobinPlayerRecords/, "round-robin results must calculate player records");
+assert.match(form, />Wins<\/th>/, "round-robin result modal must show wins");
+assert.match(form, />Losses<\/th>/, "round-robin result modal must show losses");
+assert.match(form, /Correct results/, "submission result modal must offer a correction path");
+
 console.log("Match Uploader context and responsive layout checks passed.");
