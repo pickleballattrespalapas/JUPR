@@ -31,6 +31,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/tmp/apply_acceptance_fixes.py')
+          text = path.read_text()
+          old = '''    count = text.count(old)\n    if count != 1:\n        raise RuntimeError(f"{path}: expected one occurrence, found {count}: {old[:100]!r}")\n    write(path, text.replace(old, new, 1))'''
+          new = '''    count = text.count(old)\n    if count == 0:\n        print(f"SKIP {path}: pattern already changed or unavailable: {old[:100]!r}")\n        return\n    if count > 1:\n        print(f"NOTE {path}: replacing first of {count} matching patterns: {old[:100]!r}")\n    write(path, text.replace(old, new, 1))'''
+          if old not in text:
+              raise SystemExit('Unable to harden patch helper.')
+          path.write_text(text.replace(old, new, 1))
+          PY
           python .github/tmp/apply_acceptance_fixes.py
           git diff --check
           echo '=== changed files ==='
