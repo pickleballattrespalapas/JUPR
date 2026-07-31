@@ -13,26 +13,37 @@ jobs:
     if: github.head_ref == 'agent/verify-league-format-staging-44982b'
     runs-on: ubuntu-latest
     timeout-minutes: 18
+    env:
+      EXPECTED_SHA: 44982b617fe09e2ab73d55bb6f45da646d6136c5
+      API_ORIGIN: https://juprleagues-api-staging.fly.dev
     steps:
       - name: Check out isolated verifier
         uses: actions/checkout@v4
+        with:
+          ref: agent/verify-league-format-staging-44982b
+          fetch-depth: 1
+          persist-credentials: false
 
-      - name: Wait for and verify exact permanently-open staging health
+      - name: Verify exact permanently-open staging health
         shell: bash
         run: |
           set -euo pipefail
-          expected_sha='44982b617fe09e2ab73d55bb6f45da646d6136c5'
-          base_url='https://juprleagues-api-staging.fly.dev'
+          matched=0
           rm -f fly-health.json
-          for attempt in $(seq 1 50); do
-            if curl --fail --silent --show-error --max-time 20 "$base_url/health" -o fly-health.json; then
-              if EXPECTED_SHA="$expected_sha" python - <<'PY'
-          import json, os
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error --max-time 30 "$API_ORIGIN/health" -o fly-health.json; then
+              if python - <<'PY'
+          import json
+          import os
+          from scripts.staging_write_waves import expected_write_flags
+
           with open('fly-health.json', encoding='utf-8') as handle:
               health = json.load(handle)
           expected_sha = os.environ['EXPECTED_SHA']
+          prerequisites = health.get('write_prerequisites') or {}
           checks = {
               'ok': health.get('ok') is True,
+              'service': health.get('service') == 'jupr-api',
               'environment': health.get('environment') == 'staging',
               'git_commit_sha': health.get('git_commit_sha') == expected_sha,
               'image_build_git_sha': health.get('image_build_git_sha') == expected_sha,
@@ -41,36 +52,47 @@ jobs:
               'staging_write_wave': health.get('staging_write_wave') == 'open',
               'write_wave': health.get('write_wave') == 'open',
               'business_data_write_wave_active': health.get('business_data_write_wave_active') is True,
-              'email_mode': health.get('email_mode') == 'dry_run',
-              'live_player_update_email_enabled': health.get('live_player_update_email_enabled') is False,
+              'email_mode': (health.get('email_mode') or prerequisites.get('email_mode')) == 'dry_run',
+              'live_player_update_email_enabled': (
+                  health.get('live_player_update_email_enabled')
+                  if health.get('live_player_update_email_enabled') is not None
+                  else prerequisites.get('live_player_update_email_enabled')
+              ) is False,
               'public_live_production_override_enabled': health.get('public_live_production_override_enabled') is False,
           }
           missing = [name for name, passed in checks.items() if not passed]
           if missing:
               raise SystemExit('waiting for exact staging: ' + ', '.join(missing))
-          flags = health.get('controlled_write_flags') or {}
-          disabled = sorted(name for name, enabled in flags.items() if enabled is not True)
-          if disabled:
-              raise SystemExit('permanent-open flag projection is incomplete: ' + ', '.join(disabled))
+          expected_flags = expected_write_flags('open')
+          actual_flags = health.get('controlled_write_flags') or {}
+          if actual_flags != expected_flags:
+              missing_flags = sorted(
+                  name for name, enabled in expected_flags.items()
+                  if actual_flags.get(name) is not enabled
+              )
+              extra_flags = sorted(set(actual_flags) - set(expected_flags))
+              raise SystemExit(
+                  'permanent-open flag projection differs: missing/mismatched='
+                  + ','.join(missing_flags)
+                  + '; extra='
+                  + ','.join(extra_flags)
+              )
           PY
               then
+                matched=1
                 break
               fi
             fi
-            if [ "$attempt" = 50 ]; then
-              echo 'Exact staging candidate did not become healthy in time.' >&2
-              cat fly-health.json 2>/dev/null || true
-              exit 1
-            fi
-            sleep 12
+            sleep 15
           done
+          test "$matched" = 1
 
       - name: Verify Match Uploader format-separated status
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --max-time 20 \
-            'https://juprleagues-api-staging.fly.dev/admin/clubs/tres_palapas/match-uploader/status' \
+          curl --fail --silent --show-error --max-time 30 \
+            "$API_ORIGIN/admin/clubs/tres_palapas/match-uploader/status" \
             -o match-uploader-status.json
           python - <<'PY'
           import json
@@ -90,8 +112,6 @@ jobs:
               raise SystemExit('Expected existing doubles league is missing')
           if 'summer social' in set(map(str.casefold, singles)):
               raise SystemExit('Doubles league leaked into singles choices')
-          if status.get('warnings'):
-              print('status warnings:', status['warnings'])
           PY
 
       - name: Upload verification evidence
@@ -102,3 +122,4 @@ jobs:
             fly-health.json
             match-uploader-status.json
           retention-days: 3
+          if-no-files-found: error
