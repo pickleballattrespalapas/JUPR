@@ -26,6 +26,7 @@ type MatchLogApplyPanelProps = {
   duplicateGroups?: AdminDuplicateGroup[];
   matches?: AdminMatchLogMatch[];
   recentOperations?: AdminMatchEditOperation[];
+  initialSelectedIds?: string[];
   exclusionOperation: AdminMatchExclusionOperation | null;
   onExclusionOperationChange: (operation: AdminMatchExclusionOperation | null) => void;
   onMutationComplete: () => void;
@@ -44,6 +45,11 @@ type MatchPatch = {
   t2_p2?: number;
   score_t1?: number;
   score_t2?: number;
+};
+
+type BulkScoreEdit = {
+  scoreT1: string;
+  scoreT2: string;
 };
 
 type MatchEditState = {
@@ -191,6 +197,23 @@ function emptyEditState(): MatchEditState {
   };
 }
 
+function visibleMatchIds(matches: AdminMatchLogMatch[], requestedIds: string[]): string[] {
+  const visible = new Set(matches.filter((match) => match.id != null).map((match) => String(match.id)));
+  return Array.from(new Set(requestedIds.map((value) => String(value).trim()).filter((value) => value && visible.has(value)))).slice(0, 100);
+}
+
+function bulkScoreState(matches: AdminMatchLogMatch[], matchIds: string[]): Record<string, BulkScoreEdit> {
+  const selected = new Set(matchIds);
+  return Object.fromEntries(
+    matches
+      .filter((match) => match.id != null && selected.has(String(match.id)))
+      .map((match) => [String(match.id), {
+        scoreT1: String(match.score?.team1 ?? ""),
+        scoreT2: String(match.score?.team2 ?? "")
+      }])
+  );
+}
+
 function editStateFromMatch(match: AdminMatchLogMatch | null): MatchEditState {
   if (!match) return emptyEditState();
   return {
@@ -317,6 +340,7 @@ export default function MatchLogApplyPanel({
   duplicateGroups = [],
   matches = [],
   recentOperations = [],
+  initialSelectedIds = [],
   exclusionOperation,
   onExclusionOperationChange,
   onMutationComplete
@@ -339,7 +363,8 @@ export default function MatchLogApplyPanel({
   const [idempotencyKey, setIdempotencyKey] = useState(requestKey);
   const [duplicateIdempotencyKey, setDuplicateIdempotencyKey] = useState(requestKey);
   const [recoveryOperationId, setRecoveryOperationId] = useState<string | null>(() => unresolvedEditRecoveryId(recentOperations));
-  const [bulkIds, setBulkIds] = useState<string[]>([]);
+  const [bulkIds, setBulkIds] = useState<string[]>(() => visibleMatchIds(matches, initialSelectedIds));
+  const [bulkScoreEdits, setBulkScoreEdits] = useState<Record<string, BulkScoreEdit>>(() => bulkScoreState(matches, visibleMatchIds(matches, initialSelectedIds)));
   const [bulkLeague, setBulkLeague] = useState("");
   const [bulkWeekMode, setBulkWeekMode] = useState<"unchanged" | "set" | "clear">("unchanged");
   const [bulkWeekTag, setBulkWeekTag] = useState("");
@@ -351,6 +376,7 @@ export default function MatchLogApplyPanel({
   const [bulkReplacementPlayer, setBulkReplacementPlayer] = useState("");
   const stagedEditsRef = useRef<HTMLDivElement | null>(null);
   const selectedMatch = matches.find((match) => match.id != null && String(match.id) === selectedMatchId) || null;
+  const selectedBulkMatches = matches.filter((match) => match.id != null && bulkIds.includes(String(match.id)));
   const visiblePlayerOptions = collectVisiblePlayers(matches);
   const playerOptions = rosterPlayers.length ? rosterPlayers : visiblePlayerOptions;
   const scope = patchScope(stagedPatches);
@@ -478,9 +504,33 @@ export default function MatchLogApplyPanel({
     }
   }
 
+  function setBulkSelection(nextIds: string[]) {
+    const normalized = visibleMatchIds(matches, nextIds);
+    setBulkIds(normalized);
+    setBulkScoreEdits((current) => {
+      const defaults = bulkScoreState(matches, normalized);
+      const next: Record<string, BulkScoreEdit> = {};
+      for (const id of normalized) {
+        const value = current[id] || defaults[id];
+        if (value) next[id] = value;
+      }
+      return next;
+    });
+  }
+
   function toggleBulkMatch(matchId: number) {
     const key = String(matchId);
-    setBulkIds((current) => current.includes(key) ? current.filter((value) => value !== key) : current.length < 100 ? [...current, key] : current);
+    setBulkSelection(bulkIds.includes(key) ? bulkIds.filter((value) => value !== key) : [...bulkIds, key]);
+  }
+
+  function updateBulkScore(matchId: string, field: keyof BulkScoreEdit, value: string) {
+    setBulkScoreEdits((current) => ({
+      ...current,
+      [matchId]: {
+        ...(current[matchId] || { scoreT1: "", scoreT2: "" }),
+        [field]: value
+      }
+    }));
   }
 
   function stageBulkEdits() {
@@ -510,6 +560,17 @@ export default function MatchLogApplyPanel({
           patch.date = original.toISOString();
         }
         if (bulkReplaceSlot) patch[bulkReplaceSlot] = integerInput(bulkReplacementPlayer, "Replacement player");
+        const scoreEdit = bulkScoreEdits[String(match.id)] || {
+          scoreT1: String(match.score?.team1 ?? ""),
+          scoreT2: String(match.score?.team2 ?? "")
+        };
+        const scoreT1 = integerInput(scoreEdit.scoreT1, `Match #${match.id} Team 1 score`);
+        const scoreT2 = integerInput(scoreEdit.scoreT2, `Match #${match.id} Team 2 score`);
+        if (scoreT1 < 0 || scoreT2 < 0) throw new Error(`Match #${match.id} scores must be non-negative.`);
+        if (scoreT1 + scoreT2 <= 0) throw new Error(`Match #${match.id} needs a non-zero score.`);
+        if (scoreT1 === scoreT2) throw new Error(`Match #${match.id} cannot have a tied score.`);
+        if (scoreT1 !== Number(match.score?.team1 ?? 0)) patch.score_t1 = scoreT1;
+        if (scoreT2 !== Number(match.score?.team2 ?? 0)) patch.score_t2 = scoreT2;
         return patch;
       });
       if (generated.every((patch) => patchFields(patch).length === 0)) throw new Error("Choose at least one bulk field change.");
@@ -753,10 +814,10 @@ export default function MatchLogApplyPanel({
 
       {mode === "bulk" ? <section data-testid="match-log-bulk-editor" style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.85rem", marginTop: "1rem", background: "#f8fafc" }}>
         <h3 style={{ marginTop: 0 }}>Bulk stage visible matches</h3>
-        <p style={{ color: "#475569" }}>Select up to 100 rows, then set shared fields, clear notes/week tags, shift dates, or replace one player slot. Nothing is written until the staged operation is confirmed below.</p>
+        <p style={{ color: "#475569" }}>Select up to 100 rows. Each selected score can be corrected independently, and shared metadata changes can be added to the same staged operation. Nothing is written until confirmation.</p>
         <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-          <button type="button" onClick={() => setBulkIds(matches.filter((match) => match.id != null).slice(0, 100).map((match) => String(match.id)))} style={secondaryButtonStyle}>Select first 100 visible</button>
-          <button type="button" onClick={() => setBulkIds([])} disabled={!bulkIds.length} style={secondaryButtonStyle}>Clear selection</button>
+          <button type="button" onClick={() => setBulkSelection(matches.filter((match) => match.id != null).slice(0, 100).map((match) => String(match.id)))} style={secondaryButtonStyle}>Select first 100 visible</button>
+          <button type="button" onClick={() => setBulkSelection([])} disabled={!bulkIds.length} style={secondaryButtonStyle}>Clear selection</button>
           <span style={{ alignSelf: "center" }}><strong>{bulkIds.length}</strong> selected</span>
         </p>
         <div style={{ maxHeight: "220px", overflowY: "auto", display: "grid", gap: "0.35rem", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "0.6rem", background: "white" }}>
@@ -767,6 +828,30 @@ export default function MatchLogApplyPanel({
             </label>
           ))}
         </div>
+        {selectedBulkMatches.length ? (
+          <div style={{ marginTop: "0.85rem" }}>
+            <h4 style={{ marginBottom: "0.5rem" }}>Individual score corrections</h4>
+            <p style={{ color: "#475569", marginTop: 0 }}>Review every selected match. Change only the scores that need correction.</p>
+            <div style={{ display: "grid", gap: "0.6rem" }}>
+              {selectedBulkMatches.map((match) => {
+                const scoreEdit = bulkScoreEdits[String(match.id)] || {
+                  scoreT1: String(match.score?.team1 ?? ""),
+                  scoreT2: String(match.score?.team2 ?? "")
+                };
+                return (
+                  <div key={`bulk-score-${match.id}`} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.6rem", alignItems: "end", border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.65rem", background: "white" }}>
+                    <div>
+                      <strong>Match #{match.id}</strong>
+                      <div style={{ color: "#475569", marginTop: "0.25rem" }}>{playerNames(match.team1)} vs {playerNames(match.team2)}</div>
+                    </div>
+                    <label><strong>Team 1 score</strong><br /><input type="number" min="0" step="1" value={scoreEdit.scoreT1} onChange={(event) => updateBulkScore(String(match.id), "scoreT1", event.target.value)} style={inputStyle} /></label>
+                    <label><strong>Team 2 score</strong><br /><input type="number" min="0" step="1" value={scoreEdit.scoreT2} onChange={(event) => updateBulkScore(String(match.id), "scoreT2", event.target.value)} style={inputStyle} /></label>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}>
           <label><strong>Set league</strong><br /><input value={bulkLeague} onChange={(event) => setBulkLeague(event.target.value)} style={inputStyle} placeholder="Blank = unchanged" /></label>
           <label><strong>Week tag action</strong><br /><select value={bulkWeekMode} onChange={(event) => setBulkWeekMode(event.target.value as "unchanged" | "set" | "clear")} style={inputStyle}><option value="unchanged">No change</option><option value="set">Set</option><option value="clear">Clear</option></select></label>

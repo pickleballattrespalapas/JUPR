@@ -1265,3 +1265,21 @@ def test_admin_match_log_duplicate_no_issue_contract(monkeypatch):
     assert [row["id"] for row in tables["matches"]] == [1, 2, 3, 99]
     assert tables["admin_match_log_duplicate_resolutions"][0]["match_id_key"] == "1,2"
     assert tables["admin_activity_log"][0]["action_type"] == "match_duplicate_false_positive_resolved"
+
+
+
+def test_admin_match_log_multiple_match_ids_contract(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    supabase = fake_supabase()
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).get(
+        "/admin/clubs/club/match-log?match_ids=1,3,1&limit=20",
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["filters"]["match_id"] is None
+    assert payload["filters"]["match_ids"] == [1, 3]
+    assert [match["id"] for match in payload["matches"]] == [3, 1]

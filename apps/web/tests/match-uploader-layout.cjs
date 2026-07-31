@@ -7,6 +7,10 @@ const routeRoot = path.join(webRoot, "app", "admin", "match-uploader");
 const layout = fs.readFileSync(path.join(routeRoot, "layout.tsx"), "utf8");
 const css = fs.readFileSync(path.join(routeRoot, "layout.module.css"), "utf8");
 const form = fs.readFileSync(path.join(routeRoot, "MatchUploaderForm.tsx"), "utf8");
+const matchLogRoot = path.join(webRoot, "app", "admin", "match-log");
+const matchLogWorkspace = fs.readFileSync(path.join(matchLogRoot, "MatchLogWorkspace.tsx"), "utf8");
+const matchLogPanel = fs.readFileSync(path.join(matchLogRoot, "MatchLogApplyPanel.tsx"), "utf8");
+const matchLogApi = fs.readFileSync(path.join(webRoot, "lib", "adminMatchLogApi.ts"), "utf8");
 
 assert.match(layout, /className=\{styles\.root\}/, "route layout must scope Match Uploader styles");
 assert.match(form, /league: string;/, "each manual match row must store its own league");
@@ -40,5 +44,17 @@ assert.match(form, /function roundRobinPlayerRecords/, "round-robin results must
 assert.match(form, />Wins<\/th>/, "round-robin result modal must show wins");
 assert.match(form, />Losses<\/th>/, "round-robin result modal must show losses");
 assert.match(form, /Edit results/, "submission result modal must label the match correction path as Edit results");
+assert.match(form, /submissionKind === "round_robin"/, "round-robin results must use a bulk edit handoff");
+assert.match(form, /Choose matches to edit/, "multi-match manual uploads must prompt for the matches to edit");
+assert.match(form, /\/admin\/match-log\/bulk/, "multi-match results must route to Bulk edit");
+assert.match(form, /params\.set\("match_ids"/, "bulk handoff must filter all created match IDs");
+assert.match(form, /params\.set\("selected_ids"/, "bulk handoff must preselect created match IDs");
+assert.match(matchLogWorkspace, /match_ids\?: string/, "Match Log search params must support multiple IDs");
+assert.match(matchLogWorkspace, /name="match_ids"/, "Match Log filter must accept multiple IDs");
+assert.match(matchLogWorkspace, /initialSelectedIds=\{initialSelectedIds\}/, "Bulk edit must receive the uploaded match selection");
+assert.match(matchLogPanel, /initialSelectedIds\?: string\[\]/, "Bulk editor must accept initial selected IDs");
+assert.match(matchLogPanel, /Individual score corrections/, "Bulk editor must expose per-match score controls");
+assert.match(matchLogPanel, /bulkScoreEdits/, "Bulk editor must stage independent score changes");
+assert.match(matchLogApi, /matchIds\?: string \| Array<string \| number>/, "Match Log client must send multiple IDs");
 
 console.log("Match Uploader context and responsive layout checks passed.");

@@ -16,6 +16,8 @@ import MatchLogSocialPanel from "./MatchLogSocialPanel";
 export type MatchLogSearchParams = {
   filter?: string;
   match_id?: string;
+  match_ids?: string;
+  selected_ids?: string;
   league?: string;
   week_tag?: string;
   context_type?: string;
@@ -36,7 +38,7 @@ const muted = { color: "#475569" };
 const workspaceModes = [
   { mode: "review", path: "/admin/match-log", label: "Review", title: "Review matches", description: "Find matches, scan duplicates, and choose the right correction tool." },
   { mode: "edit", path: "/admin/match-log/edit", label: "Edit one", title: "Edit a match", description: "Correct one match and review the exact changes before applying them." },
-  { mode: "bulk", path: "/admin/match-log/bulk", label: "Bulk edit", title: "Bulk edit matches", description: "Apply the same correction to a selected group of visible matches." },
+  { mode: "bulk", path: "/admin/match-log/bulk", label: "Bulk edit", title: "Bulk edit matches", description: "Review selected matches, edit scores individually, and optionally apply shared corrections." },
   { mode: "duplicates", path: "/admin/match-log/duplicates", label: "Duplicates", title: "Resolve duplicates", description: "Mark false positives or remove confirmed duplicate rows with guarded replay." },
   { mode: "exclude", path: "/admin/match-log/exclude", label: "Exclude", title: "Exclude rated matches", description: "Soft-exclude selected matches and complete any required recovery." },
   { mode: "social", path: "/admin/match-log/social", label: "Social", title: "Social match tools", description: "Review and correct social match records." },
@@ -128,7 +130,13 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
   const [exclusionOperation, setExclusionOperation] = useState<AdminMatchExclusionOperation | null>(null);
   const mutationRefreshPending = useRef(false);
   const selectedFilterParam = searchParams?.filter || "All";
-  const matchIdParam = searchParams?.match_id || null;
+  const matchIdsParam = searchParams?.match_ids || searchParams?.match_id || null;
+  const initialSelectedIds = (searchParams?.selected_ids || "")
+    .split(/[\s,;]+/)
+    .map((value) => value.replace(/^#/, "").trim())
+    .filter(Boolean)
+    .slice(0, 100);
+  const initialSelectedIdsKey = initialSelectedIds.join(",");
   const leagueParam = searchParams?.league || null;
   const weekTagParam = searchParams?.week_tag || null;
   const contextTypeParam = searchParams?.context_type || null;
@@ -141,7 +149,7 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
     accessToken,
     sessionLoading ? "loading" : "ready",
     selectedFilterParam,
-    matchIdParam || "",
+    matchIdsParam || "",
     leagueParam || "",
     weekTagParam || "",
     contextTypeParam || "",
@@ -204,7 +212,7 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
       getAdminMatchLog({
         clubId,
         filter: selectedFilterParam,
-        matchId: matchIdParam,
+        matchIds: matchIdsParam,
         league: leagueParam,
         weekTag: weekTagParam,
         contextType: contextTypeParam,
@@ -263,7 +271,7 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
     endDateParam,
     leagueParam,
     limitParam,
-    matchIdParam,
+    matchIdsParam,
     reloadNonce,
     selectedFilterParam,
     sessionLoading,
@@ -391,7 +399,7 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
                 <option>Pop-Up</option>
               </select>
             </label>
-            <label>Match ID<br /><input key={`match-${matchIdParam || "all"}`} name="match_id" defaultValue={matchIdParam || ""} style={{ width: "100%" }} /></label>
+            <label>Match IDs<br /><input key={`matches-${matchIdsParam || "all"}`} name="match_ids" defaultValue={matchIdsParam || ""} placeholder="e.g. 27, 28, 29" style={{ width: "100%" }} /><small>Comma or space-separated.</small></label>
             <label>League<br />
               <select key={`league-${leagueParam || "all"}`} name="league" defaultValue={leagueParam || ""} style={{ width: "100%" }}>
                 <option value="">All leagues</option>
@@ -534,6 +542,7 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
 
           {mode === "edit" || mode === "bulk" || mode === "duplicates" ? (
             <MatchLogApplyPanel
+              key={`${mode}:${initialSelectedIdsKey}:${data.matches.map((match) => match.id).join(",")}`}
               mode={mode === "edit" ? "guided" : mode}
               apiBase={apiBase}
               clubId={clubId}
@@ -543,6 +552,7 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
               duplicateGroups={data.duplicate_groups}
               matches={data.matches}
               recentOperations={data.recent_edit_operations || []}
+              initialSelectedIds={initialSelectedIds}
               exclusionOperation={exclusionOperation}
               onExclusionOperationChange={setExclusionOperation}
               onMutationComplete={handleMutationComplete}
