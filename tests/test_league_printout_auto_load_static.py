@@ -4,45 +4,42 @@ from pathlib import Path
 PANEL = Path(
     "apps/web/app/admin/league-manager/print/LeaguePrintoutPanel.tsx"
 ).read_text(encoding="utf-8")
+PAGE = Path(
+    "apps/web/app/admin/league-manager/print/page.tsx"
+).read_text(encoding="utf-8")
 
 
-def test_printout_auto_load_is_token_scoped_and_logout_clears_workspace() -> None:
-    assert "useAuthenticatedAutoLoad(status.enabled ? accessToken : \"\", loadLeagues)" in PANEL
-    assert "const listRequest = useLatestRequestGuard(accessToken, resetWorkspace);" in PANEL
-    assert "const detailRequest = useLatestRequestGuard(accessToken);" in PANEL
-    reset = PANEL.split("function resetWorkspace()", 1)[1].split(
-        "const listRequest", 1
+def test_printout_auto_load_is_scoped_to_the_selected_league_and_token() -> None:
+    assert 'initialLeague: string;' in PANEL
+    assert 'useLatestRequestGuard(`${accessToken}\\u0000${initialLeague}`, clearProtectedState)' in PANEL
+    assert 'useAuthenticatedAutoLoad(status.enabled ? `${accessToken}\\u0000${initialLeague}` : "", () => loadDetail(""))' in PANEL
+    clear = PANEL.split("function clearProtectedState()", 1)[1].split(
+        "async function requestJson", 1
     )[0]
     for statement in (
-        "setLeagues([]);",
-        'setLeagueName("");',
         "setPrintout(null);",
         'setWeekNum("");',
-        "setLoadingLeagues(false);",
-        "setLoadingPrintout(false);",
+        "setBusy(false);",
+        "setMessage(null);",
     ):
-        assert statement in reset
+        assert statement in clear
 
 
-def test_printout_selector_changes_auto_load_and_clear_stale_results() -> None:
-    assert "function selectLeague(selectedLeague: string)" in PANEL
-    assert 'void loadDetail(selectedLeague, "");' in PANEL
+def test_printout_week_changes_reload_without_a_second_league_selector() -> None:
     assert "function selectWeek(selectedWeek: string)" in PANEL
-    assert "void loadDetail(leagueName, selectedWeek);" in PANEL
-    load_detail = PANEL.split("async function loadDetail", 1)[1].split(
-        "function selectLeague", 1
+    assert "void loadDetail(selectedWeek);" in PANEL
+    assert "encodeURIComponent(initialLeague)" in PANEL
+    assert "setPrintout(null);" not in PANEL.split("async function loadDetail", 1)[1].split(
+        "function selectWeek", 1
     )[0]
-    assert "setPrintout(null);" in load_detail
-    assert "if (!detailRequest.isCurrent(generation)) return;" in load_detail
+    assert "Select league" not in PANEL
+    assert "Refresh leagues" not in PANEL
+    assert "Reload printout" in PANEL
 
 
-def test_printout_refresh_preserves_valid_selection_and_week() -> None:
-    load_leagues = PANEL.split("async function loadLeagues", 1)[1].split(
-        "async function loadDetail", 1
-    )[0]
-    assert "const selectedLeagueBeforeRefresh = leagueName;" in load_leagues
-    assert "const selectedWeekBeforeRefresh = weekNum;" in load_leagues
-    assert "names.includes(selectedLeagueBeforeRefresh)" in load_leagues
-    assert "await loadDetail(selectedLeague, selectedWeek);" in load_leagues
-    assert '"Refresh leagues"' in PANEL
-    assert ">Load leagues</button>" not in PANEL
+def test_printout_page_requires_selected_league_context() -> None:
+    assert "searchParams" in PAGE
+    assert 'first(searchParams?.league)' in PAGE
+    assert 'redirect("/admin/league-manager")' in PAGE
+    assert "LeagueManagerNav" in PAGE
+    assert "initialLeague={leagueName}" in PAGE
