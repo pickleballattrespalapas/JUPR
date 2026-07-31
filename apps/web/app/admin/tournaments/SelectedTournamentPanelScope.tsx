@@ -33,6 +33,15 @@ function matchingTournamentOption(select: HTMLSelectElement, tournamentId: strin
     || null;
 }
 
+function preserveTournamentContext(anchor: HTMLAnchorElement, tournamentId: string, tournamentName: string) {
+  const rawHref = anchor.getAttribute("href") || "";
+  if (!rawHref.startsWith("/admin/tournaments") && !rawHref.startsWith("/admin/tournament-setup") && !rawHref.startsWith("/admin/tournament-live")) return;
+  const url = new URL(rawHref, window.location.origin);
+  if (!url.searchParams.get("tournament")) url.searchParams.set("tournament", tournamentId);
+  if (tournamentName && !url.searchParams.get("name")) url.searchParams.set("name", tournamentName);
+  anchor.setAttribute("href", `${url.pathname}${url.search}${url.hash}`);
+}
+
 export default function SelectedTournamentPanelScope({ tournamentId, tournamentName, children }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const lastDispatchRef = useRef(0);
@@ -41,6 +50,10 @@ export default function SelectedTournamentPanelScope({ tournamentId, tournamentN
     function applySelectedTournament() {
       const container = rootRef.current;
       if (!container) return;
+
+      for (const anchor of Array.from(container.querySelectorAll("a[href]"))) {
+        preserveTournamentContext(anchor, tournamentId, tournamentName || "");
+      }
 
       for (const article of Array.from(container.querySelectorAll("article"))) {
         const heading = article.querySelector("h2");
