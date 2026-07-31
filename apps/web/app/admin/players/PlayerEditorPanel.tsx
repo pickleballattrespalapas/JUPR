@@ -33,7 +33,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
   const [socialPeople, setSocialPeople] = useState<AdminPlayerSocialIdentity[]>([]); const [socialPlayers, setSocialPlayers] = useState<Array<{ id: number; name: string; active?: boolean | null }>>([]); const [selectedSocialId, setSelectedSocialId] = useState(""); const [socialLinkedPlayerId, setSocialLinkedPlayerId] = useState(""); const [socialDisplayName, setSocialDisplayName] = useState("");
   const [mergeSourceId, setMergeSourceId] = useState(""); const [mergeTargetId, setMergeTargetId] = useState(""); const [mergePreview, setMergePreview] = useState<AdminPlayerMergePreview | null>(null);
   const [mergeOperationId, setMergeOperationId] = useState(""); const [mergeAttempted, setMergeAttempted] = useState(false); const [mergeRecovery, setMergeRecovery] = useState<AdminPlayerEditorWriteResponse | null>(null); const [replayJobId, setReplayJobId] = useState("");
-  const [saving, setSaving] = useState(false); const [message, setMessage] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false); const [message, setMessage] = useState<string | null>(null); const [resultDialog, setResultDialog] = useState<string | null>(null);
   const workspaceRequest = useLatestRequestGuard(accessToken, clearProtectedPlayerState);
   const playersRequest = useLatestRequestGuard(accessToken);
   const detailRequest = useLatestRequestGuard(accessToken);
@@ -50,7 +50,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
     playersRequest.invalidate();
     detailRequest.invalidate();
     socialRequest.invalidate();
-    setSaving(false); setMessage(null);
+    setSaving(false); setMessage(null); setResultDialog(null);
     setPlayers([]); setSelectedId(""); clearPlayerDetail();
     setSocialPeople([]); setSocialPlayers([]); seedSocialForm(null);
     setMergeSourceId(""); setMergeTargetId(""); setMergePreview(null); setMergeRecovery(null); setMergeOperationId(""); setMergeAttempted(false); setReplayJobId("");
@@ -134,7 +134,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
         await loadDetail(String(payload.player.id));
         if (!actionRequest.isCurrent(generation)) return;
       }
-      setMessage("Player saved. Use Match Log and Replay History if downstream rating repair is needed.");
+      setMessage(null); setResultDialog(`Player saved: ${payload.player?.name || editName.trim()}. Use Match Log and Replay History if downstream rating repair is needed.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save player.");
     } finally {
@@ -324,6 +324,15 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
   if (!status.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Next Player Editor is disabled</h2><p style={{ color: "#475569" }}>{status.warnings?.[0] || "Enable the Player Editor pilot flag on FastAPI."}</p></article>;
 
   return <section style={{ display: "grid", gap: "1rem" }}>
+    {resultDialog ? (
+      <div role="dialog" aria-modal="true" aria-labelledby="player-save-result-title" style={{ position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: "1rem", background: "rgba(15, 23, 42, 0.55)" }}>
+        <article style={{ ...cardStyle, width: "min(560px, 100%)", boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)" }}>
+          <h2 id="player-save-result-title" style={{ marginTop: 0 }}>Player update complete</h2>
+          <p role="status" style={{ color: "#166534" }}>{resultDialog}</p>
+          <p style={{ textAlign: "right", marginBottom: 0 }}><button type="button" onClick={() => setResultDialog(null)} style={buttonStyle}>OK</button></p>
+        </article>
+      </div>
+    ) : null}
     {message ? (
       <div
         role={isErrorMessage(message) ? "alert" : "status"}

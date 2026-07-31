@@ -63,7 +63,7 @@ type StandingRow = {
   points_against?: number;
   point_differential?: number;
 };
-type PendingOperation = { id: string; operation_type?: string; status?: string; created_at?: string };
+type PendingOperation = { id: string; operation_type?: string; status?: string; started_at?: string };
 type TeamLeagueDetail = {
   ok: boolean;
   settings: TeamSettings;
@@ -114,6 +114,16 @@ const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 const gridStyle = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" };
+const TIMEZONE_OPTIONS = [
+  "America/Mazatlan",
+  "America/Phoenix",
+  "America/Los_Angeles",
+  "America/Denver",
+  "America/Chicago",
+  "America/New_York",
+  "America/Mexico_City",
+  "UTC"
+];
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -133,7 +143,7 @@ function settingsDraft(settings?: TeamSettings | null): SettingsDraft {
     startDate: String(settings?.start_date || ""),
     weekday: String(settings?.weekday ?? 0),
     startTime: String(settings?.start_time || "18:00").slice(0, 5),
-    timezone: String(settings?.timezone || "America/Chicago"),
+    timezone: String(settings?.timezone || "America/Mazatlan"),
     venue: String(settings?.venue || ""),
     registrationClosesAt: settings?.registration_closes_at ? String(settings.registration_closes_at).slice(0, 16) : ""
   };
@@ -189,7 +199,7 @@ function TeamSettingsForm({
         <label><strong>Season start</strong><br /><input type="date" value={draft.startDate} onChange={(event) => update("startDate", event.target.value)} style={inputStyle} /></label>
         <label><strong>League night</strong><br /><select value={draft.weekday} onChange={(event) => update("weekday", event.target.value)} style={inputStyle}><option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option></select></label>
         <label><strong>Start time</strong><br /><input type="time" value={draft.startTime} onChange={(event) => update("startTime", event.target.value)} style={inputStyle} /></label>
-        <label><strong>Timezone</strong><br /><input value={draft.timezone} onChange={(event) => update("timezone", event.target.value)} placeholder="America/Chicago" style={inputStyle} /></label>
+        <label><strong>Timezone</strong><br /><select value={draft.timezone} onChange={(event) => update("timezone", event.target.value)} style={inputStyle}>{!TIMEZONE_OPTIONS.includes(draft.timezone) ? <option value={draft.timezone}>{draft.timezone}</option> : null}{TIMEZONE_OPTIONS.map((zone) => <option key={zone} value={zone}>{zone}</option>)}</select></label>
         <label><strong>Venue</strong><br /><input value={draft.venue} onChange={(event) => update("venue", event.target.value)} maxLength={240} style={inputStyle} /></label>
         <label><strong>Registration closes</strong><br /><input type="datetime-local" value={draft.registrationClosesAt} onChange={(event) => update("registrationClosesAt", event.target.value)} style={inputStyle} /></label>
       </div>
@@ -372,7 +382,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
         requestJson<TeamLeagueListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/team-leagues`)
       ]);
       if (!listRequest.isCurrent(generation)) return;
-      const names = Array.from(new Set([...(base.leagues || []).map((league) => league.league_name), ...(team.leagues || []).map((league) => league.league_name)])).sort();
+      const names = Array.from(new Set([...(base.leagues || []).filter((league) => String(league.league_type || "Individual") === "Team").map((league) => league.league_name), ...(team.leagues || []).map((league) => league.league_name)])).sort();
       setLeagueNames(names);
       setTeamLeagueRows(team.leagues || []);
       if (leagueName && names.includes(leagueName)) await selectLeague(leagueName, team.leagues || []);

@@ -706,7 +706,7 @@ def get_admin_team_league(
         supabase,
         "team_league_operations",
         filters={"club_id": str(club_id), "league_name": clean_league},
-        order="created_at",
+        order="started_at",
     )
     players = [
         {
@@ -731,7 +731,7 @@ def get_admin_team_league(
                 "idempotency_key",
                 "request_json",
                 "recovery_note",
-                "created_at",
+                "started_at",
                 "updated_at",
             )
         }

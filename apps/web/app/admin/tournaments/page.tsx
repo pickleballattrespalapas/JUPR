@@ -13,9 +13,9 @@ export default async function AdminTournamentsPage() {
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         Tournament Admin
       </p>
-      <h1 style={{ marginTop: 0 }}>Tournament registration management</h1>
+      <h1 style={{ marginTop: 0 }}>Tournament Manager</h1>
       <p style={{ color: "#334155", maxWidth: "860px" }}>
-        Read-foundation for moving Streamlit tournament registration management to Next/Vercel. This view is guarded by the stored admin session and FastAPI tournament permissions.
+        Create a tournament or open an existing tournament, then work from a focused tournament home for setup, registration, commerce, operations, results, live play, publishing, and recovery.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Tournament Admin status is temporarily unavailable. {error}</p> : null}
