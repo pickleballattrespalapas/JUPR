@@ -4,6 +4,7 @@ import { getAdminLeagueLiveStatus, getAdminLeagueManagerStatus, getAdminLeagueMa
 import { getAdminMatchUploaderStatus } from "@/lib/adminMatchUploaderApi";
 import LeagueLiveRoundPanel from "./LeagueLiveRoundPanel";
 import LeagueManagerNav from "../LeagueManagerNav";
+import SelectedLeaguePanelScope from "../SelectedLeaguePanelScope";
 
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
@@ -39,15 +40,16 @@ export default async function LeagueManagerLivePage({ searchParams }: Props) {
       {playersError ? <p role="alert" style={{ color: "#b91c1c" }}>Player lookup is unavailable. {playersError}</p> : null}
 
       {leagueStatus && liveDomainStatus && uploaderStatus ? (
-        <LeagueLiveRoundPanel
-          apiBase={getAdminLeagueManagerApiBaseUrl()}
-          clubId={clubId}
-          leagueStatus={leagueStatus}
-          liveDomainStatus={liveDomainStatus}
-          uploaderStatus={uploaderStatus}
-          players={playersData?.players || []}
-          initialLeague={leagueName}
-        />
+        <SelectedLeaguePanelScope leagueName={leagueName}>
+          <LeagueLiveRoundPanel
+            apiBase={getAdminLeagueManagerApiBaseUrl()}
+            clubId={clubId}
+            leagueStatus={leagueStatus}
+            liveDomainStatus={liveDomainStatus}
+            uploaderStatus={uploaderStatus}
+            players={playersData?.players || []}
+          />
+        </SelectedLeaguePanelScope>
       ) : null}
     </section>
   );
