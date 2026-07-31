@@ -1,0 +1,37 @@
+name: Temporary migration contract fingerprint
+
+on:
+  push:
+    branches:
+      - agent/acceptance-fixes-20260731
+
+permissions:
+  contents: read
+
+jobs:
+  fingerprint:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/acceptance-fixes-20260731
+          fetch-depth: 1
+      - name: Compute contract values
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.deployment_verifier import expected_migration_names, repository_migration_content_fingerprint
+
+          migrations = Path('supabase/migrations')
+          contract = json.loads(Path('config/production_migration_contract.json').read_text())
+          names = expected_migration_names(migrations)
+          required = sorted(set(contract['required_ledger_names']) | {'league_competition_mode'})
+          print('FINGERPRINT=' + repository_migration_content_fingerprint(migrations))
+          print('HAS_NEW_NAME=' + str('league_competition_mode' in names).lower())
+          print('REQUIRED_NAMES=' + json.dumps(required, separators=(',', ':')))
+          print('MIGRATION_COUNT=' + str(len(names)))
+          PY
