@@ -15,6 +15,7 @@ from jupr_app.domain.matches import (
     normalize_rating_scope,
 )
 from jupr_app.domain.notifications.player_profile_update_repo import queue_player_updates_for_affected_subscribers
+from jupr_app.domain.match_processing import build_active_league_metadata_expectations
 from jupr_app.domain.player_activity import build_player_activity_update, coerce_utc_datetime, max_activity_time
 
 logger = logging.getLogger(__name__)
@@ -345,10 +346,21 @@ def process_singles_matches(
             planned_player_updates.append(
                 {"player_id": int(pid), "rating_mode": "singles", "expected": expected, "after": after}
             )
-        # League and social labels organize singles match history only.
-        # Singles never mutate a league-rating island, so the atomic write
-        # must not require doubles-league metadata for those labels.
-        league_metadata_expectations: list[dict[str, Any]] = []
+        # Official singles leagues are lifecycle-guarded, but singles never
+        # mutate doubles league-rating rows. Pop-Up/Social remains metadata-only.
+        official_league_names = {
+            str(row.get("league") or "").strip()
+            for row in db_matches
+            if str(row.get("league") or "").strip().casefold()
+            not in {"", "overall", "popup", "singles"}
+        }
+        league_metadata_expectations = build_active_league_metadata_expectations(
+            df_meta,
+            club_id=str(club_id),
+            league_names=official_league_names,
+            default_k_factor=int(default_k_factor),
+            expected_match_format="singles",
+        )
         return {
             "inserted": len(db_matches),
             "match_format": "singles",
