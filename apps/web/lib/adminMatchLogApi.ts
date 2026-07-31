@@ -119,6 +119,7 @@ export type AdminMatchLogResponse = {
   filters: {
     filter: string;
     match_id?: number | null;
+    match_ids?: number[];
     league?: string | null;
     week_tag?: string | null;
     context_type?: string | null;
@@ -266,6 +267,7 @@ export async function getAdminMatchLog(params?: {
   clubId?: string;
   filter?: string | null;
   matchId?: string | number | null;
+  matchIds?: string | Array<string | number> | null;
   league?: string | null;
   weekTag?: string | null;
   contextType?: string | null;
@@ -278,7 +280,14 @@ export async function getAdminMatchLog(params?: {
   const clubId = params?.clubId || "tres_palapas";
   const query = new URLSearchParams();
   if (params?.filter) query.set("filter", String(params.filter));
-  if (params?.matchId) query.set("match_id", String(params.matchId));
+  if (params?.matchIds) {
+    const matchIds = Array.isArray(params.matchIds)
+      ? params.matchIds.map((value) => String(value).trim()).filter(Boolean).join(",")
+      : String(params.matchIds).trim();
+    if (matchIds) query.set("match_ids", matchIds);
+  } else if (params?.matchId) {
+    query.set("match_id", String(params.matchId));
+  }
   if (params?.league) query.set("league", String(params.league));
   if (params?.weekTag) query.set("week_tag", String(params.weekTag));
   if (params?.contextType) query.set("context_type", String(params.contextType));

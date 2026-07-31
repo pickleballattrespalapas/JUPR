@@ -602,10 +602,12 @@ function previewToSchedule(preview: AdminMatchUploaderRoundRobinPreview): RrCour
 function SubmissionResultDialog({
     result,
     roundRobinRecords,
+    submissionKind,
     onClose,
   }: {
     result: AdminMatchUploaderWriteResult;
     roundRobinRecords?: PlayerRoundRobinRecords | null;
+    submissionKind: "manual" | "round_robin" | "singles" | null;
     onClose: () => void;
   }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -625,9 +627,22 @@ function SubmissionResultDialog({
       : "Not sent in staging.";
     const matchIds = (result.operation?.match_ids || []).map((value) => String(value)).filter(Boolean);
     const correctionMatchId = matchIds[0] || (result.feedback?.latest_match_id == null ? "" : String(result.feedback.latest_match_id));
-    const correctionHref = correctionMatchId
-      ? `/admin/match-log/edit?match_id=${encodeURIComponent(correctionMatchId)}`
-      : (result.recovery?.match_log_route || "/admin/match-log");
+    const [chooseMatchesToEdit, setChooseMatchesToEdit] = useState(false);
+    const [selectedCorrectionIds, setSelectedCorrectionIds] = useState<string[]>(() => [...matchIds]);
+    const bulkCorrectionHref = (ids: string[]) => {
+      const params = new URLSearchParams();
+      params.set("match_ids", ids.join(","));
+      params.set("selected_ids", ids.join(","));
+      params.set("limit", String(Math.max(250, ids.length)));
+      return `/admin/match-log/bulk?${params.toString()}`;
+    };
+    const isRoundRobinBulk = submissionKind === "round_robin" && matchIds.length > 1;
+    const isManualMulti = submissionKind === "manual" && matchIds.length > 1;
+    const correctionHref = isRoundRobinBulk
+      ? bulkCorrectionHref(matchIds)
+      : correctionMatchId
+        ? `/admin/match-log/edit?match_id=${encodeURIComponent(correctionMatchId)}`
+        : (result.recovery?.match_log_route || "/admin/match-log");
     const showRoundRobinRecords = Boolean(roundRobinRecords && Object.keys(roundRobinRecords).length);
 
     return (
@@ -671,8 +686,37 @@ function SubmissionResultDialog({
           </div>
         ) : null}
         {result.warnings?.length ? <ul style={{ color: "#92400e" }}>{result.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+        {isManualMulti && chooseMatchesToEdit ? (
+          <div style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.85rem", marginTop: "1rem", background: "#f8fafc" }}>
+            <h3 style={{ marginTop: 0 }}>Choose matches to edit</h3>
+            <p style={{ color: "#475569" }}>Select the uploaded matches that need correction. They will open together in Bulk edit.</p>
+            <div style={{ display: "grid", gap: "0.4rem" }}>
+              {matchIds.map((id) => (
+                <label key={id} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedCorrectionIds.includes(id)}
+                    onChange={() => setSelectedCorrectionIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id])}
+                  />
+                  Match #{id}
+                </label>
+              ))}
+            </div>
+            <p style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", flexWrap: "wrap", marginBottom: 0 }}>
+              <button type="button" onClick={() => setChooseMatchesToEdit(false)} style={ghostButtonStyle}>Back</button>
+              {selectedCorrectionIds.length ? (
+                <Link href={bulkCorrectionHref(selectedCorrectionIds)} style={{ ...ghostButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>
+                  Open selected in bulk editor
+                </Link>
+              ) : (
+                <button type="button" disabled style={ghostButtonStyle}>Open selected in bulk editor</button>
+              )}
+            </p>
+          </div>
+        ) : null}
         <p style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", flexWrap: "wrap", marginBottom: 0 }}>
-        {correctionMatchId ? <Link href={correctionHref} style={{ ...ghostButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Edit results</Link> : null}
+        {correctionMatchId && !isManualMulti ? <Link href={correctionHref} style={{ ...ghostButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Edit results</Link> : null}
+        {correctionMatchId && isManualMulti && !chooseMatchesToEdit ? <button type="button" onClick={() => setChooseMatchesToEdit(true)} style={ghostButtonStyle}>Edit results</button> : null}
         <button type="button" onClick={onClose} style={buttonStyle}>OK</button>
       </p>
       </div>
@@ -1407,7 +1451,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
 
       {message && !result && entryMethod !== "manual" ? <p aria-live="polite" role={messageIsError ? "alert" : "status"} style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}
 
-      {result ? <SubmissionResultDialog result={result} roundRobinRecords={rrResultRecords} onClose={acknowledgeSubmission} /> : null}
+      {result ? <SubmissionResultDialog result={result} roundRobinRecords={rrResultRecords} submissionKind={submissionKind} onClose={acknowledgeSubmission} /> : null}
     </section>
   );
 }

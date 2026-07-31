@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections import Counter
 from datetime import date, datetime, timezone
 from typing import Any
@@ -40,6 +41,7 @@ MAX_CLEANUP_IDS = 100
 MAX_RESOLUTION_IDS = 20
 MAX_CONTEXT_IDS = 200
 MAX_CONTEXT_ID_LENGTH = 200
+MAX_MATCH_IDS = 100
 
 
 def _truthy_env(name: str) -> bool:
@@ -99,6 +101,42 @@ def _resolution_lookup_key(*, dup_key: str, match_ids: list[int]) -> tuple[str, 
     return (str(dup_key or "").strip(), _match_id_key(match_ids))
 
 
+def _normalize_match_ids(
+    *,
+    match_id: int | None = None,
+    match_ids: str | list[int | str] | tuple[int | str, ...] | None = None,
+) -> list[int]:
+    raw_values: list[Any] = []
+    if match_id not in (None, ""):
+        raw_values.append(match_id)
+    if isinstance(match_ids, str):
+        raw_values.extend(re.split(r"[\s,;]+", match_ids))
+    elif match_ids:
+        for value in match_ids:
+            raw_values.extend(re.split(r"[\s,;]+", str(value or "")))
+
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for value in raw_values:
+        token = str(value or "").strip()
+        if token.startswith("#"):
+            token = token[1:].strip()
+        if not token:
+            continue
+        if not re.fullmatch(r"\d+", token):
+            raise ValueError("Match IDs must be positive whole numbers separated by commas or spaces.")
+        parsed = int(token)
+        if parsed < 1:
+            raise ValueError("Match IDs must be positive whole numbers separated by commas or spaces.")
+        if parsed in seen:
+            continue
+        seen.add(parsed)
+        normalized.append(parsed)
+    if len(normalized) > MAX_MATCH_IDS:
+        raise ValueError(f"No more than {MAX_MATCH_IDS} match IDs may be loaded at once.")
+    return normalized
+
+
 def _normalize_context_ids(
     *,
     context_id: str | None = None,
@@ -137,11 +175,12 @@ def _fetch_match_rows(
     *,
     club_id: str,
     fetch_limit: int,
-    match_id: int | None = None,
+    match_ids: list[int] | None = None,
     context_type: str | None = None,
     context_ids: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     warnings: list[str] = []
+    requested_match_ids = _normalize_match_ids(match_ids=match_ids)
     requested_context_type = str(context_type or "").strip().casefold() or None
     requested_context_ids = _normalize_context_ids(context_ids=context_ids)
 
@@ -152,8 +191,10 @@ def _fetch_match_rows(
             .eq("club_id", str(club_id))
             .is_("deleted_at", None)
         )
-        if match_id is not None:
-            query = query.eq("id", int(match_id))
+        if len(requested_match_ids) == 1:
+            query = query.eq("id", requested_match_ids[0])
+        elif requested_match_ids:
+            query = query.in_("id", requested_match_ids)
         if requested_context_type:
             query = query.eq("context_type", requested_context_type)
         if len(requested_context_ids) == 1:
@@ -219,7 +260,7 @@ def _matches_filter(
     rows: list[dict[str, Any]],
     *,
     filter_type: str,
-    match_id: int | None,
+    match_ids: list[int],
     league: str | None,
     week_tag: str | None,
     context_type: str | None,
@@ -234,8 +275,9 @@ def _matches_filter(
     elif normalized_filter in {"pop-up", "popup", "pop up"}:
         result = [row for row in result if str(row.get("match_type") or "") == "PopUp"]
 
-    if match_id is not None:
-        result = [row for row in result if _safe_int(row.get("id")) == int(match_id)]
+    if match_ids:
+        expected_match_ids = set(match_ids)
+        result = [row for row in result if _safe_int(row.get("id")) in expected_match_ids]
     if league:
         result = [row for row in result if str(row.get("league") or "").strip() == str(league).strip()]
     if week_tag:
@@ -612,6 +654,7 @@ def build_admin_match_log(
     club_id: str,
     filter_type: str = "All",
     match_id: int | None = None,
+    match_ids: str | list[int | str] | tuple[int | str, ...] | None = None,
     league: str | None = None,
     week_tag: str | None = None,
     context_type: str | None = None,
@@ -622,13 +665,15 @@ def build_admin_match_log(
     limit: int = 500,
 ) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit or 500), MAX_RETURN_ROWS))
+    requested_match_ids = _normalize_match_ids(match_id=match_id, match_ids=match_ids)
     requested_context_ids = _normalize_context_ids(
         context_id=context_id,
         context_ids=context_ids,
     )
     filters = {
         "filter": filter_type or "All",
-        "match_id": match_id,
+        "match_id": requested_match_ids[0] if len(requested_match_ids) == 1 else None,
+        "match_ids": requested_match_ids,
         "league": league or None,
         "week_tag": week_tag or None,
         "context_type": str(context_type or "").strip() or None,
@@ -670,14 +715,14 @@ def build_admin_match_log(
         supabase,
         club_id=str(club_id),
         fetch_limit=fetch_limit,
-        match_id=match_id,
+        match_ids=requested_match_ids,
         context_type=context_type,
         context_ids=requested_context_ids,
     )
     filtered_rows = _matches_filter(
         raw_rows,
         filter_type=filter_type,
-        match_id=match_id,
+        match_ids=requested_match_ids,
         league=league,
         week_tag=week_tag,
         context_type=context_type,

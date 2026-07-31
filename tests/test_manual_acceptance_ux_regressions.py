@@ -4,7 +4,7 @@ from pathlib import Path
 def test_match_uploader_manual_acceptance_fixes_are_present() -> None:
     source = Path("apps/web/app/admin/match-uploader/MatchUploaderForm.tsx").read_text(encoding="utf-8")
     assert 'useState<"singles" | "manual" | "round_robin">("manual")' in source
-    assert '[newMatchRow(todayIsoDate(), status.week_tag_options[0] || "Week 1")]' in source
+    assert '[newMatchRow(todayIsoDate(), initialWeekTag, "", initialLeague)]' in source
     assert "const readyRows = rows.filter" in source
     assert "hasInvalidFilledRows" in source
     assert 'triggerLabel="Remove match"' in source

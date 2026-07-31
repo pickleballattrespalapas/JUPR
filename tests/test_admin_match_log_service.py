@@ -1021,3 +1021,45 @@ def test_admin_match_log_cleanup_rejects_no_issue_resolution(monkeypatch) -> Non
         assert "not currently active duplicate cleanup candidates" in str(exc)
     else:
         raise AssertionError("Expected resolved duplicate cleanup to be rejected")
+
+
+
+def test_admin_match_log_filters_multiple_match_ids_before_limit(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    tables = fake_tables()
+    template = dict(tables["matches"][0])
+    for index in range(6):
+        tables["matches"].append(
+            {
+                **template,
+                "id": 100 + index,
+                "date": f"2026-04-{index + 1:02d}T10:00:00Z",
+            }
+        )
+
+    payload = build_admin_match_log(
+        FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES),
+        club_id="club",
+        match_ids="1, #3, 1",
+        limit=2,
+    )
+
+    assert payload["filters"]["match_id"] is None
+    assert payload["filters"]["match_ids"] == [1, 3]
+    assert payload["summary"]["scanned_matches"] == 2
+    assert [match["id"] for match in payload["matches"]] == [3, 1]
+
+
+def test_admin_match_log_rejects_invalid_multiple_match_ids(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+
+    try:
+        build_admin_match_log(
+            fake_supabase(),
+            club_id="club",
+            match_ids="1, not-a-match",
+        )
+    except ValueError as exc:
+        assert "positive whole numbers" in str(exc)
+    else:
+        raise AssertionError("Expected invalid match IDs to be rejected")
