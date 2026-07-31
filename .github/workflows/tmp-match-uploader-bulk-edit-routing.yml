@@ -86,6 +86,6 @@ jobs:
           git commit -m 'Route uploaded matches into bulk editing'
           git fetch origin staging --no-tags
           actual="$(git diff --name-only origin/staging...HEAD | sort | tr '\n' ' ')"
-          expected='apps/web/app/admin/match-log/MatchLogApplyPanel.tsx apps/web/app/admin/match-log/MatchLogWorkspace.tsx apps/web/app/admin/match-uploader/MatchUploaderForm.tsx apps/web/lib/adminMatchLogApi.ts apps/web/tests/match-uploader-layout.cjs jupr_app/services/admin_match_log_service.py services/api/admin_match_log_routes.py tests/test_admin_match_log_service.py tests/test_api_contract_admin_match_log.py '
+          expected='apps/web/app/admin/match-log/MatchLogApplyPanel.tsx apps/web/app/admin/match-log/MatchLogWorkspace.tsx apps/web/app/admin/match-uploader/MatchUploaderForm.tsx apps/web/lib/adminMatchLogApi.ts apps/web/tests/match-uploader-layout.cjs jupr_app/services/admin_match_log_service.py services/api/admin_match_log_routes.py tests/test_admin_match_log_service.py tests/test_api_contract_admin_match_log.py tests/test_manual_acceptance_ux_regressions.py '
           test "$actual" = "$expected"
           git push origin HEAD:agent/match-uploader-bulk-edit-routing
