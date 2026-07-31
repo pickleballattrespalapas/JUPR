@@ -30,8 +30,12 @@ export default async function AdminToolsPage() {
       <h1 style={{ marginTop: 0 }}>Admin Tools</h1>
       <p style={{ color: "#334155", maxWidth: "880px" }}>Review admin activity and Club Social submissions, inspect system health, download server-generated safe rating CSVs, manage staff roles, run badge workers/recompute, and preview/apply selected tournament-match backfills through guarded FastAPI/Python services. Every applying action is staging-only, operation-keyed, strictly audited, and paired with a visible stop/recovery path.</p>
       {error ? <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>Admin Tools status unavailable. {error}</article> : null}
+      <article style={{ ...cardStyle, marginBottom: "1rem", background: "#f8fafc" }}>
+        <h2 style={{ marginTop: 0 }}>Reports</h2>
+        <p><Link href="/admin/top-players-printable">Previous-month Top 50</Link></p>
+      </article>
       <AdminToolsPanel apiBase={apiBase()} clubId={clubId} status={status} />
-      <p style={{ marginTop: "1rem" }}><Link href="/admin/replay-history">Replay History</Link> · <Link href="/admin/badges">Badge Diagnostics</Link> · <Link href="/admin/match-canonical-audit">Match Canonical Audit</Link> · <Link href="/admin">Operations cockpit</Link></p>
+      <p style={{ marginTop: "1rem" }}><Link href="/admin/top-players-printable">Previous-month Top 50</Link> · <Link href="/admin/replay-history">Replay History</Link> · <Link href="/admin/badges">Badge Diagnostics</Link> · <Link href="/admin/match-canonical-audit">Match Canonical Audit</Link> · <Link href="/admin">Operations cockpit</Link></p>
     </section>
   );
 }

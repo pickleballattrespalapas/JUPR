@@ -55,13 +55,19 @@ TOKEN_ACTIONS: dict[str, tuple[str, ...]] = {
         "publishMatches",
         "reconcileOperation",
     ),
-    "apps/web/app/admin/league-manager/LeagueManagerPanel.tsx": (
-        "createLeagueDraft",
-        "duplicateLeagueDraft",
-        "transitionLeagueLifecycle",
-        "saveLeagueSettings",
-        "previewLeagueSchedule",
-        "saveRosterMembership",
+    "apps/web/app/admin/league-manager/create/LeagueCreatePanel.tsx": (
+        "createLeague",
+    ),
+    "apps/web/app/admin/league-manager/league/LeagueHomePanel.tsx": (
+        "transitionLeague",
+        "duplicateLeague",
+    ),
+    "apps/web/app/admin/league-manager/settings/LeagueSettingsPanel.tsx": (
+        "saveSettings",
+        "previewSchedule",
+    ),
+    "apps/web/app/admin/league-manager/roster/LeagueRosterPanel.tsx": (
+        "saveBatch",
     ),
     "apps/web/app/admin/league-manager/live/LeagueLiveRoundPanel.tsx": (
         "createSession",

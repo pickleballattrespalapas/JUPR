@@ -5,15 +5,24 @@ import { useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import type {
   AdminLeagueManagerDetailResponse,
-  AdminLeagueManagerListResponse,
   AdminLeagueManagerRosterRow,
   AdminLeagueManagerStatusResponse
 } from "@/lib/adminLeagueManagerApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
-import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import { useAdminSession } from "@/lib/useAdminSession";
 
-type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };
-type BatchResponse = { ok: boolean; committed?: boolean; updated_count?: number; detail?: AdminLeagueManagerDetailResponse };
+type Props = {
+  apiBase: string | null;
+  clubId: string;
+  status: AdminLeagueManagerStatusResponse;
+  initialLeague: string;
+};
+type BatchResponse = {
+  ok: boolean;
+  committed?: boolean;
+  updated_count?: number;
+  detail?: AdminLeagueManagerDetailResponse;
+};
 type RosterFilter = "all" | "in_league" | "not_in_league" | "inactive";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -30,10 +39,8 @@ function operationKey(): string {
   return `league-roster:${Date.now()}:${Math.random().toString(16).slice(2)}`;
 }
 
-export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
-  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
-  const [leagues, setLeagues] = useState<string[]>([]);
-  const [leagueName, setLeagueName] = useState("");
+export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeague }: Props) {
+  const { accessToken, loading: sessionLoading } = useAdminSession();
   const [detail, setDetail] = useState<AdminLeagueManagerDetailResponse | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<RosterFilter>("in_league");
@@ -43,8 +50,7 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
   const [idempotencyKey, setIdempotencyKey] = useState(operationKey);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const listRequest = useLatestRequestGuard(accessToken, clearProtectedState);
-  const detailRequest = useLatestRequestGuard(accessToken);
+  const detailRequest = useLatestRequestGuard(`${accessToken}\u0000${initialLeague}`, clearProtectedState);
   const actionRequest = useLatestRequestGuard(accessToken);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -60,10 +66,7 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
   }
 
   function clearProtectedState() {
-    detailRequest.invalidate();
     actionRequest.invalidate();
-    setLeagues([]);
-    setLeagueName("");
     setDetail(null);
     setSelectedIds([]);
     setFilter("in_league");
@@ -71,48 +74,23 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
     setMessage(null);
   }
 
-  async function loadLeagues() {
-    const generation = listRequest.begin();
-    setBusy(true);
-    setMessage(null);
-    try {
-      const payload = await requestJson<AdminLeagueManagerListResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`
-      );
-      if (!listRequest.isCurrent(generation)) return;
-      const names = (payload.leagues || []).map((league) => league.league_name);
-      setLeagues(names);
-      if (leagueName && names.includes(leagueName)) await loadDetail(leagueName);
-      else if (leagueName) {
-        setLeagueName("");
-        setDetail(null);
-      }
-      setMessage(names.length ? `Loaded ${names.length} league(s).` : "No leagues are available.");
-    } catch (error) {
-      if (listRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load leagues.");
-    } finally {
-      if (listRequest.isCurrent(generation)) setBusy(false);
-    }
-  }
-
-  async function loadDetail(selectedLeague: string) {
+  async function loadDetail() {
     const generation = detailRequest.begin();
-    setLeagueName(selectedLeague);
-    setDetail(null);
-    setSelectedIds([]);
-    setFilter("in_league");
-    setIdempotencyKey(operationKey());
-    setMessage(null);
-    if (!selectedLeague) return;
     setBusy(true);
+    setMessage(null);
     try {
       const payload = await requestJson<AdminLeagueManagerDetailResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}`
+        `/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(initialLeague)}`
       );
       if (!detailRequest.isCurrent(generation)) return;
       setDetail(payload);
+      setSelectedIds([]);
+      setFilter("in_league");
+      setIdempotencyKey(operationKey());
     } catch (error) {
-      if (detailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load the roster.");
+      if (detailRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to load the roster.");
+      }
     } finally {
       if (detailRequest.isCurrent(generation)) setBusy(false);
     }
@@ -123,11 +101,12 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
     setSelectedIds([]);
     setIdempotencyKey(operationKey());
     setMessage(null);
+    setFilter(nextAction === "activate" ? "not_in_league" : "in_league");
   }
 
   async function saveBatch(confirmationText: string) {
-    if (!leagueName || !selectedIds.length) {
-      setMessage("Select a league and at least one player.");
+    if (!selectedIds.length) {
+      setMessage("Select at least one player.");
       return;
     }
     const rating = action === "activate" ? Number(startingRating) : null;
@@ -135,12 +114,13 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
       setMessage("Starting rating must be JUPR 1.0–7.0 or Elo 400–2800.");
       return;
     }
+
     const generation = actionRequest.begin();
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<BatchResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}/roster/batch`,
+        `/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(initialLeague)}/roster/batch`,
         {
           method: "POST",
           body: JSON.stringify({
@@ -149,14 +129,15 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
             starting_rating: rating,
             idempotency_key: idempotencyKey,
             confirmation_text: confirmationText,
-            source: "next_league_manager_bulk_roster_page"
+            source: "next_selected_league_roster_page"
           })
         }
       );
       if (!actionRequest.isCurrent(generation)) return;
       if (payload.detail) setDetail(payload.detail);
-      else await loadDetail(leagueName);
-      setMessage(`${action === "activate" ? "Added" : "Removed"} ${payload.updated_count ?? selectedIds.length} player(s).`);
+      else await loadDetail();
+      const count = payload.updated_count ?? selectedIds.length;
+      setMessage(`${action === "activate" ? "Added" : "Removed"} ${count} player${count === 1 ? "" : "s"}.`);
       setSelectedIds([]);
       setIdempotencyKey(operationKey());
     } catch (error) {
@@ -168,12 +149,12 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
-  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadLeagues);
+  useAuthenticatedAutoLoad(status.enabled ? `${accessToken}\u0000${initialLeague}` : "", loadDetail);
 
-  const roster = detail?.roster;
+  const roster = detail?.roster || [];
   const visibleRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return (roster || []).filter((row) => {
+    return roster.filter((row) => {
       if (needle && !`${row.player_name} ${row.player_id}`.toLowerCase().includes(needle)) return false;
       if (filter === "in_league" && !row.in_league) return false;
       if (filter === "not_in_league" && row.in_league) return false;
@@ -185,28 +166,31 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
   const allVisibleSelected = Boolean(visibleSelectable.length && visibleSelectable.every((id) => selectedIds.includes(id)));
   const rosterMutable = detail?.capabilities?.roster_mutable !== false;
 
+  if (!status.enabled) {
+    return <article style={{ ...cardStyle, background: "#f8fafc" }}>League Manager is currently unavailable.</article>;
+  }
+
+  if (sessionLoading) return <p role="status">Checking admin access…</p>;
+
+  if (!accessToken) {
+    return (
+      <article style={{ ...cardStyle, background: "#fffbeb", borderColor: "#fde68a" }}>
+        <h2 style={{ marginTop: 0 }}>Admin sign-in required</h2>
+        <p><Link href="/admin/login">Open admin login</Link></p>
+      </article>
+    );
+  }
+
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
-      <article style={{ ...cardStyle, background: "#f8fafc" }}>
-        <h2 style={{ marginTop: 0 }}>Choose a league</h2>
-        <p style={{ color: "#475569" }}>Signed in as {adminSessionLabel(session)}. Search and apply one reviewed action to up to 500 players at once.</p>
-        {sessionLoading ? <p>Checking session…</p> : null}
-        {sessionMessage ? <p style={{ color: "#b91c1c" }}>{sessionMessage}</p> : null}
-        {!accessToken && !sessionLoading ? <p><Link href="/admin/login">Open admin login</Link></p> : null}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label><strong>League</strong><br /><select value={leagueName} onChange={(event) => void loadDetail(event.target.value)} disabled={busy || !accessToken} style={inputStyle}><option value="">Select a league</option>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
-          <button type="button" onClick={() => void loadLeagues()} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Working…" : "Refresh leagues"}</button>
-        </div>
-      </article>
-
+      {busy && !detail ? <p role="status">Loading {initialLeague} roster…</p> : null}
       {detail ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>{leagueName} roster</h2>
           {!rosterMutable ? <p style={{ color: "#92400e" }}>This roster is read-only after league close.</p> : null}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
             <label><strong>Search players</strong><br /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name or player ID" style={inputStyle} /></label>
             <label><strong>Show</strong><br /><select value={filter} onChange={(event) => setFilter(event.target.value as RosterFilter)} style={inputStyle}><option value="in_league">In this league</option><option value="not_in_league">Add players</option><option value="all">All club players</option><option value="inactive">Inactive club players</option></select></label>
-            <label><strong>Bulk action</strong><br /><select value={action} onChange={(event) => resetOperation(event.target.value as "activate" | "deactivate")} disabled={!rosterMutable} style={inputStyle}><option value="activate">Add / reactivate</option><option value="deactivate">Remove from league</option></select></label>
+            <label><strong>Action</strong><br /><select value={action} onChange={(event) => resetOperation(event.target.value as "activate" | "deactivate")} disabled={!rosterMutable} style={inputStyle}><option value="activate">Add players</option><option value="deactivate">Remove players</option></select></label>
             {action === "activate" ? <label><strong>Starting JUPR or Elo</strong><br /><input value={startingRating} onChange={(event) => { setStartingRating(event.target.value); setIdempotencyKey(operationKey()); }} disabled={!rosterMutable} style={inputStyle} /></label> : null}
           </div>
 
@@ -225,11 +209,22 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
             </table>
           </div>
           {!visibleRows.length ? <p style={{ color: "#64748b" }}>No players match these filters.</p> : null}
-          <p><ConfirmAction triggerLabel={busy ? "Saving…" : action === "activate" ? (selectedIds.length === 1 ? "Add Player" : "Add Players") : (selectedIds.length === 1 ? "Remove Player" : "Remove Players")} title={`${action === "activate" ? "Add" : "Remove"} ${selectedIds.length === 1 ? "this player" : "these players"}?`} description={`Apply this single atomic roster change to ${selectedIds.length} selected player(s). A failed request can be retried safely.`} confirmLabel={action === "activate" ? "Yes, add players" : "Yes, remove players"} confirmationText="SAVE LEAGUE ROSTER BATCH" tone={action === "deactivate" ? "danger" : "default"} disabled={!accessToken || !rosterMutable || !selectedIds.length} busy={busy} onConfirm={saveBatch} /></p>
+          <p>
+            <ConfirmAction
+              triggerLabel={busy ? "Saving…" : action === "activate" ? (selectedIds.length === 1 ? "Add Player" : "Add Players") : (selectedIds.length === 1 ? "Remove Player" : "Remove Players")}
+              title={`${action === "activate" ? "Add" : "Remove"} ${selectedIds.length === 1 ? "this player" : "these players"}?`}
+              description={`Apply this single atomic roster change to ${selectedIds.length} selected player${selectedIds.length === 1 ? "" : "s"}.`}
+              confirmLabel={action === "activate" ? "Yes, add players" : "Yes, remove players"}
+              confirmationText="SAVE LEAGUE ROSTER BATCH"
+              tone={action === "deactivate" ? "danger" : "default"}
+              disabled={!rosterMutable || !selectedIds.length}
+              busy={busy}
+              onConfirm={saveBatch}
+            />
+          </p>
         </article>
       ) : null}
-
-      {message ? <p role="status" style={{ color: /unable|error|required|sign in|retry/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+      {message ? <p role="status" style={{ color: /unable|error|required|stale|retry/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </div>
   );
 }
