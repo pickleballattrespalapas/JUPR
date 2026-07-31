@@ -9,7 +9,7 @@ from jupr_app.services.staging_write_guard import staging_league_manager_writes_
 from jupr_app.domain.leagues import normalize_league_status
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
-LEAGUE_MANAGER_EXTENDED_SELECT = "league_name,league_type,description,min_weeks,is_active,status,started_at,ended_at,ended_by,schedule_config,court_board_defaults,rules_config,awards_config,k_factor,min_games,event_tags"
+LEAGUE_MANAGER_EXTENDED_SELECT = "league_name,league_type,match_format,description,min_weeks,is_active,status,started_at,ended_at,ended_by,schedule_config,court_board_defaults,rules_config,awards_config,k_factor,min_games,event_tags"
 LEAGUE_MANAGER_MINIMAL_SELECT = "league_name,is_active,k_factor,min_games"
 LEAGUE_LIFECYCLE_ACTIONS = {
     "draft": ["start"],
@@ -214,6 +214,7 @@ def _league_row_payload(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "league_name": league_name,
         "league_type": _clean_text(row.get("league_type"), limit=80) or "Standard",
+        "match_format": "singles" if str(row.get("match_format") or "").strip().casefold() == "singles" else "doubles",
         "description": _clean_text(row.get("description"), limit=2000),
         "min_weeks": _safe_int(row.get("min_weeks")),
         "status": normalize_league_status(row),

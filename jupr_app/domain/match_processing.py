@@ -74,8 +74,13 @@ def build_active_league_metadata_expectations(
     club_id: str,
     league_names: set[str] | list[str] | tuple[str, ...],
     default_k_factor: int,
+    expected_match_format: str = "doubles",
 ) -> list[dict[str, Any]]:
-    """Build the exact lifecycle snapshot required by the atomic write RPC."""
+    """Build the exact lifecycle and format snapshot required by the atomic RPC."""
+
+    clean_match_format = str(expected_match_format or "").strip().casefold()
+    if clean_match_format not in {"doubles", "singles"}:
+        raise ValueError("League match format must be doubles or singles.")
 
     reserved = {"overall", "popup", "singles"}
     required_names = sorted(
@@ -116,6 +121,14 @@ def build_active_league_metadata_expectations(
                 f"found {len(rows)}. Nothing was written."
             )
         current = rows[0]
+        current_match_format = str(
+            current.get("match_format") or "doubles"
+        ).strip().casefold()
+        if current_match_format != clean_match_format:
+            raise ValueError(
+                f"{league_name} is a {current_match_format} league and cannot "
+                f"accept {clean_match_format} matches."
+            )
         ended_at = current.get("ended_at")
         status = str(current.get("status") or "").strip()
         is_active = current.get("is_active")
@@ -173,6 +186,7 @@ def build_active_league_metadata_expectations(
                     "status": current.get("status"),
                     "is_active": current.get("is_active"),
                     "ended_at": current.get("ended_at"),
+                    "match_format": current_match_format,
                 },
             }
         )
@@ -493,6 +507,7 @@ def process_matches(
                 club_id=str(club_id),
                 league_names={str(name) for _, name in island_updates},
                 default_k_factor=int(default_k_factor),
+                expected_match_format="doubles",
             )
         )
         return {

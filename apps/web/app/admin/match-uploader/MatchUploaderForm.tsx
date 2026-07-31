@@ -731,9 +731,12 @@ function SubmissionResultDialog({
 
 export default function MatchUploaderForm({ apiBase, clubId, players, status }: Props) {
   const firstFormat = status.round_robin_format_options?.[0] || "4-Player";
-  const officialLeagueOptions = status.league_options.filter((item) => item.trim().toUpperCase() !== "POPUP");
-  const selectableLeagueOptions = officialLeagueOptions.length ? officialLeagueOptions : ["Open"];
-  const initialLeague = selectableLeagueOptions[0];
+  const legacyOfficialLeagueOptions = status.league_options.filter((item) => item.trim().toUpperCase() !== "POPUP");
+  const doublesLeagueOptions = status.doubles_league_options?.length
+    ? status.doubles_league_options
+    : legacyOfficialLeagueOptions;
+  const singlesLeagueOptions = status.singles_league_options || [];
+  const initialLeague = doublesLeagueOptions[0] || singlesLeagueOptions[0] || "";
   const initialWeekTag = status.week_tag_options[0] || "Week 1";
   const singlesEnabled = Boolean(status.singles_write_enabled && status.singles_submit_endpoint);
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
@@ -761,6 +764,9 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   const [singlesValidationAttempted, setSinglesValidationAttempted] = useState(false);
   const [removeAllDialogOpen, setRemoveAllDialogOpen] = useState(false);
 
+  const activeLeagueOptions = entryMethod === "singles" ? singlesLeagueOptions : doublesLeagueOptions;
+  const activeLeagueFormatLabel = entryMethod === "singles" ? "singles" : "doubles";
+  const hasActiveOfficialLeague = activeLeagueOptions.length > 0;
   const filledRows = rows.filter(isFilled);
   const readyRows = rows.filter((row, index) => isReadyRow(row, index));
   const hasInvalidFilledRows = filledRows.length !== readyRows.length;
@@ -805,6 +811,20 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
       : (priorScope || "");
     setRows([newMatchRow(defaultDate, defaultManualWeekTag, preservedScope, defaultLeague)]);
     setManualValidationAttempted(false);
+  }
+
+  function changeEntryMethod(nextMethod: "singles" | "manual" | "round_robin") {
+    clearEntryFeedback();
+    setManualValidationAttempted(false);
+    setSinglesValidationAttempted(false);
+    setEntryMethod(nextMethod);
+    const nextOptions = nextMethod === "singles" ? singlesLeagueOptions : doublesLeagueOptions;
+    const nextLeague = nextOptions.includes(defaultLeague) ? defaultLeague : (nextOptions[0] || "");
+    if (nextLeague !== defaultLeague) {
+      setDefaultLeague(nextLeague);
+      setRows((current) => current.map((row) => ({ ...row, league: nextLeague })));
+      setSinglesRow((current) => ({ ...current, league: nextLeague }));
+    }
   }
 
   function changeContext(nextContext: "league" | "popup") {
@@ -1040,6 +1060,10 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     setResult(null);
     setSinglesValidationAttempted(true);
     if (!requireReady()) return;
+    if (context === "league" && !singlesRow.league) {
+      setMessage("Create or activate a Singles league in League Manager, or use Pop-Up / Social.");
+      return;
+    }
     if (!singlesEnabled) {
       setMessage("Direct singles submission is unavailable until its transactional write and replay path is complete.");
       return;
@@ -1185,6 +1209,10 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     setResult(null);
     setManualValidationAttempted(true);
     if (!requireReady()) return;
+    if (context === "league" && !defaultLeague) {
+      setMessage("Create or activate a Doubles league in League Manager, or use Pop-Up / Social.");
+      return;
+    }
     const enteredRows = rows.filter(rowHasEnteredData);
     const validationRows = enteredRows.length ? enteredRows : rows.slice(0, 1);
     const errors = validationRows.map((row) => validateRequiredRow(row, rows.indexOf(row))).filter(Boolean) as string[];
@@ -1221,6 +1249,10 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     setMessage(null);
     setResult(null);
     if (!requireReady()) return;
+    if (context === "league" && !defaultLeague) {
+      setMessage("Create or activate a Doubles league in League Manager, or use Pop-Up / Social.");
+      return;
+    }
     const matches = scoredRrRows.map((row) => ({
       date: defaultDate,
       league: context === "popup" ? "POPUP" : defaultLeague,
@@ -1275,13 +1307,14 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
           {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
         </div>
         <div className={styles.setupGrid}>
-          <label className={styles.field}><strong>Entry method</strong><br /><select value={entryMethod} onChange={(event) => { clearEntryFeedback(); setManualValidationAttempted(false); setSinglesValidationAttempted(false); setEntryMethod(event.target.value as "singles" | "manual" | "round_robin"); }} style={inputStyle}>{singlesEnabled ? <option value="singles">Singles match</option> : null}<option value="manual">Doubles manual / batch</option><option value="round_robin">Doubles round robin</option></select></label>
+          <label className={styles.field}><strong>Entry method</strong><br /><select value={entryMethod} onChange={(event) => changeEntryMethod(event.target.value as "singles" | "manual" | "round_robin")} style={inputStyle}>{singlesEnabled ? <option value="singles">Singles match</option> : null}<option value="manual">Doubles manual / batch</option><option value="round_robin">Doubles round robin</option></select></label>
           <label className={styles.field}><strong>Context</strong><br /><select value={context} onChange={(event) => changeContext(event.target.value as "league" | "popup")} style={inputStyle}><option value="league">Official League</option><option value="popup">Pop-Up / Social</option></select></label>
           <label className={styles.field}><strong>Default date</strong><br /><input value={defaultDate} onChange={(event) => changeDefaultDate(event.target.value)} type="date" style={inputStyle} /></label>
-          {context === "league" ? <label className={styles.field}><strong>Default league</strong><br /><select value={defaultLeague} onChange={(event) => changeDefaultLeague(event.target.value)} style={inputStyle}>{selectableLeagueOptions.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
+          {context === "league" ? <label className={styles.field}><strong>Default {activeLeagueFormatLabel} league</strong><br /><select value={defaultLeague} onChange={(event) => changeDefaultLeague(event.target.value)} disabled={!hasActiveOfficialLeague} style={inputStyle}>{hasActiveOfficialLeague ? activeLeagueOptions.map((item) => <option key={item}>{item}</option>) : <option value="">No active {activeLeagueFormatLabel} leagues</option>}</select></label> : null}
           {context === "league" ? <label className={styles.field}><strong>Default week/session</strong><br /><select value={defaultWeekTag} onChange={(event) => changeDefaultWeekTag(event.target.value)} style={inputStyle}>{status.week_tag_options.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
           {context === "popup" ? <label className={styles.field}><strong>Pop-Up event name</strong><br /><input value={popupEventName} onChange={(event) => { clearEntryFeedback(); setPopupEventName(event.target.value); }} style={inputStyle} /></label> : null}
         </div>
+        {context === "league" && !hasActiveOfficialLeague ? <p role="alert" style={{ color: "#92400e", marginBottom: 0 }}><strong>No active {activeLeagueFormatLabel} leagues.</strong> Create one in League Manager or use Pop-Up / Social.</p> : null}
       </article>
 
       {entryMethod === "singles" && singlesEnabled ? (
@@ -1290,7 +1323,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
           <p style={{ color: "#475569" }}>Use this for one-on-one games only. Official League and Pop-Up / Social control match organization; rating changes always use the separate singles rating.</p>
           <div className={`${styles.metadataGrid} ${context === "popup" ? styles.popupMetadataGrid : ""}`}>
             <label className={styles.field}><strong>Date</strong><br /><input type="date" value={singlesRow.date} onChange={(event) => patchSingles({ date: event.target.value })} style={inputStyle} /></label>
-            {context === "league" ? <label className={styles.field}><strong>League</strong><br /><select value={singlesRow.league} onChange={(event) => patchSingles({ league: event.target.value })} style={inputStyle}>{selectableLeagueOptions.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
+            {context === "league" ? <label className={styles.field}><strong>Singles league</strong><br /><select value={singlesRow.league} onChange={(event) => patchSingles({ league: event.target.value })} disabled={!hasActiveOfficialLeague} style={inputStyle}>{hasActiveOfficialLeague ? activeLeagueOptions.map((item) => <option key={item}>{item}</option>) : <option value="">No active singles leagues</option>}</select></label> : null}
             {context === "league" ? <label className={styles.field}><strong>Week / session</strong><br /><input value={singlesRow.weekTag} onChange={(event) => patchSingles({ weekTag: event.target.value })} style={inputStyle} /></label> : null}
             <label className={styles.field}><strong>Rating scope</strong><br /><select value={singlesRow.ratingScope} onChange={(event) => patchSingles({ ratingScope: event.target.value as SinglesRow["ratingScope"] })} style={inputStyle}><option value="">Rated singles</option><option value="unrated">Unrated / record only</option></select></label>
           </div>
@@ -1362,7 +1395,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
                 </div>
                 <div className={`${styles.metadataGrid} ${context === "popup" ? styles.popupMetadataGrid : ""}`}>
                   <label className={styles.field}><strong>Date</strong><br /><input type="date" value={row.date} onChange={(event) => patchRow(row.rowId, { date: event.target.value })} style={inputStyle} /></label>
-                  {context === "league" ? <label className={styles.field}><strong>League</strong><br /><select value={row.league} onChange={(event) => patchRow(row.rowId, { league: event.target.value })} style={inputStyle}>{selectableLeagueOptions.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
+                  {context === "league" ? <label className={styles.field}><strong>League</strong><br /><select value={row.league} onChange={(event) => patchRow(row.rowId, { league: event.target.value })} style={inputStyle}>{activeLeagueOptions.map((item) => <option key={item}>{item}</option>)}</select></label> : null}
                   {context === "league" ? <label className={styles.field}><strong>Week / session</strong><br /><input value={row.weekTag} onChange={(event) => patchRow(row.rowId, { weekTag: event.target.value })} style={inputStyle} /></label> : null}
                   <label className={styles.field}><strong>Rating scope</strong><br /><select value={row.ratingScope} onChange={(event) => patchRow(row.rowId, { ratingScope: event.target.value as MatchRow["ratingScope"] })} style={inputStyle}>{context === "popup" ? <><option value="overall_only">Overall only (rated)</option><option value="unrated">Unrated / record only</option></> : <><option value="">Overall + league</option><option value="overall_only">Overall only</option><option value="unrated">Unrated / record only</option></>}</select></label>
                 </div>

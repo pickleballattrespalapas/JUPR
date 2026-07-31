@@ -185,6 +185,7 @@ def _fake_load_data(supabase, club_id):
                 "id": "league-summer-social",
                 "club_id": club_id,
                 "league_name": "Summer Social",
+                "match_format": "singles",
                 "k_factor": 32,
                 "status": "active",
                 "is_active": True,

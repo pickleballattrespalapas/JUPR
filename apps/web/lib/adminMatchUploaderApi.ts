@@ -8,6 +8,8 @@ export type AdminMatchUploaderStatusResponse = {
   player_create_endpoint?: string | null;
   max_batch_rows: number;
   league_options: string[];
+  doubles_league_options?: string[];
+  singles_league_options?: string[];
   week_tag_options: string[];
   round_robin_format_options?: string[];
   round_robin_expected_games?: Record<string, number>;

@@ -240,6 +240,10 @@ def _round_robin_expected_games() -> dict[str, int]:
     return {str(key): int(value) for key, value in EXPECTED_DOUBLES_GAMES_BY_FORMAT.items()}
 
 
+def _normalize_league_match_format(value: Any) -> str:
+    return "singles" if str(value or "").strip().casefold() == "singles" else "doubles"
+
+
 def build_admin_match_uploader_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
     round_robin_formats = _round_robin_format_options()
     round_robin_expected_games = _round_robin_expected_games()
@@ -252,53 +256,58 @@ def build_admin_match_uploader_status(supabase: Any | None, *, club_id: str) -> 
             "singles_submit_endpoint": None,
             "max_batch_rows": MAX_MATCH_UPLOADER_BATCH_ROWS,
             "league_options": ["Open", "POPUP"],
+            "doubles_league_options": ["Open"],
+            "singles_league_options": [],
             "week_tag_options": [f"Week {idx}" for idx in range(1, 13)] + ["Playoffs", "Finals", "Event"],
             "round_robin_format_options": round_robin_formats,
             "round_robin_expected_games": round_robin_expected_games,
             "warnings": ["Next Match Uploader is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER on FastAPI for the closed-club pilot."],
         }
-    league_options = ["Open", "POPUP"]
+
+    active_names: dict[str, list[str]] = {"doubles": [], "singles": []}
     try:
-        rows = _safe_rows(
-            supabase.table("leagues_metadata")
-            .select("league_name,is_active,status,ended_at")
-            .eq("club_id", str(club_id))
-            .execute()
-        )
-        active_names: list[str] = []
-        seen_names: set[str] = set()
+        try:
+            rows = _safe_rows(
+                supabase.table("leagues_metadata")
+                .select("league_name,is_active,status,ended_at,match_format")
+                .eq("club_id", str(club_id))
+                .execute()
+            )
+        except Exception:
+            rows = _safe_rows(
+                supabase.table("leagues_metadata")
+                .select("league_name,is_active,status,ended_at")
+                .eq("club_id", str(club_id))
+                .execute()
+            )
+        seen_names: dict[str, set[str]] = {"doubles": set(), "singles": set()}
         for row in rows:
             name = _clean_text(row.get("league_name"), limit=120)
             normalized_name = name.casefold()
             if not name or normalized_name in {"overall", "popup"}:
                 continue
             ended_at = row.get("ended_at")
-            if ended_at not in (None, "") and str(ended_at) not in {
-                "<NA>",
-                "NaT",
-                "nan",
-            }:
+            if ended_at not in (None, "") and str(ended_at) not in {"<NA>", "NaT", "nan"}:
                 continue
             status = str(row.get("status") or "").strip().casefold()
-            if status in {"inactive", "disabled", "ended", "completed"}:
+            if status in {"inactive", "disabled", "ended", "completed", "archived", "paused"}:
                 continue
             is_active = row.get("is_active", True)
             if isinstance(is_active, str):
-                is_active = is_active.strip().casefold() not in {
-                    "0",
-                    "false",
-                    "no",
-                    "off",
-                }
-            if not bool(is_active) or normalized_name in seen_names:
+                is_active = is_active.strip().casefold() not in {"0", "false", "no", "off"}
+            if not bool(is_active):
                 continue
-            seen_names.add(normalized_name)
-            active_names.append(name)
-        active_names.sort(key=str.casefold)
-        if active_names:
-            league_options = active_names + (["POPUP"] if "POPUP" not in active_names else [])
+            match_format = _normalize_league_match_format(row.get("match_format"))
+            if normalized_name in seen_names[match_format]:
+                continue
+            seen_names[match_format].add(normalized_name)
+            active_names[match_format].append(name)
     except Exception:
         pass
+
+    doubles_league_options = sorted(active_names["doubles"], key=str.casefold)
+    singles_league_options = sorted(active_names["singles"], key=str.casefold)
+    legacy_league_options = doubles_league_options + ["POPUP"]
     return {
         "enabled": True,
         "singles_write_enabled": is_admin_match_uploader_singles_enabled(),
@@ -312,20 +321,18 @@ def build_admin_match_uploader_status(supabase: Any | None, *, club_id: str) -> 
         "round_robin_preview_endpoint": "/admin/clubs/{club_id}/match-uploader/round-robin/preview",
         "player_create_endpoint": "/admin/clubs/{club_id}/match-uploader/players",
         "max_batch_rows": MAX_MATCH_UPLOADER_BATCH_ROWS,
-        "league_options": league_options,
+        "league_options": legacy_league_options,
+        "doubles_league_options": doubles_league_options,
+        "singles_league_options": singles_league_options,
         "week_tag_options": [f"Week {idx}" for idx in range(1, 21)] + ["Playoffs", "Finals", "Event"],
         "round_robin_format_options": round_robin_formats,
         "round_robin_expected_games": round_robin_expected_games,
         "warnings": (
             []
             if is_admin_match_uploader_singles_enabled()
-            else [
-                "Direct singles submission is disabled for the current write "
-                "wave."
-            ]
+            else ["Direct singles submission is disabled for the current write wave."]
         ),
     }
-
 
 def _court_player_names(court: dict[str, Any]) -> list[str]:
     raw_names = court.get("player_names")

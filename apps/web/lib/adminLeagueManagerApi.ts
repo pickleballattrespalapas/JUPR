@@ -42,6 +42,7 @@ export type AdminLeagueLiveStatusResponse = {
 export type AdminLeagueManagerLeague = {
   league_name: string;
   league_type?: string | null;
+  match_format?: "doubles" | "singles" | string | null;
   description?: string | null;
   min_weeks?: number | null;
   status: string;
