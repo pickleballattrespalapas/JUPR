@@ -47,6 +47,10 @@ jobs:
           if bad not in script:
               raise SystemExit('expected malformed suggestion-selection source was not found')
           script = script.replace(bad, good, 1)
+          strict_guard = "    if count != 1:\n"
+          if strict_guard not in script:
+              raise SystemExit('expected replacement helper guard was not found')
+          script = script.replace(strict_guard, "    if count < 1:\n", 1)
           exec(compile(script, '<reviewed-match-uploader-fix>', 'exec'))
           RUNNER
           git diff --check
