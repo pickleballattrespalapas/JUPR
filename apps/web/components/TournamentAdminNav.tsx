@@ -31,7 +31,7 @@ function selectedItems(tournamentId: string, tournamentName: string): Navigation
     {
       href: selectedHref("/admin/tournaments/ops", tournamentId, tournamentName),
       label: "Operations",
-      match: (pathname) => pathname === "/admin/tournaments/ops" || pathname.startsWith("/admin/tournaments/ops/")
+      match: (pathname) => ["/admin/tournaments/ops", "/admin/tournaments/ops/draws", "/admin/tournaments/ops/import"].includes(pathname)
     },
     { href: selectedHref("/admin/tournaments/ops/results", tournamentId, tournamentName), label: "Results", match: exact("/admin/tournaments/ops/results") },
     { href: selectedHref("/admin/tournament-live", tournamentId, tournamentName), label: "Live runner", match: exact("/admin/tournament-live") },
