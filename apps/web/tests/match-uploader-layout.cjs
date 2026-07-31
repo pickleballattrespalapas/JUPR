@@ -39,6 +39,6 @@ assert.match(form, /if \(match\) addPlayerName\(String\(match\.name\)\)/, "round
 assert.match(form, /function roundRobinPlayerRecords/, "round-robin results must calculate player records");
 assert.match(form, />Wins<\/th>/, "round-robin result modal must show wins");
 assert.match(form, />Losses<\/th>/, "round-robin result modal must show losses");
-assert.match(form, /Correct results/, "submission result modal must offer a correction path");
+assert.match(form, /Edit results/, "submission result modal must label the correction path as an edit action");
 
 console.log("Match Uploader context and responsive layout checks passed.");
