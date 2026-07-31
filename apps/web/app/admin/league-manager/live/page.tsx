@@ -1,13 +1,21 @@
-import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getClubPlayers } from "@/lib/api";
 import { getAdminLeagueLiveStatus, getAdminLeagueManagerStatus, getAdminLeagueManagerApiBaseUrl } from "@/lib/adminLeagueManagerApi";
 import { getAdminMatchUploaderStatus } from "@/lib/adminMatchUploaderApi";
 import LeagueLiveRoundPanel from "./LeagueLiveRoundPanel";
 import LeagueManagerNav from "../LeagueManagerNav";
 
-const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
+type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
-export default async function LeagueManagerLivePage() {
+function first(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? String(value[0] || "") : String(value || "");
+}
+
+export default async function LeagueManagerLivePage({ searchParams }: Props) {
+  const leagueName = first(searchParams?.league).trim();
+  const leagueType = first(searchParams?.mode).trim();
+  if (!leagueName) redirect("/admin/league-manager");
+
   const clubSlug = "tres-palapas";
   const clubId = "tres_palapas";
   const [{ data: leagueStatus, error: leagueError }, { data: liveDomainStatus, error: liveDomainError }, { data: uploaderStatus, error: uploaderError }, { data: playersData, error: playersError }] = await Promise.all([
@@ -20,30 +28,15 @@ export default async function LeagueManagerLivePage() {
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        League Manager Live
+        Admin League Manager
       </p>
-      <h1 style={{ marginTop: 0 }}>League live round entry</h1>
-      <LeagueManagerNav />
-      <p style={{ color: "#334155", maxWidth: "900px" }}>
-        Resumable league-night workflow: load the roster, arrange courts, generate Python-backed match slots, score every match, then publish and reconcile the complete round through one guarded FastAPI operation.
-      </p>
+      <h1 style={{ marginTop: 0 }}>{leagueName} live rounds</h1>
+      <LeagueManagerNav leagueName={leagueName} leagueType={leagueType || null} />
 
-      {leagueError ? <p style={{ color: "#b91c1c" }}>League Manager status is unavailable. {leagueError}</p> : null}
-      {liveDomainError ? <p style={{ color: "#b91c1c" }}>Python League Live status is unavailable. {liveDomainError}</p> : null}
-      {uploaderError ? <p style={{ color: "#b91c1c" }}>Match Uploader status is unavailable. {uploaderError}</p> : null}
-      {playersError ? <p style={{ color: "#b91c1c" }}>Player lookup is unavailable. {playersError}</p> : null}
-
-      <article style={{ ...cardStyle, marginBottom: "1rem", background: "#f8fafc" }}>
-        <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Operational guardrails</h2>
-        <ul style={{ color: "#475569", paddingLeft: "1.25rem" }}>
-          <li>Schedule generation runs through FastAPI/Python Match Uploader preview logic.</li>
-          <li>FastAPI records a durable audit intent, publishes every valid non-tied score under deterministic contexts, and reconciles the session snapshot without a browser-owned second write.</li>
-          <li>Partial rounds are refused. Later corrections and interrupted-publish recovery use Match Log, Replay History, reconcile, or verified compensation.</li>
-          <li>Python owns deterministic roster seeding, bench selection, score aggregation, court movement, overrides, and next-round state; the browser never ranks players.</li>
-          <li>Session snapshots, all-match publish, rating readback, guests, exports, and multi-round movement use stale guards and durable idempotency keys.</li>
-          <li>Keep Streamlit available for recovery until the persisted live workflow is proven in the staging pilot.</li>
-        </ul>
-      </article>
+      {leagueError ? <p role="alert" style={{ color: "#b91c1c" }}>League Manager is unavailable. {leagueError}</p> : null}
+      {liveDomainError ? <p role="alert" style={{ color: "#b91c1c" }}>League Live is unavailable. {liveDomainError}</p> : null}
+      {uploaderError ? <p role="alert" style={{ color: "#b91c1c" }}>Match Uploader is unavailable. {uploaderError}</p> : null}
+      {playersError ? <p role="alert" style={{ color: "#b91c1c" }}>Player lookup is unavailable. {playersError}</p> : null}
 
       {leagueStatus && liveDomainStatus && uploaderStatus ? (
         <LeagueLiveRoundPanel
@@ -53,12 +46,9 @@ export default async function LeagueManagerLivePage() {
           liveDomainStatus={liveDomainStatus}
           uploaderStatus={uploaderStatus}
           players={playersData?.players || []}
+          initialLeague={leagueName}
         />
       ) : null}
-
-      <p style={{ marginTop: "1rem" }}>
-        <Link href="/admin/league-manager">League Manager</Link> · <Link href="/admin/match-uploader">Match Uploader</Link> · <Link href="/admin/match-log">Match Log</Link> · <Link href="/admin">Operations cockpit</Link>
-      </p>
     </section>
   );
 }
