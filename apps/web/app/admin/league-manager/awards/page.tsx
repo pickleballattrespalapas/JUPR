@@ -1,11 +1,19 @@
-import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getAdminLeagueManagerApiBaseUrl, getAdminLeagueManagerStatus } from "@/lib/adminLeagueManagerApi";
 import LeagueAwardsPanel from "./LeagueAwardsPanel";
 import LeagueManagerNav from "../LeagueManagerNav";
 
-const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
+type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
-export default async function AdminLeagueAwardsPage() {
+function first(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? String(value[0] || "") : String(value || "");
+}
+
+export default async function AdminLeagueAwardsPage({ searchParams }: Props) {
+  const leagueName = first(searchParams?.league).trim();
+  const leagueType = first(searchParams?.mode).trim();
+  if (!leagueName) redirect("/admin/league-manager");
+
   const clubId = "tres_palapas";
   const { data: status, error } = await getAdminLeagueManagerStatus(clubId);
 
@@ -14,29 +22,11 @@ export default async function AdminLeagueAwardsPage() {
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         Admin League Manager
       </p>
-      <h1 style={{ marginTop: 0 }}>League awards</h1>
-      <LeagueManagerNav />
-      <p style={{ color: "#334155", maxWidth: "880px" }}>
-        Recoverable freeze, Python-authoritative preview, documented override, verified badge mint, and archive steps through guarded FastAPI. Streamlit remains the fallback until the full manual staging gate passes.
-      </p>
+      <h1 style={{ marginTop: 0 }}>{leagueName} awards</h1>
+      <LeagueManagerNav leagueName={leagueName} leagueType={leagueType || null} />
 
-      {error ? <p style={{ color: "#b91c1c" }}>League Manager status is unavailable. {error}</p> : null}
-
-      {status ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
-          <article style={cardStyle}><strong>Status</strong><br />{status.status.replace(/_/g, " ")}</article>
-          <article style={cardStyle}><strong>Leagues</strong><br />{status.league_count ?? "—"}</article>
-          <article style={cardStyle}><strong>Active</strong><br />{status.active_count ?? "—"}</article>
-          <article style={cardStyle}><strong>Gate</strong><br /><code>manage_matches</code></article>
-          <article style={cardStyle}><strong>Awards writes</strong><br />{status.awards_write_enabled ? "staging gate open" : "Streamlit fallback"}</article>
-        </div>
-      ) : null}
-
-      {status ? <LeagueAwardsPanel apiBase={getAdminLeagueManagerApiBaseUrl()} clubId={clubId} status={status} /> : null}
-
-      <p style={{ marginTop: "1rem" }}>
-        <Link href="/admin/league-manager">League Manager</Link> · <Link href="/admin/league-manager/live">League Live</Link> · <Link href="/admin/league-manager/print">Printouts</Link> · <Link href="/admin">Operations cockpit</Link>
-      </p>
+      {error ? <p role="alert" style={{ color: "#b91c1c" }}>League Manager is unavailable. {error}</p> : null}
+      {status ? <LeagueAwardsPanel apiBase={getAdminLeagueManagerApiBaseUrl()} clubId={clubId} status={status} initialLeague={leagueName} /> : null}
     </section>
   );
 }
