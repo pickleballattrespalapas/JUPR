@@ -31,14 +31,17 @@ jobs:
           set -euo pipefail
           python - <<'RUNNER'
           from pathlib import Path
-          import textwrap
 
           workflow = Path('.github/workflows/tmp-match-uploader-selection-results-polish-v2.yml').read_text(encoding='utf-8')
           start_marker = "          python - <<'PY'\n"
           end_marker = "\n          PY\n"
           start = workflow.index(start_marker) + len(start_marker)
           end = workflow.index(end_marker, start)
-          script = textwrap.dedent(workflow[start:end])
+          raw_script = workflow[start:end]
+          script = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in raw_script.splitlines()
+          )
           exec(compile(script, '<reviewed-match-uploader-fix>', 'exec'))
           RUNNER
           git diff --check
