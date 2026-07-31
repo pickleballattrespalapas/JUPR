@@ -55,6 +55,7 @@ def test_tournament_navigation_separates_manager_and_selected_context() -> None:
     assert 'label: "Registrations"' in nav
     assert 'label: "Reports"' in nav
     assert 'label: "Status & recovery"' in nav
+    assert '["/admin/tournaments/ops", "/admin/tournaments/ops/draws", "/admin/tournaments/ops/import"].includes(pathname)' in nav
     assert "Tournament workspace" not in nav
     assert "Setup, registrations, event operations, and live play" not in nav
 
@@ -65,7 +66,9 @@ def test_selected_tournament_scope_removes_repeated_selection_and_preserves_link
     assert 'candidate.dispatchEvent(new Event("change", { bubbles: true }))' in scope
     assert "preserveTournamentContext" in scope
     assert 'url.searchParams.set("tournament", tournamentId)' in scope
+    assert 'querySelectorAll<HTMLAnchorElement>("a[href]")' in scope
     assert '"registration reporting session"' in scope
+    assert '"bulk registration actions"' in scope
     assert '"1. create tournament shell"' in scope
     assert '"2. select tournament"' in scope
 
