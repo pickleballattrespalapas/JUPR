@@ -1,0 +1,70 @@
+name: Temporary filter empty bulk match patches
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temporary-filter-empty-bulk-match-patches
+  cancel-in-progress: false
+
+jobs:
+  apply-test-publish:
+    if: github.head_ref == 'agent/filter-empty-bulk-match-patches' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/filter-empty-bulk-match-patches
+          fetch-depth: 0
+
+      - name: Apply reviewed no-op filtering fix
+        run: |
+          set -euo pipefail
+          python .github/tmp/apply_filter_empty_bulk_match_patches.py
+          git diff --check
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Run focused source check
+        working-directory: apps/web
+        run: node tests/match-uploader-layout.cjs
+
+      - name: Build Next.js
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Publish clean application commit
+        run: |
+          set -euo pipefail
+          git restore --source=HEAD -- apps/web/next-env.d.ts apps/web/package-lock.json 2>/dev/null || true
+          rm -f \
+            .github/tmp/apply_filter_empty_bulk_match_patches.py \
+            .github/workflows/tmp-filter-empty-bulk-match-patches.yml
+          rmdir .github/tmp 2>/dev/null || true
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Skip unchanged matches in bulk edit staging'
+          git fetch origin staging --no-tags
+          actual="$(git diff --name-only origin/staging...HEAD | sort | tr '\n' ' ')"
+          expected='apps/web/app/admin/match-log/MatchLogApplyPanel.tsx apps/web/tests/match-uploader-layout.cjs '
+          test "$actual" = "$expected"
+          git push origin HEAD:agent/filter-empty-bulk-match-patches
