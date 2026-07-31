@@ -672,7 +672,7 @@ function SubmissionResultDialog({
         ) : null}
         {result.warnings?.length ? <ul style={{ color: "#92400e" }}>{result.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
         <p style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", flexWrap: "wrap", marginBottom: 0 }}>
-        {correctionMatchId ? <Link href={correctionHref} style={{ ...ghostButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Correct results</Link> : null}
+        {correctionMatchId ? <Link href={correctionHref} style={{ ...ghostButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Edit results</Link> : null}
         <button type="button" onClick={onClose} style={buttonStyle}>OK</button>
       </p>
       </div>
