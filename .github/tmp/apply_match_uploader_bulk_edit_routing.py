@@ -669,6 +669,16 @@ service_path.write_text(service, encoding="utf-8")
 # ---------------------------------------------------------------------------
 # Focused source and behavior tests
 # ---------------------------------------------------------------------------
+manual_test_path = Path("tests/test_manual_acceptance_ux_regressions.py")
+manual_test = manual_test_path.read_text(encoding="utf-8")
+manual_test = replace_once(
+    manual_test,
+    '''    assert '[newMatchRow(todayIsoDate(), status.week_tag_options[0] || "Week 1")]' in source''',
+    '''    assert '[newMatchRow(todayIsoDate(), initialWeekTag, "", initialLeague)]' in source''',
+    "current manual row initialization contract",
+)
+manual_test_path.write_text(manual_test, encoding="utf-8")
+
 layout_path = Path("apps/web/tests/match-uploader-layout.cjs")
 layout = layout_path.read_text(encoding="utf-8")
 
