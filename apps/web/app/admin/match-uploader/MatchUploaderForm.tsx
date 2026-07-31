@@ -159,7 +159,7 @@ function deltaLabel(value?: number | null): string {
 }
 
 function isUploaderErrorMessage(message: string): boolean {
-  return /\b(unable|unavailable|disabled|required|must|cannot|could not|not configured|sign in|error|invalid|select|enter|choose|failed)\b/i.test(message);
+  return /\b(unable|unavailable|disabled|required|must|cannot|could not|not configured|sign in|error|invalid|select|enter|choose|failed|conflict|changed|reload|retry|nothing)\b/i.test(message);
 }
 
 function isFilled(row: MatchRow): boolean {
@@ -259,15 +259,20 @@ function SearchablePlayerInput({
     ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" }
     : inputStyle;
 
+  const exactPlayerId = exactPlayer ? String(exactPlayer.id) : "";
+  const previousExactPlayerId = useRef(exactPlayerId);
+
   useEffect(() => {
     setQuery(selectedName);
   }, [selectedName]);
 
   useEffect(() => {
-    if (!value && exactPlayer && cleanedQuery) {
-      onChange(String(exactPlayer.id));
+    const previousId = previousExactPlayerId.current;
+    previousExactPlayerId.current = exactPlayerId;
+    if (!value && exactPlayerId && cleanedQuery && exactPlayerId !== previousId) {
+      onChange(exactPlayerId);
     }
-  }, [cleanedQuery, exactPlayer, onChange, value]);
+  }, [cleanedQuery, exactPlayerId, onChange, value]);
 
   async function createAndSelect() {
     if (
@@ -762,7 +767,21 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   const defaultManualWeekTag = context === "popup" ? "" : defaultWeekTag;
   const defaultManualRatingScope: MatchRow["ratingScope"] = context === "popup" ? "overall_only" : "";
   const singlesError = singlesValidationAttempted ? validateSingles(singlesRow) : null;
-  const singlesScoreInvalid = Boolean(singlesError && /score|tied/i.test(singlesError));
+  const singlesScoreA = Number(singlesRow.scoreA || 0);
+  const singlesScoreB = Number(singlesRow.scoreB || 0);
+  const singlesPlayersDuplicate = Boolean(
+    singlesRow.playerA
+    && singlesRow.playerB
+    && singlesRow.playerA === singlesRow.playerB,
+  );
+  const singlesScoreInvalid = singlesValidationAttempted && (
+    !Number.isFinite(singlesScoreA)
+    || !Number.isFinite(singlesScoreB)
+    || singlesScoreA < 0
+    || singlesScoreB < 0
+    || singlesScoreA + singlesScoreB <= 0
+    || singlesScoreA === singlesScoreB
+  );
   const rowHasEnteredData = (row: MatchRow) =>
     isFilled(row)
     || row.date !== defaultDate
@@ -1279,7 +1298,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
             <div className={styles.teamsGrid}>
               <section aria-label="Singles Player 1" className={styles.teamPanel}>
                 <h4 style={{ margin: 0 }}>Player 1</h4>
-                <SearchablePlayerInput inputId="singles-player-a" label="Player" value={singlesRow.playerA} players={singlesPlayerOptions(singlesRow.playerA)} allPlayers={knownPlayers} invalid={singlesValidationAttempted && !singlesRow.playerA} disabled={saving || creatingPlayers} onChange={(playerA) => patchSingles({ playerA })} onCreate={createAndSelectPlayer} />
+                <SearchablePlayerInput key={`singles-player-a-${singlesRow.playerA || "empty"}`} inputId="singles-player-a" label="Player" value={singlesRow.playerA} players={singlesPlayerOptions(singlesRow.playerA)} allPlayers={knownPlayers} invalid={singlesValidationAttempted && (!singlesRow.playerA || singlesPlayersDuplicate)} disabled={saving || creatingPlayers} onChange={(playerA) => patchSingles({ playerA })} onCreate={createAndSelectPlayer} />
               </section>
               <section aria-label="Singles scores" className={styles.scorePanel}>
                 <label className={styles.scoreField}><strong>Player 1 score</strong><br /><input type="number" min={0} max={99} value={singlesRow.scoreA} onChange={(event) => patchSingles({ scoreA: event.target.value })} aria-invalid={singlesScoreInvalid || undefined} style={singlesScoreInvalid ? { ...inputStyle, border: "2px solid #dc2626", background: "#fef2f2" } : inputStyle} /></label>
@@ -1287,7 +1306,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
               </section>
               <section aria-label="Singles Player 2" className={styles.teamPanel}>
                 <h4 style={{ margin: 0 }}>Player 2</h4>
-                <SearchablePlayerInput inputId="singles-player-b" label="Player" value={singlesRow.playerB} players={singlesPlayerOptions(singlesRow.playerB)} allPlayers={knownPlayers} invalid={singlesValidationAttempted && !singlesRow.playerB} disabled={saving || creatingPlayers} onChange={(playerB) => patchSingles({ playerB })} onCreate={createAndSelectPlayer} />
+                <SearchablePlayerInput key={`singles-player-b-${singlesRow.playerB || "empty"}`} inputId="singles-player-b" label="Player" value={singlesRow.playerB} players={singlesPlayerOptions(singlesRow.playerB)} allPlayers={knownPlayers} invalid={singlesValidationAttempted && (!singlesRow.playerB || singlesPlayersDuplicate)} disabled={saving || creatingPlayers} onChange={(playerB) => patchSingles({ playerB })} onCreate={createAndSelectPlayer} />
               </section>
             </div>
           </div>

@@ -18,6 +18,11 @@ def test_match_uploader_manual_acceptance_fixes_are_present() -> None:
     assert "rowHasEnteredData" in source
     assert "payload.match_write_committed === false" in source
     assert "Review Match Log before retrying" in source
+    assert "const singlesScoreInvalid = singlesValidationAttempted &&" in source
+    assert "exactPlayerId !== previousId" in source
+    assert 'key={`singles-player-a-${singlesRow.playerA || "empty"}`}' in source
+    assert 'key={`singles-player-b-${singlesRow.playerB || "empty"}`}' in source
+    assert "failed|conflict|changed|reload|retry|nothing" in source
 
 
 def test_match_log_edit_page_is_compact() -> None:
