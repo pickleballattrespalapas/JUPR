@@ -8,6 +8,7 @@ import type {
   AdminLeagueManagerStatusResponse,
   AdminLeagueManagerWriteResponse
 } from "@/lib/adminLeagueManagerApi";
+import { useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
@@ -42,6 +43,7 @@ function leagueHomeHref(leagueName: string, leagueType: string): string {
 export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
   const router = useRouter();
   const { accessToken, loading: sessionLoading } = useAdminSession();
+  const actionRequest = useLatestRequestGuard(accessToken);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [leagueType, setLeagueType] = useState<"Individual" | "Team">("Individual");
@@ -80,6 +82,7 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
       return;
     }
 
+    const generation = actionRequest.begin();
     setBusy(true);
     setMessage(null);
     try {
@@ -99,13 +102,16 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
           })
         }
       );
+      if (!actionRequest.isCurrent(generation)) return;
       const createdName = payload.league?.league_name || payload.league_name || cleanName;
       const createdType = String(payload.league?.league_type || leagueType);
       router.push(leagueHomeHref(createdName, createdType));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to create league.");
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to create league.");
+      }
     } finally {
-      setBusy(false);
+      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
