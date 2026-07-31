@@ -36,7 +36,7 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
   const [leagueName, setLeagueName] = useState("");
   const [detail, setDetail] = useState<AdminLeagueManagerDetailResponse | null>(null);
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<RosterFilter>("all");
+  const [filter, setFilter] = useState<RosterFilter>("in_league");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [action, setAction] = useState<"activate" | "deactivate">("activate");
   const [startingRating, setStartingRating] = useState("3.5");
@@ -66,6 +66,7 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
     setLeagueName("");
     setDetail(null);
     setSelectedIds([]);
+    setFilter("in_league");
     setBusy(false);
     setMessage(null);
   }
@@ -99,6 +100,7 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
     setLeagueName(selectedLeague);
     setDetail(null);
     setSelectedIds([]);
+    setFilter("in_league");
     setIdempotencyKey(operationKey());
     setMessage(null);
     if (!selectedLeague) return;
@@ -203,8 +205,8 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
           {!rosterMutable ? <p style={{ color: "#92400e" }}>This roster is read-only after league close.</p> : null}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
             <label><strong>Search players</strong><br /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name or player ID" style={inputStyle} /></label>
-            <label><strong>Show</strong><br /><select value={filter} onChange={(event) => setFilter(event.target.value as RosterFilter)} style={inputStyle}><option value="all">All club players</option><option value="in_league">In this league</option><option value="not_in_league">Not in this league</option><option value="inactive">Inactive club players</option></select></label>
-            <label><strong>Bulk action</strong><br /><select value={action} onChange={(event) => resetOperation(event.target.value as "activate" | "deactivate")} disabled={!rosterMutable} style={inputStyle}><option value="activate">Add / reactivate</option><option value="deactivate">Deactivate</option></select></label>
+            <label><strong>Show</strong><br /><select value={filter} onChange={(event) => setFilter(event.target.value as RosterFilter)} style={inputStyle}><option value="in_league">In this league</option><option value="not_in_league">Add players</option><option value="all">All club players</option><option value="inactive">Inactive club players</option></select></label>
+            <label><strong>Bulk action</strong><br /><select value={action} onChange={(event) => resetOperation(event.target.value as "activate" | "deactivate")} disabled={!rosterMutable} style={inputStyle}><option value="activate">Add / reactivate</option><option value="deactivate">Remove from league</option></select></label>
             {action === "activate" ? <label><strong>Starting JUPR or Elo</strong><br /><input value={startingRating} onChange={(event) => { setStartingRating(event.target.value); setIdempotencyKey(operationKey()); }} disabled={!rosterMutable} style={inputStyle} /></label> : null}
           </div>
 
@@ -223,7 +225,7 @@ export default function LeagueRosterPanel({ apiBase, clubId, status }: Props) {
             </table>
           </div>
           {!visibleRows.length ? <p style={{ color: "#64748b" }}>No players match these filters.</p> : null}
-          <p><ConfirmAction triggerLabel={busy ? "Saving…" : `${action === "activate" ? "Add" : "Deactivate"} ${selectedIds.length} selected`} title={`${action === "activate" ? "Add" : "Deactivate"} these league players?`} description={`Apply this single atomic roster change to ${selectedIds.length} selected player(s). A failed request can be retried safely.`} confirmLabel="Yes, save roster batch" confirmationText="SAVE LEAGUE ROSTER BATCH" tone={action === "deactivate" ? "danger" : "default"} disabled={!accessToken || !rosterMutable || !selectedIds.length} busy={busy} onConfirm={saveBatch} /></p>
+          <p><ConfirmAction triggerLabel={busy ? "Saving…" : action === "activate" ? (selectedIds.length === 1 ? "Add Player" : "Add Players") : (selectedIds.length === 1 ? "Remove Player" : "Remove Players")} title={`${action === "activate" ? "Add" : "Remove"} ${selectedIds.length === 1 ? "this player" : "these players"}?`} description={`Apply this single atomic roster change to ${selectedIds.length} selected player(s). A failed request can be retried safely.`} confirmLabel={action === "activate" ? "Yes, add players" : "Yes, remove players"} confirmationText="SAVE LEAGUE ROSTER BATCH" tone={action === "deactivate" ? "danger" : "default"} disabled={!accessToken || !rosterMutable || !selectedIds.length} busy={busy} onConfirm={saveBatch} /></p>
         </article>
       ) : null}
 

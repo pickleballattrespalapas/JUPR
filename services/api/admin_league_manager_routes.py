@@ -85,6 +85,7 @@ class AdminLeagueManagerSettingsUpdateRequest(BaseModel):
 
 class AdminLeagueManagerCreateRequest(BaseModel):
     league_name: str = Field(min_length=1, max_length=120)
+    league_type: str = Field(default="Individual", pattern=r"^(Individual|Team)$")
     match_format: str = Field(default="doubles", pattern=r"^(doubles|singles)$")
     description: str = Field(default="", max_length=2000)
     min_games: int = Field(default=6, ge=0, le=1000)
@@ -805,6 +806,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 min_games=payload.min_games,
                 k_factor=payload.k_factor,
                 match_format=payload.match_format,
+                league_type=payload.league_type,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,

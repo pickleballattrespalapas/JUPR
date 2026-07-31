@@ -15,7 +15,7 @@ const exact = (href: string) => (pathname: string) => pathname === href;
 
 const tournamentItems: NavigationItem[] = [
   { href: "/admin/tournament-setup", label: "Setup", match: exact("/admin/tournament-setup") },
-  { href: "/admin/tournaments", label: "Registration editor", match: exact("/admin/tournaments") },
+  { href: "/admin/tournaments", label: "Tournament home", match: exact("/admin/tournaments") },
   { href: "/admin/tournaments/registrations", label: "Registration reports", match: exact("/admin/tournaments/registrations") },
   { href: "/admin/tournaments/bulk", label: "Bulk actions", match: exact("/admin/tournaments/bulk") },
   { href: "/admin/tournaments/commerce", label: "Extras & fulfillment", match: exact("/admin/tournaments/commerce") },
@@ -80,10 +80,7 @@ export default function TournamentAdminNav() {
         <NavigationLinks items={tournamentItems} pathname={pathname} />
       </nav>
 
-      <nav aria-label="Tournament operations workflows" className={`${styles.nav} ${styles.subnav}`}>
-        <p className={styles.subnavLabel}>Operations workflows</p>
-        <NavigationLinks items={operationItems} pathname={pathname} />
-      </nav>
+      {pathname.startsWith("/admin/tournaments/ops") ? <nav aria-label="Tournament operations workflows" className={`${styles.nav} ${styles.subnav}`}><p className={styles.subnavLabel}>Operations workflows</p><NavigationLinks items={operationItems} pathname={pathname} /></nav> : null}
     </div>
   );
 }

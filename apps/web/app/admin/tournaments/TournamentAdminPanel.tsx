@@ -395,8 +395,8 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
 
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
-      <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Tournament Admin session</h2>
+      <article style={{ ...cardStyle, display: detail ? "none" : "block" }}>
+        <h2 style={{ marginTop: 0 }}>Create or open a tournament</h2>
         <p style={{ color: "#475569" }}>
           This workflow loads tournament setup, registration summaries, event options, and registrants through FastAPI. Registration and event-entry edits are guarded by role checks, audit logging, and an action-specific confirmation dialog.
         </p>
@@ -417,8 +417,8 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
       </article>
 
       {tournaments.length ? (
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Tournaments</h2>
+        <article style={{ ...cardStyle, display: detail ? "none" : "block" }}>
+          <h2 style={{ marginTop: 0 }}>Open tournament</h2>
           <select value={selectedId} onChange={(event) => loadDetail(event.target.value)} disabled={busy} style={inputStyle}>
             <option value="">Choose a tournament…</option>
             {tournaments.map((tournament) => (
@@ -442,6 +442,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
         <>
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>{detail.tournament.name}</h2>
+            <p style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap", alignItems: "center" }}><strong>Selected tournament</strong><button type="button" onClick={() => { setDetail(null); setSelectedId(""); setSelectedRegistrationId(""); setSelectedSelectionId(""); }} style={ghostButtonStyle}>Change tournament</button></p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem" }}>
               <div><strong>Tournament status</strong><br /><StatusChip value={detail.tournament.status} /></div>
               <div><strong>Registration status</strong><br /><StatusChip value={detail.tournament.registration_status} /></div>
@@ -452,8 +453,22 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
             <p style={{ color: "#64748b" }}><strong>By payment status:</strong> {kvList(detail.summary.by_payment_status)}</p>
           </article>
 
+          <article style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
+            <h2 style={{ marginTop: 0 }}>Tournament home</h2>
+            <p style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap" }}>
+              <Link href="/admin/tournament-setup">Setup</Link>
+              <Link href="/admin/tournaments/registrations">Registrations and reports</Link>
+              <Link href="/admin/tournaments/bulk">Bulk actions</Link>
+              <Link href="/admin/tournaments/commerce">Extras and fulfillment</Link>
+              <Link href="/admin/tournaments/team-competition">Ratings and team play</Link>
+              <Link href="/admin/tournaments/ops">Operations and results</Link>
+              <Link href="/admin/tournament-live">Live runner</Link>
+              <Link href="/admin/tournaments/status">Status and recovery</Link>
+            </p>
+          </article>
+
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
-            <h2 style={{ marginTop: 0 }}>Edit tournament shell</h2>
+            <h2 style={{ marginTop: 0 }}>Tournament settings</h2>
             <p style={{ color: "#475569" }}>Name and date edits use the loaded tournament version; a stale response reloads authoritative data before another attempt.</p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
               <label><strong>Name</strong><br /><input value={tournamentEdit.name} onChange={(event) => setTournamentEdit((current) => ({ ...current, name: event.target.value }))} style={inputStyle} /></label>

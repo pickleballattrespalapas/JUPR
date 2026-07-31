@@ -592,8 +592,9 @@ export default function MatchLogApplyPanel({
     setResult(null);
     try {
       if (!stagedPatches.length) throw new Error("Stage at least one match edit first.");
+      const submittedPatches = stagedPatches.map((patch) => ({ ...patch }));
       const payload = await callApi(`/admin/clubs/${encodeURIComponent(clubId)}/match-log/edits`, "PATCH", {
-        patches: stagedPatches,
+        patches: submittedPatches,
         confirmation_text: confirmationText,
         correction_note: correctionNote,
         source: "next_match_log_guided_editor",
@@ -601,6 +602,20 @@ export default function MatchLogApplyPanel({
         replay_target: "ALL (Full System Reset)"
       });
       const summary = resultSummary(payload) || "Match edits completed.";
+      const correctionSummaries = submittedPatches.map((patch) => {
+        const original = matches.find((match) => match.id != null && Number(match.id) === Number(patch.id));
+        const changes: string[] = [];
+        if (patch.score_t1 != null || patch.score_t2 != null) {
+          const oldTeam1 = Number(original?.score?.team1 ?? 0);
+          const oldTeam2 = Number(original?.score?.team2 ?? 0);
+          const newTeam1 = patch.score_t1 == null ? oldTeam1 : Number(patch.score_t1);
+          const newTeam2 = patch.score_t2 == null ? oldTeam2 : Number(patch.score_t2);
+          changes.push(`score ${oldTeam1}-${oldTeam2} → ${newTeam1}-${newTeam2}`);
+        }
+        const otherFields = patchFields(patch).filter((field) => field !== "score_t1" && field !== "score_t2");
+        if (otherFields.length) changes.push(otherFields.join(", "));
+        return `Match #${patch.id}: ${changes.join("; ") || "updated"}`;
+      });
       setResult(payload);
       showMessage("apply", summary, payload.ok ? "success" : "error");
       if (!payload.ok) throw new Error(summary);
@@ -613,6 +628,7 @@ export default function MatchLogApplyPanel({
         description: (
           <div>
             <p role="status" style={{ color: "#166534" }}><strong>{summary}</strong></p>
+            {correctionSummaries.length ? <ul>{correctionSummaries.map((item) => <li key={item}>{item}</li>)}</ul> : null}
             <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem", margin: 0 }}>
               <div><dt style={{ fontWeight: 700 }}>Matches updated</dt><dd style={{ margin: 0 }}>{payload.updated_count ?? 0}</dd></div>
               <div><dt style={{ fontWeight: 700 }}>Ratings replay</dt><dd style={{ margin: 0 }}>{payload.replay_job_id ? "Completed" : "Not required"}</dd></div>

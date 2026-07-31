@@ -31,6 +31,13 @@ def _clean_text(value: Any, *, limit: int) -> str:
     return str(value or "").replace("<", "").replace(">", "").strip()[:limit]
 
 
+def _normalize_league_type(value: Any) -> str:
+    clean = str(value or "Individual").strip().casefold()
+    if clean not in {"individual", "team"}:
+        raise ValueError("league_type must be Individual or Team.")
+    return "Team" if clean == "team" else "Individual"
+
+
 def _normalize_match_format(value: Any) -> str:
     clean = str(value or "doubles").strip().casefold()
     if clean not in {"doubles", "singles"}:
@@ -125,6 +132,7 @@ def create_admin_league_manager_draft(
     actor_role: str,
     confirmation_text: str,
     match_format: str = "doubles",
+    league_type: str = "Individual",
     source: str = "next_league_manager_create",
 ) -> dict[str, Any]:
     if not is_admin_league_manager_enabled():
@@ -141,6 +149,7 @@ def create_admin_league_manager_draft(
 
     clean_description = _clean_text(description, limit=2000)
     clean_match_format = _normalize_match_format(match_format)
+    clean_league_type = _normalize_league_type(league_type)
     clean_min_games = _bounded_int(min_games, field="min_games", minimum=0, maximum=1000)
     clean_k_factor = _bounded_int(k_factor, field="k_factor", minimum=1, maximum=128)
     if clean_name.casefold() in _existing_league_names(supabase, club_id=clean_club_id):
@@ -150,6 +159,7 @@ def create_admin_league_manager_draft(
         "club_id": clean_club_id,
         "league_name": clean_name,
         "description": clean_description,
+        "league_type": clean_league_type,
         "match_format": clean_match_format,
         "min_games": clean_min_games,
         "k_factor": clean_k_factor,
@@ -243,6 +253,7 @@ def duplicate_admin_league_manager_draft(
         "club_id": clean_club_id,
         "league_name": clean_target_name,
         "description": _clean_text(source_league.get("description"), limit=2000),
+        "league_type": _normalize_league_type(source_league.get("league_type")),
         "match_format": _normalize_match_format(source_league.get("match_format")),
         "min_games": _bounded_int(
             source_league.get("min_games") if source_league.get("min_games") is not None else 0,
