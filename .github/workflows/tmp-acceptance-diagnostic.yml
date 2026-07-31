@@ -33,21 +33,62 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          path = Path('.github/tmp/apply_acceptance_fixes.py')
-          text = path.read_text()
-          old = '''    count = text.count(old)\n    if count != 1:\n        raise RuntimeError(f"{path}: expected one occurrence, found {count}: {old[:100]!r}")\n    write(path, text.replace(old, new, 1))'''
-          new = '''    count = text.count(old)\n    if count == 0:\n        print(f"SKIP {path}: pattern already changed or unavailable: {old[:100]!r}")\n        return\n    if count > 1:\n        print(f"NOTE {path}: replacing first of {count} matching patterns: {old[:100]!r}")\n    write(path, text.replace(old, new, 1))'''
-          if old not in text:
-              raise SystemExit('Unable to harden patch helper.')
-          path.write_text(text.replace(old, new, 1))
+
+          patch_path = Path('.github/tmp/apply_acceptance_fixes.py')
+          patch_text = patch_path.read_text()
+          strict = '''    count = text.count(old)\n    if count != 1:\n        raise RuntimeError(f"{path}: expected one occurrence, found {count}: {old[:100]!r}")\n    write(path, text.replace(old, new, 1))'''
+          tolerant = '''    count = text.count(old)\n    if count == 0:\n        print(f"SKIP {path}: pattern already changed or unavailable: {old[:100]!r}")\n        return\n    if count > 1:\n        print(f"NOTE {path}: replacing first of {count} matching patterns: {old[:100]!r}")\n    write(path, text.replace(old, new, 1))'''
+          if strict not in patch_text:
+              raise SystemExit('Unable to prepare acceptance patch helper.')
+          patch_path.write_text(patch_text.replace(strict, tolerant, 1))
           PY
+
           python .github/tmp/apply_acceptance_fixes.py
+
           python - <<'PY'
           from pathlib import Path
-          path = Path('apps/web/app/admin/league-manager/results/page.tsx')
-          text = path.read_text().replace("one league's", "one league’s")
-          path.write_text(text)
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text()
+              if old not in text:
+                  raise SystemExit(f'{path}: required follow-up pattern is missing: {old[:120]!r}')
+              target.write_text(text.replace(old, new, 1))
+
+          # Reset the roster to current members every time another league is selected.
+          replace_once(
+              'apps/web/app/admin/league-manager/roster/LeagueRosterPanel.tsx',
+              'setLeagueName(selectedLeague);\n    setDetail(null);\n    setSelectedIds([]);\n    setIdempotencyKey(operationKey());',
+              'setLeagueName(selectedLeague);\n    setDetail(null);\n    setSelectedIds([]);\n    setFilter("in_league");\n    setIdempotencyKey(operationKey());',
+          )
+
+          # Hide the tournament selector once a tournament workspace is open.
+          replace_once(
+              'apps/web/app/admin/tournaments/TournamentAdminPanel.tsx',
+              '<article style={cardStyle}>\n          <h2 style={{ marginTop: 0 }}>Open tournament</h2>',
+              '<article style={{ ...cardStyle, display: detail ? "none" : "block" }}>\n          <h2 style={{ marginTop: 0 }}>Open tournament</h2>',
+          )
+
+          # Use the real operation timestamps in the pending-operation projection.
+          service_path = Path('jupr_app/services/team_league_service.py')
+          service = service_path.read_text()
+          marker = 'pending_operations = ['
+          start = service.index(marker)
+          end = service.index('    roster_fingerprint =', start)
+          block = service[start:end].replace('"created_at",', '"started_at",')
+          service_path.write_text(service[:start] + block + service[end:])
+
+          # Avoid a raw apostrophe in JSX text.
+          results_path = Path('apps/web/app/admin/league-manager/results/page.tsx')
+          results_path.write_text(results_path.read_text().replace("one league's", "one league’s"))
+
+          # Strengthen source contracts for the follow-up corrections.
+          contract_path = Path('apps/web/tests/acceptance-fixes-20260731.cjs')
+          contract = contract_path.read_text()
+          contract += '''\nexpect("app/admin/league-manager/roster/LeagueRosterPanel.tsx", 'setFilter("in_league")');\nexpect("app/admin/tournaments/TournamentAdminPanel.tsx", 'display: detail ? "none" : "block"');\n'''
+          contract_path.write_text(contract)
           PY
+
           git diff --check
           echo '=== working tree ==='
           git status --short
@@ -108,12 +149,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mapfile -t team_tests < <(git ls-files 'tests/*team*league*.py' | sort)
           python -m pytest -q \
             tests/test_acceptance_fixes_20260731.py \
             tests/test_admin_league_manager_service.py \
             tests/test_api_contract_admin_league_manager.py \
-            tests/test_team_league_service.py \
-            tests/test_api_contract_admin_team_league.py
+            "${team_tests[@]}"
 
       - name: Preserve validation summary
         if: always()
