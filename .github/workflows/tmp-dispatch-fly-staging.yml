@@ -1,0 +1,85 @@
+name: Dispatch exact Fly staging candidate
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    if: github.head_ref == 'agent/dispatch-fly-staging-44982b'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out canonical staging
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 0
+
+      - name: Verify and dispatch exact staging deploy when needed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected_sha='44982b617fe09e2ab73d55bb6f45da646d6136c5'
+          test "$(git rev-parse HEAD)" = "$expected_sha"
+
+          exact_now=false
+          if curl --fail --silent --show-error --max-time 20 \
+              'https://juprleagues-api-staging.fly.dev/health' -o fly-health-before.json; then
+            if EXPECTED_SHA="$expected_sha" python - <<'PY'
+          import json, os
+          with open('fly-health-before.json', encoding='utf-8') as handle:
+              health = json.load(handle)
+          expected = os.environ['EXPECTED_SHA']
+          if health.get('git_commit_sha') != expected or health.get('image_build_git_sha') != expected:
+              raise SystemExit(1)
+          if health.get('write_wave') != 'open' or health.get('staging_write_wave') != 'open':
+              raise SystemExit(1)
+          PY
+            then
+              exact_now=true
+            fi
+          fi
+
+          if [ "$exact_now" = true ]; then
+            echo 'Exact staging Fly candidate is already deployed.'
+            exit 0
+          fi
+
+          dispatch_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run fly_api_staging_deploy.yml \
+            --ref staging \
+            -f app_name=juprleagues-api-staging \
+            -f primary_region=dfw \
+            -f fly_org='' \
+            -f club_slug=tres-palapas \
+            -f club_id=tres_palapas \
+            -f write_wave=open \
+            -f expected_candidate_sha="$expected_sha" \
+            -f orchestration_run_id="${GITHUB_RUN_ID}"
+
+          run_id=''
+          for attempt in $(seq 1 30); do
+            run_id="$(gh run list \
+              --workflow fly_api_staging_deploy.yml \
+              --branch staging \
+              --event workflow_dispatch \
+              --limit 20 \
+              --json databaseId,headSha,createdAt \
+              --jq ".[] | select(.headSha == \"$expected_sha\" and .createdAt >= \"$dispatch_started\") | .databaseId" \
+              | head -n 1)"
+            if [ -n "$run_id" ]; then
+              break
+            fi
+            sleep 5
+          done
+          test -n "$run_id"
+          echo "Dispatched Fly staging run $run_id"
+          gh run watch "$run_id" --exit-status
