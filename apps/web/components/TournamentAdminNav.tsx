@@ -23,8 +23,8 @@ function selectedItems(tournamentId: string, tournamentName: string): Navigation
   return [
     { href: selectedHref("/admin/tournaments/tournament", tournamentId, tournamentName), label: "Tournament Home", match: exact("/admin/tournaments/tournament") },
     { href: selectedHref("/admin/tournament-setup", tournamentId, tournamentName), label: "Setup", match: exact("/admin/tournament-setup") },
-    { href: selectedHref("/admin/tournaments/registrations", tournamentId, tournamentName), label: "Registrations", match: exact("/admin/tournaments/registrations") },
-    { href: selectedHref("/admin/tournaments/reports", tournamentId, tournamentName), label: "Reports", match: exact("/admin/tournaments/reports") },
+    { href: selectedHref("/admin/tournaments/editor", tournamentId, tournamentName), label: "Registrations", match: exact("/admin/tournaments/editor") },
+    { href: selectedHref("/admin/tournaments/registrations", tournamentId, tournamentName), label: "Reports", match: exact("/admin/tournaments/registrations") },
     { href: selectedHref("/admin/tournaments/bulk", tournamentId, tournamentName), label: "Bulk actions", match: exact("/admin/tournaments/bulk") },
     { href: selectedHref("/admin/tournaments/commerce", tournamentId, tournamentName), label: "Extras & fulfillment", match: exact("/admin/tournaments/commerce") },
     { href: selectedHref("/admin/tournaments/team-competition", tournamentId, tournamentName), label: "Ratings & team play", match: exact("/admin/tournaments/team-competition") },
