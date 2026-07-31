@@ -1,0 +1,376 @@
+name: Temporary Match Uploader selection and result polish v2
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temporary-match-uploader-selection-results-polish-v2
+  cancel-in-progress: false
+
+jobs:
+  apply-test-publish:
+    if: github.head_ref == 'agent/match-uploader-selection-results-polish' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/match-uploader-selection-results-polish
+          fetch-depth: 0
+
+      - name: Apply reviewed Match Uploader fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          form_path = Path("apps/web/app/admin/match-uploader/MatchUploaderForm.tsx")
+          form = form_path.read_text(encoding="utf-8")
+
+          form = replace_once(
+              form,
+              "  players: PublicPlayer[];\n  disabled?: boolean;\n  invalid?: boolean;",
+              "  players: PublicPlayer[];\n  allPlayers?: PublicPlayer[];\n  disabled?: boolean;\n  invalid?: boolean;",
+              "player-input allPlayers prop",
+          )
+          form = replace_once(
+              form,
+              "  players,\n  disabled = false,\n  invalid = false,",
+              "  players,\n  allPlayers = players,\n  disabled = false,\n  invalid = false,",
+              "player-input allPlayers argument",
+          )
+          form = replace_once(
+              form,
+              "  const selected = players.find((player) => String(player.id) === value);",
+              "  const selected = allPlayers.find((player) => String(player.id) === value);",
+              "selected player full-roster lookup",
+          )
+          form = replace_once(
+              form,
+              "  const matchingPlayers = cleanedQuery\n",
+              "  const exactKnownPlayer = allPlayers.find(\n"
+              "    (player) =>\n"
+              "      String(player.name).trim().toLocaleLowerCase()\n"
+              "      === cleanedQuery.toLocaleLowerCase(),\n"
+              "  );\n"
+              "  const blockedExactPlayer = exactKnownPlayer && !exactPlayer ? exactKnownPlayer : null;\n"
+              "  const matchingPlayers = cleanedQuery\n",
+              "known-player lookup",
+          )
+          form = replace_once(
+              form,
+              "  const startingJuprMessage = cleanedQuery && !exactPlayer && matchingPlayers.length === 0\n"
+              "    ? validateStartingJupr(startingJupr)\n"
+              "    : null;\n"
+              "  const validatedInputStyle = invalid\n",
+              "  const startingJuprMessage = cleanedQuery && !exactKnownPlayer && matchingPlayers.length === 0\n"
+              "    ? validateStartingJupr(startingJupr)\n"
+              "    : null;\n"
+              "  const duplicatePlayerMessage = blockedExactPlayer\n"
+              "    ? \"This player is already selected in this match.\"\n"
+              "    : null;\n"
+              "  const inputIsInvalid = invalid || Boolean(duplicatePlayerMessage);\n"
+              "  const validatedInputStyle = inputIsInvalid\n",
+              "duplicate-player validation state",
+          )
+          form = replace_once(
+              form,
+              "  useEffect(() => {\n    setQuery(selectedName);\n  }, [selectedName]);\n\n  async function createAndSelect() {",
+              "  useEffect(() => {\n    setQuery(selectedName);\n  }, [selectedName]);\n\n"
+              "  useEffect(() => {\n"
+              "    if (!value && exactPlayer) onChange(String(exactPlayer.id));\n"
+              "  }, [exactPlayer, onChange, value]);\n\n"
+              "  async function createAndSelect() {",
+              "restored exact-query selection",
+          )
+          form = replace_once(
+              form,
+              "      || exactPlayer\n      || startingJuprMessage\n",
+              "      || exactKnownPlayer\n      || startingJuprMessage\n",
+              "known-player creation guard",
+          )
+          form = replace_once(
+              form,
+              "          aria-invalid={invalid || undefined}\n",
+              "          aria-invalid={inputIsInvalid || undefined}\n",
+              "duplicate-player aria invalid",
+          )
+          form = replace_once(
+              form,
+              "      </datalist>\n      {cleanedQuery && !exactPlayer && matchingPlayers.length === 0 ? (",
+              "      </datalist>\n"
+              "      {duplicatePlayerMessage ? (\n"
+              "        <p role=\"alert\" style={{ color: \"#b91c1c\", margin: \"0.35rem 0 0\", fontWeight: 700 }}>\n"
+              "          {duplicatePlayerMessage}\n"
+              "        </p>\n"
+              "      ) : null}\n"
+              "      {cleanedQuery && !exactKnownPlayer && matchingPlayers.length === 0 ? (",
+              "duplicate-player warning and creation suppression",
+          )
+
+          form = replace_once(
+              form,
+              "          onChange={(event) => setQuery(event.target.value)}\n          onKeyDown={(event) => {",
+              "          onChange={(event) => {\n"
+              "            const next = event.target.value;\n"
+              "            setQuery(next);\n"
+              "            const selectedSuggestion = players.find(\n"
+              "              (player) =>\n"
+              "                String(player.name).trim().toLocaleLowerCase()\n"
+              "                === next.replace(/\\s+/g, \" \"").trim().toLocaleLowerCase(),\n"
+              "            );\n"
+              "            if (selectedSuggestion && !selectedNames.has(String(selectedSuggestion.name).trim().toLocaleLowerCase())) {\n"
+              "              addPlayerName(String(selectedSuggestion.name));\n"
+              "            }\n"
+              "          }}\n"
+              "          onKeyDown={(event) => {",
+              "round-robin suggestion immediate add",
+          )
+
+          for value_name in ("t1p1", "t1p2", "t2p1", "t2p2"):
+              form = replace_once(
+                  form,
+                  f"players={{playerOptionsFor(row, row.{value_name})}} invalid=",
+                  f"players={{playerOptionsFor(row, row.{value_name})}} allPlayers={{knownPlayers}} invalid=",
+                  f"manual {value_name} full-roster context",
+              )
+          for value_name in ("playerA", "playerB"):
+              form = replace_once(
+                  form,
+                  f"players={{singlesPlayerOptions(singlesRow.{value_name})}} invalid=",
+                  f"players={{singlesPlayerOptions(singlesRow.{value_name})}} allPlayers={{knownPlayers}} invalid=",
+                  f"singles {value_name} full-roster context",
+              )
+
+          form = replace_once(
+              form,
+              "function isUploaderErrorMessage(message: string): boolean {",
+              "function countDeltaLabel(\n"
+              "  before?: number | null,\n"
+              "  after?: number | null,\n"
+              "  delta?: number | null,\n"
+              "): string {\n"
+              "  if (delta != null && Number.isFinite(Number(delta))) return String(Math.trunc(Number(delta)));\n"
+              "  if (before == null || after == null) return \"—\";\n"
+              "  const calculated = Number(after) - Number(before);\n"
+              "  return Number.isFinite(calculated) ? String(Math.trunc(calculated)) : \"—\";\n"
+              "}\n\n"
+              "function isUploaderErrorMessage(message: string): boolean {",
+              "win-loss display helper",
+          )
+          form = replace_once(
+              form,
+              "  const emailSummary = email?.mode === \"auto_sent\"\n"
+              "    ? `${email.sent ?? 0} sent, ${email.skipped ?? 0} skipped, ${email.errors ?? 0} error(s).`\n"
+              "    : \"Not sent in staging.\";\n\n  return (",
+              "  const emailSummary = email?.mode === \"auto_sent\"\n"
+              "    ? `${email.sent ?? 0} sent, ${email.skipped ?? 0} skipped, ${email.errors ?? 0} error(s).`\n"
+              "    : \"Not sent in staging.\";\n"
+              "  const correctionHref = result.feedback?.latest_match_id != null\n"
+              "    ? `/admin/match-log/edit?match_id=${encodeURIComponent(String(result.feedback.latest_match_id))}`\n"
+              "    : (result.recovery?.match_log_route || \"/admin/match-log/edit\");\n\n"
+              "  return (",
+              "correction route",
+          )
+          form = replace_once(
+              form,
+              ">Change</th></tr></thead>",
+              ">Change</th><th style={{ textAlign: \"left\", padding: \"0.5rem\", borderBottom: \"1px solid #cbd5e1\" }}>Wins</th><th style={{ textAlign: \"left\", padding: \"0.5rem\", borderBottom: \"1px solid #cbd5e1\" }}>Losses</th></tr></thead>",
+              "result wins-losses headers",
+          )
+          form = replace_once(
+              form,
+              "{deltaLabel(player.rating_delta)}</td></tr>",
+              "{deltaLabel(player.rating_delta)}</td><td style={{ padding: \"0.5rem\", borderBottom: \"1px solid #e2e8f0\" }}>{countDeltaLabel(player.wins_before, player.wins_after, player.wins_delta)}</td><td style={{ padding: \"0.5rem\", borderBottom: \"1px solid #e2e8f0\" }}>{countDeltaLabel(player.losses_before, player.losses_after, player.losses_delta)}</td></tr>",
+              "result wins-losses values",
+          )
+          form = replace_once(
+              form,
+              "        <p style={{ display: \"flex\", justifyContent: \"flex-end\", marginBottom: 0 }}>\n"
+              "          <button type=\"button\" onClick={onClose} style={buttonStyle}>OK</button>\n"
+              "        </p>",
+              "        <p style={{ display: \"flex\", justifyContent: \"flex-end\", gap: \"0.5rem\", flexWrap: \"wrap\", marginBottom: 0 }}>\n"
+              "          <Link href={correctionHref} style={{ ...ghostButtonStyle, textDecoration: \"none\" }}>Correct results</Link>\n"
+              "          <button type=\"button\" onClick={onClose} style={buttonStyle}>OK</button>\n"
+              "        </p>",
+              "result correction action",
+          )
+          form_path.write_text(form, encoding="utf-8")
+
+          type_path = Path("apps/web/lib/adminMatchUploaderApi.ts")
+          type_text = type_path.read_text(encoding="utf-8")
+          type_text = replace_once(
+              type_text,
+              "      matches_played_before?: number | null;\n      matches_played_after?: number | null;",
+              "      matches_played_before?: number | null;\n"
+              "      matches_played_after?: number | null;\n"
+              "      wins_before?: number | null;\n"
+              "      wins_after?: number | null;\n"
+              "      wins_delta?: number | null;\n"
+              "      losses_before?: number | null;\n"
+              "      losses_after?: number | null;\n"
+              "      losses_delta?: number | null;",
+              "result win-loss types",
+          )
+          type_path.write_text(type_text, encoding="utf-8")
+
+          direct_path = Path("jupr_app/services/direct_match_entry_service.py")
+          direct = direct_path.read_text(encoding="utf-8")
+          direct = replace_once(
+              direct,
+              "    affected_players: list[dict[str, Any]] = []\n    ratings_updated = False",
+              "    wins_key = \"singles_wins\" if match_format == \"singles\" else \"wins\"\n"
+              "    losses_key = \"singles_losses\" if match_format == \"singles\" else \"losses\"\n\n"
+              "    def numeric_delta(before: Any, after: Any) -> int | None:\n"
+              "        try:\n"
+              "            return int(float(after)) - int(float(before))\n"
+              "        except Exception:\n"
+              "            return None\n\n"
+              "    affected_players: list[dict[str, Any]] = []\n"
+              "    ratings_updated = False",
+              "feedback win-loss keys",
+          )
+          direct = replace_once(
+              direct,
+              "                \"matches_played_before\": expected.get(matches_key),\n"
+              "                \"matches_played_after\": after.get(matches_key),",
+              "                \"matches_played_before\": expected.get(matches_key),\n"
+              "                \"matches_played_after\": after.get(matches_key),\n"
+              "                \"wins_before\": expected.get(wins_key),\n"
+              "                \"wins_after\": after.get(wins_key),\n"
+              "                \"wins_delta\": numeric_delta(expected.get(wins_key), after.get(wins_key)),\n"
+              "                \"losses_before\": expected.get(losses_key),\n"
+              "                \"losses_after\": after.get(losses_key),\n"
+              "                \"losses_delta\": numeric_delta(expected.get(losses_key), after.get(losses_key)),",
+              "feedback win-loss payload",
+          )
+          direct_path.write_text(direct, encoding="utf-8")
+
+          layout_path = Path("apps/web/tests/match-uploader-layout.cjs")
+          layout = layout_path.read_text(encoding="utf-8")
+          marker = '\nconsole.log("Match Uploader context and responsive layout checks passed.");\n'
+          additions = '''
+assert.match(form, /allPlayers\?: PublicPlayer\[\]/, "player inputs must know excluded roster players");
+assert.match(form, /This player is already selected in this match\./, "duplicate known players must show a warning");
+assert.match(form, /if \(!value && exactPlayer\)/, "restored exact queries must select automatically");
+assert.match(form, /selectedSuggestion[\s\S]*addPlayerName/, "round-robin suggestions must add immediately");
+assert.match(form, />Wins<\/th>[\s\S]*>Losses<\/th>/, "result modal must show wins and losses");
+assert.match(form, /Correct results/, "result modal must offer correction");
+'''
+          if marker not in layout:
+              raise SystemExit("layout-test marker not found")
+          layout_path.write_text(layout.replace(marker, additions + marker, 1), encoding="utf-8")
+
+          feedback_test = Path("tests/test_direct_match_feedback_stats.py")
+          feedback_test.write_text(
+              '''from jupr_app.services.direct_match_entry_service import _feedback_from_receipt
+
+
+def test_direct_match_feedback_includes_win_loss_deltas() -> None:
+    payload = _feedback_from_receipt(
+        match_format="doubles",
+        player_updates=[
+            {
+                "player_id": 7,
+                "expected": {
+                    "rating": 1400,
+                    "wins": 4,
+                    "losses": 2,
+                    "matches_played": 6,
+                },
+                "after": {
+                    "rating": 1420,
+                    "wins": 6,
+                    "losses": 3,
+                    "matches_played": 9,
+                },
+            }
+        ],
+        match_ids=[101, 102, 103],
+        player_names={7: "Test Player"},
+    )
+
+    player = payload["affected_players"][0]
+    assert player["wins_before"] == 4
+    assert player["wins_after"] == 6
+    assert player["wins_delta"] == 2
+    assert player["losses_before"] == 2
+    assert player["losses_after"] == 3
+    assert player["losses_delta"] == 1
+    assert payload["latest_match_id"] == 103
+''',
+              encoding="utf-8",
+          )
+          PY
+          git diff --check
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Run focused web checks
+        working-directory: apps/web
+        run: node tests/match-uploader-layout.cjs
+
+      - name: Build Next.js
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install focused Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r services/api/requirements.txt
+          pip install pytest
+
+      - name: Run focused Python checks
+        run: |
+          python -m pytest -q \
+            tests/test_direct_match_feedback_stats.py \
+            tests/test_api_contract_admin_match_uploader.py \
+            tests/test_api_contract_admin_match_uploader_singles.py
+          python -m py_compile jupr_app/services/direct_match_entry_service.py
+
+      - name: Publish clean application commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/tmp-match-uploader-selection-results-polish.yml \
+            .github/workflows/tmp-match-uploader-selection-results-polish-v2.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Polish Match Uploader selection and result recovery'
+          git fetch origin staging --no-tags
+          actual="$(git diff --name-only origin/staging...HEAD | sort | tr '\n' ' ')"
+          expected='apps/web/app/admin/match-uploader/MatchUploaderForm.tsx apps/web/lib/adminMatchUploaderApi.ts apps/web/tests/match-uploader-layout.cjs jupr_app/services/direct_match_entry_service.py tests/test_direct_match_feedback_stats.py '
+          test "$actual" = "$expected"
+          git push origin HEAD:agent/match-uploader-selection-results-polish
