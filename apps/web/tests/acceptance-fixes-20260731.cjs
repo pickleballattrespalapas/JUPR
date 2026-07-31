@@ -21,5 +21,6 @@ expect("app/admin/league-manager/teams/TeamLeaguesPanel.tsx", 'league.league_typ
 expect("app/admin/tournaments/TournamentAdminPanel.tsx", 'Tournament home');
 expect("app/admin/tournaments/TournamentAdminPanel.tsx", 'display: detail ? "none" : "block"');
 expect("components/TournamentAdminNav.tsx", 'Tournament home');
+expect("../../config/production_migration_contract.json", '"league_competition_mode"');
 
 console.log("July 31 acceptance source contracts passed.");
