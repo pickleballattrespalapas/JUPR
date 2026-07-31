@@ -1,0 +1,104 @@
+name: Verify league-format staging candidate
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.head_ref == 'agent/verify-league-format-staging-44982b'
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Check out isolated verifier
+        uses: actions/checkout@v4
+
+      - name: Wait for and verify exact permanently-open staging health
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_sha='44982b617fe09e2ab73d55bb6f45da646d6136c5'
+          base_url='https://juprleagues-api-staging.fly.dev'
+          rm -f fly-health.json
+          for attempt in $(seq 1 50); do
+            if curl --fail --silent --show-error --max-time 20 "$base_url/health" -o fly-health.json; then
+              if EXPECTED_SHA="$expected_sha" python - <<'PY'
+          import json, os
+          with open('fly-health.json', encoding='utf-8') as handle:
+              health = json.load(handle)
+          expected_sha = os.environ['EXPECTED_SHA']
+          checks = {
+              'ok': health.get('ok') is True,
+              'environment': health.get('environment') == 'staging',
+              'git_commit_sha': health.get('git_commit_sha') == expected_sha,
+              'image_build_git_sha': health.get('image_build_git_sha') == expected_sha,
+              'fly_app_name': health.get('fly_app_name') == 'juprleagues-api-staging',
+              'supabase_project_ref': health.get('supabase_project_ref') == 'sijpxjxvdtrehmqvirfi',
+              'staging_write_wave': health.get('staging_write_wave') == 'open',
+              'write_wave': health.get('write_wave') == 'open',
+              'business_data_write_wave_active': health.get('business_data_write_wave_active') is True,
+              'email_mode': health.get('email_mode') == 'dry_run',
+              'live_player_update_email_enabled': health.get('live_player_update_email_enabled') is False,
+              'public_live_production_override_enabled': health.get('public_live_production_override_enabled') is False,
+          }
+          missing = [name for name, passed in checks.items() if not passed]
+          if missing:
+              raise SystemExit('waiting for exact staging: ' + ', '.join(missing))
+          flags = health.get('controlled_write_flags') or {}
+          disabled = sorted(name for name, enabled in flags.items() if enabled is not True)
+          if disabled:
+              raise SystemExit('permanent-open flag projection is incomplete: ' + ', '.join(disabled))
+          PY
+              then
+                break
+              fi
+            fi
+            if [ "$attempt" = 50 ]; then
+              echo 'Exact staging candidate did not become healthy in time.' >&2
+              cat fly-health.json 2>/dev/null || true
+              exit 1
+            fi
+            sleep 12
+          done
+
+      - name: Verify Match Uploader format-separated status
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 20 \
+            'https://juprleagues-api-staging.fly.dev/admin/clubs/tres_palapas/match-uploader/status' \
+            -o match-uploader-status.json
+          python - <<'PY'
+          import json
+          with open('match-uploader-status.json', encoding='utf-8') as handle:
+              status = json.load(handle)
+          if status.get('enabled') is not True:
+              raise SystemExit('Match Uploader is not enabled')
+          if status.get('singles_write_enabled') is not True:
+              raise SystemExit('Singles writes are not enabled')
+          if status.get('status') == 'guarded_off':
+              raise SystemExit('Match Uploader is guarded off')
+          doubles = [str(value) for value in status.get('doubles_league_options') or []]
+          singles = [str(value) for value in status.get('singles_league_options') or []]
+          if set(map(str.casefold, doubles)) & set(map(str.casefold, singles)):
+              raise SystemExit('Singles and doubles league choices overlap')
+          if 'summer social' not in set(map(str.casefold, doubles)):
+              raise SystemExit('Expected existing doubles league is missing')
+          if 'summer social' in set(map(str.casefold, singles)):
+              raise SystemExit('Doubles league leaked into singles choices')
+          if status.get('warnings'):
+              print('status warnings:', status['warnings'])
+          PY
+
+      - name: Upload verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: league-format-staging-44982b-evidence
+          path: |
+            fly-health.json
+            match-uploader-status.json
+          retention-days: 3
