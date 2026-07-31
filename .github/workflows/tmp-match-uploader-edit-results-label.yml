@@ -1,0 +1,69 @@
+name: Temporary Match Uploader Edit Results Label
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temporary-match-uploader-edit-results-label
+  cancel-in-progress: false
+
+jobs:
+  apply-test-publish:
+    if: github.head_ref == 'agent/match-uploader-edit-results-label' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/match-uploader-edit-results-label
+          fetch-depth: 0
+
+      - name: Apply reviewed label change
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          form_path = Path('apps/web/app/admin/match-uploader/MatchUploaderForm.tsx')
+          form = form_path.read_text(encoding='utf-8')
+          old_form = '>Correct results</Link>'
+          new_form = '>Edit results</Link>'
+          if form.count(old_form) != 1:
+              raise SystemExit(f'expected exactly one result action label, found {form.count(old_form)}')
+          form_path.write_text(form.replace(old_form, new_form, 1), encoding='utf-8')
+
+          test_path = Path('apps/web/tests/match-uploader-layout.cjs')
+          test = test_path.read_text(encoding='utf-8')
+          old_test = 'assert.match(form, /Correct results/, "submission result modal must offer a correction path");'
+          new_test = 'assert.match(form, /Edit results/, "submission result modal must label the correction path as an edit action");'
+          if test.count(old_test) != 1:
+              raise SystemExit(f'expected exactly one result action assertion, found {test.count(old_test)}')
+          test_path.write_text(test.replace(old_test, new_test, 1), encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Run focused Match Uploader check
+        run: node apps/web/tests/match-uploader-layout.cjs
+
+      - name: Publish clean application commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/tmp-match-uploader-edit-results-label.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Rename Match Uploader result action'
+          git fetch origin staging --no-tags
+          actual="$(git diff --name-only origin/staging...HEAD | sort | tr '\n' ' ')"
+          expected='apps/web/app/admin/match-uploader/MatchUploaderForm.tsx apps/web/tests/match-uploader-layout.cjs '
+          test "$actual" = "$expected"
+          git push origin HEAD:agent/match-uploader-edit-results-label
