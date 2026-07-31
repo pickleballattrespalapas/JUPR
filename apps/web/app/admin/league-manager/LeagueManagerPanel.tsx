@@ -51,12 +51,6 @@ function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
 }
 
-function statusChipStyle(status: string) {
-  if (status === "active") return { background: "#dcfce7", borderColor: "#bbf7d0" };
-  if (status === "ended" || status === "archived") return { background: "#f1f5f9", borderColor: "#cbd5e1" };
-  return { background: "#fef3c7", borderColor: "#fde68a" };
-}
-
 function leagueHomeHref(league: AdminLeagueManagerLeague): string {
   const params = new URLSearchParams({
     league: league.league_name,
@@ -69,14 +63,12 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
   const router = useRouter();
   const { accessToken, loading: sessionLoading } = useAdminSession();
   const [leagues, setLeagues] = useState<AdminLeagueManagerLeague[]>([]);
-  const [selectedLeague, setSelectedLeague] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const listRequest = useLatestRequestGuard(accessToken, clearProtectedState);
 
   function clearProtectedState() {
     setLeagues([]);
-    setSelectedLeague("");
     setBusy(false);
     setMessage(null);
   }
@@ -112,18 +104,9 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
-  function openLeague(league: AdminLeagueManagerLeague) {
-    setSelectedLeague(league.league_name);
-    router.push(leagueHomeHref(league));
-  }
-
-  function openSelectedLeague() {
-    const league = leagues.find((item) => item.league_name === selectedLeague);
-    if (!league) {
-      setMessage("Choose a league first.");
-      return;
-    }
-    openLeague(league);
+  function selectLeague(leagueName: string) {
+    const league = leagues.find((item) => item.league_name === leagueName);
+    if (league) router.push(leagueHomeHref(league));
   }
 
   useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadLeagues);
@@ -149,68 +132,34 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
   }
 
   return (
-    <div style={{ display: "grid", gap: "1rem" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
-        <article style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
-          <h2 style={{ marginTop: 0 }}>Create league</h2>
-          <p style={{ color: "#475569" }}>Start a new Individual or Team league as a draft.</p>
-          <Link href="/admin/league-manager/create" style={buttonStyle}>Create league</Link>
-        </article>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
+      <article style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
+        <h2 style={{ marginTop: 0 }}>Create league draft</h2>
+        <p style={{ color: "#475569" }}>Start a new Individual or Team league.</p>
+        <Link href="/admin/league-manager/create" style={buttonStyle}>Create league draft</Link>
+      </article>
 
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Open league</h2>
-          <label>
-            <strong>Select league</strong><br />
-            <select
-              value={selectedLeague}
-              onChange={(event) => setSelectedLeague(event.target.value)}
-              disabled={busy}
-              style={inputStyle}
-            >
-              <option value="">Choose a league</option>
-              {leagues.map((league) => (
-                <option key={league.league_name} value={league.league_name}>
-                  {league.league_name} · {league.league_type || "Individual"} · {league.match_format === "singles" ? "Singles" : "Doubles"} · {league.status}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
-            <button type="button" onClick={openSelectedLeague} disabled={!selectedLeague || busy} style={buttonStyle}>Open league</button>
-            <button type="button" onClick={() => void loadLeagues()} disabled={busy} style={ghostButtonStyle}>{busy ? "Refreshing…" : "Refresh list"}</button>
-          </p>
-        </article>
-      </div>
-
-      {leagues.length ? (
-        <section aria-label="Available leagues">
-          <h2>Available leagues</h2>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
+      <article style={cardStyle}>
+        <h2 style={{ marginTop: 0 }}>Open league</h2>
+        <label>
+          <strong>Select league</strong><br />
+          <select
+            defaultValue=""
+            onChange={(event) => selectLeague(event.target.value)}
+            disabled={busy}
+            style={inputStyle}
+          >
+            <option value="">Choose a league</option>
             {leagues.map((league) => (
-              <button
-                key={league.league_name}
-                type="button"
-                onClick={() => openLeague(league)}
-                disabled={busy}
-                style={{
-                  ...cardStyle,
-                  textAlign: "left",
-                  cursor: "pointer",
-                  display: "grid",
-                  gap: "0.4rem",
-                  alignContent: "start"
-                }}
-              >
-                <strong style={{ overflowWrap: "anywhere" }}>{league.league_name}</strong>
-                <span style={{ color: "#475569" }}>{league.league_type || "Individual"} · {league.match_format === "singles" ? "Singles" : "Doubles"}</span>
-                <span style={{ width: "fit-content", border: "1px solid", borderRadius: "999px", padding: "0.12rem 0.45rem", fontSize: "0.78rem", ...statusChipStyle(league.status) }}>{league.status}</span>
-              </button>
+              <option key={league.league_name} value={league.league_name}>
+                {league.league_name} · {league.league_type || "Individual"} · {league.match_format === "singles" ? "Singles" : "Doubles"} · {league.status}
+              </option>
             ))}
-          </div>
-        </section>
-      ) : null}
-
-      {message ? <p role="status" style={{ color: /unable|error|required|choose/i.test(message) ? "#b91c1c" : "#475569" }}>{message}</p> : null}
+          </select>
+        </label>
+        <p><button type="button" onClick={() => void loadLeagues()} disabled={busy} style={ghostButtonStyle}>{busy ? "Refreshing…" : "Refresh list"}</button></p>
+        {message ? <p role="status" style={{ color: /unable|error|required/i.test(message) ? "#b91c1c" : "#475569" }}>{message}</p> : null}
+      </article>
     </div>
   );
 }
