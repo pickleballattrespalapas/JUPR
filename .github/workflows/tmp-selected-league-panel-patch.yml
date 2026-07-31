@@ -1,3 +1,4 @@
+# One-time staging branch patch. Self-removes after success.
 name: Temporary selected-league panel patcher
 
 on:
@@ -43,16 +44,8 @@ jobs:
               target.write_text(text[:start] + text[end:])
 
           live = "apps/web/app/admin/league-manager/live/LeagueLiveRoundPanel.tsx"
-          replace_once(
-              live,
-              "  liveDomainStatus: AdminLeagueLiveStatusResponse;\n};",
-              "  liveDomainStatus: AdminLeagueLiveStatusResponse;\n  initialLeague: string;\n};",
-          )
-          replace_once(
-              live,
-              "export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, uploaderStatus, players, liveDomainStatus }: Props) {",
-              "export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, uploaderStatus, players, liveDomainStatus, initialLeague }: Props) {",
-          )
+          replace_once(live, "  liveDomainStatus: AdminLeagueLiveStatusResponse;\n};", "  liveDomainStatus: AdminLeagueLiveStatusResponse;\n  initialLeague: string;\n};")
+          replace_once(live, "export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, uploaderStatus, players, liveDomainStatus }: Props) {", "export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, uploaderStatus, players, liveDomainStatus, initialLeague }: Props) {")
           replace_once(live, "  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();", "  const { accessToken } = useAdminSession();")
           replace_once(live, "  const [leagueName, setLeagueName] = useState(\"\");", "  const [leagueName, setLeagueName] = useState(initialLeague);")
           replace_once(live, "    setLeagueName(\"\");\n    setLiveSessions([]);", "    setLeagueName(initialLeague);\n    setLiveSessions([]);")
@@ -71,16 +64,8 @@ jobs:
           target.write_text(text)
 
           awards = "apps/web/app/admin/league-manager/awards/LeagueAwardsPanel.tsx"
-          replace_once(
-              awards,
-              "type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };",
-              "type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse; initialLeague: string };",
-          )
-          replace_once(
-              awards,
-              "export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {",
-              "export default function LeagueAwardsPanel({ apiBase, clubId, status, initialLeague }: Props) {",
-          )
+          replace_once(awards, "type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };", "type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse; initialLeague: string };")
+          replace_once(awards, "export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {", "export default function LeagueAwardsPanel({ apiBase, clubId, status, initialLeague }: Props) {")
           replace_once(awards, "  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();", "  const { accessToken } = useAdminSession();")
           replace_once(awards, "  const [leagueName, setLeagueName] = useState(\"\");", "  const [leagueName, setLeagueName] = useState(initialLeague);")
           replace_once(awards, "setBusy(false); setMessage(null); setLeagues([]); setLeagueName(\"\"); setState(null);", "setBusy(false); setMessage(null); setLeagues([]); setLeagueName(initialLeague); setState(null);")
@@ -107,16 +92,8 @@ jobs:
           target.write_text(text)
 
           teams = "apps/web/app/admin/league-manager/teams/TeamLeaguesPanel.tsx"
-          replace_once(
-              teams,
-              "type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };",
-              "type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse; initialLeague: string };",
-          )
-          replace_once(
-              teams,
-              "export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {",
-              "export default function TeamLeaguesPanel({ apiBase, clubId, status, initialLeague }: Props) {",
-          )
+          replace_once(teams, "type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };", "type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse; initialLeague: string };")
+          replace_once(teams, "export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {", "export default function TeamLeaguesPanel({ apiBase, clubId, status, initialLeague }: Props) {")
           replace_once(teams, "  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();", "  const { accessToken } = useAdminSession();")
           replace_once(teams, "  const [leagueName, setLeagueName] = useState(\"\");", "  const [leagueName, setLeagueName] = useState(initialLeague);")
           replace_once(teams, "    setLeagueName(\"\");\n    setDetail(null);", "    setLeagueName(initialLeague);\n    setDetail(null);")
