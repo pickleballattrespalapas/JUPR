@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/acceptance-fixes-20260731
+  pull_request:
+    branches:
+      - staging
 
 permissions:
   contents: read
@@ -14,6 +17,7 @@ concurrency:
 
 jobs:
   validate:
+    if: github.head_ref == 'agent/acceptance-fixes-20260731' || github.ref_name == 'agent/acceptance-fixes-20260731'
     runs-on: ubuntu-latest
     timeout-minutes: 50
     steps:
@@ -117,5 +121,4 @@ jobs:
       - name: Preserve validation summary
         if: always()
         shell: bash
-        run: |
-          echo "Validation completed for $(git rev-parse HEAD)."
+        run: echo "Validation completed for $(git rev-parse HEAD)."
