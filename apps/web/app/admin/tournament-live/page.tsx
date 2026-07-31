@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import TournamentAdminNav from "@/components/TournamentAdminNav";
 import { getAdminTournamentApiBaseUrl, getAdminTournamentLiveStatus } from "@/lib/adminTournamentApi";
@@ -17,7 +18,9 @@ export default async function AdminTournamentLivePage({ searchParams }: Props) {
 
   return (
     <>
-      <TournamentAdminNav />
+      <Suspense fallback={<div aria-hidden="true" style={{ minHeight: "42px", marginBottom: "1rem" }} />}>
+        <TournamentAdminNav />
+      </Suspense>
       <section>
         <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
           Tournament Manager
