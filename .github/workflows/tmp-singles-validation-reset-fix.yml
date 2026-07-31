@@ -77,6 +77,8 @@ jobs:
             .github/tmp/apply_singles_validation_reset_fix.py \
             .github/workflows/tmp-singles-validation-reset-fix.yml
           rmdir .github/tmp 2>/dev/null || true
+          git checkout -- apps/web/next-env.d.ts 2>/dev/null || true
+          rm -f apps/web/tsconfig.tsbuildinfo
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
