@@ -30,6 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           python .github/tmp/apply_league_match_format.py
+          python .github/tmp/patch_league_match_format_test.py
           git diff --check
 
       - name: Set up Node
@@ -85,6 +86,7 @@ jobs:
           set -euo pipefail
           rm -f \
             .github/tmp/apply_league_match_format.py \
+            .github/tmp/patch_league_match_format_test.py \
             .github/workflows/tmp-league-match-format.yml
           rmdir .github/tmp 2>/dev/null || true
           git diff --check
@@ -107,6 +109,7 @@ jobs:
           jupr_app/services/admin_match_uploader_service.py
           services/api/admin_league_manager_routes.py
           supabase/migrations/20260731033000_league_match_format.sql
+          tests/test_api_contract_admin_match_uploader_singles.py
           tests/test_league_match_format_contract.py
           EOF
           )"
