@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAdminLeagueManagerApiBaseUrl, getAdminLeagueManagerStatus } from "@/lib/adminLeagueManagerApi";
 import LeagueAwardsPanel from "./LeagueAwardsPanel";
 import LeagueManagerNav from "../LeagueManagerNav";
+import SelectedLeaguePanelScope from "../SelectedLeaguePanelScope";
 
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
@@ -26,7 +27,11 @@ export default async function AdminLeagueAwardsPage({ searchParams }: Props) {
       <LeagueManagerNav leagueName={leagueName} leagueType={leagueType || null} />
 
       {error ? <p role="alert" style={{ color: "#b91c1c" }}>League Manager is unavailable. {error}</p> : null}
-      {status ? <LeagueAwardsPanel apiBase={getAdminLeagueManagerApiBaseUrl()} clubId={clubId} status={status} initialLeague={leagueName} /> : null}
+      {status ? (
+        <SelectedLeaguePanelScope leagueName={leagueName}>
+          <LeagueAwardsPanel apiBase={getAdminLeagueManagerApiBaseUrl()} clubId={clubId} status={status} />
+        </SelectedLeaguePanelScope>
+      ) : null}
     </section>
   );
 }
