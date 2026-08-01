@@ -64,25 +64,149 @@ export default async function PublicTournamentsPage({
 }: Props) {
   const registrationSlug = firstParam(searchParams, "tournament");
   const tournamentId = firstParam(searchParams, "tournament_id");
+  const explicitSelection = Boolean(registrationSlug || tournamentId);
   const { data, error } = await getClubTournamentRegistration(params.clubSlug, {
     registrationSlug,
     tournamentId
   });
 
-  const tournament = data?.tournament;
+  const apiTournament = data?.tournament ?? null;
   const settings = data?.settings;
+  const selectionMatches = Boolean(
+    explicitSelection &&
+      apiTournament &&
+      (!tournamentId || apiTournament.id === tournamentId) &&
+      (!registrationSlug || settings?.registration_slug === registrationSlug)
+  );
+  const tournament = selectionMatches ? apiTournament : null;
   const currentId = tournament?.id || null;
-  const currentSlug = settings?.registration_slug || null;
-  const selectableEvents = (data?.events || []).filter((event) => event.selectable);
-  const eventsByDay = (data?.days || []).map((day) => ({
-    day,
-    events: (data?.events || []).filter(
-      (event) => event.registration_day_id === day.id
-    )
-  }));
+  const currentSlug = tournament ? settings?.registration_slug || null : null;
+  const selectableEvents = tournament
+    ? (data?.events || []).filter((event) => event.selectable)
+    : [];
+  const eventsByDay = tournament
+    ? (data?.days || []).map((day) => ({
+        day,
+        events: (data?.events || []).filter(
+          (event) => event.registration_day_id === day.id
+        )
+      }))
+    : [];
+
+  if (!explicitSelection) {
+    return (
+      <section>
+        <p
+          style={{
+            margin: "0 0 0.5rem",
+            color: "#2563eb",
+            fontWeight: 800,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            fontSize: "0.78rem"
+          }}
+        >
+          Tournaments
+        </p>
+        <h1 style={{ marginTop: 0 }}>Choose a tournament</h1>
+        <p style={{ color: "#334155", maxWidth: "820px" }}>
+          Select a tournament to open its Tournament Home, registration, roster,
+          and Partner Board.
+        </p>
+
+        {error ? (
+          <article
+            role="alert"
+            style={{
+              ...cardStyle,
+              borderColor: "#fecaca",
+              background: "#fef2f2",
+              marginBottom: "1rem"
+            }}
+          >
+            <h2 style={{ marginTop: 0 }}>Tournaments are temporarily unavailable</h2>
+            <p style={{ color: "#7f1d1d" }}>{error}</p>
+          </article>
+        ) : null}
+
+        {data?.tournaments?.length ? (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+              gap: "0.75rem"
+            }}
+          >
+            {data.tournaments.map((choice) => (
+              <Link
+                key={choice.tournament.id}
+                href={tournamentHref(params.clubSlug, choice)}
+                style={{
+                  ...cardStyle,
+                  color: "#0f172a",
+                  textDecoration: "none"
+                }}
+              >
+                <strong>{choice.tournament.name}</strong>
+                <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
+                  {dateLabel(choice.tournament.start_date)}
+                  {choice.tournament.end_date
+                    ? ` – ${dateLabel(choice.tournament.end_date)}`
+                    : ""}
+                </p>
+                <p style={{ margin: "0.35rem 0 0", color: "#64748b" }}>
+                  Registration: {choice.settings.registration_status || "draft"}
+                </p>
+              </Link>
+            ))}
+          </div>
+        ) : !error ? (
+          <article style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>No published tournaments</h2>
+            <p style={{ color: "#475569" }}>
+              There is no public tournament workspace available for this club yet.
+            </p>
+          </article>
+        ) : null}
+      </section>
+    );
+  }
+
+  if (!tournament) {
+    return (
+      <section>
+        <p
+          style={{
+            margin: "0 0 0.5rem",
+            color: "#2563eb",
+            fontWeight: 800,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            fontSize: "0.78rem"
+          }}
+        >
+          Tournaments
+        </p>
+        <h1 style={{ marginTop: 0 }}>Tournament not found</h1>
+        <p style={{ color: "#334155" }}>
+          The selected tournament is unavailable or is no longer published.
+        </p>
+        <p>
+          <Link href={`/clubs/${params.clubSlug}/tournaments`}>
+            Return to tournament selection
+          </Link>
+        </p>
+      </section>
+    );
+  }
 
   return (
     <section>
+      <p style={{ margin: "0 0 0.75rem" }}>
+        <Link href={`/clubs/${params.clubSlug}/tournaments`}>
+          ← Choose another tournament
+        </Link>
+      </p>
       <p
         style={{
           margin: "0 0 0.5rem",
@@ -93,241 +217,172 @@ export default async function PublicTournamentsPage({
           fontSize: "0.78rem"
         }}
       >
-        Tournaments
+        Tournament Home
       </p>
-      <h1 style={{ marginTop: 0 }}>Club tournaments</h1>
+      <h1 style={{ marginTop: 0 }}>{tournament.name}</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Choose a tournament first, then use its Tournament Home, registration,
-        roster, and Partner Board from one consistent public workspace.
+        Registration, roster, partner requests, events, and public tournament
+        information for this tournament.
       </p>
 
-      {error ? (
-        <article
-          role="alert"
+      <PublicTournamentNav
+        clubSlug={params.clubSlug}
+        tournamentName={tournament.name}
+        tournamentId={currentId}
+        registrationSlug={currentSlug}
+        active="overview"
+      />
+
+      <article
+        style={{
+          ...cardStyle,
+          marginBottom: "1rem",
+          background: "#eff6ff",
+          borderColor: "#bfdbfe"
+        }}
+      >
+        <div
           style={{
-            ...cardStyle,
-            borderColor: "#fecaca",
-            background: "#fef2f2",
-            marginBottom: "1rem"
+            display: "flex",
+            justifyContent: "space-between",
+            gap: "1rem",
+            flexWrap: "wrap",
+            alignItems: "flex-start"
           }}
         >
-          <h2 style={{ marginTop: 0 }}>Tournaments are temporarily unavailable</h2>
-          <p style={{ color: "#7f1d1d" }}>{error}</p>
-        </article>
-      ) : null}
-
-      {data?.tournaments?.length ? (
-        <section style={{ marginBottom: "1.25rem" }}>
-          <h2>Choose a tournament</h2>
-          <div
+          <div>
+            <h2 style={{ marginTop: 0 }}>{tournament.name}</h2>
+            <p style={{ marginBottom: 0, color: "#475569" }}>
+              {dateLabel(tournament.start_date)} – {dateLabel(tournament.end_date)}
+            </p>
+          </div>
+          <span
             style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-              gap: "0.75rem"
+              border: "1px solid #93c5fd",
+              borderRadius: "999px",
+              padding: "0.25rem 0.6rem",
+              background: "white",
+              fontWeight: 800
             }}
           >
-            {data.tournaments.map((choice) => {
-              const selected = choice.tournament.id === tournament?.id;
-              return (
-                <Link
-                  key={choice.tournament.id}
-                  href={tournamentHref(params.clubSlug, choice)}
-                  aria-current={selected ? "page" : undefined}
-                  style={{
-                    ...cardStyle,
-                    borderColor: selected ? "#60a5fa" : "#e2e8f0",
-                    background: selected ? "#eff6ff" : "white",
-                    color: "#0f172a",
-                    textDecoration: "none"
-                  }}
-                >
-                  <strong>{choice.tournament.name}</strong>
-                  <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
-                    {dateLabel(choice.tournament.start_date)}
-                    {choice.tournament.end_date
-                      ? ` – ${dateLabel(choice.tournament.end_date)}`
-                      : ""}
-                  </p>
-                  <p style={{ margin: "0.35rem 0 0", color: "#64748b" }}>
-                    Registration: {choice.settings.registration_status || "draft"}
-                  </p>
-                </Link>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
+            {settings?.registration_status || "draft"}
+          </span>
+        </div>
+      </article>
 
-      {!error && data && !tournament ? (
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))",
+          gap: "0.75rem",
+          marginBottom: "1rem"
+        }}
+      >
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>No published tournament</h2>
-          <p style={{ color: "#475569" }}>
-            There is no public tournament workspace available for this club yet.
-          </p>
+          <strong>Registration</strong>
+          <br />
+          {data?.registration_open ? "Open" : "Closed"}
         </article>
-      ) : null}
+        <article style={cardStyle}>
+          <strong>Open divisions</strong>
+          <br />
+          {selectableEvents.length}
+        </article>
+        <article style={cardStyle}>
+          <strong>Registrations</strong>
+          <br />
+          {data?.roster_summary?.total_registrations ?? 0}
+        </article>
+        <article style={cardStyle}>
+          <strong>Players needing partners</strong>
+          <br />
+          {data?.roster_summary?.players_needing_partners ?? 0}
+        </article>
+      </div>
 
-      {tournament ? (
-        <>
-          <PublicTournamentNav
-            clubSlug={params.clubSlug}
-            tournamentName={tournament.name}
-            tournamentId={currentId}
-            registrationSlug={currentSlug}
-            active="overview"
-          />
-
-          <article
-            style={{
-              ...cardStyle,
-              marginBottom: "1rem",
-              background: "#eff6ff",
-              borderColor: "#bfdbfe"
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: "1rem",
-                flexWrap: "wrap",
-                alignItems: "flex-start"
-              }}
-            >
-              <div>
-                <h2 style={{ marginTop: 0 }}>{tournament.name}</h2>
-                <p style={{ marginBottom: 0, color: "#475569" }}>
-                  {dateLabel(tournament.start_date)} – {dateLabel(tournament.end_date)}
-                </p>
-              </div>
-              <span
-                style={{
-                  border: "1px solid #93c5fd",
-                  borderRadius: "999px",
-                  padding: "0.25rem 0.6rem",
-                  background: "white",
-                  fontWeight: 800
-                }}
+      <section style={{ marginBottom: "1.25rem" }}>
+        <h2>Tournament pages</h2>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: "0.75rem"
+          }}
+        >
+          {[
+            {
+              label: "Register",
+              description: data?.registration_open
+                ? "Choose divisions, submit registration, and manage extras."
+                : data?.registration_closed_reason ||
+                  "Registration is not currently open.",
+              module: "registration" as const
+            },
+            {
+              label: "Roster",
+              description:
+                "Browse public-safe registrations by day, event, division, and status.",
+              module: "roster" as const
+            },
+            {
+              label: "Partner Board",
+              description: "Find players who opted into public partner requests.",
+              module: "partner-board" as const
+            }
+          ].map((item) => (
+            <article key={item.module} style={cardStyle}>
+              <h3 style={{ marginTop: 0 }}>{item.label}</h3>
+              <p style={{ color: "#475569" }}>{item.description}</p>
+              <Link
+                href={publicTournamentHref(
+                  params.clubSlug,
+                  item.module,
+                  currentId,
+                  currentSlug
+                )}
+                style={{ fontWeight: 800 }}
               >
-                {settings?.registration_status || "draft"}
-              </span>
-            </div>
-          </article>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))",
-              gap: "0.75rem",
-              marginBottom: "1rem"
-            }}
-          >
-            <article style={cardStyle}>
-              <strong>Registration</strong>
-              <br />
-              {data?.registration_open ? "Open" : "Closed"}
+                Open {item.label}
+              </Link>
             </article>
-            <article style={cardStyle}>
-              <strong>Open divisions</strong>
-              <br />
-              {selectableEvents.length}
-            </article>
-            <article style={cardStyle}>
-              <strong>Registrations</strong>
-              <br />
-              {data?.roster_summary?.total_registrations ?? 0}
-            </article>
-            <article style={cardStyle}>
-              <strong>Players needing partners</strong>
-              <br />
-              {data?.roster_summary?.players_needing_partners ?? 0}
-            </article>
-          </div>
+          ))}
+        </div>
+      </section>
 
-          <section style={{ marginBottom: "1.25rem" }}>
-            <h2>Tournament pages</h2>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                gap: "0.75rem"
-              }}
-            >
-              {[
-                [
-                  "Register",
-                  data?.registration_open
-                    ? "Choose divisions, submit registration, and manage extras."
-                    : data?.registration_closed_reason ||
-                      "Registration is not currently open.",
-                  "registration" as const
-                ],
-                [
-                  "Roster",
-                  "Browse public-safe registrations by day, event, division, and status.",
-                  "roster" as const
-                ],
-                [
-                  "Partner Board",
-                  "Find players who opted into public partner requests.",
-                  "partner-board" as const
-                ]
-              ].map(([label, description, module]) => (
-                <article key={module} style={cardStyle}>
-                  <h3 style={{ marginTop: 0 }}>{label}</h3>
-                  <p style={{ color: "#475569" }}>{description}</p>
-                  <Link
-                    href={publicTournamentHref(
-                      params.clubSlug,
-                      module,
-                      currentId,
-                      currentSlug
-                    )}
-                    style={{ fontWeight: 800 }}
-                  >
-                    Open {label}
-                  </Link>
-                </article>
-              ))}
-            </div>
-          </section>
+      <section>
+        <h2>Events and days</h2>
+        <div style={{ display: "grid", gap: "0.75rem" }}>
+          {eventsByDay.map(({ day, events }) => (
+            <article key={day.id} style={cardStyle}>
+              <h3 style={{ marginTop: 0 }}>
+                {day.label} · {dateLabel(day.event_date)}
+              </h3>
+              {events.length ? (
+                <ul style={{ marginBottom: 0 }}>
+                  {events.map((event) => (
+                    <li key={event.id}>
+                      {eventLabel(event)}
+                      {event.price_usd != null
+                        ? ` · $${Number(event.price_usd).toFixed(2)}`
+                        : ""}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p style={{ marginBottom: 0, color: "#64748b" }}>
+                  No public events are assigned to this day.
+                </p>
+              )}
+            </article>
+          ))}
+        </div>
+      </section>
 
-          <section>
-            <h2>Events and days</h2>
-            <div style={{ display: "grid", gap: "0.75rem" }}>
-              {eventsByDay.map(({ day, events }) => (
-                <article key={day.id} style={cardStyle}>
-                  <h3 style={{ marginTop: 0 }}>
-                    {day.label} · {dateLabel(day.event_date)}
-                  </h3>
-                  {events.length ? (
-                    <ul style={{ marginBottom: 0 }}>
-                      {events.map((event) => (
-                        <li key={event.id}>
-                          {eventLabel(event)}
-                          {event.price_usd != null
-                            ? ` · $${Number(event.price_usd).toFixed(2)}`
-                            : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p style={{ marginBottom: 0, color: "#64748b" }}>
-                      No public events are assigned to this day.
-                    </p>
-                  )}
-                </article>
-              ))}
-            </div>
-          </section>
-
-          <p style={{ marginTop: "1rem" }}>
-            <Link href={`/clubs/${params.clubSlug}/tournament-team-results`}>
-              View published four-player team results
-            </Link>
-          </p>
-        </>
-      ) : null}
+      <p style={{ marginTop: "1rem" }}>
+        <Link href={`/clubs/${params.clubSlug}/tournament-team-results`}>
+          View published four-player team results
+        </Link>
+      </p>
     </section>
   );
 }

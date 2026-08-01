@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOutAdminSession } from "@/lib/adminAuthClient";
@@ -16,6 +16,7 @@ type AdminLink = {
   label: string;
   href: string;
   active: (pathname: string) => boolean;
+  newTab?: boolean;
 };
 
 type AdminGroup = {
@@ -119,6 +120,41 @@ const adminGroups: AdminGroup[] = [
         active: (pathname) => pathname.startsWith("/admin/replay-history")
       }
     ]
+  },
+  {
+    label: "Public site",
+    links: [
+      {
+        label: "Public Home ↗",
+        href: "/",
+        active: () => false,
+        newTab: true
+      },
+      {
+        label: "Club Home ↗",
+        href: "/clubs/tres-palapas",
+        active: () => false,
+        newTab: true
+      },
+      {
+        label: "Leagues ↗",
+        href: "/clubs/tres-palapas/leagues",
+        active: () => false,
+        newTab: true
+      },
+      {
+        label: "Tournaments ↗",
+        href: "/clubs/tres-palapas/tournaments",
+        active: () => false,
+        newTab: true
+      },
+      {
+        label: "Leaderboards ↗",
+        href: "/clubs/tres-palapas/leaderboards",
+        active: () => false,
+        newTab: true
+      }
+    ]
   }
 ];
 
@@ -129,6 +165,8 @@ function SidebarLink({ item, pathname }: { item: AdminLink; pathname: string }) 
       href={item.href}
       aria-current={active ? "page" : undefined}
       className={`${styles.link} ${active ? styles.active : ""}`}
+      target={item.newTab ? "_blank" : undefined}
+      rel={item.newTab ? "noreferrer" : undefined}
     >
       {item.label}
     </Link>
@@ -140,8 +178,23 @@ export default function AdminShell({ children }: Props) {
   const router = useRouter();
   const { session, accessToken } = useAdminSession();
   const [signingOut, setSigningOut] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
+    {}
+  );
   const authPage =
     pathname === "/admin/login" || pathname === "/admin/reset-password";
+
+  useEffect(() => {
+    const activeGroup = adminGroups.find((group) =>
+      group.links.some((item) => item.active(pathname))
+    );
+    if (!activeGroup) return;
+    setCollapsedGroups((current) => {
+      if (!current[activeGroup.label]) return current;
+      return { ...current, [activeGroup.label]: false };
+    });
+  }, [pathname]);
 
   if (authPage || !accessToken) return <>{children}</>;
 
@@ -156,38 +209,104 @@ export default function AdminShell({ children }: Props) {
     }
   }
 
+  function toggleGroup(label: string) {
+    setCollapsedGroups((current) => ({
+      ...current,
+      [label]: !current[label]
+    }));
+  }
+
   return (
-    <div className={styles.shell}>
-      <aside className={styles.sidebar} aria-label="Admin workspace navigation">
-        <div className={styles.identity}>
-          <p className={styles.eyebrow}>Admin workspace</p>
-          <p className={styles.email}>
-            {session?.user?.email || "Authorized staff account"}
+    <div
+      className={`${styles.shell} ${
+        sidebarCollapsed ? styles.shellCollapsed : ""
+      }`}
+    >
+      <aside
+        className={`${styles.sidebar} ${
+          sidebarCollapsed ? styles.sidebarCollapsed : ""
+        }`}
+        aria-label="Admin workspace navigation"
+      >
+        <button
+          type="button"
+          className={styles.sidebarToggle}
+          aria-expanded={!sidebarCollapsed}
+          aria-label={sidebarCollapsed ? "Expand admin sidebar" : "Collapse admin sidebar"}
+          title={sidebarCollapsed ? "Expand admin sidebar" : "Collapse admin sidebar"}
+          onClick={() => setSidebarCollapsed((current) => !current)}
+        >
+          <span aria-hidden="true">{sidebarCollapsed ? "☰" : "‹"}</span>
+          {!sidebarCollapsed ? <span>Collapse</span> : null}
+        </button>
+
+        {!sidebarCollapsed ? (
+          <>
+            <div className={styles.identity}>
+              <p className={styles.eyebrow}>Admin workspace</p>
+              <p className={styles.email}>
+                {session?.user?.email || "Authorized staff account"}
+              </p>
+            </div>
+
+            {adminGroups.map((group) => {
+              const collapsed = Boolean(collapsedGroups[group.label]);
+              const activeGroup = group.links.some((item) => item.active(pathname));
+              const groupId = `admin-group-${group.label
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "-")}`;
+              return (
+                <section key={group.label} className={styles.groupSection}>
+                  <button
+                    type="button"
+                    className={`${styles.groupToggle} ${
+                      activeGroup ? styles.groupActive : ""
+                    }`}
+                    aria-expanded={!collapsed}
+                    aria-controls={groupId}
+                    onClick={() => toggleGroup(group.label)}
+                  >
+                    <span>{group.label}</span>
+                    <span aria-hidden="true">{collapsed ? "+" : "−"}</span>
+                  </button>
+                  {!collapsed ? (
+                    <nav
+                      id={groupId}
+                      className={styles.group}
+                      aria-label={group.label}
+                    >
+                      {group.links.map((item) => (
+                        <SidebarLink
+                          key={item.href}
+                          item={item}
+                          pathname={pathname}
+                        />
+                      ))}
+                    </nav>
+                  ) : null}
+                </section>
+              );
+            })}
+
+            <div className={styles.actions}>
+              <Link href="/admin/login" className={styles.sessionLink}>
+                Manage session
+              </Link>
+              <button
+                type="button"
+                className={styles.signOut}
+                disabled={signingOut}
+                onClick={() => void signOut()}
+              >
+                {signingOut ? "Signing out…" : "Sign out"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className={styles.collapsedLabel} aria-hidden="true">
+            Admin
           </p>
-        </div>
-
-        {adminGroups.map((group) => (
-          <nav key={group.label} className={styles.group} aria-label={group.label}>
-            <p className={styles.groupLabel}>{group.label}</p>
-            {group.links.map((item) => (
-              <SidebarLink key={item.href} item={item} pathname={pathname} />
-            ))}
-          </nav>
-        ))}
-
-        <div className={styles.actions}>
-          <Link href="/admin/login" className={styles.sessionLink}>
-            Manage session
-          </Link>
-          <button
-            type="button"
-            className={styles.signOut}
-            disabled={signingOut}
-            onClick={() => void signOut()}
-          >
-            {signingOut ? "Signing out…" : "Sign out"}
-          </button>
-        </div>
+        )}
       </aside>
       <div className={styles.content}>{children}</div>
     </div>
