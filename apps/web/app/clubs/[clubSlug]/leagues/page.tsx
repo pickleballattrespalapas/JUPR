@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { publicLeagueHomeHref } from "@/components/PublicLeagueNav";
 import { getClubLeagueResults } from "@/lib/api";
 
 type Props = {
@@ -12,11 +13,6 @@ const cardStyle = {
   background: "white",
   minWidth: 0
 };
-
-function leagueHref(clubSlug: string, leagueName: string): string {
-  const query = new URLSearchParams({ league: leagueName });
-  return `/clubs/${clubSlug}/league-results?${query.toString()}`;
-}
 
 export default async function PublicLeaguesPage({ params }: Props) {
   const { data, error } = await getClubLeagueResults(params.clubSlug);
@@ -38,8 +34,8 @@ export default async function PublicLeaguesPage({ params }: Props) {
       </p>
       <h1 style={{ marginTop: 0 }}>Choose a league</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Open an active league to view its current standings, weekly history,
-        player summaries, and league-specific results.
+        Open an active league to enter its League Home, standings, weekly
+        history, and player summaries.
       </p>
 
       {error ? (
@@ -68,7 +64,7 @@ export default async function PublicLeaguesPage({ params }: Props) {
           {leagues.map((league) => (
             <Link
               key={league.name}
-              href={leagueHref(params.clubSlug, league.name)}
+              href={publicLeagueHomeHref(params.clubSlug, league.name)}
               style={{
                 ...cardStyle,
                 color: "#0f172a",
@@ -87,7 +83,7 @@ export default async function PublicLeaguesPage({ params }: Props) {
                 Minimum games: {league.min_games ?? 0}
               </p>
               <p style={{ margin: "0.75rem 0 0", fontWeight: 800 }}>
-                Open league →
+                Open League Home →
               </p>
             </Link>
           ))}
