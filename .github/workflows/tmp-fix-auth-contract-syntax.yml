@@ -1,0 +1,57 @@
+name: Temporary auth contract syntax fixer
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'agent/tournament-lifecycle-rebuild' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/tournament-lifecycle-rebuild
+          fetch-depth: 0
+
+      - name: Fix shared-session contract syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("tests/test_authenticated_auto_load_contract.py")
+          text = path.read_text()
+          broken = '''    assert "emit(
+                  snapshotFromSession(null" in source
+          '''
+          fixed = '''    assert "snapshotFromSession(null" in source
+          '''
+          if broken not in text:
+              raise SystemExit("broken shared-session assertion not found")
+          text = text.replace(broken, fixed, 1)
+          text = text.replace(
+              '    assert "clearAdminSession({ changeSource: options.changeSource });" in auth\ndef test_secondary_reports_actions_and_recap_writes_ignore_old_token_responses',
+              '    assert "clearAdminSession({ changeSource: options.changeSource });" in auth\n\n\ndef test_secondary_reports_actions_and_recap_writes_ignore_old_token_responses',
+              1,
+          )
+          path.write_text(text)
+          PY
+          python -m py_compile tests/test_authenticated_auto_load_contract.py
+          git diff --check
+
+      - name: Commit correction and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/tmp-fix-auth-contract-syntax.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix shared admin session contract syntax"
+          git push origin HEAD:agent/tournament-lifecycle-rebuild
