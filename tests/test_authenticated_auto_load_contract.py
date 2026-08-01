@@ -276,8 +276,7 @@ def test_admin_session_revalidation_is_shared_and_fails_closed() -> None:
     assert "if (restoreRequest) return restoreRequest;" in source
     assert "if (!background) emit(snapshotFromSession(null, { loading: true }));" in source
     assert "emit(snapshotFromSession(authorized));" in source
-    assert "emit(
-        snapshotFromSession(null" in source
+    assert "snapshotFromSession(null" in source
     assert "stored && adminSessionIsFresh(stored) && stored.capabilities?.authorized" in source
     assert "if (eventSource === SHARED_SESSION_CHANGE_SOURCE) return;" in source
     assert "return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);" in source
