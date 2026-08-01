@@ -8,7 +8,10 @@ import type {
   AdminTournamentStatusResponse,
   AdminTournamentWriteResponse
 } from "@/lib/adminTournamentApi";
-import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
+import {
+  useAuthenticatedAutoLoad,
+  useLatestRequestGuard
+} from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
@@ -25,9 +28,38 @@ type TournamentEdit = {
   endDate: string;
 };
 
-const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white", minWidth: 0 };
-const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
-const moduleStyle = { ...cardStyle, display: "grid", gap: "0.35rem", alignContent: "start", textDecoration: "none", color: "#0f172a" };
+type PhaseCard = {
+  title: string;
+  state: string;
+  description: string;
+  href: string;
+  note: string;
+};
+
+const cardStyle = {
+  border: "1px solid #e2e8f0",
+  borderRadius: "14px",
+  padding: "1rem",
+  background: "white",
+  minWidth: 0
+};
+const inputStyle = {
+  width: "100%",
+  minWidth: 0,
+  boxSizing: "border-box" as const,
+  padding: "0.55rem",
+  border: "1px solid #cbd5e1",
+  borderRadius: "8px",
+  font: "inherit"
+};
+const phaseCardStyle = {
+  ...cardStyle,
+  display: "grid",
+  gap: "0.45rem",
+  alignContent: "start",
+  textDecoration: "none",
+  color: "#0f172a"
+};
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -37,13 +69,20 @@ function dateValue(value?: string | null): string {
   return value ? String(value).slice(0, 10) : "";
 }
 
-function selectedHref(path: string, tournamentId: string, tournamentName: string): string {
+function selectedHref(
+  path: string,
+  tournamentId: string,
+  tournamentName: string
+): string {
   const params = new URLSearchParams({ tournament: tournamentId });
   if (tournamentName) params.set("name", tournamentName);
   return `${path}?${params.toString()}`;
 }
 
-function editFromDetail(detail: AdminTournamentDetailResponse | null, fallbackName: string): TournamentEdit {
+function editFromDetail(
+  detail: AdminTournamentDetailResponse | null,
+  fallbackName: string
+): TournamentEdit {
   return {
     name: detail?.tournament.name || fallbackName,
     startDate: dateValue(detail?.tournament.start_date),
@@ -51,20 +90,175 @@ function editFromDetail(detail: AdminTournamentDetailResponse | null, fallbackNa
   };
 }
 
-function StatusChip({ value }: { value?: string | null }) {
-  const normalized = String(value || "").toLowerCase();
-  const background = ["open", "active", "confirmed", "paid"].includes(normalized) ? "#dcfce7" : ["closed", "cancelled", "archived", "refunded"].includes(normalized) ? "#f1f5f9" : "#fef3c7";
-  const borderColor = background === "#dcfce7" ? "#bbf7d0" : background === "#f1f5f9" ? "#cbd5e1" : "#fde68a";
-  return <span style={{ width: "fit-content", border: `1px solid ${borderColor}`, borderRadius: "999px", padding: "0.15rem 0.5rem", background, fontSize: "0.8rem", fontWeight: 700 }}>{value || "—"}</span>;
+function phaseStateStyle(state: string) {
+  if (["Complete", "Ready", "Open"].includes(state)) {
+    return { color: "#166534", background: "#dcfce7", borderColor: "#bbf7d0" };
+  }
+  if (["Blocked", "Needs attention"].includes(state)) {
+    return { color: "#991b1b", background: "#fee2e2", borderColor: "#fecaca" };
+  }
+  if (["In progress", "Live"].includes(state)) {
+    return { color: "#92400e", background: "#fef3c7", borderColor: "#fde68a" };
+  }
+  return { color: "#475569", background: "#f8fafc", borderColor: "#cbd5e1" };
 }
 
-export default function TournamentHomePanel({ apiBase, clubId, status, tournamentId, initialName }: Props) {
+function phaseCards(
+  detail: AdminTournamentDetailResponse,
+  tournamentId: string,
+  tournamentName: string
+): PhaseCard[] {
+  const registrationStatus = String(
+    detail.tournament.registration_status || ""
+  ).toLowerCase();
+  const setupReady = Boolean(
+    detail.tournament.start_date &&
+      detail.tournament.end_date &&
+      detail.days.length &&
+      detail.event_options.length
+  );
+  const registrations = detail.summary.registrations || 0;
+  const registrationOpen = registrationStatus === "open";
+
+  return [
+    {
+      title: "Setup",
+      state: setupReady ? "Ready" : "In progress",
+      description:
+        "Basics, events and formats, registration rules, pricing, extras, schedule, courts, and final review.",
+      href: selectedHref(
+        "/admin/tournaments/setup",
+        tournamentId,
+        tournamentName
+      ),
+      note: setupReady
+        ? `${detail.event_options.length} events across ${detail.days.length} tournament days`
+        : "Complete dates, events, and tournament days"
+    },
+    {
+      title: "Registration",
+      state: registrationOpen
+        ? "Open"
+        : registrations
+          ? "In progress"
+          : "Not started",
+      description:
+        "Registrants, partners and teams, offline payments, extras, communications, and reports.",
+      href: selectedHref(
+        "/admin/tournaments/registration",
+        tournamentId,
+        tournamentName
+      ),
+      note: `${registrations} registration${registrations === 1 ? "" : "s"}`
+    },
+    {
+      title: "Live Operations",
+      state: setupReady && registrations ? "Ready" : "Blocked",
+      description:
+        "Preflight, check-in, draws, court schedule, live scoring, corrections, recovery, and podium draft.",
+      href: selectedHref(
+        "/admin/tournaments/live-operations",
+        tournamentId,
+        tournamentName
+      ),
+      note:
+        setupReady && registrations
+          ? "Core setup and registrations are present"
+          : "Complete setup and add registrations first"
+    },
+    {
+      title: "Publish",
+      state: "Not started",
+      description:
+        "Review results, publish ready divisions, create official matches, complete replay, and close the tournament.",
+      href: selectedHref(
+        "/admin/tournaments/publish",
+        tournamentId,
+        tournamentName
+      ),
+      note: "Results become official only through Publish"
+    }
+  ];
+}
+
+function nextAction(
+  detail: AdminTournamentDetailResponse,
+  tournamentId: string,
+  tournamentName: string
+): { label: string; href: string; reason: string } {
+  if (!detail.tournament.start_date || !detail.tournament.end_date) {
+    return {
+      label: "Finish tournament basics",
+      href: selectedHref(
+        "/admin/tournaments/tournament",
+        tournamentId,
+        tournamentName
+      ),
+      reason: "Tournament dates are incomplete."
+    };
+  }
+  if (!detail.event_options.length || !detail.days.length) {
+    return {
+      label: "Continue setup",
+      href: selectedHref(
+        "/admin/tournaments/setup",
+        tournamentId,
+        tournamentName
+      ),
+      reason: "Events or tournament days still need attention."
+    };
+  }
+  if (String(detail.tournament.registration_status || "").toLowerCase() !== "open") {
+    return {
+      label: "Review and open registration",
+      href: selectedHref(
+        "/admin/tournaments/setup",
+        tournamentId,
+        tournamentName
+      ),
+      reason: "Core setup is ready; registration is not open."
+    };
+  }
+  if (!detail.summary.registrations) {
+    return {
+      label: "Manage registration",
+      href: selectedHref(
+        "/admin/tournaments/registration",
+        tournamentId,
+        tournamentName
+      ),
+      reason: "Registration is open and no entrants are recorded yet."
+    };
+  }
+  return {
+    label: "Prepare Live Operations",
+    href: selectedHref(
+      "/admin/tournaments/live-operations",
+      tournamentId,
+      tournamentName
+    ),
+    reason: "Core setup and registrations are present."
+  };
+}
+
+export default function TournamentHomePanel({
+  apiBase,
+  clubId,
+  status,
+  tournamentId,
+  initialName
+}: Props) {
   const { accessToken, loading: sessionLoading } = useAdminSession();
   const [detail, setDetail] = useState<AdminTournamentDetailResponse | null>(null);
-  const [edit, setEdit] = useState<TournamentEdit>(() => editFromDetail(null, initialName || ""));
+  const [edit, setEdit] = useState<TournamentEdit>(() =>
+    editFromDetail(null, initialName || "")
+  );
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const detailRequest = useLatestRequestGuard(`${accessToken}\u0000${tournamentId}`, clearProtectedState);
+  const detailRequest = useLatestRequestGuard(
+    `${accessToken}\u0000${tournamentId}`,
+    clearProtectedState
+  );
   const actionRequest = useLatestRequestGuard(accessToken);
 
   function clearProtectedState() {
@@ -83,7 +277,9 @@ export default function TournamentHomePanel({ apiBase, clubId, status, tournamen
     if (options?.body) headers.set("Content-Type", "application/json");
     const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+    if (!response.ok) {
+      throw new Error(String(payload?.detail || `API error (${response.status})`));
+    }
     return payload as T;
   }
 
@@ -93,13 +289,19 @@ export default function TournamentHomePanel({ apiBase, clubId, status, tournamen
     setMessage(null);
     try {
       const payload = await requestJson<AdminTournamentDetailResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`
+        `/admin/clubs/${encodeURIComponent(
+          clubId
+        )}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`
       );
       if (!detailRequest.isCurrent(generation)) return;
       setDetail(payload);
       setEdit(editFromDetail(payload, initialName || ""));
     } catch (error) {
-      if (detailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load tournament home.");
+      if (detailRequest.isCurrent(generation)) {
+        setMessage(
+          error instanceof Error ? error.message : "Unable to load tournament home."
+        );
+      }
     } finally {
       if (detailRequest.isCurrent(generation)) setBusy(false);
     }
@@ -120,7 +322,9 @@ export default function TournamentHomePanel({ apiBase, clubId, status, tournamen
     setMessage(null);
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`,
+        `/admin/clubs/${encodeURIComponent(
+          clubId
+        )}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`,
         {
           method: "PATCH",
           body: JSON.stringify({
@@ -129,46 +333,72 @@ export default function TournamentHomePanel({ apiBase, clubId, status, tournamen
             end_date: edit.endDate || null,
             expected_updated_at: detail.tournament.updated_at,
             confirmation_text: confirmationText,
-            source: "next_selected_tournament_home"
+            source: "next_tournament_lifecycle_home"
           })
         }
       );
       if (!actionRequest.isCurrent(generation)) return;
       await loadDetail();
       if (!actionRequest.isCurrent(generation)) return;
-      setMessage(payload.idempotent_replay ? "Tournament update safely reconciled." : "Tournament details saved.");
+      setMessage(
+        payload.idempotent_replay
+          ? "Tournament update safely reconciled."
+          : "Tournament details saved."
+      );
     } catch (error) {
-      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save tournament details.");
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : "Unable to save tournament details."
+        );
+      }
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  useAuthenticatedAutoLoad(status.enabled ? `${accessToken}\u0000${tournamentId}` : "", loadDetail);
+  useAuthenticatedAutoLoad(
+    status.enabled ? `${accessToken}\u0000${tournamentId}` : "",
+    loadDetail
+  );
 
-  if (!status.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}>Tournament Manager is currently unavailable.</article>;
-  if (sessionLoading) return <p role="status">Checking admin access…</p>;
-  if (!accessToken) return <article style={{ ...cardStyle, background: "#fffbeb", borderColor: "#fde68a" }}><h2 style={{ marginTop: 0 }}>Admin sign-in required</h2><p><Link href="/admin/login">Open admin login</Link></p></article>;
+  if (!status.enabled) {
+    return (
+      <article style={{ ...cardStyle, background: "#f8fafc" }}>
+        Tournament Manager is currently unavailable.
+      </article>
+    );
+  }
+  if (sessionLoading && !accessToken) {
+    return <p role="status">Loading tournament workspace…</p>;
+  }
+  if (!accessToken) {
+    return (
+      <article style={{ ...cardStyle, background: "#fffbeb" }}>
+        <h2 style={{ marginTop: 0 }}>Admin sign-in required</h2>
+        <p><Link href="/admin/login">Open admin login</Link></p>
+      </article>
+    );
+  }
 
   const tournamentName = detail?.tournament.name || initialName || tournamentId;
-  const modules = [
-    ["Setup", "/admin/tournament-setup", "Registration settings, days, divisions, impact review, and setup publishing."],
-    ["Registrations", "/admin/tournaments/editor", "Edit individual registrations and event entries."],
-    ["Reports", "/admin/tournaments/registrations", "Filter registrations, export CSV, and preview recipient handoff."],
-    ["Bulk actions", "/admin/tournaments/bulk", "Apply reviewed registration updates to multiple players."],
-    ["Extras & fulfillment", "/admin/tournaments/commerce", "Catalog, bundles, offline payment states, pickup, and recovery."],
-    ["Ratings & team play", "/admin/tournaments/team-competition", "Combined ratings, four-player teams, and team competition settings."],
-    ["Operations", "/admin/tournaments/ops", "Draws, teams, scoring, podiums, and recoverable tournament operations."],
-    ["Results", "/admin/tournaments/ops/results", "Review and import tournament result files."],
-    ["Live runner", "/admin/tournament-live", "Run draw-scoped live scoring and progression."],
-    ["Official publish", "/admin/tournaments/ops/publish", "Publish official tournament matches and verify evidence."],
-    ["Status & recovery", "/admin/tournaments/status", "Lifecycle state, recovery operations, and audit evidence."]
-  ] as const;
+  const next = detail ? nextAction(detail, tournamentId, tournamentName) : null;
+  const phases = detail
+    ? phaseCards(detail, tournamentId, tournamentName)
+    : [];
 
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
+      {message ? (
+        <p
+          role="status"
+          style={{ color: /unable|error|required|reload|cannot/i.test(message) ? "#b91c1c" : "#166534" }}
+        >
+          {message}
+        </p>
+      ) : null}
       {busy && !detail ? <p role="status">Loading {tournamentName}…</p> : null}
-      {message ? <p role="status" style={{ color: /unable|error|required|reload|cannot/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}
 
       {detail ? (
         <>
@@ -176,48 +406,83 @@ export default function TournamentHomePanel({ apiBase, clubId, status, tournamen
             <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "flex-start" }}>
               <div>
                 <h2 style={{ margin: 0 }}>{tournamentName}</h2>
-                <p style={{ color: "#475569", marginBottom: 0 }}>{dateValue(detail.tournament.start_date) || "Date not set"} – {dateValue(detail.tournament.end_date) || "Date not set"}</p>
+                <p style={{ color: "#475569", marginBottom: 0 }}>
+                  {dateValue(detail.tournament.start_date) || "Date not set"} – {dateValue(detail.tournament.end_date) || "Date not set"}
+                </p>
               </div>
-              <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
-                <StatusChip value={detail.tournament.status} />
-                <StatusChip value={detail.tournament.registration_status || "registration n/a"} />
+              <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                <span><strong>{detail.summary.registrations}</strong> registrations</span>
+                <span><strong>{detail.event_options.length}</strong> events</span>
+                <span><strong>{detail.days.length}</strong> days</span>
               </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}>
-              <div><strong>Registrations</strong><br />{detail.summary.registrations}</div>
-              <div><strong>Event entries</strong><br />{detail.summary.selections}</div>
-              <div><strong>Days</strong><br />{detail.days.length}</div>
-              <div><strong>Divisions</strong><br />{detail.event_options.length}</div>
             </div>
           </article>
 
-          <section aria-label={`${tournamentName} modules`}>
-            <h2>Tournament tools</h2>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
-              {modules.map(([label, path, description]) => (
-                <Link key={path} href={selectedHref(path, tournamentId, tournamentName)} style={moduleStyle}>
-                  <strong>{label}</strong>
-                  <span style={{ color: "#475569" }}>{description}</span>
+          {next ? (
+            <article style={{ ...cardStyle, borderColor: "#93c5fd" }}>
+              <p style={{ marginTop: 0, color: "#475569" }}><strong>Next action</strong></p>
+              <h2 style={{ marginTop: 0 }}>{next.label}</h2>
+              <p style={{ color: "#475569" }}>{next.reason}</p>
+              <Link href={next.href} style={{ display: "inline-block", padding: "0.6rem 0.9rem", borderRadius: "999px", background: "#0f172a", color: "white", textDecoration: "none", fontWeight: 800 }}>
+                {next.label}
+              </Link>
+            </article>
+          ) : null}
+
+          <section aria-label="Tournament lifecycle phases">
+            <h2>Tournament workflow</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.85rem" }}>
+              {phases.map((phase) => (
+                <Link key={phase.title} href={phase.href} style={phaseCardStyle}>
+                  <span style={{ width: "fit-content", border: "1px solid", borderRadius: "999px", padding: "0.15rem 0.5rem", fontSize: "0.78rem", fontWeight: 800, ...phaseStateStyle(phase.state) }}>
+                    {phase.state}
+                  </span>
+                  <strong>{phase.title}</strong>
+                  <span style={{ color: "#475569" }}>{phase.description}</span>
+                  <small style={{ color: "#64748b" }}>{phase.note}</small>
                 </Link>
               ))}
-              {String(detail.tournament.status).toLowerCase() === "draft" ? (
-                <Link href={selectedHref("/admin/tournaments/delete-draft", tournamentId, tournamentName)} style={{ ...moduleStyle, borderColor: "#fecaca", color: "#991b1b" }}>
-                  <strong>Delete draft</strong>
-                  <span>Delete only this unlaunched tournament draft through the guarded recovery workflow.</span>
-                </Link>
-              ) : null}
             </div>
           </section>
 
           <article style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>Tournament details</h2>
+            <h2 style={{ marginTop: 0 }}>Tournament basics</h2>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem" }}>
-              <label><strong>Name</strong><br /><input value={edit.name} onChange={(event) => setEdit((current) => ({ ...current, name: event.target.value }))} style={inputStyle} /></label>
-              <label><strong>Start date</strong><br /><input type="date" value={edit.startDate} onChange={(event) => setEdit((current) => ({ ...current, startDate: event.target.value }))} style={inputStyle} /></label>
-              <label><strong>End date</strong><br /><input type="date" min={edit.startDate || undefined} value={edit.endDate} onChange={(event) => setEdit((current) => ({ ...current, endDate: event.target.value }))} style={inputStyle} /></label>
+              <label style={{ minWidth: 0 }}>
+                <strong>Name</strong><br />
+                <input value={edit.name} onChange={(event) => setEdit((current) => ({ ...current, name: event.target.value }))} style={inputStyle} />
+              </label>
+              <label style={{ minWidth: 0 }}>
+                <strong>Start date</strong><br />
+                <input type="date" value={edit.startDate} onChange={(event) => setEdit((current) => ({ ...current, startDate: event.target.value }))} style={inputStyle} />
+              </label>
+              <label style={{ minWidth: 0 }}>
+                <strong>End date</strong><br />
+                <input type="date" min={edit.startDate || undefined} value={edit.endDate} onChange={(event) => setEdit((current) => ({ ...current, endDate: event.target.value }))} style={inputStyle} />
+              </label>
             </div>
-            <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Save tournament details"} title="Save tournament details?" description={`Update the name and dates for ${tournamentName}.`} confirmLabel="Yes, save tournament" confirmationText="SAVE TOURNAMENT" disabled={!edit.name.trim() || !detail.tournament.updated_at} busy={busy} onConfirm={saveTournament} /></p>
+            <p>
+              <ConfirmAction
+                triggerLabel={busy ? "Saving…" : "Save tournament basics"}
+                title="Save tournament basics?"
+                description={`Update the name and dates for ${tournamentName}.`}
+                confirmLabel="Yes, save tournament"
+                confirmationText="SAVE TOURNAMENT"
+                disabled={!edit.name.trim() || !detail.tournament.updated_at}
+                busy={busy}
+                onConfirm={saveTournament}
+              />
+            </p>
           </article>
+
+          <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+            <Link href={selectedHref("/admin/tournaments/status", tournamentId, tournamentName)}>Status & recovery</Link>
+            {String(detail.tournament.status).toLowerCase() === "draft" ? (
+              <Link href={selectedHref("/admin/tournaments/delete-draft", tournamentId, tournamentName)} style={{ color: "#b91c1c" }}>
+                Delete draft
+              </Link>
+            ) : null}
+          </p>
         </>
       ) : null}
     </div>
