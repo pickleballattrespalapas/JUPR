@@ -20,6 +20,7 @@ jobs:
       LEAGUE_RESULTS_URL: https://juprleagues-api-staging.fly.dev/clubs/tres-palapas/league-results
       CANONICAL_URL: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
       TEST_TOURNAMENT_ID: 93000000-0000-4000-8000-000000000001
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -140,6 +141,12 @@ jobs:
             ([.leagues[].name] | index("T1") == null)
           ' evidence/league-results.json
 
+      - name: Verify Vercel bypass is configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_AUTOMATION_BYPASS_SECRET"
+
       - name: Wait for canonical navigation routes
         shell: bash
         run: |
@@ -162,7 +169,10 @@ jobs:
             : > evidence/vercel-routes.txt
             all_ready=1
             for path in "${routes[@]}"; do
-              status="$(curl -L -sS -o /dev/null -w '%{http_code}' --max-time 30 "$CANONICAL_URL$path" || true)"
+              status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+                -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" \
+                -H "x-vercel-set-bypass-cookie: true" \
+                "$CANONICAL_URL$path" || true)"
               echo "$path $status" | tee -a evidence/vercel-routes.txt
               if [ "$status" != "200" ]; then all_ready=0; fi
             done
@@ -178,9 +188,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL --max-time 30 "$CANONICAL_URL/clubs/tres-palapas/tournaments" -o evidence/tournament-selection.html
-          curl -fsSL --max-time 30 "$CANONICAL_URL/clubs/tres-palapas/tournaments?tournament_id=$TEST_TOURNAMENT_ID" -o evidence/selected-tournament.html
-          curl -fsSL --max-time 30 "$CANONICAL_URL/clubs/tres-palapas/leagues" -o evidence/leagues.html
+          curl -fsS --max-time 30 -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" "$CANONICAL_URL/clubs/tres-palapas/tournaments" -o evidence/tournament-selection.html
+          curl -fsS --max-time 30 -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" "$CANONICAL_URL/clubs/tres-palapas/tournaments?tournament_id=$TEST_TOURNAMENT_ID" -o evidence/selected-tournament.html
+          curl -fsS --max-time 30 -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" "$CANONICAL_URL/clubs/tres-palapas/leagues" -o evidence/leagues.html
           grep -q "Choose a tournament" evidence/tournament-selection.html
           if grep -q "Choose another tournament" evidence/tournament-selection.html; then
             echo "Selection-only page unexpectedly rendered a selected workspace." >&2
