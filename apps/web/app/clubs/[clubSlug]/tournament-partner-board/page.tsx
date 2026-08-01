@@ -1,10 +1,18 @@
 import Link from "next/link";
-import { getClubTournamentRegistrationEdit, getClubTournamentRoster } from "@/lib/tournamentRegistrationApi";
-import type { PublicRegistrationDay, PublicRegistrationEditSelection, PublicRegistrationEvent, PublicTournamentNeedsPartnerEntry } from "@/lib/tournamentRegistrationApi";
+import { redirect } from "next/navigation";
+import PublicTournamentModuleHeader from "@/components/PublicTournamentModuleHeader";
+import {
+  getClubTournamentRegistrationEdit,
+  getClubTournamentRoster,
+  type PublicRegistrationDay,
+  type PublicRegistrationEditSelection,
+  type PublicRegistrationEvent,
+  type PublicTournamentNeedsPartnerEntry
+} from "@/lib/tournamentRegistrationApi";
 import PairingInterestPanel from "./PairingInterestPanel";
 import PartnerRequestReviewPanel from "./PartnerRequestReviewPanel";
 
-type TournamentPartnerBoardPageProps = {
+type Props = {
   params: { clubSlug: string };
   searchParams?: Record<string, string | string[] | undefined>;
 };
@@ -13,25 +21,38 @@ const cardStyle = {
   border: "1px solid #e2e8f0",
   borderRadius: "14px",
   padding: "1rem",
-  background: "white"
+  background: "white",
+  minWidth: 0
 };
 
-function firstParam(searchParams: TournamentPartnerBoardPageProps["searchParams"], key: string): string | null {
+function firstParam(
+  searchParams: Props["searchParams"],
+  key: string
+): string | null {
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
 }
 
 function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "event";
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "event"
+  );
 }
 
-function entryEventLabel(entry: PublicTournamentNeedsPartnerEntry): string {
-  return [entry.event_day_label || "Day", entry.event_family || "Event", entry.division || "Division"].join(" · ");
+function eventLabel(entry: PublicTournamentNeedsPartnerEntry): string {
+  return [
+    entry.event_day_label || "Day",
+    entry.event_family || "Event",
+    entry.division || "Division"
+  ].join(" · ");
 }
 
-function entryEventKey(entry: PublicTournamentNeedsPartnerEntry): string {
-  return slugify(entryEventLabel(entry));
+function eventKey(entry: PublicTournamentNeedsPartnerEntry): string {
+  return slugify(eventLabel(entry));
 }
 
 function entryAnchor(entry: PublicTournamentNeedsPartnerEntry): string {
@@ -46,16 +67,36 @@ function requesterSelectionsForEntry(
 ): PublicRegistrationEditSelection[] {
   const dayById = new Map(days.map((day) => [day.id, day]));
   const eventById = new Map(events.map((event) => [event.id, event]));
-  const targetKey = entryEventKey(entry);
+  const targetKey = eventKey(entry);
   return selections.filter((selection) => {
     const event = eventById.get(String(selection.event_option_id || ""));
     if (!event) return false;
     const day = dayById.get(event.registration_day_id);
-    return slugify([day?.label || "Day", event.event_family_label || "Event", event.division_name || "Division"].join(" · ")) === targetKey;
+    return (
+      slugify(
+        [
+          day?.label || "Day",
+          event.event_family_label || "Event",
+          event.division_name || "Division"
+        ].join(" · ")
+      ) === targetKey
+    );
   });
 }
 
-function queryFor({ tournamentId, registrationSlug, editToken, event, partnerRequestId }: { tournamentId?: string | null; registrationSlug?: string | null; editToken?: string | null; event?: string | null; partnerRequestId?: string | null }): string {
+function boardQuery({
+  tournamentId,
+  registrationSlug,
+  editToken,
+  event,
+  partnerRequestId
+}: {
+  tournamentId?: string | null;
+  registrationSlug?: string | null;
+  editToken?: string | null;
+  event?: string | null;
+  partnerRequestId?: string | null;
+}): string {
   const query = new URLSearchParams();
   if (registrationSlug) query.set("tournament", registrationSlug);
   else if (tournamentId) query.set("tournament_id", tournamentId);
@@ -66,20 +107,29 @@ function queryFor({ tournamentId, registrationSlug, editToken, event, partnerReq
   return text ? `?${text}` : "";
 }
 
-export default async function TournamentPartnerBoardPage({ params, searchParams }: TournamentPartnerBoardPageProps) {
-  const { clubSlug } = params;
-  const editToken = firstParam(searchParams, "edit_token") || "";
-  const selectedEvent = firstParam(searchParams, "event");
-  const selectedPartnerRequestId = firstParam(searchParams, "partner_request_id");
+export default async function TournamentPartnerBoardPage({
+  params,
+  searchParams
+}: Props) {
   const registrationSlug = firstParam(searchParams, "tournament");
   const tournamentId = firstParam(searchParams, "tournament_id");
+  if (!registrationSlug && !tournamentId) {
+    redirect(`/clubs/${params.clubSlug}/tournaments`);
+  }
+
+  const editToken = firstParam(searchParams, "edit_token") || "";
+  const selectedEvent = firstParam(searchParams, "event");
+  const selectedPartnerRequestId = firstParam(
+    searchParams,
+    "partner_request_id"
+  );
   const [{ data, error }, editResponse] = await Promise.all([
-    getClubTournamentRoster(clubSlug, {
+    getClubTournamentRoster(params.clubSlug, {
       registrationSlug,
       tournamentId
     }),
     editToken
-      ? getClubTournamentRegistrationEdit(clubSlug, {
+      ? getClubTournamentRegistrationEdit(params.clubSlug, {
           editToken,
           registrationSlug,
           tournamentId
@@ -87,131 +137,354 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
       : Promise.resolve({ data: null, error: null })
   ]);
 
-  const tournament = data?.tournament;
-  const settings = data?.settings;
-  // Fail closed: only the explicit board projection carries both display and
-  // contact consent. The broader roster list may contain players who need a
-  // partner but did not opt into public pairing requests.
-  const partnerEntries = data?.roster?.partner_board_entries ?? [];
-  const eventChoices = Array.from(new Map(partnerEntries.map((entry) => [entryEventKey(entry), entryEventLabel(entry)])).entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  const visibleEntries = selectedEvent ? partnerEntries.filter((entry) => entryEventKey(entry) === selectedEvent) : partnerEntries;
-  const query = queryFor({ tournamentId: tournament?.id, registrationSlug: settings?.registration_slug });
-  const queryWithEdit = queryFor({ tournamentId: tournament?.id, registrationSlug: settings?.registration_slug, editToken: editToken || null, event: selectedEvent, partnerRequestId: selectedPartnerRequestId });
-  const apiBase = process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
+  const tournament = data?.tournament || null;
+  const settings = data?.settings || null;
+  const selectionMatches = Boolean(
+    tournament &&
+      (!tournamentId || tournament.id === tournamentId) &&
+      (!registrationSlug || settings?.registration_slug === registrationSlug)
+  );
+
+  if (!selectionMatches || !tournament) {
+    return (
+      <section>
+        <h1>Partner Board unavailable</h1>
+        <p style={{ color: "#475569" }}>
+          The selected tournament is unavailable or no longer published.
+        </p>
+        <Link href={`/clubs/${params.clubSlug}/tournaments`}>
+          Return to tournament selection
+        </Link>
+      </section>
+    );
+  }
+
+  const partnerEntries = data?.roster?.partner_board_entries || [];
+  const eventChoices = Array.from(
+    new Map(
+      partnerEntries.map((entry) => [eventKey(entry), eventLabel(entry)])
+    ).entries()
+  ).sort((a, b) => a[1].localeCompare(b[1]));
+  const visibleEntries = selectedEvent
+    ? partnerEntries.filter((entry) => eventKey(entry) === selectedEvent)
+    : partnerEntries;
+  const selectedQuery = boardQuery({
+    tournamentId: tournament.id,
+    registrationSlug: settings?.registration_slug
+  });
+  const queryWithEdit = boardQuery({
+    tournamentId: tournament.id,
+    registrationSlug: settings?.registration_slug,
+    editToken: editToken || null,
+    event: selectedEvent,
+    partnerRequestId: selectedPartnerRequestId
+  });
+  const apiBase =
+    process.env.JUPR_API_BASE_URL ||
+    process.env.NEXT_PUBLIC_JUPR_API_BASE_URL ||
+    null;
 
   return (
     <section>
-      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        Tournament Partner Board
-      </p>
-      <h1 style={{ marginTop: 0 }}>{tournament?.name ?? "Partner board"}</h1>
-      <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Public partner board for players who registered as needing a partner. Contact details are not exposed; sending or accepting pairing interest requires your secure registration edit link.
-      </p>
+      <PublicTournamentModuleHeader
+        clubSlug={params.clubSlug}
+        tournamentName={tournament.name}
+        tournamentId={tournament.id}
+        registrationSlug={settings?.registration_slug || null}
+        active="partner-board"
+        kicker="Tournament Partner Board"
+        description="Find players who opted into public partner requests. Contact details stay private, and pairing actions require a secure registration edit link."
+      />
 
-      {error ? <p style={{ color: "#b91c1c" }}>Partner board is temporarily unavailable. {error}</p> : null}
-      {editResponse.error ? <p style={{ color: "#b91c1c" }}>Your edit link could not be verified for pairing actions. {editResponse.error}</p> : null}
-      {data?.setup_error ? <p style={{ color: "#b91c1c" }}>{data.setup_error}</p> : null}
-      {!error && data && !tournament ? <p>{data.empty_reason || "No tournament partner board is currently published."}</p> : null}
+      {error ? (
+        <article
+          role="alert"
+          style={{
+            ...cardStyle,
+            marginBottom: "1rem",
+            borderColor: "#fecaca",
+            background: "#fef2f2"
+          }}
+        >
+          <h2 style={{ marginTop: 0 }}>Partner Board temporarily unavailable</h2>
+          <p style={{ color: "#7f1d1d" }}>{error}</p>
+        </article>
+      ) : null}
+      {editResponse.error ? (
+        <article
+          role="alert"
+          style={{
+            ...cardStyle,
+            marginBottom: "1rem",
+            borderColor: "#fecaca",
+            background: "#fef2f2"
+          }}
+        >
+          <h2 style={{ marginTop: 0 }}>Edit link could not be verified</h2>
+          <p style={{ color: "#7f1d1d" }}>{editResponse.error}</p>
+        </article>
+      ) : null}
 
-      {data?.tournaments?.length ? (
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-          {data.tournaments.map((choice) => {
-            const slug = choice.settings.registration_slug;
-            const active = choice.tournament.id === tournament?.id;
-            const href = slug ? `/clubs/${clubSlug}/tournament-partner-board?tournament=${encodeURIComponent(slug)}` : `/clubs/${clubSlug}/tournament-partner-board?tournament_id=${encodeURIComponent(choice.tournament.id)}`;
-            return (
-              <Link key={choice.tournament.id} href={href} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
-                {choice.tournament.name}
-              </Link>
-            );
-          })}
+      <article
+        style={{
+          ...cardStyle,
+          marginBottom: "1rem",
+          background: "#eff6ff",
+          borderColor: "#bfdbfe"
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: "1rem",
+            flexWrap: "wrap",
+            alignItems: "flex-start"
+          }}
+        >
+          <div>
+            <h2 style={{ marginTop: 0 }}>Open partner requests</h2>
+            <p style={{ marginBottom: 0, color: "#475569" }}>
+              Browse by event, then use your private registration edit link to
+              send or accept interest.
+            </p>
+          </div>
+          <span
+            style={{
+              border: `1px solid ${
+                settings?.partner_board_enabled ? "#86efac" : "#cbd5e1"
+              }`,
+              borderRadius: "999px",
+              padding: "0.25rem 0.6rem",
+              background: settings?.partner_board_enabled ? "#dcfce7" : "#f1f5f9",
+              color: settings?.partner_board_enabled ? "#166534" : "#475569",
+              fontWeight: 800
+            }}
+          >
+            {settings?.partner_board_enabled ? "Board open" : "Board disabled"}
+          </span>
         </div>
-      ) : null}
-
-      {tournament ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
-          <article style={cardStyle}><strong>Public board entries</strong><br />{partnerEntries.length}</article>
-          <article style={cardStyle}><strong>Showing</strong><br />{visibleEntries.length}</article>
-          <article style={cardStyle}><strong>Registrations</strong><br />{data?.summary?.total_registrations ?? 0}</article>
-          <article style={cardStyle}><strong>Roster players</strong><br />{data?.summary?.total_players ?? 0}</article>
-          <article style={cardStyle}><strong>Board enabled</strong><br />{settings?.partner_board_enabled ? "Yes" : "No"}</article>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))",
+            gap: "0.75rem",
+            marginTop: "1rem"
+          }}
+        >
+          <div><strong>Open requests</strong><br />{partnerEntries.length}</div>
+          <div><strong>Showing</strong><br />{visibleEntries.length}</div>
+          <div><strong>Registrations</strong><br />{data?.summary?.total_registrations ?? 0}</div>
+          <div><strong>Roster players</strong><br />{data?.summary?.total_players ?? 0}</div>
         </div>
+      </article>
+
+      {!editToken ? (
+        <article
+          style={{
+            ...cardStyle,
+            marginBottom: "1rem",
+            display: "flex",
+            justifyContent: "space-between",
+            gap: "1rem",
+            flexWrap: "wrap",
+            alignItems: "center"
+          }}
+        >
+          <div>
+            <h2 style={{ margin: 0 }}>Want to contact or accept a player?</h2>
+            <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
+              Request your secure registration edit link. Public pages never
+              expose email addresses or phone numbers.
+            </p>
+          </div>
+          <Link
+            href={`/clubs/${params.clubSlug}/tournament-registration${selectedQuery}`}
+            style={{ fontWeight: 800 }}
+          >
+            Request edit link
+          </Link>
+        </article>
       ) : null}
 
-      {tournament ? (
-        <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-          <Link href={`/clubs/${clubSlug}/tournament-registration${query}`}>Open registration</Link>
-          <Link href={`/clubs/${clubSlug}/tournament-roster${queryFor({ tournamentId: tournament?.id, registrationSlug: settings?.registration_slug, event: selectedEvent })}`}>Open roster</Link>
-          {!editToken ? <Link href={`/clubs/${clubSlug}/tournament-registration${query}`}>Request edit link to send or accept interest</Link> : null}
-        </p>
-      ) : null}
-
-      {editToken && editResponse.data && tournament ? (
+      {editToken && editResponse.data ? (
         <PartnerRequestReviewPanel
           apiBase={apiBase}
-          clubSlug={clubSlug}
+          clubSlug={params.clubSlug}
           tournamentId={tournament.id}
-          registrationSlug={settings?.registration_slug ?? null}
+          registrationSlug={settings?.registration_slug || null}
           editToken={editToken}
           focusRequestId={selectedPartnerRequestId}
         />
       ) : null}
 
       {partnerEntries.length ? (
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-          <Link href={`/clubs/${clubSlug}/tournament-partner-board${queryFor({ tournamentId: tournament?.id, registrationSlug: settings?.registration_slug, editToken: editToken || null })}`} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: !selectedEvent ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: !selectedEvent ? 800 : 600 }}>All events</Link>
+        <nav
+          aria-label="Partner Board event filters"
+          style={{
+            display: "flex",
+            gap: "0.5rem",
+            flexWrap: "wrap",
+            marginBottom: "1rem"
+          }}
+        >
+          <Link
+            href={`/clubs/${params.clubSlug}/tournament-partner-board${boardQuery({
+              tournamentId: tournament.id,
+              registrationSlug: settings?.registration_slug,
+              editToken: editToken || null
+            })}`}
+            style={{
+              border: "1px solid #cbd5e1",
+              borderRadius: "999px",
+              padding: "0.4rem 0.7rem",
+              background: !selectedEvent ? "#dbeafe" : "white",
+              color: !selectedEvent ? "#1d4ed8" : "#0f172a",
+              textDecoration: "none",
+              fontWeight: !selectedEvent ? 800 : 650
+            }}
+          >
+            All events
+          </Link>
           {eventChoices.map(([key, label]) => {
-            const active = key === selectedEvent;
+            const active = selectedEvent === key;
             return (
-              <Link key={key} href={`/clubs/${clubSlug}/tournament-partner-board${queryFor({ tournamentId: tournament?.id, registrationSlug: settings?.registration_slug, editToken: editToken || null, event: key, partnerRequestId: selectedPartnerRequestId })}`} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
+              <Link
+                key={key}
+                href={`/clubs/${params.clubSlug}/tournament-partner-board${boardQuery({
+                  tournamentId: tournament.id,
+                  registrationSlug: settings?.registration_slug,
+                  editToken: editToken || null,
+                  event: key,
+                  partnerRequestId: selectedPartnerRequestId
+                })}`}
+                style={{
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "999px",
+                  padding: "0.4rem 0.7rem",
+                  background: active ? "#dbeafe" : "white",
+                  color: active ? "#1d4ed8" : "#0f172a",
+                  textDecoration: "none",
+                  fontWeight: active ? 800 : 650
+                }}
+              >
                 {label}
               </Link>
             );
           })}
-        </div>
+        </nav>
       ) : null}
 
-      {tournament && !settings?.partner_board_enabled ? (
-        <article style={{ ...cardStyle, marginBottom: "1rem", background: "#f8fafc" }}>
-          <h2 style={{ marginTop: 0 }}>Partner board is disabled</h2>
-          <p style={{ color: "#475569" }}>The public partner board is not enabled for this tournament.</p>
+      {!settings?.partner_board_enabled ? (
+        <article style={{ ...cardStyle, background: "#f8fafc" }}>
+          <h2 style={{ marginTop: 0 }}>Partner Board is disabled</h2>
+          <p style={{ color: "#475569" }}>
+            The tournament administrator has not enabled public partner requests.
+          </p>
         </article>
-      ) : null}
-
-      {visibleEntries.length ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem" }}>
+      ) : visibleEntries.length ? (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+            gap: "0.85rem"
+          }}
+        >
           {visibleEntries.map((entry) => (
-            <article key={entry.board_entry_key || String(entry.player_name)} id={entryAnchor(entry)} style={cardStyle}>
-              <h2 style={{ marginTop: 0, fontSize: "1.05rem" }}>{entry.player_name}</h2>
-              <p style={{ color: "#475569" }}>{entryEventLabel(entry)}</p>
-              <dl style={{ display: "grid", gap: "0.35rem", margin: 0 }}>
-                {entry.skill ? <><dt style={{ fontWeight: 800 }}>Skill</dt><dd style={{ margin: 0 }}>{entry.skill}</dd></> : null}
-                {entry.age_bracket ? <><dt style={{ fontWeight: 800 }}>Age bracket</dt><dd style={{ margin: 0 }}>{entry.age_bracket}</dd></> : null}
-                {entry.note ? <><dt style={{ fontWeight: 800 }}>Note</dt><dd style={{ margin: 0 }}>{entry.note}</dd></> : null}
-              </dl>
-              <p style={{ marginBottom: 0 }}><Link href={`/clubs/${clubSlug}/tournament-partner-board${queryWithEdit}#${entryAnchor(entry)}`}>board link</Link></p>
-              {editToken && editResponse.data && tournament ? (
+            <article
+              key={entry.board_entry_key || String(entry.player_name)}
+              id={entryAnchor(entry)}
+              style={{
+                ...cardStyle,
+                display: "grid",
+                gap: "0.75rem",
+                alignContent: "start"
+              }}
+            >
+              <div>
+                <h2 style={{ margin: "0 0 0.3rem", fontSize: "1.1rem" }}>
+                  {entry.player_name}
+                </h2>
+                <p style={{ margin: 0, color: "#1d4ed8", fontWeight: 700 }}>
+                  {eventLabel(entry)}
+                </p>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  gap: "0.6rem"
+                }}
+              >
+                <div>
+                  <strong>Skill</strong><br />
+                  {entry.skill || "Not listed"}
+                </div>
+                <div>
+                  <strong>Age bracket</strong><br />
+                  {entry.age_bracket || "Open"}
+                </div>
+              </div>
+              {entry.note ? (
+                <div>
+                  <strong>Player note</strong>
+                  <p style={{ margin: "0.25rem 0 0", color: "#475569" }}>
+                    {entry.note}
+                  </p>
+                </div>
+              ) : null}
+              <Link
+                href={`/clubs/${params.clubSlug}/tournament-partner-board${queryWithEdit}#${entryAnchor(
+                  entry
+                )}`}
+                style={{ fontWeight: 800 }}
+              >
+                Link to this request
+              </Link>
+              {editToken && editResponse.data ? (
                 <PairingInterestPanel
                   apiBase={apiBase}
-                  clubSlug={clubSlug}
+                  clubSlug={params.clubSlug}
                   tournamentId={tournament.id}
-                  registrationSlug={settings?.registration_slug ?? null}
+                  registrationSlug={settings?.registration_slug || null}
                   editToken={editToken}
-                  requesterSelections={requesterSelectionsForEntry(entry, editResponse.data.selections ?? [], data?.events ?? [], data?.days ?? [])}
+                  requesterSelections={requesterSelectionsForEntry(
+                    entry,
+                    editResponse.data.selections || [],
+                    data?.events || [],
+                    data?.days || []
+                  )}
                   boardEntries={[entry]}
                 />
               ) : null}
             </article>
           ))}
         </div>
-      ) : tournament && settings?.partner_board_enabled ? (
+      ) : (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>{partnerEntries.length ? "No matching partner requests" : "No open partner requests"}</h2>
-          <p style={{ color: "#475569" }}>{partnerEntries.length ? "Try clearing the event filter." : "There are no public partner-board entries for this tournament yet."}</p>
-          {editToken ? <Link href={`/clubs/${clubSlug}/tournament-partner-board${queryWithEdit}`}>Refresh board</Link> : null}
+          <h2 style={{ marginTop: 0 }}>
+            {partnerEntries.length
+              ? "No requests match this event"
+              : "No open partner requests"}
+          </h2>
+          <p style={{ color: "#475569" }}>
+            {partnerEntries.length
+              ? "Select All events to clear the current filter."
+              : "No players have opted into the public Partner Board for this tournament."}
+          </p>
+          {selectedEvent ? (
+            <Link
+              href={`/clubs/${params.clubSlug}/tournament-partner-board${boardQuery({
+                tournamentId: tournament.id,
+                registrationSlug: settings?.registration_slug,
+                editToken: editToken || null
+              })}`}
+            >
+              Show all events
+            </Link>
+          ) : null}
         </article>
-      ) : null}
+      )}
     </section>
   );
 }
