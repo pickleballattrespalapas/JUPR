@@ -64,8 +64,8 @@ def test_public_tournament_selection_is_separate_from_selected_workspace() -> No
     hub = read("app/clubs/[clubSlug]/tournaments/page.tsx")
     nav = read("components/PublicTournamentNav.tsx")
     registration = read("app/clubs/[clubSlug]/tournament-registration/page.tsx")
-    roster_layout = read("app/clubs/[clubSlug]/tournament-roster/layout.tsx")
-    partner_layout = read("app/clubs/[clubSlug]/tournament-partner-board/layout.tsx")
+    roster = read("app/clubs/[clubSlug]/tournament-roster/page.tsx")
+    partner = read("app/clubs/[clubSlug]/tournament-partner-board/page.tsx")
 
     assert "getClubTournamentRegistration" in hub
     assert "const explicitSelection = Boolean(registrationSlug || tournamentId)" in hub
@@ -85,14 +85,15 @@ def test_public_tournament_selection_is_separate_from_selected_workspace() -> No
     assert "tournamentId" in nav
     assert "PublicTournamentNav" in registration
     assert 'active="registration"' in registration
-    assert "PublicTournamentRouteNav" in roster_layout
-    assert 'active="roster"' in roster_layout
-    assert "PublicTournamentRouteNav" in partner_layout
-    assert 'active="partner-board"' in partner_layout
+    assert "PublicTournamentModuleHeader" in roster
+    assert 'active="roster"' in roster
+    assert "PublicTournamentModuleHeader" in partner
+    assert 'active="partner-board"' in partner
 
 
-def test_leagues_hub_lists_active_leagues_instead_of_generic_modules() -> None:
+def test_leagues_hub_lists_active_leagues_and_opens_league_home() -> None:
     leagues = read("app/clubs/[clubSlug]/leagues/page.tsx")
+    league_home = read("app/clubs/[clubSlug]/leagues/[leagueName]/page.tsx")
     club = read("app/clubs/[clubSlug]/page.tsx")
     site_map = read("app/site-map/page.tsx")
     sitemap = read("app/sitemap.ts")
@@ -100,8 +101,10 @@ def test_leagues_hub_lists_active_leagues_instead_of_generic_modules() -> None:
     assert "getClubLeagueResults" in leagues
     assert "Choose a league" in leagues
     assert "data?.leagues || []" in leagues
-    assert "Open league →" in leagues
-    assert "/league-results?" in leagues
+    assert "publicLeagueHomeHref" in leagues
+    assert "Open League Home" in leagues
+    assert "PublicLeagueNav" in league_home
+    assert "League pages" in league_home
     assert "Team Leagues" not in leagues
     assert "Club Leaderboards" not in leagues
     assert 'title: "Leagues"' in club
