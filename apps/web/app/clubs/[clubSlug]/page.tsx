@@ -16,111 +16,148 @@ export default async function ClubPage({ params }: ClubPageProps) {
   const { clubSlug } = params;
   const { data, error } = await getClub(clubSlug);
   const clubName = data?.name ?? clubSlug;
+  const base = `/clubs/${clubSlug}`;
 
   if (error) {
     return (
       <section>
         <h1>Club: {clubSlug}</h1>
-        <p style={{ color: "#b91c1c" }}>We could not load this club right now. {error}</p>
+        <p style={{ color: "#b91c1c" }}>
+          We could not load this club right now. {error}
+        </p>
         <p>
-          <Link href={`/clubs/${clubSlug}/leaderboards`}>Try the public leaderboards</Link>
+          <Link href={`${base}/leaderboards`}>Try the public leaderboards</Link>
         </p>
       </section>
     );
   }
 
+  const modules = [
+    {
+      title: "Leagues",
+      description:
+        "Open league results, team leagues, challenge ladders, and related standings from one place.",
+      href: `${base}/leagues`,
+      label: "Open leagues"
+    },
+    {
+      title: "Tournaments",
+      description:
+        "Choose a tournament, then open its registration, roster, Partner Board, and published results.",
+      href: `${base}/tournaments`,
+      label: "Open tournaments"
+    },
+    {
+      title: "Live events",
+      description:
+        "Open public JUPR Live sessions with rounds, scores, standings, and brackets.",
+      href: `${base}/live`,
+      label: "Open JUPR Live"
+    },
+    {
+      title: "Leaderboards",
+      description: "See active JUPR rankings for this club.",
+      href: `${base}/leaderboards`,
+      label: "View leaderboards"
+    },
+    {
+      title: "Match Explorer",
+      description:
+        "Preview rating impact for potential doubles combinations using public-safe projections.",
+      href: `${base}/match-explorer`,
+      label: "Open Match Explorer"
+    },
+    {
+      title: "Players",
+      description:
+        "Browse the public player directory and profiles with ratings, records, and recent matches.",
+      href: `${base}/players`,
+      label: "Open players"
+    },
+    {
+      title: "Match history",
+      description: "Review recorded matches and public-safe rating snapshots.",
+      href: `${base}/matches`,
+      label: "View matches"
+    },
+    {
+      title: "Weekly Recap",
+      description:
+        "Read published club highlights, spotlight reels, podiums, and looking-ahead notes.",
+      href: `${base}/weekly-recap`,
+      label: "Open Weekly Recap"
+    },
+    {
+      title: "Badge Codex",
+      description:
+        "Browse badges, unlock paths, prestige, and recent badge earners.",
+      href: `${base}/badge-codex`,
+      label: "Open Badge Codex"
+    },
+    {
+      title: "Ratings",
+      description:
+        "Understand how club, league, and tournament matches feed JUPR ratings.",
+      href: "/how-ratings-work",
+      label: "How ratings work"
+    }
+  ];
+
   return (
     <section>
       <div style={{ marginBottom: "1.5rem" }}>
-        <p style={{ margin: "0 0 0.35rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
+        <p
+          style={{
+            margin: "0 0 0.35rem",
+            color: "#2563eb",
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            fontSize: "0.78rem"
+          }}
+        >
           Club home
         </p>
-        <h1 style={{ margin: "0 0 0.5rem", fontSize: "2.4rem", lineHeight: 1.1 }}>{clubName}</h1>
-        <p style={{ marginBottom: "0.25rem" }}><strong>Slug:</strong> {data?.slug ?? clubSlug}</p>
-        {data?.tagline ? <p style={{ margin: "0.25rem 0", color: "#334155" }}>{data.tagline}</p> : null}
+        <h1
+          style={{
+            margin: "0 0 0.5rem",
+            fontSize: "2.4rem",
+            lineHeight: 1.1
+          }}
+        >
+          {clubName}
+        </h1>
+        {data?.tagline ? (
+          <p style={{ margin: "0.25rem 0", color: "#334155" }}>
+            {data.tagline}
+          </p>
+        ) : null}
         {data?.support_email ? (
           <p style={{ margin: "0.25rem 0" }}>
-            <strong>Support:</strong> <a href={`mailto:${data.support_email}`}>{data.support_email}</a>
+            <strong>Support:</strong>{" "}
+            <a href={`mailto:${data.support_email}`}>{data.support_email}</a>
           </p>
         ) : null}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "1rem" }}>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Live events</h2>
-          <p style={{ color: "#475569" }}>Open public JUPR Live sessions with rounds, scores, standings, and brackets when durable sessions are available.</p>
-          <Link href={`/clubs/${clubSlug}/live`}>Open JUPR Live</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Leaderboards</h2>
-          <p style={{ color: "#475569" }}>See active JUPR rankings for this club.</p>
-          <Link href={`/clubs/${clubSlug}/leaderboards`}>View leaderboards</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Match Explorer</h2>
-          <p style={{ color: "#475569" }}>Preview rating impact for potential doubles combinations using public-safe FastAPI projections.</p>
-          <Link href={`/clubs/${clubSlug}/match-explorer`}>Open match explorer</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>League results</h2>
-          <p style={{ color: "#475569" }}>Review league standings, weekly results, player summaries, and public-safe rating movement.</p>
-          <Link href={`/clubs/${clubSlug}/league-results`}>Open league results</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Team leagues</h2>
-          <p style={{ color: "#475569" }}>Register with one partner for a weekly round robin and optional playoffs.</p>
-          <Link href={`/clubs/${clubSlug}/team-leagues`}>Open team leagues</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Badge Codex</h2>
-          <p style={{ color: "#475569" }}>Browse JUPR badges, unlock paths, prestige, and recent badge earners.</p>
-          <Link href={`/clubs/${clubSlug}/badge-codex`}>Open badge codex</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Challenge Ladder</h2>
-          <p style={{ color: "#475569" }}>View public ladder tiers, player status, active challenge buckets, and quick rules.</p>
-          <Link href={`/clubs/${clubSlug}/challenge-ladder`}>Open challenge ladder</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Weekly Recap</h2>
-          <p style={{ color: "#475569" }}>Read published club highlights, spotlight reels, tournament podiums, and looking-ahead notes.</p>
-          <Link href={`/clubs/${clubSlug}/weekly-recap`}>Open weekly recap</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Tournament Registration</h2>
-          <p style={{ color: "#475569" }}>Register for published tournament divisions without exposing draw seeding, score entry, or admin tools.</p>
-          <Link href={`/clubs/${clubSlug}/tournament-registration`}>Open tournament registration</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Team Tournament Results</h2>
-          <p style={{ color: "#475569" }}>Follow four-player team standings, playoff brackets, rosters, and published podiums.</p>
-          <Link href={`/clubs/${clubSlug}/tournament-team-results`}>Open team tournament results</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Tournament Roster</h2>
-          <p style={{ color: "#475569" }}>Browse public-safe tournament roster entries, summary cards, and open players-looking sections.</p>
-          <Link href={`/clubs/${clubSlug}/tournament-roster`}>Open tournament roster</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Tournament Partner Board</h2>
-          <p style={{ color: "#475569" }}>View public-safe players looking for tournament pairings and use edit-token gated pairing interest when available.</p>
-          <Link href={`/clubs/${clubSlug}/tournament-partner-board`}>Open partner board</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Players</h2>
-          <p style={{ color: "#475569" }}>Browse the public player directory and open profiles with ratings, records, and recent matches.</p>
-          <Link href={`/clubs/${clubSlug}/players`}>Open players</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Match history</h2>
-          <p style={{ color: "#475569" }}>Review recorded matches and drill into match detail pages with public-safe rating snapshots.</p>
-          <Link href={`/clubs/${clubSlug}/matches`}>View matches</Link>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Ratings</h2>
-          <p style={{ color: "#475569" }}>Understand how JUPR events feed ratings and club standings.</p>
-          <Link href="/how-ratings-work">How ratings work</Link>
-        </article>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
+          gap: "1rem"
+        }}
+      >
+        {modules.map((module) => (
+          <article key={module.href} style={cardStyle}>
+            <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>
+              {module.title}
+            </h2>
+            <p style={{ color: "#475569" }}>{module.description}</p>
+            <Link href={module.href} style={{ fontWeight: 800 }}>
+              {module.label}
+            </Link>
+          </article>
+        ))}
       </div>
     </section>
   );
