@@ -1,0 +1,138 @@
+name: Temporary public workspace verifier
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.head_ref == 'agent/verify-public-workspaces-e7ba64'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EXPECTED_SHA: e7ba6472fef351de0ce0189e971ebe504d6bfba6
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      MATCH_UPLOADER_STATUS_URL: https://juprleagues-api-staging.fly.dev/admin/clubs/tres_palapas/match-uploader/status
+      LEAGUE_RESULTS_URL: https://juprleagues-api-staging.fly.dev/clubs/tres-palapas/league-results
+      CANONICAL_URL: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      TOURNAMENT_ID: 93000000-0000-4000-8000-000000000001
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 1
+
+      - name: Wait for exact Fly candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          for attempt in $(seq 1 120); do
+            if curl -fsS --max-time 20 "$FLY_HEALTH_URL" -o evidence/health.json; then
+              source_sha="$(jq -r '.git_commit_sha // .source_commit_sha // .source_sha // .commit_sha // empty' evidence/health.json)"
+              image_sha="$(jq -r '.image_build_git_sha // .image_git_sha // empty' evidence/health.json)"
+              echo "attempt=$attempt source=$source_sha image=$image_sha"
+              if [ "$source_sha" = "$EXPECTED_SHA" ] && { [ -z "$image_sha" ] || [ "$image_sha" = "$EXPECTED_SHA" ]; }; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 120 ]; then
+              echo "Fly did not reach the exact staging candidate." >&2
+              cat evidence/health.json >&2 || true
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Verify permanent-open staging safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e --arg sha "$EXPECTED_SHA" '
+            (.environment == "staging") and
+            ((.git_commit_sha // .source_commit_sha // .source_sha // .commit_sha) == $sha) and
+            ((.image_build_git_sha // .image_git_sha // $sha) == $sha) and
+            ((.fly_app_name // .app_name // .app) == "juprleagues-api-staging") and
+            (.write_wave == "open") and
+            (.staging_write_wave == "open") and
+            (.business_data_write_wave_active == true) and
+            (.email_mode == "dry_run") and
+            (.live_player_update_email_enabled == false) and
+            (.public_live_production_override_enabled == false) and
+            ((.supabase_project_ref // .supabase_project) == "sijpxjxvdtrehmqvirfi")
+          ' evidence/health.json
+
+      - name: Verify Match Uploader and active leagues
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 20 "$MATCH_UPLOADER_STATUS_URL" -o evidence/match-uploader-status.json
+          jq -e '(.enabled == true) and (.singles_write_enabled == true) and ((.status // "") != "guarded_off")' evidence/match-uploader-status.json
+          curl -fsS --max-time 20 "$LEAGUE_RESULTS_URL" -o evidence/league-results.json
+          jq -e '
+            ([.leagues[].name] | index("Acceptance Singles League 0731") != null) and
+            ([.leagues[].name] | index("Summer Social") != null)
+          ' evidence/league-results.json
+
+      - name: Verify canonical public workspace routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_AUTOMATION_BYPASS_SECRET"
+          routes=(
+            "/clubs/tres-palapas/leagues"
+            "/clubs/tres-palapas/leagues/Acceptance%20Singles%20League%200731"
+            "/clubs/tres-palapas/league-results?league=Acceptance%20Singles%20League%200731"
+            "/clubs/tres-palapas/tournaments?tournament_id=$TOURNAMENT_ID"
+            "/clubs/tres-palapas/tournament-roster?tournament_id=$TOURNAMENT_ID"
+            "/clubs/tres-palapas/tournament-partner-board?tournament_id=$TOURNAMENT_ID"
+            "/admin"
+            "/admin/match-uploader"
+          )
+          : > evidence/routes.txt
+          for path in "${routes[@]}"; do
+            status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+              -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" \
+              -H "x-vercel-set-bypass-cookie: true" \
+              "$CANONICAL_URL$path")"
+            echo "$path $status" | tee -a evidence/routes.txt
+            test "$status" = "200"
+          done
+
+      - name: Verify public workspace source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('apps/web')
+          roster = (root / 'app/clubs/[clubSlug]/tournament-roster/page.tsx').read_text()
+          partner = (root / 'app/clubs/[clubSlug]/tournament-partner-board/page.tsx').read_text()
+          league_home = (root / 'app/clubs/[clubSlug]/leagues/[leagueName]/page.tsx').read_text()
+          league_nav = (root / 'components/PublicLeagueNav.tsx').read_text()
+
+          assert 'PublicTournamentModuleHeader' in roster
+          assert 'Roster overview' in roster
+          assert 'data.tournaments.map' not in roster
+          assert 'PublicTournamentModuleHeader' in partner
+          assert 'Open partner requests' in partner
+          assert 'data.tournaments.map' not in partner
+          assert 'PublicLeagueNav' in league_home
+          assert 'League pages' in league_home
+          assert 'All leagues' in league_nav
+          assert 'Weekly History' in league_nav
+          Path('evidence/source-contract.txt').write_text('Public workspace source contracts passed.\n')
+          PY
+
+      - name: Upload verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-workspace-evidence
+          path: evidence
+          if-no-files-found: error
