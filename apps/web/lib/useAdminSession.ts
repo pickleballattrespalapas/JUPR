@@ -29,7 +29,6 @@ const serverSnapshot: AdminSessionState = {
 let sharedSnapshot: AdminSessionState = serverSnapshot;
 let initialized = false;
 let restoreRequest: Promise<void> | null = null;
-let recheckTimer: number | null = null;
 const listeners = new Set<() => void>();
 
 function emit(next: AdminSessionState): void {
@@ -131,10 +130,7 @@ function ensureInitialized(): void {
   window.addEventListener("storage", handleStorage);
   window.addEventListener("focus", recheckVisibleSession);
   document.addEventListener("visibilitychange", recheckVisibleSession);
-  recheckTimer = window.setInterval(
-    recheckVisibleSession,
-    ADMIN_SESSION_RECHECK_MS
-  );
+  window.setInterval(recheckVisibleSession, ADMIN_SESSION_RECHECK_MS);
 
   void restoreSharedSession({ background: trusted });
 }
