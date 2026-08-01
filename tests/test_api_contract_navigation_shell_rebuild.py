@@ -115,3 +115,33 @@ def test_leagues_hub_lists_active_leagues_and_opens_league_home() -> None:
     assert '"Tournaments", "/clubs/tres-palapas/tournaments"' in site_map
     assert '"/clubs/tres-palapas/leagues"' in sitemap
     assert '"/clubs/tres-palapas/tournaments"' in sitemap
+
+
+def test_selected_league_modules_are_dedicated_pages_without_legacy_switchers() -> None:
+    nav = read("components/PublicLeagueNav.tsx")
+    standings = read("app/clubs/[clubSlug]/leagues/[leagueName]/standings/page.tsx")
+    weekly = read("app/clubs/[clubSlug]/leagues/[leagueName]/weekly-history/page.tsx")
+    players = read("app/clubs/[clubSlug]/leagues/[leagueName]/players/page.tsx")
+
+    assert 'overall: "standings"' in nav
+    assert 'weekly: "weekly-history"' in nav
+    assert 'player: "players"' in nav
+    assert "/league-results?" not in nav
+
+    assert "PublicLeagueNav" in standings
+    assert 'active="overall"' in standings
+    assert "Current standings" in standings
+    assert "data.leagues.map" not in standings
+    assert "sectionLabels" not in standings
+
+    assert "PublicLeagueNav" in weekly
+    assert 'active="weekly"' in weekly
+    assert "weekly history" in weekly
+    assert "data.leagues.map" not in weekly
+    assert "sectionLabels" not in weekly
+
+    assert "PublicLeagueNav" in players
+    assert 'active="player"' in players
+    assert "player summaries" in players
+    assert "data.leagues.map" not in players
+    assert "sectionLabels" not in players
