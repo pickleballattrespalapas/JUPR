@@ -1,0 +1,209 @@
+name: Temporary navigation shell verifier
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.head_ref == 'agent/verify-navigation-a191c3'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EXPECTED_SHA: a191c35764aa55c5a846943d6435a6370daf14e3
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      MATCH_UPLOADER_STATUS_URL: https://juprleagues-api-staging.fly.dev/admin/clubs/tres_palapas/match-uploader/status
+      CANONICAL_URL: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      TEST_TOURNAMENT_ID: 93000000-0000-4000-8000-000000000001
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 1
+
+      - name: Wait for exact Fly candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          for attempt in $(seq 1 120); do
+            if curl -fsS --max-time 20 "$FLY_HEALTH_URL" -o evidence/health.json; then
+              actual="$(jq -r '.git_commit_sha // .source_commit_sha // .source_sha // .commit_sha // empty' evidence/health.json)"
+              image="$(jq -r '.image_build_git_sha // .image_git_sha // empty' evidence/health.json)"
+              echo "attempt=$attempt source=$actual image=$image"
+              if [ "$actual" = "$EXPECTED_SHA" ] && { [ -z "$image" ] || [ "$image" = "$EXPECTED_SHA" ]; }; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 120 ]; then
+              echo "Fly did not reach the exact staging candidate." >&2
+              cat evidence/health.json >&2 || true
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Verify permanent-open staging safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path('evidence/health.json').read_text())
+          expected_sha = os.environ['EXPECTED_SHA']
+
+          def find_key(value, key):
+              if isinstance(value, dict):
+                  if key in value:
+                      return value[key]
+                  for child in value.values():
+                      found = find_key(child, key)
+                      if found is not None:
+                          return found
+              elif isinstance(value, list):
+                  for child in value:
+                      found = find_key(child, key)
+                      if found is not None:
+                          return found
+              return None
+
+          def first(*keys):
+              for key in keys:
+                  value = find_key(payload, key)
+                  if value is not None:
+                      return value
+              return None
+
+          observed = {
+              'environment': first('environment'),
+              'source_sha': first('git_commit_sha', 'source_commit_sha', 'source_sha', 'commit_sha'),
+              'image_sha': first('image_build_git_sha', 'image_git_sha'),
+              'fly_app': first('fly_app_name', 'app_name', 'app'),
+              'write_wave': first('write_wave'),
+              'staging_write_wave': first('staging_write_wave'),
+              'business_data_write_wave_active': first('business_data_write_wave_active'),
+              'email_mode': first('email_mode'),
+              'live_player_update_email_enabled': first('live_player_update_email_enabled'),
+              'public_live_production_override_enabled': first('public_live_production_override_enabled'),
+              'supabase_project_ref': first('supabase_project_ref', 'supabase_project'),
+          }
+          expected = {
+              'environment': 'staging',
+              'source_sha': expected_sha,
+              'image_sha': expected_sha,
+              'fly_app': 'juprleagues-api-staging',
+              'write_wave': 'open',
+              'staging_write_wave': 'open',
+              'business_data_write_wave_active': True,
+              'email_mode': 'dry_run',
+              'live_player_update_email_enabled': False,
+              'public_live_production_override_enabled': False,
+              'supabase_project_ref': 'sijpxjxvdtrehmqvirfi',
+          }
+          Path('evidence/observed-health-contract.json').write_text(json.dumps(observed, indent=2, sort_keys=True) + '\n')
+          mismatches = {
+              key: {'expected': expected[key], 'actual': observed.get(key)}
+              for key in expected
+              if observed.get(key) != expected[key]
+          }
+          print(json.dumps(observed, indent=2, sort_keys=True))
+          if mismatches:
+              print('MISMATCHES=' + json.dumps(mismatches, indent=2, sort_keys=True))
+              raise SystemExit(1)
+          PY
+
+      - name: Verify Match Uploader remains enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 20 "$MATCH_UPLOADER_STATUS_URL" -o evidence/match-uploader-status.json
+          jq -e '(.enabled == true) and (.singles_write_enabled == true) and ((.status // "") != "guarded_off")' evidence/match-uploader-status.json
+
+      - name: Wait for canonical navigation routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          tournament="tournament_id=$TEST_TOURNAMENT_ID"
+          routes=(
+            "/"
+            "/clubs/tres-palapas"
+            "/clubs/tres-palapas/leagues"
+            "/clubs/tres-palapas/tournaments?$tournament"
+            "/clubs/tres-palapas/tournament-registration?$tournament"
+            "/clubs/tres-palapas/tournament-roster?$tournament"
+            "/clubs/tres-palapas/tournament-partner-board?$tournament"
+            "/admin/login"
+            "/admin"
+            "/admin/league-manager"
+            "/admin/tournaments"
+            "/admin/match-uploader"
+          )
+          for attempt in $(seq 1 90); do
+            : > evidence/vercel-routes.txt
+            all_ready=1
+            for path in "${routes[@]}"; do
+              status="$(curl -L -sS -o /dev/null -w '%{http_code}' --max-time 30 "$CANONICAL_URL$path" || true)"
+              echo "$path $status" | tee -a evidence/vercel-routes.txt
+              if [ "$status" != "200" ]; then all_ready=0; fi
+            done
+            if [ "$all_ready" -eq 1 ]; then break; fi
+            if [ "$attempt" -eq 90 ]; then
+              echo "Canonical navigation routes did not all become ready." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Verify navigation source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('apps/web')
+          public_header = (root / 'components/PublicSiteHeader.tsx').read_text()
+          admin_shell = (root / 'components/AdminShell.tsx').read_text()
+          root_layout = (root / 'app/layout.tsx').read_text()
+          admin_layout = (root / 'app/admin/layout.tsx').read_text()
+          tournaments = (root / 'app/clubs/[clubSlug]/tournaments/page.tsx').read_text()
+          tournament_nav = (root / 'components/PublicTournamentNav.tsx').read_text()
+          leagues = (root / 'app/clubs/[clubSlug]/leagues/page.tsx').read_text()
+
+          assert 'label: "Leagues"' in public_header
+          assert 'label: "Tournaments"' in public_header
+          assert 'label: "Register"' not in public_header
+          assert 'label: "Roster"' not in public_header
+          assert 'label: "Partner Board"' not in public_header
+          assert 'pathname.startsWith("/admin/")' in public_header
+          assert 'if (authPage || !accessToken)' in admin_shell
+          assert 'aria-label="Admin workspace navigation"' in admin_shell
+          assert 'label: "League Manager"' in admin_shell
+          assert 'label: "Tournament Manager"' in admin_shell
+          assert 'signOutAdminSession' in admin_shell
+          assert 'PublicSiteHeader' in root_layout
+          assert 'AdminShell' in admin_layout
+          assert 'Choose a tournament' in tournaments
+          assert 'PublicTournamentNav' in tournaments
+          assert '["registration", "Register"]' in tournament_nav
+          assert '["roster", "Roster"]' in tournament_nav
+          assert '["partner-board", "Partner Board"]' in tournament_nav
+          assert 'League Results' in leagues
+          assert 'Team Leagues' in leagues
+          assert 'Challenge Ladder' in leagues
+          Path('evidence/navigation-source-contract.txt').write_text('Navigation source contracts passed.\n')
+          PY
+
+      - name: Upload verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: navigation-shell-evidence
+          path: evidence
+          if-no-files-found: error
