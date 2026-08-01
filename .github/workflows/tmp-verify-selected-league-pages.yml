@@ -1,0 +1,173 @@
+name: Temporary selected League pages verifier
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.head_ref == 'agent/verify-selected-league-pages-3d5795'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EXPECTED_SHA: 3d57959fa9ab312a215bb6841338f3e7ac46868f
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      MATCH_UPLOADER_STATUS_URL: https://juprleagues-api-staging.fly.dev/admin/clubs/tres_palapas/match-uploader/status
+      LEAGUE_RESULTS_URL: https://juprleagues-api-staging.fly.dev/clubs/tres-palapas/league-results
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 1
+
+      - name: Wait for exact Fly candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          for attempt in $(seq 1 120); do
+            if curl -fsS --max-time 20 "$FLY_HEALTH_URL" -o evidence/health.json; then
+              source_sha="$(jq -r '.git_commit_sha // .source_commit_sha // .source_sha // .commit_sha // empty' evidence/health.json)"
+              image_sha="$(jq -r '.image_build_git_sha // .image_git_sha // empty' evidence/health.json)"
+              echo "attempt=$attempt source=$source_sha image=$image_sha"
+              if [ "$source_sha" = "$EXPECTED_SHA" ] && { [ -z "$image_sha" ] || [ "$image_sha" = "$EXPECTED_SHA" ]; }; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 120 ]; then
+              echo "Fly did not reach the exact staging candidate." >&2
+              cat evidence/health.json >&2 || true
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Verify permanent-open staging safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path('evidence/health.json').read_text())
+          expected_sha = os.environ['EXPECTED_SHA']
+
+          def find_key(value, key):
+              if isinstance(value, dict):
+                  if key in value:
+                      return value[key]
+                  for child in value.values():
+                      found = find_key(child, key)
+                      if found is not None:
+                          return found
+              elif isinstance(value, list):
+                  for child in value:
+                      found = find_key(child, key)
+                      if found is not None:
+                          return found
+              return None
+
+          def first(*keys):
+              for key in keys:
+                  value = find_key(payload, key)
+                  if value is not None:
+                      return value
+              return None
+
+          observed = {
+              'environment': first('environment'),
+              'source_sha': first('git_commit_sha', 'source_commit_sha', 'source_sha', 'commit_sha'),
+              'image_sha': first('image_build_git_sha', 'image_git_sha'),
+              'fly_app': first('fly_app_name', 'app_name', 'app'),
+              'write_wave': first('write_wave'),
+              'staging_write_wave': first('staging_write_wave'),
+              'business_data_write_wave_active': first('business_data_write_wave_active'),
+              'email_mode': first('email_mode'),
+              'live_player_update_email_enabled': first('live_player_update_email_enabled'),
+              'public_live_production_override_enabled': first('public_live_production_override_enabled'),
+              'supabase_project_ref': first('supabase_project_ref', 'supabase_project'),
+          }
+          expected = {
+              'environment': 'staging',
+              'source_sha': expected_sha,
+              'image_sha': expected_sha,
+              'fly_app': 'juprleagues-api-staging',
+              'write_wave': 'open',
+              'staging_write_wave': 'open',
+              'business_data_write_wave_active': True,
+              'email_mode': 'dry_run',
+              'live_player_update_email_enabled': False,
+              'public_live_production_override_enabled': False,
+              'supabase_project_ref': 'sijpxjxvdtrehmqvirfi',
+          }
+          Path('evidence/observed-health-contract.json').write_text(json.dumps(observed, indent=2, sort_keys=True) + '\n')
+          mismatches = {
+              key: {'expected': expected[key], 'actual': observed.get(key)}
+              for key in expected
+              if observed.get(key) != expected[key]
+          }
+          print(json.dumps(observed, indent=2, sort_keys=True))
+          if mismatches:
+              print('MISMATCHES=' + json.dumps(mismatches, indent=2, sort_keys=True))
+              raise SystemExit(1)
+          PY
+
+      - name: Verify Match Uploader and active leagues
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 20 "$MATCH_UPLOADER_STATUS_URL" -o evidence/match-uploader-status.json
+          jq -e '(.enabled == true) and (.singles_write_enabled == true) and ((.status // "") != "guarded_off")' evidence/match-uploader-status.json
+          curl -fsS --max-time 20 "$LEAGUE_RESULTS_URL" -o evidence/league-results.json
+          jq -e '
+            ([.leagues[].name] | index("Acceptance Singles League 0731") != null) and
+            ([.leagues[].name] | index("Summer Social") != null)
+          ' evidence/league-results.json
+
+      - name: Verify dedicated selected-League source contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('apps/web')
+          nav = (root / 'components/PublicLeagueNav.tsx').read_text()
+          standings = (root / 'app/clubs/[clubSlug]/leagues/[leagueName]/standings/page.tsx').read_text()
+          weekly = (root / 'app/clubs/[clubSlug]/leagues/[leagueName]/weekly-history/page.tsx').read_text()
+          players = (root / 'app/clubs/[clubSlug]/leagues/[leagueName]/players/page.tsx').read_text()
+
+          assert 'overall: "standings"' in nav
+          assert 'weekly: "weekly-history"' in nav
+          assert 'player: "players"' in nav
+          assert '/league-results?' not in nav
+
+          for source, active, heading in (
+              (standings, 'active="overall"', 'Current standings'),
+              (weekly, 'active="weekly"', 'weekly history'),
+              (players, 'active="player"', 'player summaries'),
+          ):
+              assert 'PublicLeagueNav' in source
+              assert active in source
+              assert heading in source
+              assert 'data.leagues.map' not in source
+              assert 'sectionLabels' not in source
+
+          assert 'Staging Fixtures league results' not in standings
+          assert 'Staging Fixtures league results' not in weekly
+          assert 'Staging Fixtures league results' not in players
+          Path('evidence/source-contract.txt').write_text('Dedicated selected League page source contracts passed.\n')
+          PY
+
+      - name: Upload verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: selected-league-pages-evidence
+          path: evidence
+          if-no-files-found: error
