@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   temporary-tournament-lifecycle-patch:
-    if: github.ref_name == 'agent/tournament-lifecycle-rebuild' && github.actor != 'github-actions[bot]'
+    if: (github.ref_name == 'agent/tournament-lifecycle-rebuild' || github.head_ref == 'agent/tournament-lifecycle-rebuild') && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
