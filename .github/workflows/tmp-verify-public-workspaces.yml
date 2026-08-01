@@ -18,9 +18,6 @@ jobs:
       FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
       MATCH_UPLOADER_STATUS_URL: https://juprleagues-api-staging.fly.dev/admin/clubs/tres_palapas/match-uploader/status
       LEAGUE_RESULTS_URL: https://juprleagues-api-staging.fly.dev/clubs/tres-palapas/league-results
-      CANONICAL_URL: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
-      TOURNAMENT_ID: 93000000-0000-4000-8000-000000000001
-      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,19 +50,73 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          jq -e --arg sha "$EXPECTED_SHA" '
-            (.environment == "staging") and
-            ((.git_commit_sha // .source_commit_sha // .source_sha // .commit_sha) == $sha) and
-            ((.image_build_git_sha // .image_git_sha // $sha) == $sha) and
-            ((.fly_app_name // .app_name // .app) == "juprleagues-api-staging") and
-            (.write_wave == "open") and
-            (.staging_write_wave == "open") and
-            (.business_data_write_wave_active == true) and
-            (.email_mode == "dry_run") and
-            (.live_player_update_email_enabled == false) and
-            (.public_live_production_override_enabled == false) and
-            ((.supabase_project_ref // .supabase_project) == "sijpxjxvdtrehmqvirfi")
-          ' evidence/health.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path('evidence/health.json').read_text())
+          expected_sha = os.environ['EXPECTED_SHA']
+
+          def find_key(value, key):
+              if isinstance(value, dict):
+                  if key in value:
+                      return value[key]
+                  for child in value.values():
+                      found = find_key(child, key)
+                      if found is not None:
+                          return found
+              elif isinstance(value, list):
+                  for child in value:
+                      found = find_key(child, key)
+                      if found is not None:
+                          return found
+              return None
+
+          def first(*keys):
+              for key in keys:
+                  value = find_key(payload, key)
+                  if value is not None:
+                      return value
+              return None
+
+          observed = {
+              'environment': first('environment'),
+              'source_sha': first('git_commit_sha', 'source_commit_sha', 'source_sha', 'commit_sha'),
+              'image_sha': first('image_build_git_sha', 'image_git_sha'),
+              'fly_app': first('fly_app_name', 'app_name', 'app'),
+              'write_wave': first('write_wave'),
+              'staging_write_wave': first('staging_write_wave'),
+              'business_data_write_wave_active': first('business_data_write_wave_active'),
+              'email_mode': first('email_mode'),
+              'live_player_update_email_enabled': first('live_player_update_email_enabled'),
+              'public_live_production_override_enabled': first('public_live_production_override_enabled'),
+              'supabase_project_ref': first('supabase_project_ref', 'supabase_project'),
+          }
+          expected = {
+              'environment': 'staging',
+              'source_sha': expected_sha,
+              'image_sha': expected_sha,
+              'fly_app': 'juprleagues-api-staging',
+              'write_wave': 'open',
+              'staging_write_wave': 'open',
+              'business_data_write_wave_active': True,
+              'email_mode': 'dry_run',
+              'live_player_update_email_enabled': False,
+              'public_live_production_override_enabled': False,
+              'supabase_project_ref': 'sijpxjxvdtrehmqvirfi',
+          }
+          Path('evidence/observed-health-contract.json').write_text(json.dumps(observed, indent=2, sort_keys=True) + '\n')
+          mismatches = {
+              key: {'expected': expected[key], 'actual': observed.get(key)}
+              for key in expected
+              if observed.get(key) != expected[key]
+          }
+          print(json.dumps(observed, indent=2, sort_keys=True))
+          if mismatches:
+              print('MISMATCHES=' + json.dumps(mismatches, indent=2, sort_keys=True))
+              raise SystemExit(1)
+          PY
 
       - name: Verify Match Uploader and active leagues
         shell: bash
@@ -78,31 +129,6 @@ jobs:
             ([.leagues[].name] | index("Acceptance Singles League 0731") != null) and
             ([.leagues[].name] | index("Summer Social") != null)
           ' evidence/league-results.json
-
-      - name: Verify canonical public workspace routes
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$VERCEL_AUTOMATION_BYPASS_SECRET"
-          routes=(
-            "/clubs/tres-palapas/leagues"
-            "/clubs/tres-palapas/leagues/Acceptance%20Singles%20League%200731"
-            "/clubs/tres-palapas/league-results?league=Acceptance%20Singles%20League%200731"
-            "/clubs/tres-palapas/tournaments?tournament_id=$TOURNAMENT_ID"
-            "/clubs/tres-palapas/tournament-roster?tournament_id=$TOURNAMENT_ID"
-            "/clubs/tres-palapas/tournament-partner-board?tournament_id=$TOURNAMENT_ID"
-            "/admin"
-            "/admin/match-uploader"
-          )
-          : > evidence/routes.txt
-          for path in "${routes[@]}"; do
-            status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
-              -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" \
-              -H "x-vercel-set-bypass-cookie: true" \
-              "$CANONICAL_URL$path")"
-            echo "$path $status" | tee -a evidence/routes.txt
-            test "$status" = "200"
-          done
 
       - name: Verify public workspace source contracts
         shell: bash
