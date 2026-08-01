@@ -47,43 +47,69 @@ def test_tournament_home_is_a_lifecycle_dashboard_with_next_action() -> None:
 
 
 def test_lifecycle_phase_overviews_and_subnavigation_exist() -> None:
-    overview = read("app/admin/tournaments/TournamentLifecycleOverviewPanel.tsx")
-    phase_nav = read("components/TournamentPhaseNav.tsx")
+  overview = read("app/admin/tournaments/TournamentLifecycleOverviewPanel.tsx")
+  phase_nav = read("components/TournamentPhaseNav.tsx")
+  setup_entry = read("app/admin/tournaments/setup/page.tsx")
+  setup_nav = read("components/TournamentSetupWizardNav.tsx")
+  setup_panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
 
-    for page in (
-        "app/admin/tournaments/setup/page.tsx",
-        "app/admin/tournaments/registration/page.tsx",
-        "app/admin/tournaments/live-operations/page.tsx",
-        "app/admin/tournaments/publish/page.tsx",
-    ):
-        source = read(page)
-        assert "TournamentLifecycleOverviewPanel" in source
-        assert 'redirect("/admin/tournaments")' in source
+  assert "tournamentSetupStepHref" in setup_entry
+  assert '"basics"' in setup_entry
+  assert 'redirect("/admin/tournaments")' in setup_entry
 
-    for label in (
-        "Tournament basics",
-        "Events and formats",
-        "Registration rules",
-        "Pricing, extras, and fulfillment",
-        "Schedule and courts",
-        "Review and open registration",
-        "Partners and teams",
-        "Payments and extras",
-        "Preflight and check-in",
-        "Draws and scheduling",
-        "Live scoring",
-        "Corrections and recovery",
-        "Review results",
-        "Publish divisions",
-        "Tournament closeout",
-    ):
-        assert label in overview
+  for page in (
+      "app/admin/tournaments/registration/page.tsx",
+      "app/admin/tournaments/live-operations/page.tsx",
+      "app/admin/tournaments/publish/page.tsx",
+  ):
+      source = read(page)
+      assert "TournamentLifecycleOverviewPanel" in source
+      assert 'redirect("/admin/tournaments")' in source
 
-    assert 'export type TournamentPhase = "setup" | "registration" | "live" | "publish";' in phase_nav
-    assert "Setup overview" in phase_nav
-    assert "Registration overview" in phase_nav
-    assert "Live overview" in phase_nav
-    assert "Publish overview" in phase_nav
+  for label in (
+      "Tournament basics",
+      "Events and formats",
+      "Registration rules",
+      "Pricing, extras, and fulfillment",
+      "Schedule and courts",
+      "Review and open registration",
+      "Partners and teams",
+      "Payments and extras",
+      "Preflight and check-in",
+      "Draws and scheduling",
+      "Live scoring",
+      "Corrections and recovery",
+      "Review results",
+      "Publish divisions",
+      "Tournament closeout",
+  ):
+      assert label in overview
+
+  assert 'export type TournamentPhase = "setup" | "registration" | "live" | "publish";' in phase_nav
+  for label in (
+      "1. Basics",
+      "2. Events & formats",
+      "3. Registration rules",
+      "4. Pricing & extras",
+      "5. Schedule & courts",
+      "6. Review & open",
+  ):
+      assert label in phase_nav
+
+  for key in (
+      'key: "basics"',
+      'key: "events"',
+      'key: "registration-rules"',
+      'key: "pricing"',
+      'key: "schedule"',
+      'key: "review"',
+  ):
+      assert key in setup_nav
+
+  assert 'goTo("events")' in setup_panel
+  assert "Save and continue" in setup_panel
+  assert "Review setup" in setup_panel
+  assert "Open registration" in setup_panel
 
 
 def test_admin_session_is_shared_across_admin_route_mounts() -> None:

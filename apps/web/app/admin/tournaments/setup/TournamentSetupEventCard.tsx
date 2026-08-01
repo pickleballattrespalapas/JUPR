@@ -23,8 +23,8 @@ import {
   type BuilderRow,
   type SetupRecord,
   type ValidationIssue
-} from "../../../../tournament-setup/tournamentSetupBuilder";
-import styles from "../../../../tournament-setup/TournamentSetupBuilder.module.css";
+} from "../../tournament-setup/tournamentSetupBuilder";
+import styles from "../../tournament-setup/TournamentSetupBuilder.module.css";
 
 type Props = {
   row: BuilderRow;

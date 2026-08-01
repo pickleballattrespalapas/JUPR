@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import TournamentSetupWizardNav, {
   TOURNAMENT_SETUP_STEPS,
@@ -253,7 +253,7 @@ function formatImpactItem(value: unknown): string {
   return JSON.stringify(row);
 }
 
-function footerRow(children: React.ReactNode) {
+function footerRow(children: ReactNode) {
   return (
     <div
       style={{

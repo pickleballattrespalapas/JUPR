@@ -108,7 +108,7 @@ function setupSteps(
       title: "1. Tournament basics",
       description: "Name, dates, venue, timezone, contact, description, and visibility.",
       href: selectedHref(
-        "/admin/tournaments/tournament",
+        "/admin/tournaments/setup/basics",
         tournamentId,
         tournamentName
       ),
@@ -118,7 +118,7 @@ function setupSteps(
       title: "2. Events and formats",
       description: "Standard, combined-rating, and four-player team formats with relevant rules only.",
       href: selectedHref(
-        "/admin/tournaments/team-competition",
+        "/admin/tournaments/setup/events",
         tournamentId,
         tournamentName
       ),
@@ -128,7 +128,7 @@ function setupSteps(
       title: "3. Registration rules",
       description: "Registration window, capacity, waitlist, partner board, identity, and cancellation rules.",
       href: selectedHref(
-        "/admin/tournament-setup",
+        "/admin/tournaments/setup/registration-rules",
         tournamentId,
         tournamentName
       ),
@@ -138,7 +138,7 @@ function setupSteps(
       title: "4. Pricing, extras, and fulfillment",
       description: "Entry fees, additional events, extras, bundles, inventory, pickup, and offline payment.",
       href: selectedHref(
-        "/admin/tournaments/commerce",
+        "/admin/tournaments/setup/pricing",
         tournamentId,
         tournamentName
       ),
@@ -148,7 +148,7 @@ function setupSteps(
       title: "5. Schedule and courts",
       description: "Days, event blocks, courts, match duration, warm-up, and check-in assumptions.",
       href: selectedHref(
-        "/admin/tournament-setup",
+        "/admin/tournaments/setup/schedule",
         tournamentId,
         tournamentName
       ),
@@ -158,7 +158,7 @@ function setupSteps(
       title: "6. Review and open registration",
       description: "Resolve missing fields, conflicts, capacity, pricing, and schedule warnings before opening.",
       href: selectedHref(
-        "/admin/tournament-setup",
+        "/admin/tournaments/setup/review",
         tournamentId,
         tournamentName
       ),
