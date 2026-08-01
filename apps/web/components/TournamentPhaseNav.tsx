@@ -28,39 +28,39 @@ function phaseItems(
   tournamentName: string
 ): PhaseItem[] {
   if (phase === "setup") {
-    return [
-      {
-        label: "Setup overview",
-        href: selectedHref("/admin/tournaments/setup", tournamentId, tournamentName),
-        match: (pathname) => pathname === "/admin/tournaments/setup"
-      },
-      {
-        label: "Tournament basics",
-        href: selectedHref("/admin/tournaments/tournament", tournamentId, tournamentName),
-        match: (pathname) => pathname === "/admin/tournaments/tournament"
-      },
-      {
-        label: "Events & formats",
-        href: selectedHref("/admin/tournaments/team-competition", tournamentId, tournamentName),
-        match: (pathname) => pathname === "/admin/tournaments/team-competition"
-      },
-      {
-        label: "Registration rules",
-        href: selectedHref("/admin/tournament-setup", tournamentId, tournamentName),
-        match: (pathname) => pathname === "/admin/tournament-setup"
-      },
-      {
-        label: "Pricing & extras",
-        href: selectedHref("/admin/tournaments/commerce", tournamentId, tournamentName),
-        match: (pathname) => pathname === "/admin/tournaments/commerce"
-      },
-      {
-        label: "Schedule & courts",
-        href: selectedHref("/admin/tournament-setup", tournamentId, tournamentName),
-        match: () => false
-      }
-    ];
-  }
+  return [
+    {
+      label: "1. Basics",
+      href: selectedHref("/admin/tournaments/setup/basics", tournamentId, tournamentName),
+      match: (pathname) => pathname === "/admin/tournaments/setup/basics"
+    },
+    {
+      label: "2. Events & formats",
+      href: selectedHref("/admin/tournaments/setup/events", tournamentId, tournamentName),
+      match: (pathname) => pathname === "/admin/tournaments/setup/events"
+    },
+    {
+      label: "3. Registration rules",
+      href: selectedHref("/admin/tournaments/setup/registration-rules", tournamentId, tournamentName),
+      match: (pathname) => pathname === "/admin/tournaments/setup/registration-rules"
+    },
+    {
+      label: "4. Pricing & extras",
+      href: selectedHref("/admin/tournaments/setup/pricing", tournamentId, tournamentName),
+      match: (pathname) => pathname === "/admin/tournaments/setup/pricing"
+    },
+    {
+      label: "5. Schedule & courts",
+      href: selectedHref("/admin/tournaments/setup/schedule", tournamentId, tournamentName),
+      match: (pathname) => pathname === "/admin/tournaments/setup/schedule"
+    },
+    {
+      label: "6. Review & open",
+      href: selectedHref("/admin/tournaments/setup/review", tournamentId, tournamentName),
+      match: (pathname) => pathname === "/admin/tournaments/setup/review"
+    }
+  ];
+}
 
   if (phase === "registration") {
     return [

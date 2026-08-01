@@ -190,7 +190,7 @@ function nextAction(
     return {
       label: "Finish tournament basics",
       href: selectedHref(
-        "/admin/tournaments/tournament",
+        "/admin/tournaments/setup/basics",
         tournamentId,
         tournamentName
       ),
@@ -201,7 +201,7 @@ function nextAction(
     return {
       label: "Continue setup",
       href: selectedHref(
-        "/admin/tournaments/setup",
+        "/admin/tournaments/setup/events",
         tournamentId,
         tournamentName
       ),
@@ -212,7 +212,7 @@ function nextAction(
     return {
       label: "Review and open registration",
       href: selectedHref(
-        "/admin/tournaments/setup",
+        "/admin/tournaments/setup/review",
         tournamentId,
         tournamentName
       ),
@@ -446,34 +446,21 @@ export default function TournamentHomePanel({
           </section>
 
           <article style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>Tournament basics</h2>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem" }}>
-              <label style={{ minWidth: 0 }}>
-                <strong>Name</strong><br />
-                <input value={edit.name} onChange={(event) => setEdit((current) => ({ ...current, name: event.target.value }))} style={inputStyle} />
-              </label>
-              <label style={{ minWidth: 0 }}>
-                <strong>Start date</strong><br />
-                <input type="date" value={edit.startDate} onChange={(event) => setEdit((current) => ({ ...current, startDate: event.target.value }))} style={inputStyle} />
-              </label>
-              <label style={{ minWidth: 0 }}>
-                <strong>End date</strong><br />
-                <input type="date" min={edit.startDate || undefined} value={edit.endDate} onChange={(event) => setEdit((current) => ({ ...current, endDate: event.target.value }))} style={inputStyle} />
-              </label>
-            </div>
-            <p>
-              <ConfirmAction
-                triggerLabel={busy ? "Saving…" : "Save tournament basics"}
-                title="Save tournament basics?"
-                description={`Update the name and dates for ${tournamentName}.`}
-                confirmLabel="Yes, save tournament"
-                confirmationText="SAVE TOURNAMENT"
-                disabled={!edit.name.trim() || !detail.tournament.updated_at}
-                busy={busy}
-                onConfirm={saveTournament}
-              />
-            </p>
-          </article>
+  <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+    <div>
+      <h2 style={{ marginTop: 0 }}>Tournament basics</h2>
+      <p style={{ color: "#475569", marginBottom: 0 }}>
+        {tournamentName} · {dateValue(detail.tournament.start_date) || "Date not set"} – {dateValue(detail.tournament.end_date) || "Date not set"}
+      </p>
+    </div>
+    <Link
+      href={selectedHref("/admin/tournaments/setup/basics", tournamentId, tournamentName)}
+      style={{ display: "inline-block", padding: "0.6rem 0.9rem", borderRadius: "999px", background: "#0f172a", color: "white", textDecoration: "none", fontWeight: 800 }}
+    >
+      Edit in guided setup
+    </Link>
+  </div>
+</article>
 
           <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
             <Link href={selectedHref("/admin/tournaments/status", tournamentId, tournamentName)}>Status & recovery</Link>
