@@ -26,9 +26,20 @@ function tournamentQuery(
   return text ? `?${text}` : "";
 }
 
+function normalizedModule(value: string): PublicTournamentModule {
+  if (
+    value === "registration" ||
+    value === "roster" ||
+    value === "partner-board"
+  ) {
+    return value;
+  }
+  return "overview";
+}
+
 export function publicTournamentHref(
   clubSlug: string,
-  module: PublicTournamentModule,
+  module: PublicTournamentModule | string,
   tournamentId?: string | null,
   registrationSlug?: string | null
 ): string {
@@ -39,7 +50,11 @@ export function publicTournamentHref(
     roster: `${base}/tournament-roster`,
     "partner-board": `${base}/tournament-partner-board`
   };
-  return `${paths[module]}${tournamentQuery(tournamentId, registrationSlug)}`;
+  const selectedModule = normalizedModule(module);
+  return `${paths[selectedModule]}${tournamentQuery(
+    tournamentId,
+    registrationSlug
+  )}`;
 }
 
 export default function PublicTournamentNav({
