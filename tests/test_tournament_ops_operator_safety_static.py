@@ -55,7 +55,7 @@ def test_selected_tournament_ops_keeps_read_only_snapshots_and_hides_post_contro
     assert "Refresh tournaments" not in panel
     assert "selectTournament(event.target.value)" not in panel
     assert "loadTournaments" not in panel
-    assert "Retry snapshot" in panel
+    assert "Reload selected draw" in panel
     assert ">Load tournaments<" not in panel
     assert "Load ops snapshot" not in panel
     for read_only_table in ("Draws", "Teams", "Games", "Podium"):
