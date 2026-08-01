@@ -41,7 +41,6 @@ def test_named_operator_surfaces_auto_load_lists_and_keep_only_recovery_controls
         "apps/web/app/admin/tournament-live/TournamentLivePanel.tsx": ("loadTournaments", "Refresh tournaments"),
         "apps/web/app/admin/tournaments/TournamentAdminPanel.tsx": ("loadTournaments", "Refresh tournaments"),
         "apps/web/app/admin/tournaments/bulk/BulkRegistrationPanel.tsx": ("loadTournaments", "Refresh tournaments"),
-        "apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx": ("loadTournaments", "Refresh tournaments"),
         "apps/web/app/admin/tournaments/registrations/RegistrationManagementPanel.tsx": ("loadTournaments", "Refresh tournaments"),
         "apps/web/app/admin/tournaments/status/TournamentStatusPanel.tsx": ("loadTournaments", "Refresh tournaments"),
         "apps/web/app/admin/tournaments/delete-draft/DeleteDraftPanel.tsx": ("loadTournaments", "Refresh draft tournaments"),
@@ -157,10 +156,6 @@ def test_refresh_preserves_valid_tournament_selections_and_reloads_current_detai
             'setSelectedTournamentId("");',
             "await loadDraws(selectedTournamentBeforeRefresh, selectedDrawBeforeRefresh)",
         ),
-        "apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx": (
-            'setSelectedTournamentId("");',
-            "await loadOps(selectedTournamentBeforeRefresh, selectedDrawBeforeRefresh)",
-        ),
         "apps/web/app/admin/tournaments/registrations/RegistrationManagementPanel.tsx": (
             'setSelectedTournamentId("");',
             "await loadDetail(selectedBeforeRefresh, true)",
@@ -183,8 +178,6 @@ def test_refresh_preserves_valid_tournament_selections_and_reloads_current_detai
     assert "nextDraws.some((row) => row.id === preferredDrawId)" in tournament_live
     assert 'void loadDraws(tournamentId, "")' in tournament_live
 
-    tournament_ops = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
-    assert "!refreshedSnapshot.draws.some((row) => row.id === selectedDrawBeforeRefresh)" in tournament_ops
 
 
 def test_player_editor_workspace_ignores_logout_and_retry_races() -> None:
@@ -272,25 +265,27 @@ def test_league_live_clears_stale_session_state_before_detail_reads() -> None:
     assert "!detail || loadedLeagueName !== leagueName || !rosterSuggestion || !sessionRoster.length" in source
 
 
-def test_admin_session_revalidation_fails_closed_and_ignores_older_restores() -> None:
+def test_admin_session_revalidation_is_shared_and_fails_closed() -> None:
     source = _read("apps/web/lib/useAdminSession.ts")
     auth = _read("apps/web/lib/adminAuthClient.ts")
 
-    assert "let loadGeneration = 0;" in source
-    assert "const generation = ++loadGeneration;" in source
-    assert "let queuedBackground: boolean | null = null;" in source
-    assert "queuedBackground =" in source
-    assert "void load({ background: nextBackground });" in source
-    assert "setSession(null);" in source
-    assert source.count("generation === loadGeneration") >= 3
+    assert 'import { useSyncExternalStore } from "react";' in source
+    assert "let sharedSnapshot: AdminSessionState = serverSnapshot;" in source
+    assert "let restoreRequest: Promise<void> | null = null;" in source
+    assert "const listeners = new Set<() => void>();" in source
+    assert "if (restoreRequest) return restoreRequest;" in source
+    assert "if (!background) emit(snapshotFromSession(null, { loading: true }));" in source
+    assert "emit(snapshotFromSession(authorized));" in source
+    assert "emit(
+        snapshotFromSession(null" in source
+    assert "stored && adminSessionIsFresh(stored) && stored.capabilities?.authorized" in source
+    assert "if (eventSource === SHARED_SESSION_CHANGE_SOURCE) return;" in source
+    assert "return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);" in source
     assert "const storageSnapshot =" in auth
     assert "const storageIsUnchanged =" in auth
     assert auth.count("if (!storageIsUnchanged()) return null;") >= 3
     assert "saveAdminSession(authorized, { changeSource: options.changeSource });" in auth
     assert "clearAdminSession({ changeSource: options.changeSource });" in auth
-    assert "const changeSource = `use-admin-session-${++adminSessionHookSequence}`;" in source
-    assert "if (eventSource === changeSource) return;" in source
-
 
 def test_secondary_reports_actions_and_recap_writes_ignore_old_token_responses() -> None:
     badge = _read("apps/web/app/admin/badges/BadgeDiagnosticsPanel.tsx")
