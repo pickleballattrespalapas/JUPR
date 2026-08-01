@@ -24,6 +24,12 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/tmp_patch_tournament_lifecycle.py
+          python - <<'PY'
+          from pathlib import Path
+          for path in Path('apps/web/app/admin/tournaments').rglob('*.tsx'):
+              text = path.read_text()
+              path.write_text('\n'.join(line.rstrip() for line in text.splitlines()) + '\n')
+          PY
           git diff --check
 
       - name: Publish clean application commit
