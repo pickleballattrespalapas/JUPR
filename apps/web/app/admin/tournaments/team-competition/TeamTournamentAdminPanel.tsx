@@ -8,18 +8,18 @@ import { ConfirmAction } from "@/components/ConfirmAction";
 import {
   FourPlayerTeamMember,
   getAdminTeamCompetitionSnapshot,
-  listAdminTeamTournaments,
   mutateAdminTeamCompetition,
   TeamCompetitionEvent,
   TeamCompetitionSnapshot,
   TeamTournamentMatchup
 } from "@/lib/tournamentTeamCompetitionApi";
 import { useAuthenticatedAutoLoad } from "@/lib/useAuthenticatedAutoLoad";
-import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import { useAdminSession } from "@/lib/useAdminSession";
 
 import styles from "./TeamTournamentAdminPanel.module.css";
 
-type Props = { clubId: string };
+type Props = { clubId: string; initialTournamentId: string };
+type EventFormat = "STANDARD" | "COMBINED_RATING_CAP" | "FOUR_PLAYER_TEAM";
 type Tab = "setup" | "ratings" | "teams" | "schedule" | "matches" | "podium";
 type TeamSlot = "MAN_1" | "MAN_2" | "WOMAN_1" | "WOMAN_2";
 type RosterEntry = {
@@ -129,6 +129,19 @@ function initialConfig(event: TeamCompetitionEvent): ConfigDraft {
   };
 }
 
+function eventFormat(draft: ConfigDraft | null): EventFormat {
+  if (draft?.competitionFormat === "FOUR_PLAYER_TEAM") return "FOUR_PLAYER_TEAM";
+  if (draft?.eligibilityMode === "COMBINED_RATING_CAP") return "COMBINED_RATING_CAP";
+  return "STANDARD";
+}
+
+function friendlyWorkspaceWarning(warning: string): string {
+  if (/tournament_team_operations unavailable|apierror/i.test(warning)) {
+    return "Team scheduling and scoring data is temporarily unavailable. Event-format setup and rating review remain available.";
+  }
+  return warning;
+}
+
 function slotLabel(slot: TeamSlot): string {
   return {
     MAN_1: "Man 1",
@@ -138,18 +151,17 @@ function slotLabel(slot: TeamSlot): string {
   }[slot];
 }
 
-export default function TeamTournamentAdminPanel({ clubId }: Props) {
+export default function TeamTournamentAdminPanel({
+  clubId,
+  initialTournamentId
+}: Props) {
   const {
-    session,
     accessToken,
     loading: sessionLoading,
     message: sessionMessage
   } = useAdminSession();
   const operationKeys = useRef(new Map<string, string>());
-  const [tournaments, setTournaments] = useState<
-    Array<{ id: string; name: string; status?: string }>
-  >([]);
-  const [tournamentId, setTournamentId] = useState("");
+  const [tournamentId, setTournamentId] = useState(initialTournamentId);
   const [snapshot, setSnapshot] = useState<TeamCompetitionSnapshot | null>(null);
   const [tab, setTab] = useState<Tab>("setup");
   const [busy, setBusy] = useState(false);
@@ -254,7 +266,7 @@ export default function TeamTournamentAdminPanel({ clubId }: Props) {
 
   async function loadSnapshot(nextTournamentId = tournamentId): Promise<void> {
     setTournamentId(nextTournamentId);
-    setSnapshot(null);
+    if (nextTournamentId !== tournamentId) setSnapshot(null);
     if (!nextTournamentId || !accessToken) return;
     setBusy(true);
     const response = await getAdminTeamCompetitionSnapshot(
@@ -270,7 +282,7 @@ export default function TeamTournamentAdminPanel({ clubId }: Props) {
     }
     setSnapshot(response.data);
     setMessageKind("success");
-    setMessage(`Loaded ${response.data.tournament.name}.`);
+    setMessage(null);
     const firstEvent = response.data.event_options[0];
     if (firstEvent) {
       setConfigEventId(firstEvent.id);
@@ -293,32 +305,11 @@ export default function TeamTournamentAdminPanel({ clubId }: Props) {
     setRoundRobinTeamIds([]);
   }
 
-  async function loadWorkspace(): Promise<void> {
-    if (!accessToken) return;
-    setBusy(true);
-    setMessage(null);
-    const response = await listAdminTeamTournaments(clubId, accessToken);
-    setBusy(false);
-    if (response.error || !response.data) {
-      setMessageKind("error");
-      setMessage(response.error || "Unable to load tournaments.");
-      return;
-    }
-    const choices = response.data.tournaments || [];
-    setTournaments(choices);
-    if (choices.length === 1) {
-      await loadSnapshot(choices[0].id);
-    } else {
-      setMessageKind("notice");
-      setMessage(
-        choices.length
-          ? "Choose a tournament to begin."
-          : "No tournaments are available."
-      );
-    }
-  }
-
-  useAuthenticatedAutoLoad(accessToken, loadWorkspace, clubId);
+  useAuthenticatedAutoLoad(
+    `${accessToken}\u0000${initialTournamentId}`,
+    () => loadSnapshot(initialTournamentId),
+    clubId
+  );
 
   async function mutate(
     scope: string,
@@ -434,38 +425,7 @@ export default function TeamTournamentAdminPanel({ clubId }: Props) {
 
   return (
     <div className={styles.shell} data-testid="team-tournament-admin-workspace">
-      <div className={styles.toolbar}>
-        <label className={styles.field}>
-          Tournament
-          <select
-            className={styles.select}
-            value={tournamentId}
-            disabled={busy}
-            onChange={(event) => void loadSnapshot(event.target.value)}
-          >
-            <option value="">Choose tournament</option>
-            {tournaments.map((row) => (
-              <option key={row.id} value={row.id}>
-                {row.name}
-                {row.status ? ` · ${row.status}` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          className={styles.secondaryButton}
-          disabled={busy || !tournamentId}
-          onClick={() => void loadSnapshot()}
-        >
-          {busy ? "Loading…" : "Refresh"}
-        </button>
-      </div>
-
-      <p className={styles.hint}>
-        Signed in as {adminSessionLabel(session)}. Every save is version checked,
-        recoverable, and audited.
-      </p>
+      {busy && !snapshot ? <p className={styles.notice}>Loading event setup…</p> : null}
       {message ? (
         <p className={styles[messageKind]} role={messageKind === "error" ? "alert" : "status"}>
           {message}
@@ -475,9 +435,11 @@ export default function TeamTournamentAdminPanel({ clubId }: Props) {
         <div className={styles.card}>
           <strong>Workspace warnings</strong>
           <ul className={styles.warningList}>
-            {snapshot.warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
-            ))}
+            {snapshot.warnings
+              .map((warning) => friendlyWorkspaceWarning(warning))
+              .map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
           </ul>
         </div>
       ) : null}
@@ -523,39 +485,47 @@ export default function TeamTournamentAdminPanel({ clubId }: Props) {
                     </select>
                   </label>
                   <label className={styles.field}>
-                    Registration eligibility
+                    Event format
                     <select
                       className={styles.select}
-                      value={configDraft?.eligibilityMode || "STANDARD"}
+                      value={eventFormat(configDraft)}
                       onChange={(event) =>
-                        setConfigDraft((current) =>
-                          current
-                            ? {
-                                ...current,
-                                eligibilityMode: event.target
-                                  .value as ConfigDraft["eligibilityMode"],
-                                competitionFormat:
-                                  event.target.value === "COMBINED_RATING_CAP"
-                                    ? "STANDARD"
-                                    : current.competitionFormat,
-                                combinedRatingCap:
-                                  event.target.value === "COMBINED_RATING_CAP"
-                                    ? current.combinedRatingCap || "8.0"
-                                    : ""
-                              }
-                            : current
-                        )
+                        setConfigDraft((current) => {
+                          if (!current) return current;
+                          const value = event.target.value as EventFormat;
+                          if (value === "COMBINED_RATING_CAP") {
+                            return {
+                              ...current,
+                              eligibilityMode: "COMBINED_RATING_CAP",
+                              combinedRatingCap: current.combinedRatingCap || "8.0",
+                              competitionFormat: "STANDARD"
+                            };
+                          }
+                          if (value === "FOUR_PLAYER_TEAM") {
+                            return {
+                              ...current,
+                              eligibilityMode: "STANDARD",
+                              combinedRatingCap: "",
+                              competitionFormat: "FOUR_PLAYER_TEAM"
+                            };
+                          }
+                          return {
+                            ...current,
+                            eligibilityMode: "STANDARD",
+                            combinedRatingCap: "",
+                            competitionFormat: "STANDARD"
+                          };
+                        })
                       }
                     >
-                      <option value="STANDARD">Standard event</option>
-                      <option value="COMBINED_RATING_CAP">
-                        Combined partner rating below a cap
-                      </option>
+                      <option value="STANDARD">Standard singles or doubles</option>
+                      <option value="COMBINED_RATING_CAP">Combined-rating doubles</option>
+                      <option value="FOUR_PLAYER_TEAM">Four-player team · two men and two women</option>
                     </select>
                   </label>
                   {configDraft?.eligibilityMode === "COMBINED_RATING_CAP" ? (
                     <label className={styles.field}>
-                      Combined rating must be below
+                      Maximum combined partner rating
                       <input
                         className={styles.input}
                         type="number"
@@ -571,39 +541,9 @@ export default function TeamTournamentAdminPanel({ clubId }: Props) {
                           )
                         }
                       />
+                      <small>Eligibility is strictly below this cap.</small>
                     </label>
                   ) : null}
-                  <label className={styles.field}>
-                    Competition format
-                    <select
-                      className={styles.select}
-                      value={configDraft?.competitionFormat || "STANDARD"}
-                      onChange={(event) =>
-                        setConfigDraft((current) =>
-                          current
-                            ? {
-                                ...current,
-                                competitionFormat: event.target
-                                  .value as ConfigDraft["competitionFormat"],
-                                eligibilityMode:
-                                  event.target.value === "FOUR_PLAYER_TEAM"
-                                    ? "STANDARD"
-                                    : current.eligibilityMode,
-                                combinedRatingCap:
-                                  event.target.value === "FOUR_PLAYER_TEAM"
-                                    ? ""
-                                    : current.combinedRatingCap
-                              }
-                            : current
-                        )
-                      }
-                    >
-                      <option value="STANDARD">Standard singles or doubles</option>
-                      <option value="FOUR_PLAYER_TEAM">
-                        Four players · two men and two women
-                      </option>
-                    </select>
-                  </label>
                   {configDraft?.competitionFormat === "FOUR_PLAYER_TEAM" ? (
                     <>
                       <label className={styles.field}>
@@ -679,6 +619,16 @@ export default function TeamTournamentAdminPanel({ clubId }: Props) {
                     </>
                   ) : null}
                 </div>
+                {configDraft ? (
+                  <p className={styles.notice}>
+                    <strong>Review:</strong>{" "}
+                    {eventFormat(configDraft) === "STANDARD"
+                      ? "Standard singles or doubles"
+                      : eventFormat(configDraft) === "COMBINED_RATING_CAP"
+                        ? `Combined-rating doubles · below ${configDraft.combinedRatingCap || "—"}`
+                        : `Four-player team · ${configDraft.allowSubstitutes ? "substitutes allowed" : "no substitutes"} · ${configDraft.tiebreakMode === "SKINNY_RELAY" ? "skinny-singles relay" : "one singles game"} · ${configDraft.playoffFormat.replaceAll("_", " ").toLowerCase()}`}
+                  </p>
+                ) : null}
                 <div className={styles.actions}>
                   <ConfirmAction
                     triggerLabel="Save event rules"

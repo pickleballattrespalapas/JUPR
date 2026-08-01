@@ -11,7 +11,6 @@ import {
   getAdminTournamentCommerceDetail,
   getAdminTournamentCommerceOperation,
   getAdminTournamentCommerceStatus,
-  listAdminTournamentCommerceTournaments,
   mutateAdminTournamentCommerce,
   TournamentCommerceBundle,
   TournamentCommerceBundleComponent,
@@ -21,10 +20,12 @@ import {
   TournamentCommerceVariant
 } from "@/lib/tournamentCommerceApi";
 import { useAuthenticatedAutoLoad } from "@/lib/useAuthenticatedAutoLoad";
-import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import { useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
   clubId: string;
+  tournamentId: string;
+  tournamentName: string;
 };
 
 type EditableCatalog = {
@@ -50,6 +51,8 @@ const cardStyle = {
 
 const inputStyle = {
   width: "100%",
+  minWidth: 0,
+  boxSizing: "border-box" as const,
   padding: "0.55rem",
   border: "1px solid #cbd5e1",
   borderRadius: "8px",
@@ -169,18 +172,18 @@ function operationStatusStyle(status: string) {
   return { color: "#92400e", background: "#fffbeb" };
 }
 
-export default function TournamentCommercePanel({ clubId }: Props) {
+export default function TournamentCommercePanel({
+  clubId,
+  tournamentId,
+  tournamentName
+}: Props) {
   const {
-    session,
     accessToken,
     loading: sessionLoading,
     message: sessionMessage
   } = useAdminSession();
   const [status, setStatus] = useState<Record<string, unknown> | null>(null);
-  const [tournaments, setTournaments] = useState<
-    Array<{ id: string; name: string; status?: string }>
-  >([]);
-  const [selectedTournamentId, setSelectedTournamentId] = useState("");
+  const [selectedTournamentId, setSelectedTournamentId] = useState(tournamentId);
   const [detail, setDetail] =
     useState<AdminTournamentCommerceDetail | null>(null);
   const [draft, setDraft] = useState<EditableCatalog | null>(null);
@@ -230,6 +233,15 @@ export default function TournamentCommercePanel({ clubId }: Props) {
     return grouped;
   }, [draft?.bundle_components]);
 
+  const savedItemIds = useMemo(
+    () => new Set((detail?.catalog.items || []).map((item) => item.id)),
+    [detail?.catalog.items]
+  );
+  const savedBundleIds = useMemo(
+    () => new Set((detail?.catalog.bundles || []).map((bundle) => bundle.id)),
+    [detail?.catalog.bundles]
+  );
+
   const eventLabels = useMemo(
     () =>
       new Map(
@@ -261,29 +273,18 @@ export default function TournamentCommercePanel({ clubId }: Props) {
     if (!accessToken) return;
     setBusy(true);
     setMessage(null);
-    const [statusResponse, tournamentsResponse] = await Promise.all([
-      getAdminTournamentCommerceStatus(clubId, accessToken),
-      listAdminTournamentCommerceTournaments(clubId, accessToken)
-    ]);
-    setBusy(false);
+    const statusResponse = await getAdminTournamentCommerceStatus(
+      clubId,
+      accessToken
+    );
     if (statusResponse.error) {
+      setBusy(false);
       setMessage(statusResponse.error);
       setStatus(null);
       return;
     }
     setStatus(statusResponse.data);
-    if (tournamentsResponse.error || !tournamentsResponse.data) {
-      setMessage(
-        tournamentsResponse.error || "Unable to load tournament choices."
-      );
-      return;
-    }
-    setTournaments(tournamentsResponse.data.tournaments || []);
-    setMessage(
-      tournamentsResponse.data.tournaments.length
-        ? "Tournament extras workspace is ready."
-        : "No tournaments are available."
-    );
+    await loadDetail(tournamentId);
   }
 
   async function loadDetail(tournamentId = selectedTournamentId) {
@@ -331,7 +332,7 @@ export default function TournamentCommercePanel({ clubId }: Props) {
         ])
       )
     );
-    setMessage(`Loaded ${response.data.tournament.name}.`);
+    setMessage(null);
   }
 
   function updateDraft(change: (next: EditableCatalog) => void) {
@@ -790,7 +791,7 @@ export default function TournamentCommercePanel({ clubId }: Props) {
     setMessage("Loaded authoritative recovery evidence.");
   }
 
-  useAuthenticatedAutoLoad(accessToken, loadWorkspace);
+  useAuthenticatedAutoLoad(`${accessToken}\u0000${tournamentId}`, loadWorkspace);
 
   if (!accessToken) {
     return (
@@ -807,59 +808,9 @@ export default function TournamentCommercePanel({ clubId }: Props) {
   }
 
   return (
-    <section style={{ display: "grid", gap: "1rem" }}>
-      <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Tournament extras workspace</h2>
-        <p style={{ color: "#475569" }}>
-          Catalogs, bundle savings, giveaways, offline payments, pickup, and
-          recovery are managed here.
-        </p>
-        <p>
-          <strong>Admin:</strong> {adminSessionLabel(session)}
-        </p>
-        <p
-          style={{
-            color: adminWriteReady ? "#166534" : "#92400e",
-            background: adminWriteReady ? "#f0fdf4" : "#fffbeb",
-            padding: "0.65rem",
-            borderRadius: "10px"
-          }}
-        >
-          {adminWriteReady
-            ? "Local catalog actions are available."
-            : "Reads are available. Catalog review and writes remain closed until the approved staging window is opened."}
-        </p>
-        <button
-          type="button"
-          onClick={loadWorkspace}
-          disabled={busy}
-          style={ghostButtonStyle}
-        >
-          {busy ? "Refreshing…" : "Refresh tournaments"}
-        </button>
-      </article>
+    <section data-commerce-form aria-label={`${tournamentName} payments, extras, and fulfillment`} style={{ display: "grid", gap: "1rem" }}>
+      <style>{`[data-commerce-form] label { min-width: 0; } [data-commerce-form] input, [data-commerce-form] select, [data-commerce-form] textarea, [data-commerce-form] button { box-sizing: border-box; max-width: 100%; } [data-commerce-form] summary { cursor: pointer; }`}</style>
 
-      {tournaments.length ? (
-        <article style={cardStyle}>
-          <label>
-            <strong>Tournament</strong>
-            <br />
-            <select
-              value={selectedTournamentId}
-              onChange={(event) => void loadDetail(event.target.value)}
-              disabled={busy}
-              style={inputStyle}
-            >
-              <option value="">Choose a tournament…</option>
-              {tournaments.map((tournament) => (
-                <option key={tournament.id} value={tournament.id}>
-                  {tournament.name} · {tournament.status || "unknown"}
-                </option>
-              ))}
-            </select>
-          </label>
-        </article>
-      ) : null}
 
       {detail && draft ? (
         <>
@@ -902,7 +853,12 @@ export default function TournamentCommercePanel({ clubId }: Props) {
               </article>
 
               {draft.items.map((item) => (
-                <article key={item.id} style={cardStyle}>
+                <details key={item.id} open={!savedItemIds.has(item.id)} style={cardStyle}>
+                  <summary style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+                    <span><strong>{item.name || "Untitled extra"}</strong><br /><small>{formatCommerceMoney(item.base_price_minor)} · {item.status} · {item.kind.toLowerCase()}</small></span>
+                    <span style={{ fontWeight: 800 }}>{savedItemIds.has(item.id) ? "Edit" : "New extra"}</span>
+                  </summary>
+                  <div style={{ marginTop: "1rem" }}>
                   <div
                     style={{
                       display: "flex",
@@ -967,11 +923,11 @@ export default function TournamentCommercePanel({ clubId }: Props) {
                       Base price (USD)
                       <br />
                       <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={(item.base_price_minor / 100).toFixed(2)}
-                        onChange={(event) =>
+                        key={`${item.id}-${detail?.catalog.catalog_revision || 0}-base-price`}
+                        type="text"
+                        inputMode="decimal"
+                        defaultValue={(item.base_price_minor / 100).toFixed(2)}
+                        onBlur={(event) =>
                           updateDraft((next) => {
                             next.items.find(
                               (row) => row.id === item.id
@@ -1202,10 +1158,11 @@ export default function TournamentCommercePanel({ clubId }: Props) {
                           Price change (USD)
                           <br />
                           <input
-                            type="number"
-                            step="0.01"
-                            value={(variant.price_delta_minor / 100).toFixed(2)}
-                            onChange={(event) =>
+                            key={`${variant.id}-${detail?.catalog.catalog_revision || 0}-price-delta`}
+                            type="text"
+                            inputMode="decimal"
+                            defaultValue={(variant.price_delta_minor / 100).toFixed(2)}
+                            onBlur={(event) =>
                               updateDraft((next) => {
                                 next.variants.find(
                                   (row) => row.id === variant.id
@@ -1276,7 +1233,8 @@ export default function TournamentCommercePanel({ clubId }: Props) {
                       Add option
                     </button>
                   </p>
-                </article>
+                </div>
+                </details>
               ))}
 
               <article style={cardStyle}>
@@ -1301,14 +1259,12 @@ export default function TournamentCommercePanel({ clubId }: Props) {
                 </div>
                 <div style={{ display: "grid", gap: "0.75rem" }}>
                   {draft.bundles.map((bundle) => (
-                    <section
-                      key={bundle.id}
-                      style={{
-                        border: "1px solid #e2e8f0",
-                        borderRadius: "12px",
-                        padding: "0.75rem"
-                      }}
-                    >
+                    <details key={bundle.id} open={!savedBundleIds.has(bundle.id)} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem" }}>
+                      <summary style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+                        <span><strong>{bundle.name || "Untitled bundle"}</strong><br /><small>{formatCommerceMoney(bundle.price_minor)} · {bundle.status} · {(componentsByBundle.get(bundle.id) || []).length} required parts</small></span>
+                        <span style={{ fontWeight: 800 }}>{savedBundleIds.has(bundle.id) ? "Edit" : "New bundle"}</span>
+                      </summary>
+                      <section style={{ marginTop: "1rem" }}>
                       <div
                         style={{
                           display: "grid",
@@ -1336,11 +1292,11 @@ export default function TournamentCommercePanel({ clubId }: Props) {
                           Bundle price (USD)
                           <br />
                           <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={(bundle.price_minor / 100).toFixed(2)}
-                            onChange={(event) =>
+                            key={`${bundle.id}-${detail?.catalog.catalog_revision || 0}-bundle-price`}
+                            type="text"
+                            inputMode="decimal"
+                            defaultValue={(bundle.price_minor / 100).toFixed(2)}
+                            onBlur={(event) =>
                               updateDraft((next) => {
                                 next.bundles.find(
                                   (row) => row.id === bundle.id
@@ -1519,6 +1475,7 @@ export default function TournamentCommercePanel({ clubId }: Props) {
                         Add an event or extra
                         <br />
                         <select
+                          key={`${bundle.id}-${draft.variants.length}-${draft.event_options.length}`}
                           defaultValue=""
                           onChange={(event) => {
                             addBundleComponent(bundle.id, event.target.value);
@@ -1563,6 +1520,7 @@ export default function TournamentCommercePanel({ clubId }: Props) {
                         </button>
                       </p>
                     </section>
+                    </details>
                   ))}
                 </div>
               </article>

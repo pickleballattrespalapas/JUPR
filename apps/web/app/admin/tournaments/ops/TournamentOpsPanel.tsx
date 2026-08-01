@@ -4,8 +4,6 @@ import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import type {
-  AdminTournament,
-  AdminTournamentListResponse,
   AdminTournamentOpsSnapshotResponse,
   AdminTournamentOpsTeam,
   AdminTournamentResultsImportPreviewResponse,
@@ -13,10 +11,10 @@ import type {
   AdminTournamentWriteResponse
 } from "@/lib/adminTournamentApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
-import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import { useAdminSession } from "@/lib/useAdminSession";
 
 export type OpsWorkflow = "all" | "draws" | "import" | "results" | "publish";
-type Props = { apiBase: string | null; clubId: string; status: AdminTournamentStatusResponse; workflow?: OpsWorkflow };
+type Props = { apiBase: string | null; clubId: string; status: AdminTournamentStatusResponse; workflow?: OpsWorkflow; initialTournamentId: string };
 type TeamEditorRow = { editor_key: string; team_number: string; player1_id: string; player2_id: string; seed: string; notes: string };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -88,11 +86,15 @@ function GenericRowsTable({ rows, preferredColumns }: { rows: Array<Record<strin
   );
 }
 
-export default function TournamentOpsPanel({ apiBase, clubId, status, workflow = "all" }: Props) {
-  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
-  const [includeArchived, setIncludeArchived] = useState(false);
-  const [tournaments, setTournaments] = useState<AdminTournament[]>([]);
-  const [selectedTournamentId, setSelectedTournamentId] = useState("");
+export default function TournamentOpsPanel({
+  apiBase,
+  clubId,
+  status,
+  workflow = "all",
+  initialTournamentId
+}: Props) {
+  const { accessToken } = useAdminSession();
+  const [selectedTournamentId, setSelectedTournamentId] = useState(initialTournamentId);
   const [selectedDrawId, setSelectedDrawId] = useState("");
   const [snapshot, setSnapshot] = useState<AdminTournamentOpsSnapshotResponse | null>(null);
   const [drawEventOptionId, setDrawEventOptionId] = useState("");
@@ -116,7 +118,6 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
   const [resultsReviewDirty, setResultsReviewDirty] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const listRequest = useLatestRequestGuard(accessToken, clearProtectedOpsState);
   const snapshotRequest = useLatestRequestGuard(accessToken);
   const actionRequest = useLatestRequestGuard(accessToken);
 
@@ -165,7 +166,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
   function clearProtectedOpsState() {
     snapshotRequest.invalidate();
     setBusy(false); setMessage(null);
-    setTournaments([]); setSelectedTournamentId(""); setSelectedDrawId(""); setSnapshot(null);
+    setSelectedTournamentId(initialTournamentId); setSelectedDrawId(""); setSnapshot(null);
     setDrawEventOptionId(""); setTeamRows(teamRowsFromTeams([], "")); setScoreGameId(""); setScoreA(""); setScoreB("");
     setResultsPreview(null); setResultsMappings({}); setResultsMatchReviews({}); setResultsPodiumRefs({}); setResultsReviewDirty(true);
   }
@@ -185,46 +186,6 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     setScoreGameId(firstGame ? String(firstGame.id || "") : "");
     setScoreA(firstGame?.score_a == null ? "" : String(firstGame.score_a));
     setScoreB(firstGame?.score_b == null ? "" : String(firstGame.score_b));
-  }
-
-  async function loadTournaments() {
-    const selectedTournamentBeforeRefresh = selectedTournamentId;
-    const selectedDrawBeforeRefresh = selectedDrawId;
-    const generation = listRequest.begin();
-    snapshotRequest.invalidate();
-    setBusy(true);
-    setMessage(null);
-    setSnapshot(null);
-    setResultsPreview(null);
-    try {
-      const suffix = includeArchived ? "?include_archived=true" : "";
-      const payload = await requestJson<AdminTournamentListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/ops/tournaments${suffix}`);
-      if (!listRequest.isCurrent(generation)) return;
-      const nextTournaments = payload.tournaments || [];
-      const selectionStillAvailable = Boolean(selectedTournamentBeforeRefresh && nextTournaments.some((row) => row.id === selectedTournamentBeforeRefresh));
-      setTournaments(nextTournaments);
-      setMessage(nextTournaments.length ? `Loaded ${payload.count ?? nextTournaments.length} tournament(s).` : "No tournaments match this view.");
-      if (selectionStillAvailable) {
-        const refreshedSnapshot = await loadOps(selectedTournamentBeforeRefresh, selectedDrawBeforeRefresh);
-        if (
-          selectedDrawBeforeRefresh
-          && refreshedSnapshot
-          && !refreshedSnapshot.draws.some((row) => row.id === selectedDrawBeforeRefresh)
-          && listRequest.isCurrent(generation)
-        ) {
-          setSelectedDrawId("");
-          await loadOps(selectedTournamentBeforeRefresh, "");
-        }
-      } else {
-        setSelectedTournamentId("");
-        setSelectedDrawId("");
-        setDrawEventOptionId("");
-      }
-    } catch (error) {
-      if (listRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
-    } finally {
-      if (listRequest.isCurrent(generation)) setBusy(false);
-    }
   }
 
   async function loadOps(
@@ -252,7 +213,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
       resetScoreEditor(payload);
       setResultsPreview(null);
       setResultsReviewDirty(true);
-      setMessage("Tournament operations snapshot loaded.");
+      setMessage(null);
       return payload;
     } catch (error) {
       if (snapshotRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load tournament operations.");
@@ -260,17 +221,6 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     } finally {
       if (snapshotRequest.isCurrent(generation)) setBusy(false);
     }
-  }
-
-  function selectTournament(tournamentId: string) {
-    setSelectedTournamentId(tournamentId);
-    setSelectedDrawId("");
-    setSnapshot(null);
-    setDrawEventOptionId("");
-    setResultsPreview(null);
-    setResultsReviewDirty(true);
-    if (tournamentId) void loadOps(tournamentId, "");
-    else snapshotRequest.invalidate();
   }
 
   function selectDraw(drawId: string) {
@@ -688,27 +638,26 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
     return id || "";
   }
 
-  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadTournaments, includeArchived ? "archived" : "active");
+  useAuthenticatedAutoLoad(
+    status.enabled ? `${accessToken}\u0000${initialTournamentId}` : "",
+    () => loadOps(initialTournamentId, "")
+  );
 
+
+  if (!accessToken) {
+    return (
+      <article style={{ ...cardStyle, background: "#fffbeb" }}>
+        <h2 style={{ marginTop: 0 }}>Admin sign-in required</h2>
+        <p><Link href="/admin/login">Open admin login</Link></p>
+      </article>
+    );
+  }
   if (!status.enabled) {
     return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Next Tournament Admin is disabled</h2><p style={{ color: "#475569" }}>{status.warnings?.[0] || "Enable the Tournament Admin pilot flag on FastAPI."}</p></article>;
   }
 
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
-      <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Tournament Ops</h2>
-        <p style={{ color: "#475569" }}>Operations visibility plus guarded writes for creating draws, importing or maintaining teams, generating/scoring games, podiums, trophies, and official rating match publication.</p>
-        <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
-          <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
-          <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to load guarded tournament operations data." : sessionLoading ? "Checking admin session…" : "Sign in before loading ops data."}</p>
-          {sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}
-          {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
-        </div>
-        <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.75rem" }}><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} disabled={busy} />Include archived tournaments</label>
-        <button type="button" onClick={loadTournaments} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh tournaments"}</button>
-      </article>
-
       {!operationsWriteReady ? (
         <article data-testid="tournament-ops-read-only-banner" style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
           <h2 style={{ marginTop: 0 }}>Tournament Ops is read-only</h2>
@@ -717,16 +666,6 @@ export default function TournamentOpsPanel({ apiBase, clubId, status, workflow =
           </p>
         </article>
       ) : null}
-
-      {tournaments.length ? (
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Select tournament</h2>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
-            <label><strong>Tournament</strong><br /><select value={selectedTournamentId} onChange={(event) => selectTournament(event.target.value)} disabled={busy} style={inputStyle}><option value="">Choose a tournament…</option>{tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name} · {tournament.status}</option>)}</select></label>
-            <button type="button" onClick={() => loadOps()} disabled={busy || !selectedTournamentId} style={ghostButtonStyle}>Retry snapshot</button>
-          </div>
-        </article>
-      ) : <article style={cardStyle}><p style={{ color: "#64748b" }}>{busy ? "Loading tournaments…" : "No tournaments match this view."}</p></article>}
 
       {operationsWriteReady && snapshot && shows("draws") ? (
         <article style={{ ...cardStyle, background: "#f8fafc" }}>
