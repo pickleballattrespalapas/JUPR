@@ -29,7 +29,7 @@ def test_tournament_ops_status_is_never_served_from_a_stale_next_cache() -> None
     assert "revalidate" not in api
 
 
-def test_tournament_ops_read_only_mode_hides_post_backed_controls_but_keeps_snapshots() -> None:
+def test_selected_tournament_ops_keeps_read_only_snapshots_and_hides_post_controls() -> None:
     panel = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
 
     assert 'data-testid="tournament-ops-read-only-banner"' in panel
@@ -49,24 +49,27 @@ def test_tournament_ops_read_only_mode_hides_post_backed_controls_but_keeps_snap
     assert "{operationsWriteReady ? <div" in results_section
     assert "Commit reviewed results" in results_section
 
+    assert "initialTournamentId: string" in panel
     assert "useAuthenticatedAutoLoad(" in panel
-    assert "Refresh tournaments" in panel
-    assert "selectTournament(event.target.value)" in panel
-    assert "if (tournamentId) void loadOps(tournamentId, \"\")" in panel
-    assert "Retry snapshot" in panel
+    assert "() => loadOps(initialTournamentId, \"\")" in panel
+    assert "Refresh tournaments" not in panel
+    assert "selectTournament(event.target.value)" not in panel
+    assert "loadTournaments" not in panel
+    assert "Reload selected draw" in panel
     assert ">Load tournaments<" not in panel
     assert "Load ops snapshot" not in panel
     for read_only_table in ("Draws", "Teams", "Games", "Podium"):
         assert f">{read_only_table}</h2><GenericRowsTable" in panel
 
 
-def test_tournament_ops_workflow_header_preserves_selected_tournament_context() -> None:
+def test_tournament_ops_workflow_header_preserves_phase_and_tournament_context() -> None:
     page = _read("apps/web/app/admin/tournaments/ops/TournamentOpsWorkflowPage.tsx")
 
     assert "tournamentId: string;" in page
-    assert "SelectedTournamentPanelScope" in page
+    assert "TournamentPhaseNav" in page
+    assert 'const phase = workflow === "results" || workflow === "publish" ? "publish" : "live";' in page
     assert "getAdminTournamentStatus" in page
     assert "Tournament Operations are unavailable" in page
     assert "TournamentOpsPanel" in page
-    assert "tournamentId={tournamentId}" in page
+    assert "initialTournamentId={tournamentId}" in page
     assert "operationsWriteReady" not in page

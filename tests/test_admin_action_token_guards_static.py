@@ -45,6 +45,10 @@ TOKEN_ACTIONS: dict[str, tuple[str, ...]] = {
         "saveRegistration",
         "saveSelection",
     ),
+    "apps/web/app/admin/tournaments/registration/registrants/[registrationId]/TournamentRegistrantEditPanel.tsx": (
+        "saveRegistration",
+        "saveSelection",
+    ),
     "apps/web/app/admin/tournaments/registrations/RegistrationManagementPanel.tsx": (
         "exportCsv",
         "previewBroadcast",

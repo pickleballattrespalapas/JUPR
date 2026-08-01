@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import SelectedTournamentPanelScope from "../SelectedTournamentPanelScope";
+import TournamentPhaseNav from "@/components/TournamentPhaseNav";
 import TournamentCommercePanel from "./TournamentCommercePanel";
 
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
@@ -16,15 +16,18 @@ export default function AdminTournamentCommercePage({ searchParams }: Props) {
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        Tournament Manager
+        Tournament Manager / Registration
       </p>
-      <h1 style={{ marginTop: 0 }}>{tournamentName || "Tournament"} extras and fulfillment</h1>
+      <h1 style={{ marginTop: 0 }}>{tournamentName || "Tournament"} payments, extras, and fulfillment</h1>
+      <TournamentPhaseNav phase="registration" />
       <p style={{ color: "#334155", maxWidth: "860px" }}>
         Configure extras and bundles, then track offline payment, pickup, fulfillment, and recovery without rewriting prior orders.
       </p>
-      <SelectedTournamentPanelScope tournamentId={tournamentId} tournamentName={tournamentName || null}>
-        <TournamentCommercePanel clubId="tres_palapas" />
-      </SelectedTournamentPanelScope>
+      <TournamentCommercePanel
+        clubId="tres_palapas"
+        tournamentId={tournamentId}
+        tournamentName={tournamentName || tournamentId}
+      />
     </section>
   );
 }

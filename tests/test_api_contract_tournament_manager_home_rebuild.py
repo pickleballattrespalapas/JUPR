@@ -23,39 +23,46 @@ def test_tournament_manager_landing_is_create_or_open_only() -> None:
     assert "Status</strong>" not in page
 
 
-def test_selected_tournament_home_exposes_scoped_modules() -> None:
+def test_selected_tournament_home_exposes_lifecycle_phases() -> None:
     page = read("app/admin/tournaments/tournament/page.tsx")
     panel = read("app/admin/tournaments/tournament/TournamentHomePanel.tsx")
 
     assert 'first(searchParams?.tournament)' in page
     assert 'redirect("/admin/tournaments")' in page
-    assert "Tournament tools" in panel
+    assert "Tournament workflow" in panel
+    assert "Next action" in panel
     for label in (
-        "Setup",
-        "Registrations",
-        "Reports",
-        "Extras & fulfillment",
-        "Ratings & team play",
-        "Operations",
-        "Results",
-        "Live runner",
-        "Official publish",
-        "Status & recovery",
+        'title: "Setup"',
+        'title: "Registration"',
+        'title: "Live Operations"',
+        'title: "Publish"',
     ):
         assert label in panel
+    assert "Results become official only through Publish" in panel
     assert "Delete draft" in panel
 
 
-def test_tournament_navigation_separates_manager_and_selected_context() -> None:
+def test_tournament_navigation_separates_manager_and_lifecycle_context() -> None:
     nav = read("components/TournamentAdminNav.tsx")
     assert 'label: "Tournament Manager Home"' in nav
     assert 'const hasTournament = Boolean(tournamentId)' in nav
-    assert 'const tournamentItems = hasTournament ? selectedItems' in nav
+    assert "const tournamentItems = hasTournament" in nav
     assert 'label: "Tournament Home"' in nav
-    assert 'label: "Registrations"' in nav
-    assert 'label: "Reports"' in nav
-    assert 'label: "Status & recovery"' in nav
-    assert '["/admin/tournaments/ops", "/admin/tournaments/ops/draws", "/admin/tournaments/ops/import"].includes(pathname)' in nav
+    assert 'label: "Setup"' in nav
+    assert 'label: "Registration"' in nav
+    assert 'label: "Live Operations"' in nav
+    assert 'label: "Publish"' in nav
+    for old_label in (
+        'label: "Bulk actions"',
+        'label: "Extras & fulfillment"',
+        'label: "Ratings & team play"',
+        'label: "Operations"',
+        'label: "Results"',
+        'label: "Live runner"',
+        'label: "Official publish"',
+        'label: "Status & recovery"',
+    ):
+        assert old_label not in nav
     assert "Tournament workspace" not in nav
     assert "Setup, registrations, event operations, and live play" not in nav
 
@@ -71,10 +78,20 @@ def test_selected_tournament_scope_removes_repeated_selection_and_preserves_link
     assert '"bulk registration actions"' in scope
     assert '"1. create tournament shell"' in scope
     assert '"2. select tournament"' in scope
+    assert "hasVisibleTransientText" in scope
+    assert "Loading {tournamentName" in scope
 
 
 def test_selected_tournament_module_pages_require_context() -> None:
     pages = (
+        "app/admin/tournaments/setup/page.tsx",
+        "app/admin/tournaments/registration/page.tsx",
+        "app/admin/tournaments/registration/registrants/page.tsx",
+        "app/admin/tournaments/registration/partners/page.tsx",
+        "app/admin/tournaments/live-operations/page.tsx",
+        "app/admin/tournaments/live-operations/check-in/page.tsx",
+        "app/admin/tournaments/publish/page.tsx",
+        "app/admin/tournaments/publish/closeout/page.tsx",
         "app/admin/tournaments/editor/page.tsx",
         "app/admin/tournaments/registrations/page.tsx",
         "app/admin/tournaments/bulk/page.tsx",
