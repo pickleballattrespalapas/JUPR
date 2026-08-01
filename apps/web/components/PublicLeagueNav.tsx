@@ -28,11 +28,12 @@ export function publicLeagueResultsHref(
   leagueName: string,
   section: Exclude<PublicLeagueModule, "home">
 ): string {
-  const query = new URLSearchParams({
-    league: safeLeagueName(leagueName)
-  });
-  if (section !== "overall") query.set("section", section);
-  return `/clubs/${clubSlug}/league-results?${query.toString()}`;
+  const routes: Record<Exclude<PublicLeagueModule, "home">, string> = {
+    overall: "standings",
+    weekly: "weekly-history",
+    player: "players"
+  };
+  return `${publicLeagueHomeHref(clubSlug, leagueName)}/${routes[section]}`;
 }
 
 export default function PublicLeagueNav({
