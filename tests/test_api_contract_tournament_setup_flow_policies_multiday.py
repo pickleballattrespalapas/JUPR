@@ -79,12 +79,14 @@ def test_policy_templates_and_weather_policy_are_required() -> None:
 def test_add_division_uses_dialog_instead_of_appending_hidden_row() -> None:
     panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
     dialog = read("app/admin/tournaments/setup/TournamentSetupDivisionDialog.tsx")
+    division_card = read("app/admin/tournaments/setup/TournamentSetupDivisionCard.tsx")
     assert "TournamentSetupDivisionDialog" in panel
     assert 'onClick={() => setDivisionDialogOpen(true)}' in panel
     assert 'role="dialog"' in dialog
     assert 'Add division' in dialog
     assert 'onConfirm(draft)' in dialog
     assert 'scrollIntoView' in panel
+    assert 'confirmationText=""' in division_card
 
 
 def test_event_and_division_schedules_support_multiple_days() -> None:
