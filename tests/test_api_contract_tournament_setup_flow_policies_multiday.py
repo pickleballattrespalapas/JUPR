@@ -78,3 +78,15 @@ def test_event_and_division_schedules_support_multiple_days() -> None:
     assert '"scheduled_day_ids"' in repo
     assert "scheduled_day_ids jsonb" in migration
     assert "registration_day_id remains the primary grouping day" in migration
+
+
+def test_multi_day_projection_preserves_existing_single_day_contracts() -> None:
+    builder = read("app/admin/tournament-setup/tournamentSetupBuilder.ts")
+    payload_tests = read("app/admin/tournament-setup/tournamentSetupBuilder.test.mjs")
+    assert 'Object.prototype.hasOwnProperty.call(projected, "scheduled_day_ids")' in builder
+    assert "scheduledDayIds.length > 1" in builder
+    assert "const inferredScheduledDays = events" in builder
+    assert "dayLabel(primaryDay)" in builder
+    assert 'assert.deepEqual(draft.scheduled_day_ids, ["day-1"]);' in payload_tests
+    assert 'scheduled_day_ids: ["day-friday"]' in payload_tests
+    assert 'scheduled_day_ids: ["day-saturday"]' in payload_tests
