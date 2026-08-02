@@ -127,3 +127,11 @@ def test_public_registration_displays_required_weather_policy() -> None:
     assert "scheduled_day_ids?: string[] | null" in public_api
     assert "settings?.weather_policy_markdown" in public_page
     assert ">Weather policy<" in public_page
+
+
+def test_public_services_project_weather_and_multi_day_fields() -> None:
+    registration_service = (ROOT / "jupr_app/services/public_tournament_registration_service.py").read_text()
+    roster_service = (ROOT / "jupr_app/services/public_tournament_roster_service.py").read_text()
+    for source in (registration_service, roster_service):
+        assert '"weather_policy_markdown"' in source
+        assert '"scheduled_day_ids"' in source
