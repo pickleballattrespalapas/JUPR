@@ -22,6 +22,7 @@ import {
   draftSignature,
   eventDayReference,
   eventDivisionName,
+  eventFamilyName,
   eventUsesLabelDayReference,
   issuesForPath,
   moveBuilderRow,
@@ -849,7 +850,6 @@ async function reviewImpact() {
   const states = setupState(basics, settings, configuration);
   const definition = stepDefinition(step);
   const issues = validateSetupConfiguration(configuration);
-  const familyNames = distinctFamilyNames(configuration);
   const registrationStatus = safeString(settings.registration_status || "draft");
   const settingsConfirmation =
     status?.confirmation_text?.settings || "SAVE SETUP";
@@ -1016,7 +1016,7 @@ function renderEvents() {
                     ) {
                       return division;
                     }
-                    let nextValue = {
+                    let nextValue: SetupRecord = {
                       ...division.value,
                       event_family_label: nextName,
                       event_family: nextName
