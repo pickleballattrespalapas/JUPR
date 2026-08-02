@@ -20,7 +20,7 @@ jobs:
           fetch-depth: 0
 
       - name: Apply Tournament Setup refinement
-        run: python scripts/tmp_tournament_setup_refine.py
+        run: PYTHONPATH=. python scripts/tmp_tournament_setup_refine.py
 
       - name: Run focused source and migration checks
         run: |
