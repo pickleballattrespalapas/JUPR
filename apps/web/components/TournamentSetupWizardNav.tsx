@@ -3,6 +3,7 @@ import Link from "next/link";
 export type TournamentSetupStep =
   | "basics"
   | "events"
+  | "divisions"
   | "registration-rules"
   | "pricing"
   | "schedule"
@@ -33,39 +34,46 @@ export const TOURNAMENT_SETUP_STEPS: Array<{
     number: 1,
     label: "Tournament basics",
     shortLabel: "Basics",
-    description: "Name and tournament dates."
+    description: "Identity, dates, location, timezone, and sponsors."
   },
   {
     key: "events",
     number: 2,
-    label: "Events and formats",
+    label: "Events",
     shortLabel: "Events",
-    description: "Divisions, eligibility, formats, scoring, and capacity."
+    description: "Create event families, assign days, and set defaults."
+  },
+  {
+    key: "divisions",
+    number: 3,
+    label: "Divisions",
+    shortLabel: "Divisions",
+    description: "Create skill and age divisions inside each event."
   },
   {
     key: "registration-rules",
-    number: 3,
+    number: 4,
     label: "Registration rules",
     shortLabel: "Rules",
-    description: "Registration window, waitlist, Partner Board, and policies."
+    description: "Tournament-wide registration window, waitlist, Partner Board, and policies."
   },
   {
     key: "pricing",
-    number: 4,
+    number: 5,
     label: "Pricing, extras, and fulfillment",
     shortLabel: "Pricing",
     description: "Entry fees, merchandise, bundles, inventory, and pickup."
   },
   {
     key: "schedule",
-    number: 5,
+    number: 6,
     label: "Schedule and courts",
     shortLabel: "Schedule",
-    description: "Tournament days and event-day assignments."
+    description: "Tournament days and division-day assignments."
   },
   {
     key: "review",
-    number: 6,
+    number: 7,
     label: "Review and open registration",
     shortLabel: "Review",
     description: "Resolve warnings, publish setup, and open registration."
