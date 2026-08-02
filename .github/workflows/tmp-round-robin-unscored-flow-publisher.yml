@@ -1,16 +1,16 @@
 name: Temporary Round-Robin unscored flow publisher
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/round-robin-unscored-flow
+      - staging
 
 permissions:
   contents: write
 
 jobs:
   publish:
-    if: github.actor != 'github-actions[bot]'
+    if: github.head_ref == 'agent/round-robin-unscored-flow'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
