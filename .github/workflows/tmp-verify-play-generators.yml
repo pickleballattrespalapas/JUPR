@@ -1,0 +1,174 @@
+name: Temporary Round-Robin and Ladder Generator verification
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify-generators:
+    if: github.head_ref == 'agent/round-robin-ladder-generators'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      PYTHONPATH: .
+      NEXT_PUBLIC_JUPR_API_BASE_URL: http://localhost:8000
+      JUPR_API_BASE_URL: http://localhost:8000
+      NEXT_PUBLIC_JUPR_WEB_BASE_URL: https://pickleballclubsandwich.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/round-robin-ladder-generators
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Compile generator backend
+        run: |
+          python -m compileall -q \
+            jupr_app/domain/adaptive_play_engine.py \
+            jupr_app/services/admin_play_generator_service.py \
+            services/api/admin_play_generator_routes.py
+
+      - name: Stress arbitrary roster sizes and adaptive operations
+        run: |
+          python - <<'PY'
+          from jupr_app.domain.adaptive_play_engine import (
+              advance_generator_event,
+              create_generator_preview,
+              mutate_generator_roster,
+              save_generator_round,
+              skip_generator_round,
+              start_generator_event,
+          )
+
+          def matches(round_row):
+              return list(round_row.get('matches') or []) or [
+                  match
+                  for court in round_row.get('courts') or []
+                  for match in court.get('matches') or []
+              ]
+
+          for play_format, minimum in [('singles', 2), ('doubles', 4)]:
+              for count in range(minimum, 41):
+                  names = [f'P{index}' for index in range(1, count + 1)]
+                  for courts in (0, 1, 2, 5, 20):
+                      rr = create_generator_preview(
+                          generator_kind='round_robin',
+                          play_format=play_format,
+                          title='Stress RR',
+                          participant_names=names,
+                          total_rounds=4,
+                          court_count=courts,
+                      )
+                      assert len(rr['rounds']) == 4
+                      for round_row in rr['rounds']:
+                          used = []
+                          expected_side = 1 if play_format == 'singles' else 2
+                          for match in matches(round_row):
+                              assert len(match['sideA']) == expected_side
+                              assert len(match['sideB']) == expected_side
+                              assert not set(match['sideA']).intersection(match['sideB'])
+                              used.extend(match['sideA'] + match['sideB'])
+                          assert len(used) == len(set(used))
+
+                  ladder = create_generator_preview(
+                      generator_kind='ladder',
+                      play_format=play_format,
+                      title='Stress Ladder',
+                      participant_names=names,
+                      total_rounds=3,
+                      court_count=0,
+                  )
+                  assert len(ladder['rounds']) == 1
+
+          rr = start_generator_event(create_generator_preview(
+              generator_kind='round_robin', play_format='singles', title='Adaptive',
+              participant_names=['A', 'B', 'C', 'D', 'E'], total_rounds=4, court_count=2,
+          ))
+          first = rr['rounds'][0]
+          rr = save_generator_round(rr, round_number=1, scores=[
+              {'match_id': match['id'], 'score_a': 11, 'score_b': 7}
+              for match in matches(first)
+          ])
+          rr = advance_generator_event(rr)
+          saved = rr['rounds'][0]
+          rr = mutate_generator_roster(rr, action='add', name='F')
+          rr = mutate_generator_roster(rr, action='substitute', participant_id='p-1', name='Sub', substitute_scope='round')
+          rr = mutate_generator_roster(rr, action='remove', participant_id='p-2')
+          assert rr['rounds'][0] == saved
+          rr = skip_generator_round(rr, round_number=2, reason='Acceptance skip')
+          rr = advance_generator_event(rr)
+          assert rr['currentRoundNumber'] == 3
+          print('adaptive generator stress passed')
+          PY
+
+      - name: Run focused backend and compatibility tests
+        run: |
+          python -m pytest -q \
+            tests/test_adaptive_play_engine.py \
+            tests/test_admin_play_generator_service.py \
+            tests/test_api_contract_play_generators.py \
+            tests/test_live_beta_engine.py \
+            tests/test_api_contract_admin_jupr_live.py \
+            tests/test_api_contract_admin_jupr_live_full.py \
+            tests/test_api_contract_admin_jupr_live_league.py \
+            tests/test_api_live_sessions_contract.py \
+            tests/test_public_live_write_service.py \
+            tests/test_production_deployment_hardening.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify one-page PDF dependency
+        working-directory: apps/web
+        run: |
+          node --input-type=module - <<'JS'
+          import { jsPDF } from 'jspdf';
+          const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+          doc.text('Round-Robin Generator paper schedule', 24, 24);
+          const bytes = Buffer.from(doc.output('arraybuffer'));
+          if (bytes.subarray(0, 4).toString() !== '%PDF') throw new Error('PDF output invalid');
+          if (doc.getNumberOfPages() !== 1) throw new Error('Schedule PDF must be one page');
+          console.log(`PDF smoke passed: ${bytes.length} bytes`);
+          JS
+
+      - name: Run component checks
+        working-directory: apps/web
+        run: npm run test:component
+
+      - name: Build Next app
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Verify visible module names and routes
+        run: |
+          test -f apps/web/app/admin/round-robin-generator/page.tsx
+          test -f apps/web/app/admin/ladder-generator/page.tsx
+          test -f apps/web/app/admin/round-robin-generator/sessions/'[sessionKey]'/rounds/'[roundNumber]'/page.tsx
+          test -f apps/web/app/admin/ladder-generator/sessions/'[sessionKey]'/rounds/'[roundNumber]'/page.tsx
+          grep -q 'Round-Robin Generator' apps/web/components/AdminShell.tsx
+          grep -q 'Ladder Generator' apps/web/components/AdminShell.tsx
+          grep -q 'redirect("/admin/round-robin-generator")' apps/web/app/admin/jupr-live/page.tsx
+          grep -q 'Download one-sheet PDF' apps/web/app/admin/play-generators/GeneratorWorkspace.tsx
+          grep -q 'Skip round' apps/web/app/admin/play-generators/GeneratorRoundRunner.tsx
+          grep -q 'Substitute player' apps/web/app/admin/play-generators/GeneratorRoundRunner.tsx
+          grep -q 'Only Round 1 is shown' apps/web/app/admin/play-generators/GeneratorWorkspace.tsx
+          git diff --check
