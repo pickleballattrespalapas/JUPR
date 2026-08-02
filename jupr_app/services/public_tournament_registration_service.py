@@ -346,6 +346,7 @@ def _public_settings(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "partner_board_enabled": _safe_bool(row.get("partner_board_enabled")),
         "rules_markdown": _clean_text(row.get("rules_markdown"), limit=4000),
         "refund_policy_markdown": _clean_text(row.get("refund_policy_markdown"), limit=4000),
+        "weather_policy_markdown": _clean_text(row.get("weather_policy_markdown"), limit=4000),
         "sponsor_markdown": _clean_text(row.get("sponsor_markdown"), limit=4000),
     }
 
@@ -367,6 +368,16 @@ def _public_event(row: dict[str, Any], *, registration_open: bool) -> dict[str, 
     return {
         "id": str(row.get("id") or ""),
         "registration_day_id": str(row.get("registration_day_id") or ""),
+        "scheduled_day_ids": [
+            _clean_text(value, limit=160)
+            for value in (
+                row.get("scheduled_day_ids")
+                if isinstance(row.get("scheduled_day_ids"), list)
+                else []
+            )
+            if _clean_text(value, limit=160)
+        ]
+        or [str(row.get("registration_day_id") or "")],
         "label": _clean_text(row.get("label") or row.get("division_name") or "Division", limit=160),
         "event_family_label": _clean_text(row.get("event_family_label") or row.get("label") or "Event", limit=160),
         "division_name": _clean_text(row.get("division_name") or row.get("label") or "Division", limit=160),

@@ -243,6 +243,7 @@ def fake_storage():
                 "partner_board_enabled": True,
                 "rules_markdown": "Be kind.",
                 "refund_policy_markdown": "No refunds after draw publication.",
+                "weather_policy_markdown": "Unsafe conditions may delay or reschedule play.",
                 "sponsor_markdown": "Presented by Rally House.",
                 "builder_draft_json": {"private": True},
                 "builder_draft_updated_at": "2026-01-01T00:00:00Z",
@@ -256,6 +257,7 @@ def fake_storage():
                 "id": "event1",
                 "tournament_id": "t1",
                 "registration_day_id": "day1",
+                "scheduled_day_ids": ["day1", "day2"],
                 "sort_order": 1,
                 "label": "Open Doubles",
                 "event_family_label": "Doubles",
@@ -302,6 +304,8 @@ def test_public_tournament_registration_page_is_public_safe() -> None:
     assert "internal_seed_notes" not in payload["events"][0]
     assert "builder_draft_json" not in payload["settings"]
     assert payload["settings"]["sponsor_markdown"] == "Presented by Rally House."
+    assert payload["settings"]["weather_policy_markdown"] == "Unsafe conditions may delay or reschedule play."
+    assert payload["events"][0]["scheduled_day_ids"] == ["day1", "day2"]
 
 
 def test_public_profile_resolution_returns_safe_suggestion_without_linking_policy() -> None:

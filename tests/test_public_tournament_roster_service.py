@@ -41,6 +41,8 @@ def test_public_tournament_roster_page_is_public_safe_after_registration() -> No
     assert payload["summary"]["total_players"] == 1
     assert payload["settings"]["registration_open_at"] == "2026-07-01T14:00:00Z"
     assert payload["settings"]["registration_close_at"] == "2026-08-25T23:00:00Z"
+    assert payload["settings"]["weather_policy_markdown"] == "Unsafe conditions may delay or reschedule play."
+    assert payload["events"][0]["scheduled_day_ids"] == ["day1", "day2"]
     roster_rows = payload["roster"]["registrations_by_event"]
     assert roster_rows[0]["event_family"] == "Doubles"
     assert roster_rows[0]["division"] == "Open"
