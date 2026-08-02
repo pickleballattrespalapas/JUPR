@@ -116,3 +116,12 @@ def test_multi_day_projection_preserves_existing_single_day_contracts() -> None:
     assert 'assert.deepEqual(draft.scheduled_day_ids, ["day-1"]);' in payload_tests
     assert 'scheduled_day_ids: ["day-friday"]' in payload_tests
     assert 'scheduled_day_ids: ["day-saturday"]' in payload_tests
+
+
+def test_public_registration_displays_required_weather_policy() -> None:
+    public_api = read("lib/tournamentRegistrationApi.ts")
+    public_page = read("app/clubs/[clubSlug]/tournament-registration/page.tsx")
+    assert "weather_policy_markdown?: string | null" in public_api
+    assert "scheduled_day_ids?: string[] | null" in public_api
+    assert "settings?.weather_policy_markdown" in public_page
+    assert ">Weather policy<" in public_page

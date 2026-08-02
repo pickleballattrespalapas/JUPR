@@ -207,6 +207,13 @@ export default async function TournamentRegistrationPage({
         </article>
       ) : null}
 
+      {tournament && settings?.weather_policy_markdown ? (
+        <article style={{ ...cardStyle, marginBottom: "1rem" }}>
+          <h2 style={{ marginTop: 0 }}>Weather policy</h2>
+          {markdownish(settings.weather_policy_markdown)}
+        </article>
+      ) : null}
+
       {tournament ? (
         <article
           style={{

@@ -5,9 +5,7 @@ import { ConfirmAction } from "@/components/ConfirmAction";
 import {
   AGE_MODES,
   SKILL_LABEL_OPTIONS,
-  ageRuleText,
   ageRuleValue,
-  clearIncompatibleAgeRuleFields,
   cleanString,
   dayLabel,
   dayReference,
@@ -16,15 +14,11 @@ import {
   eventDivisionName,
   eventFamilyDefaults,
   eventFamilyName,
-  finiteNumber,
   numberInputValue,
   recordBoolean,
   setAgeRuleNumber,
   setEventAgeMode,
   setEventDayReferences,
-  setEventDivisionName,
-  setEventSkillLabel,
-  setRecordBoolean,
   setRecordNumber,
   setRecordString,
   type BuilderRow,
@@ -54,6 +48,63 @@ function optionLabel(value: string): string {
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function setRecordBoolean(
+  value: SetupRecord,
+  key: string,
+  checked: boolean
+): SetupRecord {
+  return { ...value, [key]: checked };
+}
+
+function setEventDivisionName(value: SetupRecord, name: string): SetupRecord {
+  const next: SetupRecord = { ...value };
+  if (
+    Object.prototype.hasOwnProperty.call(value, "division_name") ||
+    !Object.prototype.hasOwnProperty.call(value, "label")
+  ) {
+    next.division_name = name;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "label")) {
+    next.label = name;
+  }
+  return next;
+}
+
+function setEventSkillLabel(value: SetupRecord, skill: string): SetupRecord {
+  const next: SetupRecord = { ...value, skill_label: skill };
+  if (
+    Object.prototype.hasOwnProperty.call(value, "skill_mode") ||
+    Object.prototype.hasOwnProperty.call(value, "event_type")
+  ) {
+    next.skill_mode = skill.trim().toLowerCase() === "open"
+      ? "OPEN"
+      : "SKILL_BRACKET";
+  }
+  return next;
+}
+
+function ageRuleText(value: SetupRecord, key: string): string {
+  const direct = key === "notes"
+    ? value.division_notes ?? value.notes
+    : value[key];
+  if (direct != null && String(direct).trim()) return cleanString(direct);
+  const raw = value.age_rules;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return cleanString((raw as SetupRecord)[key]);
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return cleanString((parsed as SetupRecord)[key]);
+      }
+    } catch {
+      return "";
+    }
+  }
+  return "";
 }
 
 function effectiveParticipantType(value: SetupRecord, eventFamilies: BuilderRow[]): string {
@@ -260,6 +311,7 @@ export default function TournamentSetupDivisionCard({
           title={`Remove ${name || `division ${position + 1}`}?`}
           description="This removes the division from the setup draft. Published tournament data does not change until final review."
           confirmLabel="Yes, remove division"
+          confirmationText=""
           disabled={disabled}
           onConfirm={() => onRemove()}
         />
@@ -611,13 +663,10 @@ export default function TournamentSetupDivisionCard({
             disabled={disabled}
             onChange={(event) =>
               onChange(
-                clearIncompatibleAgeRuleFields(
-                  setRecordString(
-                    value,
-                    ["event_format_override", "division_format"],
-                    event.target.value
-                  ),
-                  ageMode
+                setRecordString(
+                  value,
+                  ["event_format_override", "division_format"],
+                  event.target.value
                 )
               )
             }
