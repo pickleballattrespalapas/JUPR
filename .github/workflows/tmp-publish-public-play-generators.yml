@@ -31,6 +31,21 @@ jobs:
       - name: Apply public generator mirror
         run: python scripts/tmp_public_play_generator_mirror.py
 
+      - name: Fix generated JSX text
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner.tsx")
+          text = path.read_text()
+          old = "The organizer's private link enables scores and roster changes."
+          new = "The private organizer link enables scores and roster changes."
+          if text.count(old) != 1:
+              raise SystemExit(f"organizer-copy match count={text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
