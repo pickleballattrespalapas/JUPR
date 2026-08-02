@@ -30,7 +30,7 @@ export default async function PublicGeneratorPage({ params }: Props) {
       <p style={{ color: "#475569", maxWidth: "900px" }}>
         Public sessions are unrated. Keep the organizer link private; share the clean page URL as the view-only scoreboard.
       </p>
-      <PublicGeneratorWorkspace generatorKind="round_robin" apiBase="/api" clubId={params.clubSlug} status={status} />
+      <PublicGeneratorWorkspace generatorKind="round_robin" apiBase={serverApiBase()} clubId={params.clubSlug} status={status} />
     </section>
   );
 }
