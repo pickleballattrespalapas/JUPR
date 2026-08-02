@@ -177,6 +177,10 @@ function roundPath(kind: GeneratorKind, sessionKey: string, round: number): stri
   return `/admin/${generatorSlug(kind)}/sessions/${encodeURIComponent(sessionKey)}/rounds/${round}`;
 }
 
+function standingsPath(sessionKey: string): string {
+  return `/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/standings`;
+}
+
 function roundStandings(
   round: RoundRow,
   participants: Map<string, Participant>
@@ -601,6 +605,11 @@ export default function GeneratorRoundRunner({
             ) : null}
           </div>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            {generatorKind === "round_robin" ? (
+              <Link href={standingsPath(sessionKey)} style={secondaryButton}>
+                Standings
+              </Link>
+            ) : null}
             {previousRound ? (
               <Link href={roundPath(generatorKind, sessionKey, previousRound)} style={secondaryButton}>
                 Previous round
@@ -716,7 +725,12 @@ export default function GeneratorRoundRunner({
 
         {round.status === "saved" ? (
           <section style={{ marginTop: "1rem", borderTop: "1px solid #e2e8f0", paddingTop: "1rem" }}>
-            <h3>Round {roundNumber} results</h3>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+              <h3 style={{ margin: 0 }}>Round {roundNumber} results</h3>
+              {generatorKind === "round_robin" ? (
+                <Link href={standingsPath(sessionKey)} style={secondaryButton}>View full standings</Link>
+              ) : null}
+            </div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>

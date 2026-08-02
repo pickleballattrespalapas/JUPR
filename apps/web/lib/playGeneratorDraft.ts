@@ -2,6 +2,7 @@ export type StoredPlayGeneratorDraft<TPreview> = {
   version: 1;
   title: string;
   playFormat: "singles" | "doubles";
+  standingsSort?: "wins" | "points" | "differential";
   targetCount: number;
   participantText: string;
   linkedPlayerIds: Record<string, number>;

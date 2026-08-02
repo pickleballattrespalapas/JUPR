@@ -18,6 +18,21 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+
+STANDINGS_SORTS = {"wins", "points", "differential"}
+
+
+def normalize_standings_sort(value: Any) -> str:
+    mode = str(value or "wins").strip().lower().replace("-", "_")
+    aliases = {
+        "total_wins": "wins",
+        "total_points": "points",
+        "point_differential": "differential",
+        "diff": "differential",
+    }
+    mode = aliases.get(mode, mode)
+    return mode if mode in STANDINGS_SORTS else "wins"
+
 def _clean_name(value: Any) -> str:
     return " ".join(str(value or "").replace("\u00a0", " ").split()).strip()[:160]
 
@@ -545,6 +560,7 @@ def create_generator_preview(
     player_ids: list[int] | None = None,
     total_rounds: int = 3,
     court_count: int = 0,
+    standings_sort: str = "wins",
 ) -> dict[str, Any]:
     kind = str(generator_kind or "").strip().lower().replace("-", "_")
     if kind not in {"round_robin", "ladder"}:
@@ -590,6 +606,7 @@ def create_generator_preview(
         "type": "round_robin" if kind == "round_robin" else "league",
         "generatorKind": kind,
         "playFormat": fmt,
+        "standingsSort": normalize_standings_sort(standings_sort),
         "status": "preview",
         "participants": participants,
         "totalRounds": max(1, min(int(total_rounds or 1), 50)),
@@ -618,6 +635,7 @@ def create_generator_preview(
                 "ids": ids,
                 "rounds": event["totalRounds"],
                 "courts": event["courtCount"],
+                "standings_sort": event["standingsSort"],
                 "schedule": event["rounds"],
             },
             sort_keys=True,
@@ -743,6 +761,104 @@ def _round_standings(event: dict[str, Any], round_row: dict[str, Any], participa
     rows.sort(key=lambda row: (-row["wins"], -row["differential"], -row["pointsFor"], row["name"].lower()))
     for idx,row in enumerate(rows,1): row["rank"]=idx
     return rows
+
+
+def generator_event_standings(event: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return complete saved-round standings using the event's selected primary sort.
+
+    Every participant remains visible, including players who joined late, withdrew,
+    substituted, or have not yet completed a game. Skipped and unsaved rounds do
+    not affect the table.
+    """
+    participants = _participant_map(event)
+    stats: dict[str, dict[str, Any]] = {}
+    for participant in event.get("participants") or []:
+        pid = str(participant.get("id") or "")
+        if not pid:
+            continue
+        stats[pid] = {
+            "participantId": pid,
+            "name": str(participant.get("name") or pid),
+            "matches": 0,
+            "wins": 0,
+            "losses": 0,
+            "pointsFor": 0,
+            "pointsAgainst": 0,
+            "differential": 0,
+            "rosterOrder": int(participant.get("roster_order") or 9999),
+        }
+
+    for round_row in event.get("rounds") or []:
+        if str(round_row.get("status") or "") != "saved":
+            continue
+        for match in _round_matches(round_row):
+            if match.get("scoreA") is None or match.get("scoreB") is None:
+                continue
+            score_a = int(match.get("scoreA") or 0)
+            score_b = int(match.get("scoreB") or 0)
+            side_a = [str(value) for value in match.get("sideA") or match.get("teamA") or []]
+            side_b = [str(value) for value in match.get("sideB") or match.get("teamB") or []]
+            for pid, points_for, points_against in [
+                *((pid, score_a, score_b) for pid in side_a),
+                *((pid, score_b, score_a) for pid in side_b),
+            ]:
+                row = stats.get(pid)
+                if row is None:
+                    participant = participants.get(pid, {})
+                    row = {
+                        "participantId": pid,
+                        "name": str(participant.get("name") or pid),
+                        "matches": 0,
+                        "wins": 0,
+                        "losses": 0,
+                        "pointsFor": 0,
+                        "pointsAgainst": 0,
+                        "differential": 0,
+                        "rosterOrder": int(participant.get("roster_order") or 9999),
+                    }
+                    stats[pid] = row
+                row["matches"] += 1
+                row["pointsFor"] += points_for
+                row["pointsAgainst"] += points_against
+                row["differential"] += points_for - points_against
+                row["wins" if points_for > points_against else "losses"] += 1
+
+    mode = normalize_standings_sort(event.get("standingsSort"))
+
+    def sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
+        common_tail = (
+            int(row.get("losses") or 0),
+            int(row.get("rosterOrder") or 9999),
+            str(row.get("name") or "").casefold(),
+            str(row.get("participantId") or ""),
+        )
+        if mode == "points":
+            return (
+                -int(row.get("pointsFor") or 0),
+                -int(row.get("wins") or 0),
+                -int(row.get("differential") or 0),
+                *common_tail,
+            )
+        if mode == "differential":
+            return (
+                -int(row.get("differential") or 0),
+                -int(row.get("wins") or 0),
+                -int(row.get("pointsFor") or 0),
+                *common_tail,
+            )
+        return (
+            -int(row.get("wins") or 0),
+            -int(row.get("differential") or 0),
+            -int(row.get("pointsFor") or 0),
+            *common_tail,
+        )
+
+    rows = sorted(stats.values(), key=sort_key)
+    for rank, row in enumerate(rows, start=1):
+        row["rank"] = rank
+        row["standingsSort"] = mode
+    return rows
+
 
 def _ladder_next_order(event: dict[str, Any], round_row: dict[str, Any], next_round: int) -> list[str]:
     active_next = active_participant_ids(event, next_round)
