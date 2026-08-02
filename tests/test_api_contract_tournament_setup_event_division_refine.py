@@ -33,6 +33,14 @@ def test_basics_has_location_timezone_sponsors_and_no_save_confirmation() -> Non
     assert "void saveBasics()" in basics
 
 
+def test_routine_save_and_continue_actions_do_not_require_confirmation_dialogs() -> None:
+    panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+    assert "Save registration rules?" not in panel
+    assert "Save the tournament schedule?" not in panel
+    assert 'onClick={() => void saveRegistrationRules()}' in panel
+    assert 'onClick={() => void saveDraftAndContinue("review")}' in panel
+
+
 def test_divisions_do_not_expose_registration_status() -> None:
     division = read("app/admin/tournaments/setup/TournamentSetupDivisionCard.tsx")
     rules = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
