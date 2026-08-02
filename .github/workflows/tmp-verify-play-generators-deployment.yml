@@ -38,23 +38,16 @@ jobs:
           for attempt in $(seq 1 120); do
             web_ok=0
             fly_ok=0
-            if curl -fsS --max-time 20 \
-              -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" \
-              "$EXPECTED_VERCEL_ORIGIN/api/environment" \
-              -o evidence/vercel-environment.json; then
+            if curl -fsS --max-time 20 -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" "$EXPECTED_VERCEL_ORIGIN/api/environment" -o evidence/vercel-environment.json; then
               web_sha="$(jq -r '.git_commit_sha // empty' evidence/vercel-environment.json)"
               web_id="$(jq -r '.vercel_deployment_id // empty' evidence/vercel-environment.json)"
               web_origin="$(jq -r '.vercel_deployment_origin // empty' evidence/vercel-environment.json)"
-              if [ "$web_sha" = "$EXPECTED_SHA" ] && [ "$web_id" = "$EXPECTED_VERCEL_DEPLOYMENT_ID" ] && [ "$web_origin" = "$EXPECTED_VERCEL_ORIGIN" ]; then
-                web_ok=1
-              fi
+              if [ "$web_sha" = "$EXPECTED_SHA" ] && [ "$web_id" = "$EXPECTED_VERCEL_DEPLOYMENT_ID" ] && [ "$web_origin" = "$EXPECTED_VERCEL_ORIGIN" ]; then web_ok=1; fi
             fi
             if curl -fsS --max-time 20 "$FLY_HEALTH_URL" -o evidence/fly-health.json; then
               fly_sha="$(jq -r '.git_commit_sha // .source_commit_sha // .commit_sha // empty' evidence/fly-health.json)"
               image_sha="$(jq -r '.image_build_git_sha // .image_git_sha // empty' evidence/fly-health.json)"
-              if [ "$fly_sha" = "$EXPECTED_SHA" ] && { [ -z "$image_sha" ] || [ "$image_sha" = "$EXPECTED_SHA" ]; }; then
-                fly_ok=1
-              fi
+              if [ "$fly_sha" = "$EXPECTED_SHA" ] && { [ -z "$image_sha" ] || [ "$image_sha" = "$EXPECTED_SHA" ]; }; then fly_ok=1; fi
             fi
             echo "attempt=$attempt web_ok=$web_ok fly_ok=$fly_ok"
             if [ "$web_ok" -eq 1 ] && [ "$fly_ok" -eq 1 ]; then break; fi
@@ -73,9 +66,7 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-
           payload = json.loads(Path('evidence/fly-health.json').read_text())
-
           def find(value, key):
               if isinstance(value, dict):
                   if key in value:
@@ -90,7 +81,6 @@ jobs:
                       if found is not None:
                           return found
               return None
-
           observed = {
               'environment': find(payload, 'environment'),
               'fly_app': find(payload, 'fly_app_name'),
@@ -115,7 +105,6 @@ jobs:
           }
           mismatches = {key: {'expected': expected[key], 'actual': observed.get(key)} for key in expected if observed.get(key) != expected[key]}
           Path('evidence/safety-contract.json').write_text(json.dumps(observed, indent=2, sort_keys=True) + '\n')
-          print(json.dumps(observed, indent=2, sort_keys=True))
           if mismatches:
               raise SystemExit('Safety mismatch: ' + json.dumps(mismatches, sort_keys=True))
           PY
@@ -129,7 +118,7 @@ jobs:
           curl -fsS --max-time 20 "$MATCH_UPLOADER_STATUS_URL" -o evidence/match-uploader-status.json
           jq -e '(.enabled == true) and (.singles_write_enabled == true) and ((.status // "") != "guarded_off")' evidence/match-uploader-status.json
 
-      - name: Verify canonical module routes and legacy redirect
+      - name: Verify canonical module routes
         shell: bash
         run: |
           set -euo pipefail
@@ -147,15 +136,9 @@ jobs:
             echo "$path $status" | tee -a evidence/routes.txt
             test "$status" = "200"
           done
-          legacy_headers="$(curl -sS --max-time 30 -D - -o /dev/null "${headers[@]}" "$CANONICAL_URL/admin/jupr-live" | tr -d '\r')"
-          printf '%s\n' "$legacy_headers" > evidence/legacy-redirect.txt
-          echo "$legacy_headers" | grep -q '^HTTP/.* 307'
-          echo "$legacy_headers" | grep -qi '^location: /admin/round-robin-generator'
           grep -q 'Round-Robin Generator' evidence/route-_admin_round-robin-generator.html
           grep -q 'Ladder Generator' evidence/route-_admin_ladder-generator.html
-          if grep -q 'JUPR Live Admin' evidence/route-_admin_round-robin-generator.html; then
-            exit 1
-          fi
+          if grep -q 'JUPR Live Admin' evidence/route-_admin_round-robin-generator.html; then exit 1; fi
 
       - name: Verify deployed source contracts and scheduling engine
         shell: bash
@@ -163,21 +146,16 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from jupr_app.domain.adaptive_play_engine import advance_generator_event, create_generator_preview, mutate_generator_roster, save_generator_round, skip_generator_round, start_generator_event
-
           def matches(round_row):
               return list(round_row.get('matches') or []) or [match for court in round_row.get('courts') or [] for match in court.get('matches') or []]
-
           rr = create_generator_preview(generator_kind='round_robin', play_format='singles', title='Verifier Singles', participant_names=['A', 'B', 'C', 'D', 'E'], total_rounds=5, court_count=2)
-          assert len(rr['rounds']) == 5
-          assert any(row['byeParticipantIds'] for row in rr['rounds'])
-
+          assert len(rr['rounds']) == 5 and any(row['byeParticipantIds'] for row in rr['rounds'])
           ladder = create_generator_preview(generator_kind='ladder', play_format='doubles', title='Verifier Ladder', participant_names=[f'P{i}' for i in range(1, 10)], total_rounds=3, court_count=2)
           assert len(ladder['rounds']) == 1
           ladder = start_generator_event(ladder)
           ladder = save_generator_round(ladder, round_number=1, scores=[{'match_id': row['id'], 'score_a': 11, 'score_b': 7} for row in matches(ladder['rounds'][0])])
           ladder = advance_generator_event(ladder)
           assert len(ladder['rounds']) == 2
-
           rr = start_generator_event(rr)
           rr = save_generator_round(rr, round_number=1, scores=[{'match_id': row['id'], 'score_a': 11, 'score_b': 7} for row in matches(rr['rounds'][0])])
           rr = advance_generator_event(rr)
@@ -196,8 +174,10 @@ jobs:
           runner = Path('apps/web/app/admin/play-generators/GeneratorRoundRunner.tsx').read_text()
           routes = Path('services/api/admin_play_generator_routes.py').read_text()
           service = Path('jupr_app/services/admin_play_generator_service.py').read_text()
+          legacy = Path('apps/web/app/admin/jupr-live/page.tsx').read_text()
           assert 'Round-Robin Generator' in shell and 'Ladder Generator' in shell
           assert 'label: "JUPR Live"' not in shell
+          assert 'redirect("/admin/round-robin-generator")' in legacy
           assert 'Download CSV' in workspace and 'Download one-sheet PDF' in workspace
           assert 'Only Round 1 is shown' in workspace
           assert 'Save round scores' in runner and 'Skip round' in runner and 'Substitute player' in runner
