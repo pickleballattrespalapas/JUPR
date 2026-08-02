@@ -1,16 +1,16 @@
 name: Temporary public play generator publisher
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/public-round-robin-ladder-generators
+      - staging
 
 permissions:
   contents: write
 
 jobs:
   publish:
-    if: github.actor != 'github-actions[bot]'
+    if: github.head_ref == 'agent/public-round-robin-ladder-generators' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
