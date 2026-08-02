@@ -158,6 +158,17 @@ function ageRuleText(value: SetupRecord, key: string): string {
 ''',
     )
 
+    replace_once(
+        path,
+        '''          confirmLabel="Yes, remove division"
+          disabled={disabled}
+''',
+        '''          confirmLabel="Yes, remove division"
+          confirmationText=""
+          disabled={disabled}
+''',
+    )
+
 
 def expose_weather_policy() -> None:
     path = ROOT / "apps/web/app/clubs/[clubSlug]/tournament-registration/page.tsx"
