@@ -1,0 +1,197 @@
+name: Temporary Round-Robin standings verifier
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.head_ref == 'agent/verify-round-robin-standings-38af43'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EXPECTED_SHA: 38af439e148728958f135802c12bc52389b64c65
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      MATCH_UPLOADER_STATUS_URL: https://juprleagues-api-staging.fly.dev/admin/clubs/tres_palapas/match-uploader/status
+      PUBLIC_PREVIEW_URL: https://juprleagues-api-staging.fly.dev/clubs/tres-palapas/play-generators/preview
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 1
+
+      - name: Wait for exact Fly candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          for attempt in $(seq 1 120); do
+            if curl -fsS --max-time 20 "$FLY_HEALTH_URL" -o evidence/health.json; then
+              source_sha="$(jq -r '.git_commit_sha // .source_commit_sha // .source_sha // .commit_sha // empty' evidence/health.json)"
+              image_sha="$(jq -r '.image_build_git_sha // .image_git_sha // empty' evidence/health.json)"
+              echo "attempt=$attempt source=$source_sha image=$image_sha"
+              if [ "$source_sha" = "$EXPECTED_SHA" ] && { [ -z "$image_sha" ] || [ "$image_sha" = "$EXPECTED_SHA" ]; }; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 120 ]; then
+              echo "Fly did not reach the exact staging candidate." >&2
+              cat evidence/health.json >&2 || true
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Verify permanent-open staging safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path('evidence/health.json').read_text())
+          expected_sha = os.environ['EXPECTED_SHA']
+
+          def find_key(value, key):
+              if isinstance(value, dict):
+                  if key in value:
+                      return value[key]
+                  for child in value.values():
+                      found = find_key(child, key)
+                      if found is not None:
+                          return found
+              elif isinstance(value, list):
+                  for child in value:
+                      found = find_key(child, key)
+                      if found is not None:
+                          return found
+              return None
+
+          def first(*keys):
+              for key in keys:
+                  value = find_key(payload, key)
+                  if value is not None:
+                      return value
+              return None
+
+          observed = {
+              'environment': first('environment'),
+              'source_sha': first('git_commit_sha', 'source_commit_sha', 'source_sha', 'commit_sha'),
+              'image_sha': first('image_build_git_sha', 'image_git_sha'),
+              'fly_app': first('fly_app_name', 'app_name', 'app'),
+              'write_wave': first('write_wave'),
+              'staging_write_wave': first('staging_write_wave'),
+              'business_data_write_wave_active': first('business_data_write_wave_active'),
+              'email_mode': first('email_mode'),
+              'live_player_update_email_enabled': first('live_player_update_email_enabled'),
+              'public_live_production_override_enabled': first('public_live_production_override_enabled'),
+              'supabase_project_ref': first('supabase_project_ref', 'supabase_project'),
+          }
+          expected = {
+              'environment': 'staging',
+              'source_sha': expected_sha,
+              'image_sha': expected_sha,
+              'fly_app': 'juprleagues-api-staging',
+              'write_wave': 'open',
+              'staging_write_wave': 'open',
+              'business_data_write_wave_active': True,
+              'email_mode': 'dry_run',
+              'live_player_update_email_enabled': False,
+              'public_live_production_override_enabled': False,
+              'supabase_project_ref': 'sijpxjxvdtrehmqvirfi',
+          }
+          Path('evidence/observed-health-contract.json').write_text(json.dumps(observed, indent=2, sort_keys=True) + '\n')
+          mismatches = {
+              key: {'expected': expected[key], 'actual': observed.get(key)}
+              for key in expected
+              if observed.get(key) != expected[key]
+          }
+          print(json.dumps(observed, indent=2, sort_keys=True))
+          if mismatches:
+              print('MISMATCHES=' + json.dumps(mismatches, indent=2, sort_keys=True))
+              raise SystemExit(1)
+          PY
+
+      - name: Verify Match Uploader remains enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 20 "$MATCH_UPLOADER_STATUS_URL" -o evidence/match-uploader-status.json
+          jq -e '(.enabled == true) and (.singles_write_enabled == true) and ((.status // "") != "guarded_off")' evidence/match-uploader-status.json
+
+      - name: Verify public preview persists standings ranking
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > evidence/preview-request.json <<'JSON'
+          {
+            "generator_kind": "round_robin",
+            "play_format": "singles",
+            "title": "Acceptance Standings Preview 0802",
+            "participant_names": ["Standing Alpha", "Standing Bravo", "Standing Charlie", "Standing Delta"],
+            "participant_player_ids": {},
+            "total_rounds": 3,
+            "court_count": 2,
+            "standings_sort": "points"
+          }
+          JSON
+          curl -fsS --max-time 30 \
+            -H 'Content-Type: application/json' \
+            --data @evidence/preview-request.json \
+            "$PUBLIC_PREVIEW_URL" \
+            -o evidence/preview-response.json
+          jq -e '
+            (.ok == true) and
+            (.preview.generatorKind == "round_robin") and
+            (.preview.standingsSort == "points") and
+            (.preview.rounds | length == 3) and
+            (.preview.previewFingerprint | type == "string" and length > 10)
+          ' evidence/preview-response.json
+
+      - name: Verify full standings source and route contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('.')
+          engine = (root / 'jupr_app/domain/adaptive_play_engine.py').read_text()
+          admin_service = (root / 'jupr_app/services/admin_play_generator_service.py').read_text()
+          public_service = (root / 'jupr_app/services/public_play_generator_service.py').read_text()
+          admin_setup = (root / 'apps/web/app/admin/play-generators/GeneratorWorkspace.tsx').read_text()
+          public_setup = (root / 'apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorWorkspace.tsx').read_text()
+          admin_runner = (root / 'apps/web/app/admin/play-generators/GeneratorRoundRunner.tsx').read_text()
+          public_runner = (root / 'apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner.tsx').read_text()
+          table = (root / 'apps/web/components/PlayGeneratorStandingsTable.tsx').read_text()
+
+          assert 'def generator_event_standings' in engine
+          assert 'status") or "") != "saved"' in engine
+          assert 'standings_sort' in admin_service
+          assert 'standings_sort' in public_service
+          assert '"standings": generator_event_standings(event)' in admin_service
+          assert '"standings": generator_event_standings(event)' in public_service
+          assert 'Standings ranked by' in admin_setup
+          assert 'Standings ranked by' in public_setup
+          assert 'Total wins' in admin_setup and 'Total points' in admin_setup and 'Point differential' in admin_setup
+          assert 'View full standings' in admin_runner
+          assert 'View full standings' in public_runner
+          assert 'Full standings' in table
+          assert 'Skipped and unplayed rounds do not affect the table.' in table
+          assert (root / 'apps/web/app/admin/round-robin-generator/sessions/[sessionKey]/standings/page.tsx').exists()
+          assert (root / 'apps/web/app/clubs/[clubSlug]/round-robin-generator/sessions/[sessionKey]/standings/page.tsx').exists()
+          Path('evidence/source-contract.txt').write_text('Round-Robin standings source contracts passed.\n')
+          PY
+
+      - name: Upload verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: round-robin-standings-evidence
+          path: evidence
+          if-no-files-found: error
