@@ -57,11 +57,8 @@ jobs:
               fi
             fi
             echo "attempt=$attempt web_ok=$web_ok fly_ok=$fly_ok"
-            if [ "$web_ok" -eq 1 ] && [ "$fly_ok" -eq 1 ]; then
-              break
-            fi
+            if [ "$web_ok" -eq 1 ] && [ "$fly_ok" -eq 1 ]; then break; fi
             if [ "$attempt" -eq 120 ]; then
-              echo "Exact staging identities did not converge." >&2
               cat evidence/vercel-environment.json >&2 || true
               cat evidence/fly-health.json >&2 || true
               exit 1
@@ -116,11 +113,7 @@ jobs:
               'production_override': False,
               'supabase_project_ref': 'sijpxjxvdtrehmqvirfi',
           }
-          mismatches = {
-              key: {'expected': expected[key], 'actual': observed.get(key)}
-              for key in expected
-              if observed.get(key) != expected[key]
-          }
+          mismatches = {key: {'expected': expected[key], 'actual': observed.get(key)} for key in expected if observed.get(key) != expected[key]}
           Path('evidence/safety-contract.json').write_text(json.dumps(observed, indent=2, sort_keys=True) + '\n')
           print(json.dumps(observed, indent=2, sort_keys=True))
           if mismatches:
@@ -144,21 +137,23 @@ jobs:
           routes=(
             "/admin/round-robin-generator"
             "/admin/ladder-generator"
-            "/admin/jupr-live"
             "/clubs/tres-palapas/live"
             "/admin/match-uploader"
           )
           : > evidence/routes.txt
           for path in "${routes[@]}"; do
-            final="$(curl -fsSL --max-time 30 "${headers[@]}" -o "evidence/route-$(echo "$path" | tr '/?' '__').html" -w '%{url_effective} %{http_code}' "$CANONICAL_URL$path")"
-            echo "$path $final" | tee -a evidence/routes.txt
-            test "${final##* }" = "200"
+            outfile="evidence/route-$(echo "$path" | tr '/?' '__').html"
+            status="$(curl -fsS --max-time 30 "${headers[@]}" -o "$outfile" -w '%{http_code}' "$CANONICAL_URL$path")"
+            echo "$path $status" | tee -a evidence/routes.txt
+            test "$status" = "200"
           done
-          grep -q '/admin/round-robin-generator' evidence/routes.txt
+          legacy_headers="$(curl -sS --max-time 30 -D - -o /dev/null "${headers[@]}" "$CANONICAL_URL/admin/jupr-live" | tr -d '\r')"
+          printf '%s\n' "$legacy_headers" > evidence/legacy-redirect.txt
+          echo "$legacy_headers" | grep -q '^HTTP/.* 307'
+          echo "$legacy_headers" | grep -qi '^location: /admin/round-robin-generator'
           grep -q 'Round-Robin Generator' evidence/route-_admin_round-robin-generator.html
           grep -q 'Ladder Generator' evidence/route-_admin_ladder-generator.html
           if grep -q 'JUPR Live Admin' evidence/route-_admin_round-robin-generator.html; then
-            echo "Legacy visible module name remains." >&2
             exit 1
           fi
 
@@ -167,57 +162,24 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          from jupr_app.domain.adaptive_play_engine import (
-              advance_generator_event,
-              create_generator_preview,
-              mutate_generator_roster,
-              save_generator_round,
-              skip_generator_round,
-              start_generator_event,
-          )
+          from jupr_app.domain.adaptive_play_engine import advance_generator_event, create_generator_preview, mutate_generator_roster, save_generator_round, skip_generator_round, start_generator_event
 
           def matches(round_row):
-              return list(round_row.get('matches') or []) or [
-                  match
-                  for court in round_row.get('courts') or []
-                  for match in court.get('matches') or []
-              ]
+              return list(round_row.get('matches') or []) or [match for court in round_row.get('courts') or [] for match in court.get('matches') or []]
 
-          rr = create_generator_preview(
-              generator_kind='round_robin',
-              play_format='singles',
-              title='Verifier Singles',
-              participant_names=['A', 'B', 'C', 'D', 'E'],
-              total_rounds=5,
-              court_count=2,
-          )
+          rr = create_generator_preview(generator_kind='round_robin', play_format='singles', title='Verifier Singles', participant_names=['A', 'B', 'C', 'D', 'E'], total_rounds=5, court_count=2)
           assert len(rr['rounds']) == 5
           assert any(row['byeParticipantIds'] for row in rr['rounds'])
 
-          ladder = create_generator_preview(
-              generator_kind='ladder',
-              play_format='doubles',
-              title='Verifier Ladder',
-              participant_names=[f'P{i}' for i in range(1, 10)],
-              total_rounds=3,
-              court_count=2,
-          )
+          ladder = create_generator_preview(generator_kind='ladder', play_format='doubles', title='Verifier Ladder', participant_names=[f'P{i}' for i in range(1, 10)], total_rounds=3, court_count=2)
           assert len(ladder['rounds']) == 1
           ladder = start_generator_event(ladder)
-          ladder = save_generator_round(
-              ladder,
-              round_number=1,
-              scores=[{'match_id': row['id'], 'score_a': 11, 'score_b': 7} for row in matches(ladder['rounds'][0])],
-          )
+          ladder = save_generator_round(ladder, round_number=1, scores=[{'match_id': row['id'], 'score_a': 11, 'score_b': 7} for row in matches(ladder['rounds'][0])])
           ladder = advance_generator_event(ladder)
           assert len(ladder['rounds']) == 2
 
           rr = start_generator_event(rr)
-          rr = save_generator_round(
-              rr,
-              round_number=1,
-              scores=[{'match_id': row['id'], 'score_a': 11, 'score_b': 7} for row in matches(rr['rounds'][0])],
-          )
+          rr = save_generator_round(rr, round_number=1, scores=[{'match_id': row['id'], 'score_a': 11, 'score_b': 7} for row in matches(rr['rounds'][0])])
           rr = advance_generator_event(rr)
           saved = rr['rounds'][0]
           rr = mutate_generator_roster(rr, action='add', name='F')
@@ -226,7 +188,6 @@ jobs:
           rr = skip_generator_round(rr, round_number=2, reason='Verifier skip')
           rr = advance_generator_event(rr)
           assert rr['currentRoundNumber'] == 3
-          print('play generator source contracts passed')
           PY
           python - <<'PY'
           from pathlib import Path
@@ -237,14 +198,10 @@ jobs:
           service = Path('jupr_app/services/admin_play_generator_service.py').read_text()
           assert 'Round-Robin Generator' in shell and 'Ladder Generator' in shell
           assert 'label: "JUPR Live"' not in shell
-          assert 'Download CSV' in workspace
-          assert 'Download one-sheet PDF' in workspace
+          assert 'Download CSV' in workspace and 'Download one-sheet PDF' in workspace
           assert 'Only Round 1 is shown' in workspace
-          assert 'Save round scores' in runner
-          assert 'Skip round' in runner
-          assert 'Substitute player' in runner
-          assert '/rounds/{round_number}/skip' in routes
-          assert '/sessions/{session_key}/roster' in routes
+          assert 'Save round scores' in runner and 'Skip round' in runner and 'Substitute player' in runner
+          assert '/rounds/{round_number}/skip' in routes and '/sessions/{session_key}/roster' in routes
           assert 'match_format=play_format' in service
           PY
 
