@@ -1,0 +1,194 @@
+name: Temporary Tournament Setup staging verification
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify-staging:
+    if: github.head_ref == 'agent/verify-tournament-setup-staging-1a21cf'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    env:
+      EXPECTED_CANDIDATE_SHA: 1a21cf83932618b0e15ceb1f24051e25c321192f
+      EXPECTED_VERCEL_DEPLOYMENT_ID: dpl_GmTQMWcy2cNhbsxM5xEzfkNFPfBC
+      EXPECTED_VERCEL_ORIGIN: https://jupr-r7fqx1uyu-pickleballattrespalapas1.vercel.app
+      STAGING_API_ORIGIN: https://juprleagues-api-staging.fly.dev
+      STAGING_WEB_ALIAS: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      STAGING_SUPABASE_REF: sijpxjxvdtrehmqvirfi
+      FIXTURE_TOURNAMENT_ID: 93000000-0000-4000-8000-000000000001
+    steps:
+      - name: Wait for exact Vercel and Fly deployments
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          expected_sha = os.environ["EXPECTED_CANDIDATE_SHA"]
+          vercel_id = os.environ["EXPECTED_VERCEL_DEPLOYMENT_ID"]
+          vercel_origin = os.environ["EXPECTED_VERCEL_ORIGIN"].rstrip("/")
+          api_origin = os.environ["STAGING_API_ORIGIN"].rstrip("/")
+          web_alias = os.environ["STAGING_WEB_ALIAS"].rstrip("/")
+          supabase_ref = os.environ["STAGING_SUPABASE_REF"]
+          bypass = os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", "").strip()
+          if not bypass:
+              raise SystemExit("Vercel automation bypass secret is unavailable")
+
+          def get_json(url, headers=None):
+              request = Request(url, headers=headers or {}, method="GET")
+              with urlopen(request, timeout=25) as response:
+                  if response.status != 200:
+                      raise RuntimeError(f"{url} returned HTTP {response.status}")
+                  return json.loads(response.read().decode("utf-8"))
+
+          last_errors = []
+          for attempt in range(1, 101):
+              errors = []
+              try:
+                  web = get_json(
+                      f"{vercel_origin}/api/environment",
+                      {"x-vercel-protection-bypass": bypass},
+                  )
+              except (HTTPError, URLError, TimeoutError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+                  web = {}
+                  errors.append(f"Vercel identity unavailable: {exc.__class__.__name__}")
+              try:
+                  api = get_json(f"{api_origin}/health")
+              except (HTTPError, URLError, TimeoutError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+                  api = {}
+                  errors.append(f"Fly health unavailable: {exc.__class__.__name__}")
+
+              expected_web = {
+                  "environment": "staging",
+                  "vercel_environment": "preview",
+                  "git_commit_sha": expected_sha,
+                  "vercel_deployment_id": vercel_id,
+                  "api_origin": api_origin,
+                  "auth_origin": f"https://{supabase_ref}.supabase.co",
+                  "preview_isolation_active": True,
+                  "preview_auth_isolation_active": True,
+              }
+              for key, value in expected_web.items():
+                  if web.get(key) != value:
+                      errors.append(f"Vercel {key} is {web.get(key)!r}, expected {value!r}")
+              expected_api = {
+                  "ok": True,
+                  "environment": "staging",
+                  "git_commit_sha": expected_sha,
+                  "fly_app_name": "juprleagues-api-staging",
+                  "web_origin": web_alias,
+                  "supabase_project_ref": supabase_ref,
+                  "jwt_verification_configured": True,
+                  "jwt_verification_mode": "jwks",
+                  "jwt_verification_project_ref": supabase_ref,
+                  "staging_write_wave": "open",
+                  "business_data_write_wave_active": True,
+              }
+              for key, value in expected_api.items():
+                  if api.get(key) != value:
+                      errors.append(f"Fly {key} is {api.get(key)!r}, expected {value!r}")
+              prerequisites = api.get("write_prerequisites")
+              if not isinstance(prerequisites, dict) or prerequisites.get("email_mode") != "dry_run":
+                  errors.append("Fly email safety is not dry_run")
+
+              if not errors:
+                  print(json.dumps({"web": web, "api": api}, indent=2, sort_keys=True))
+                  break
+              last_errors = errors
+              print(f"Attempt {attempt}/100: " + "; ".join(errors[:8]))
+              time.sleep(15)
+          else:
+              raise SystemExit("Exact staging deployments did not become ready: " + "; ".join(last_errors))
+          PY
+
+      - name: Verify public registration payload and multi-day fixture
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+
+          api_origin = os.environ["STAGING_API_ORIGIN"].rstrip("/")
+          tournament_id = os.environ["FIXTURE_TOURNAMENT_ID"]
+          query = urlencode({"tournament_id": tournament_id})
+          url = f"{api_origin}/clubs/tres-palapas/tournament-registration?{query}"
+          request = Request(url, method="GET")
+          with urlopen(request, timeout=30) as response:
+              assert response.status == 200, response.status
+              payload = json.loads(response.read().decode("utf-8"))
+
+          assert payload.get("tournament", {}).get("id") == tournament_id
+          settings = payload.get("settings") or {}
+          assert str(settings.get("rules_markdown") or "").strip()
+          assert str(settings.get("refund_policy_markdown") or "").strip()
+          assert str(settings.get("weather_policy_markdown") or "").strip()
+
+          events = {str(row.get("id")): row for row in payload.get("events") or []}
+          men = events["staging-event-summer-classic-men-35"]
+          assert men.get("registration_day_id") == "staging-day-summer-classic-1"
+          assert men.get("scheduled_day_ids") == [
+              "staging-day-summer-classic-1",
+              "staging-day-summer-classic-2",
+          ]
+          women = events["staging-event-summer-classic-women-35"]
+          assert women.get("scheduled_day_ids") == ["staging-day-summer-classic-1"]
+          print(json.dumps({
+              "tournament": payload.get("tournament"),
+              "policies_present": True,
+              "men_schedule": men.get("scheduled_day_ids"),
+              "women_schedule": women.get("scheduled_day_ids"),
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Verify deployed public and admin setup pages
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          python - <<'PY'
+          import os
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+
+          origin = os.environ["EXPECTED_VERCEL_ORIGIN"].rstrip("/")
+          bypass = os.environ["VERCEL_AUTOMATION_BYPASS_SECRET"].strip()
+          tournament_id = os.environ["FIXTURE_TOURNAMENT_ID"]
+
+          def get_text(path):
+              request = Request(
+                  f"{origin}{path}",
+                  headers={"x-vercel-protection-bypass": bypass},
+                  method="GET",
+              )
+              with urlopen(request, timeout=40) as response:
+                  assert response.status == 200, (path, response.status)
+                  return response.read().decode("utf-8", errors="replace")
+
+          public_query = urlencode({"tournament_id": tournament_id})
+          public_html = get_text(
+              f"/clubs/tres-palapas/tournament-registration?{public_query}"
+          )
+          assert "Tournament Registration" in public_html
+          assert "Weather policy" in public_html
+          assert "Refund policy" in public_html
+
+          admin_query = urlencode({
+              "tournament": tournament_id,
+              "name": "Staging Summer Classic",
+          })
+          for step in ("basics", "schedule", "events", "divisions"):
+              html = get_text(f"/admin/tournaments/setup/{step}?{admin_query}")
+              assert "Internal Server Error" not in html
+              assert "Tournament" in html
+          print("Public policies and Tournament Setup routes rendered successfully.")
+          PY
