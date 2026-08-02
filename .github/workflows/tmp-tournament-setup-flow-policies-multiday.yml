@@ -33,6 +33,7 @@ jobs:
           python - <<'PY'
           import hashlib
           import json
+          import re
           from pathlib import Path
 
           migrations = Path("supabase/migrations")
@@ -66,14 +67,20 @@ jobs:
 
           panel_path = Path("apps/web/app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
           panel_text = panel_path.read_text()
-          duplicate_review = "async function reviewImpact()\n\nasync function reviewImpact() {"
-          if duplicate_review in panel_text:
-              panel_text = panel_text.replace(
-                  duplicate_review,
-                  "async function reviewImpact() {",
-                  1,
+          panel_text = re.sub(
+              r"async function reviewImpact\(\)\s*\n\s*async function reviewImpact\(\) \{",
+              "async function reviewImpact() {",
+              panel_text,
+              count=1,
+          )
+          for function_name in ("renderEvents", "renderPricing", "renderReview"):
+              panel_text = re.sub(
+                  rf"function {function_name}\(\)\s*\n\s*function {function_name}\(\) \{{",
+                  f"function {function_name}() {{",
+                  panel_text,
+                  count=1,
               )
-              panel_path.write_text(panel_text)
+          panel_path.write_text(panel_text)
 
           setup_test = Path("tests/test_api_contract_tournament_setup_event_division_refine.py")
           setup_text = setup_test.read_text()
