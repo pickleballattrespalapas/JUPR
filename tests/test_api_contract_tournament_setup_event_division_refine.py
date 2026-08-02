@@ -61,3 +61,9 @@ def test_setup_metadata_is_structured_and_migrated() -> None:
         assert field in routes
         assert field in service
         assert field in repo
+
+def test_setup_status_badges_wait_for_loaded_detail() -> None:
+    panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+    assert "const states = detail ? setupState(basics, settings, configuration) : {};" in panel
+    assert "states={states}" in panel
+    assert "busy && !detail" in panel
