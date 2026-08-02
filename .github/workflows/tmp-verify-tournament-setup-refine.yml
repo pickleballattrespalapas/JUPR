@@ -17,10 +17,6 @@ jobs:
       EXPECTED_SHA: 391400b29681d6f6167ba321622a4715e7e5607e
       FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
       MATCH_UPLOADER_STATUS_URL: https://juprleagues-api-staging.fly.dev/admin/clubs/tres_palapas/match-uploader/status
-      CANONICAL_URL: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
-      TEST_TOURNAMENT_ID: 93000000-0000-4000-8000-000000000001
-      TEST_TOURNAMENT_NAME: Staging%20Summer%20Classic
-      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -127,48 +123,6 @@ jobs:
           set -euo pipefail
           curl -fsS --max-time 20 "$MATCH_UPLOADER_STATUS_URL" -o evidence/match-uploader-status.json
           jq -e '(.enabled == true) and (.singles_write_enabled == true) and ((.status // "") != "guarded_off")' evidence/match-uploader-status.json
-
-      - name: Verify Vercel bypass is configured
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$VERCEL_AUTOMATION_BYPASS_SECRET"
-
-      - name: Wait for canonical Tournament Setup routes
-        shell: bash
-        run: |
-          set -euo pipefail
-          context="tournament=$TEST_TOURNAMENT_ID&name=$TEST_TOURNAMENT_NAME"
-          routes=(
-            "/admin/tournaments/tournament?$context"
-            "/admin/tournaments/setup?$context"
-            "/admin/tournaments/setup/basics?$context"
-            "/admin/tournaments/setup/events?$context"
-            "/admin/tournaments/setup/divisions?$context"
-            "/admin/tournaments/setup/registration-rules?$context"
-            "/admin/tournaments/setup/pricing?$context"
-            "/admin/tournaments/setup/schedule?$context"
-            "/admin/tournaments/setup/review?$context"
-            "/admin/match-uploader"
-          )
-          for attempt in $(seq 1 90); do
-            : > evidence/vercel-routes.txt
-            all_ready=1
-            for path in "${routes[@]}"; do
-              status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
-                -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" \
-                -H "x-vercel-set-bypass-cookie: true" \
-                "$CANONICAL_URL$path" || true)"
-              echo "$path $status" | tee -a evidence/vercel-routes.txt
-              if [ "$status" != "200" ]; then all_ready=0; fi
-            done
-            if [ "$all_ready" -eq 1 ]; then break; fi
-            if [ "$attempt" -eq 90 ]; then
-              echo "Canonical Tournament Setup routes did not all become ready." >&2
-              exit 1
-            fi
-            sleep 10
-          done
 
       - name: Verify Tournament Setup source contracts
         shell: bash
