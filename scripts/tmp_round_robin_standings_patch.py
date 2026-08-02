@@ -126,11 +126,10 @@ replace_once(
     "    court_count: int = Field(default=0, ge=0, le=20)\n",
     "    court_count: int = Field(default=0, ge=0, le=20)\n    standings_sort: str = Field(default=\"wins\", pattern=r\"^(wins|points|differential)$\")\n",
 )
-replace_count(
+replace_once(
     admin_routes,
-    "                court_count=payload.court_count,\n",
-    "                court_count=payload.court_count,\n                standings_sort=payload.standings_sort,\n",
-    1,
+    "                total_rounds=payload.total_rounds,\n                court_count=payload.court_count,\n            )",
+    "                total_rounds=payload.total_rounds,\n                court_count=payload.court_count,\n                standings_sort=payload.standings_sort,\n            )",
 )
 replace_once(
     admin_routes,
