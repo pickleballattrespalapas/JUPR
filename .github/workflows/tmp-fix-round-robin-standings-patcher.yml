@@ -1,0 +1,56 @@
+name: Temporary Round-Robin standings patcher fixer
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'agent/round-robin-full-standings' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/round-robin-full-standings
+          fetch-depth: 0
+
+      - name: Make the admin preview-route marker specific
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/tmp_round_robin_standings_patch.py')
+          text = path.read_text()
+          old = '''replace_count(
+              admin_routes,
+              "                court_count=payload.court_count,\\n",
+              "                court_count=payload.court_count,\\n                standings_sort=payload.standings_sort,\\n",
+              1,
+          )'''
+          new = '''replace_once(
+              admin_routes,
+              "                total_rounds=payload.total_rounds,\\n                court_count=payload.court_count,\\n            )",
+              "                total_rounds=payload.total_rounds,\\n                court_count=payload.court_count,\\n                standings_sort=payload.standings_sort,\\n            )",
+          )'''
+          if text.count(old) != 1:
+              raise SystemExit(f'admin route marker block match count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+
+      - name: Commit the corrected patcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/tmp-fix-round-robin-standings-patcher.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix Round-Robin standings publisher marker"
+          git push origin HEAD:agent/round-robin-full-standings
