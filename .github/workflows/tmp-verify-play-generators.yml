@@ -1,3 +1,4 @@
+# Manual verification trigger after clean scheduling refinement.
 name: Temporary Round-Robin and Ladder Generator verification
 
 on:
