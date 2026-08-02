@@ -847,7 +847,7 @@ async function reviewImpact() {
     }
   }
 
-  const states = setupState(basics, settings, configuration);
+  const states = detail ? setupState(basics, settings, configuration) : {};
   const definition = stepDefinition(step);
   const issues = validateSetupConfiguration(configuration);
   const registrationStatus = safeString(settings.registration_status || "draft");
