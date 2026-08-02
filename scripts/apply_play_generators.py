@@ -28,7 +28,7 @@ def write_bundle() -> None:
     for relative, content in payload.items():
         path = ROOT / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        path.write_text(str(content).rstrip() + "\n", encoding="utf-8")
 
 
 def patch_main() -> None:
@@ -64,7 +64,7 @@ def patch_main() -> None:
         not in text
     ):
         text = replace_once(text, call_marker, call_text, "main installer")
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
 def patch_sidebar() -> None:
@@ -89,7 +89,7 @@ def patch_sidebar() -> None:
       },
 '''
     text = replace_once(text, old, new, "admin sidebar JUPR Live link")
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
 def patch_package() -> None:
@@ -114,7 +114,7 @@ def patch_public_names() -> None:
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
-    page.write_text(text, encoding="utf-8")
+    page.write_text(text.rstrip() + "\n", encoding="utf-8")
 
     creator = ROOT / "apps/web/app/clubs/[clubSlug]/live/PublicLiveCreator.tsx"
     text = creator.read_text(encoding="utf-8")
@@ -125,14 +125,14 @@ def patch_public_names() -> None:
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
-    creator.write_text(text, encoding="utf-8")
+    creator.write_text(text.rstrip() + "\n", encoding="utf-8")
 
     detail = ROOT / "apps/web/app/clubs/[clubSlug]/live/[sessionKey]/page.tsx"
     text = detail.read_text(encoding="utf-8")
     text = text.replace("Live Events", "Play Generators")
     text = text.replace("Live session unavailable", "Play session unavailable")
     text = text.replace("Back to live sessions", "Back to play sessions")
-    detail.write_text(text, encoding="utf-8")
+    detail.write_text(text.rstrip() + "\n", encoding="utf-8")
 
     runner = (
         ROOT
@@ -142,7 +142,7 @@ def patch_public_names() -> None:
     text = text.replace("JUPR Live", "play generator")
     text = text.replace("live session", "play session")
     text = text.replace("Live Event", "Play Session")
-    runner.write_text(text, encoding="utf-8")
+    runner.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
 def main() -> None:
