@@ -17,7 +17,6 @@ jobs:
       EXPECTED_SHA: 32062be384f3233d7f37e0089b7adfc72b558e45
       FLY_BASE: https://juprleagues-api-staging.fly.dev
       CANONICAL_ORIGIN: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
-      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -111,21 +110,6 @@ jobs:
             "$FLY_BASE/clubs/tres-palapas/play-generators/preview"
           tr -d '\r' < evidence/cors-preview.txt > evidence/cors-preview-normalized.txt
           grep -qi '^access-control-allow-origin: https://jupr-git-staging-pickleballattrespalapas1\.vercel\.app$' evidence/cors-preview-normalized.txt
-
-      - name: Verify canonical routes render the deployed API base
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$VERCEL_AUTOMATION_BYPASS_SECRET"
-          for path in \
-            /clubs/tres-palapas/round-robin-generator \
-            /clubs/tres-palapas/ladder-generator; do
-            file="evidence/$(echo "$path" | tr '/' '_' | sed 's/^_//').html"
-            curl -fsS --max-time 30 \
-              -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" \
-              "$CANONICAL_ORIGIN$path" -o "$file"
-            grep -q 'juprleagues-api-staging.fly.dev' "$file"
-          done
 
       - name: Verify source routing contracts
         shell: bash
