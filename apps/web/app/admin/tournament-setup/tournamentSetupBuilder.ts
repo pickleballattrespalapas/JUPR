@@ -332,6 +332,37 @@ export function eventDayReference(row: SetupRecord): string {
   return cleanString(row.assigned_day ?? row.registration_day_id);
 }
 
+function cleanStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(cleanString).filter(Boolean))];
+}
+
+export function eventDayReferences(row: SetupRecord): string[] {
+  const scheduled = cleanStringList(
+    row.scheduled_day_ids ?? row.registration_day_ids ?? row.assigned_days
+  );
+  if (scheduled.length) return scheduled;
+  const primary = eventDayReference(row);
+  return primary ? [primary] : [];
+}
+
+export function setEventDayReferences(
+  row: SetupRecord,
+  references: readonly string[]
+): SetupRecord {
+  const scheduled = [...new Set(references.map(cleanString).filter(Boolean))];
+  const primary = scheduled[0] || "";
+  const next: SetupRecord = {
+    ...row,
+    scheduled_day_ids: scheduled,
+    registration_day_id: primary
+  };
+  if (Object.prototype.hasOwnProperty.call(row, "assigned_day")) {
+    next.assigned_day = primary;
+  }
+  return next;
+}
+
 export function eventUsesLabelDayReference(row: SetupRecord): boolean {
   return Object.prototype.hasOwnProperty.call(row, "assigned_day");
 }
@@ -355,6 +386,7 @@ export function newEventFamilyRow(
     id: newContractId("family"),
     event_family: name,
     registration_day_id: registrationDayId,
+    scheduled_day_ids: registrationDayId ? [registrationDayId] : [],
     participant_type: "GENDER_DOUBLES",
     gender_restriction: "ANY",
     default_format: "ROUND_ROBIN_PLUS_PLAYOFF",
@@ -405,6 +437,12 @@ export function newEventOptionRow(configuration: SetupConfiguration): SetupRecor
   const familyNames = distinctFamilyNames(configuration);
   const familyName = familyNames[0] || `Event ${position}`;
   const defaults = eventFamilyDefaults(configuration.eventFamilies, familyName);
+  const inheritedSchedule = eventDayReferences(defaults || {});
+  const fallbackSchedule = [dayReference(firstDay)].filter(Boolean);
+  const scheduledDayIds = inheritedSchedule.length ? inheritedSchedule : fallbackSchedule;
+  const primaryDay = configuration.days.find(
+    (row) => dayReference(row.value) === scheduledDayIds[0]
+  )?.value || firstDay;
   const existingNames = new Set(configuration.eventOptions.map((row) => eventDivisionName(row.value).toLowerCase()));
   let divisionName = `${familyName} Open`;
   let suffix = position;
@@ -425,7 +463,9 @@ export function newEventOptionRow(configuration: SetupConfiguration): SetupRecor
       skill_label: "Open",
       age_mode: "ALL_AGES",
       age_label: "All Ages",
-      assigned_day: dayLabel(firstDay),
+      assigned_day: dayLabel(primaryDay) || scheduledDayIds[0] || dayLabel(firstDay),
+      scheduled_day_ids: scheduledDayIds,
+      schedule_mode: "INHERIT_EVENT",
       capacity_teams: Number(defaults?.default_capacity_teams ?? 16),
       price_usd: Number(defaults?.default_price_usd ?? 0),
       waitlist_enabled: recordBoolean(defaults?.default_waitlist, true),
@@ -441,7 +481,9 @@ export function newEventOptionRow(configuration: SetupConfiguration): SetupRecor
   const eventType = cleanString(defaults?.participant_type) || "GENDER_DOUBLES";
   return {
     id: newContractId("event"),
-    registration_day_id: dayReference(firstDay),
+    registration_day_id: scheduledDayIds[0] || dayReference(firstDay),
+    scheduled_day_ids: scheduledDayIds,
+    schedule_mode: "INHERIT_EVENT",
     event_family_label: familyName,
     division_name: divisionName,
     event_type: eventType,
@@ -627,12 +669,42 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
 
   const eventOptions = draft.event_options.map((row, index) => {
     const usesLegacyShape = eventUsesLegacyBuilderShape(row);
-    if (!usesLegacyShape) return projectCanonicalAgeRuleEdits(row);
+    if (!usesLegacyShape) {
+      const projected = projectCanonicalAgeRuleEdits(row);
+      const scheduledDayIds = eventDayReferences(projected)
+        .map((reference) =>
+          dayIdsByLabel.get(normalizedLookupKey(reference)) || reference
+        )
+        .filter((reference) => dayIdsByLabel.has(normalizedLookupKey(reference)) || days.some((day) => cleanString(day.id) === reference));
+      const primary = scheduledDayIds[0] || cleanString(projected.registration_day_id);
+      const next: SetupRecord = {
+        ...projected,
+        registration_day_id: primary
+      };
+      if (
+        Object.prototype.hasOwnProperty.call(projected, "scheduled_day_ids") ||
+        scheduledDayIds.length > 1
+      ) {
+        next.scheduled_day_ids = scheduledDayIds.length
+          ? scheduledDayIds
+          : (primary ? [primary] : []);
+      }
+      return next;
+    }
 
     const familyName = eventFamilyName(row);
     const defaults = familiesByName.get(normalizedLookupKey(familyName)) || {};
     const assignedDay = eventDayReference(row);
-    const registrationDayId = dayIdsByLabel.get(normalizedLookupKey(assignedDay))
+    const scheduleReferences = eventDayReferences(row).length
+      ? eventDayReferences(row)
+      : eventDayReferences(defaults);
+    const scheduledDayIds = scheduleReferences
+      .map((reference) =>
+        dayIdsByLabel.get(normalizedLookupKey(reference)) || reference
+      )
+      .filter(Boolean);
+    const registrationDayId = scheduledDayIds[0]
+      || dayIdsByLabel.get(normalizedLookupKey(assignedDay))
       || cleanString(row.registration_day_id)
       || assignedDay;
     const eventType = firstCleanString(
@@ -669,6 +741,7 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
     );
     const canonical: SetupRecord = {
       registration_day_id: registrationDayId,
+      scheduled_day_ids: scheduledDayIds.length ? scheduledDayIds : (registrationDayId ? [registrationDayId] : []),
       sort_order: row.sort_order || index + 1,
       label: cleanString(row.label) || divisionName || familyName || `Event ${index + 1}`,
       event_type: eventType,
@@ -756,6 +829,26 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
   const duplicateFamilyIds = duplicateIndexes(familyIds);
   families.forEach((row, index) => {
     if (!eventFamilyName(row)) issues.push({ path: `families.${index}.event_family`, message: "Event name is required." });
+    const explicitScheduledDays = eventDayReferences(row);
+    const inferredScheduledDays = events
+      .filter(
+        (event) =>
+          normalizedLookupKey(eventFamilyName(event)) ===
+          normalizedLookupKey(eventFamilyName(row))
+      )
+      .flatMap(eventDayReferences);
+    const scheduledDays = explicitScheduledDays.length
+      ? explicitScheduledDays
+      : [...new Set(inferredScheduledDays)];
+    if (!scheduledDays.length) {
+      issues.push({ path: `families.${index}.scheduled_day_ids`, message: "Choose at least one tournament day for this event." });
+    }
+    for (const scheduledDay of scheduledDays) {
+      if (!enabledDayReferences.has(scheduledDay)) {
+        issues.push({ path: `families.${index}.scheduled_day_ids`, message: "Every event day must be an enabled tournament day." });
+        break;
+      }
+    }
     if (duplicateFamilies.has(index)) issues.push({ path: `families.${index}.event_family`, message: "Event names must be unique." });
     if (duplicateFamilyIds.has(index)) issues.push({ path: `families.${index}.id`, message: "Event-family IDs must be unique." });
     const capacity = finiteNumber(row.default_capacity_teams);
@@ -772,7 +865,6 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
   const eventIds = events.map((row) => cleanString(row.id));
   const duplicateEventIds = duplicateIndexes(eventIds);
   const conflictKeys = events.map((row) => [
-    eventDayReference(row),
     eventFamilyName(row),
     eventDivisionName(row)
   ].map((part) => part.trim().toLowerCase()).join("|"));
@@ -781,7 +873,7 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
   events.forEach((row, index) => {
     const name = eventDivisionName(row);
     const family = eventFamilyName(row);
-    const day = eventDayReference(row);
+    const scheduledDays = eventDayReferences(row);
     const usesLegacyShape = eventUsesLegacyBuilderShape(row);
     if (!name) issues.push({ path: `events.${index}.division_name`, message: "Division name is required." });
     if (!family) issues.push({ path: `events.${index}.event_family`, message: "Event family is required." });
@@ -791,13 +883,21 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
         message: "Choose an event family with defined defaults."
       });
     }
-    if (!day) issues.push({ path: `events.${index}.registration_day_id`, message: "Assigned day is required." });
-    else if (!enabledDayReferences.has(day)) {
-      issues.push({ path: `events.${index}.registration_day_id`, message: "Choose an enabled tournament day." });
+    if (!scheduledDays.length) {
+      issues.push({ path: `events.${index}.scheduled_day_ids`, message: "Choose at least one tournament day for this division." });
+    } else if (scheduledDays.some((day) => !enabledDayReferences.has(day))) {
+      issues.push({ path: `events.${index}.scheduled_day_ids`, message: "Choose an enabled tournament day." });
+    }
+    const familyDefaults = families.find(
+      (familyRow) => normalizedLookupKey(eventFamilyName(familyRow)) === normalizedLookupKey(family)
+    );
+    const familyDays = eventDayReferences(familyDefaults || {});
+    if (familyDays.length && scheduledDays.some((day) => !familyDays.includes(day))) {
+      issues.push({ path: `events.${index}.scheduled_day_ids`, message: "Division days must be selected on the parent event." });
     }
     if (duplicateEventIds.has(index)) issues.push({ path: `events.${index}.id`, message: "Division IDs must be unique." });
     if (duplicateEvents.has(index)) {
-      issues.push({ path: `events.${index}.division_name`, message: "This day, event, and division combination is duplicated." });
+      issues.push({ path: `events.${index}.division_name`, message: "This event and division combination is duplicated." });
     }
 
     const capacity = finiteNumber(row.capacity_teams);

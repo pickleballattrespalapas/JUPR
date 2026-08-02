@@ -180,6 +180,7 @@ test("publish projection converts a multi-day legacy draft without changing its 
       {
         id: "division-mixed",
         registration_day_id: "day-friday",
+        scheduled_day_ids: ["day-friday"],
         sort_order: 1,
         label: "Mixed 3.5",
         event_type: "MIXED_DOUBLES",
@@ -207,6 +208,7 @@ test("publish projection converts a multi-day legacy draft without changing its 
       {
         id: "division-singles",
         registration_day_id: "day-saturday",
+        scheduled_day_ids: ["day-saturday"],
         sort_order: 2,
         label: "Singles 50+",
         event_type: "SINGLES",
@@ -476,7 +478,7 @@ test("valid configuration passes and duplicate/conflicting rows are rejected", (
   const messages = validateSetupConfiguration(invalid).map((issue) => issue.message);
 
   assert.ok(messages.includes("Day labels must be unique."));
-  assert.ok(messages.includes("This day, event, and division combination is duplicated."));
+  assert.ok(messages.includes("This event and division combination is duplicated."));
 });
 
 test("validation reports bad references and typed numeric errors", () => {
@@ -573,6 +575,7 @@ test("new divisions use the current payload shape and sensible defaults", () => 
   };
   const draft = newEventOptionRow(draftConfiguration);
   assert.equal(draft.assigned_day, "Friday");
+  assert.deepEqual(draft.scheduled_day_ids, ["day-1"]);
   assert.equal(draft.event_family, "Mixed Doubles");
   assert.equal(Object.hasOwn(draft, "registration_day_id"), false);
 });

@@ -67,11 +67,11 @@ def test_lifecycle_phase_overviews_and_subnavigation_exist() -> None:
       assert 'redirect("/admin/tournaments")' in source
 
   for label in (
-      "Tournament basics",
-      "Events and formats",
-      "Registration rules",
-      "Pricing, extras, and fulfillment",
+      "Tournament basics and policies",
       "Schedule and courts",
+      "Events",
+      "Divisions",
+      "Pricing, extras, and fulfillment",
       "Review and open registration",
       "Partners and teams",
       "Payments and extras",
@@ -87,26 +87,26 @@ def test_lifecycle_phase_overviews_and_subnavigation_exist() -> None:
 
   assert 'export type TournamentPhase = "setup" | "registration" | "live" | "publish";' in phase_nav
   for label in (
-      "1. Basics",
-      "2. Events & formats",
-      "3. Registration rules",
-      "4. Pricing & extras",
-      "5. Schedule & courts",
+      "1. Basics & policies",
+      "2. Schedule & courts",
+      "3. Events",
+      "4. Divisions",
+      "5. Pricing & extras",
       "6. Review & open",
   ):
       assert label in phase_nav
 
   for key in (
       'key: "basics"',
-      'key: "events"',
-      'key: "registration-rules"',
-      'key: "pricing"',
       'key: "schedule"',
+      'key: "events"',
+      'key: "divisions"',
+      'key: "pricing"',
       'key: "review"',
   ):
       assert key in setup_nav
 
-  assert 'goTo("events")' in setup_panel
+  assert 'goTo("schedule")' in setup_panel
   assert "Save and continue" in setup_panel
   assert "Review setup" in setup_panel
   assert "Open registration" in setup_panel

@@ -45,6 +45,7 @@ class TournamentSetupSettingsRequest(BaseModel):
     partner_board_enabled: bool | None = None
     rules_markdown: str | None = None
     refund_policy_markdown: str | None = None
+    weather_policy_markdown: str | None = None
     sponsor_markdown: str | None = None
     location_name: str | None = None
     timezone: str | None = None

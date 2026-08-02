@@ -10,10 +10,11 @@ import {
   cleanString,
   dayLabel,
   dayReference,
-  eventDayReference,
+  eventDayReferences,
   eventFamilyName,
   numberInputValue,
   recordBoolean,
+  setEventDayReferences,
   setRecordNumber,
   setRecordString,
   type BuilderRow,
@@ -62,7 +63,7 @@ export default function TournamentSetupEventFamilyCard({
   const issueId = useId();
   const value = row.value;
   const name = eventFamilyName(value);
-  const currentDay = eventDayReference(value);
+  const currentDays = eventDayReferences(value);
   const participantType = cleanString(value.participant_type) || "GENDER_DOUBLES";
   const gender = cleanString(value.gender_restriction) || "ANY";
   const drawFormat = cleanString(value.default_format) || "ROUND_ROBIN_PLUS_PLAYOFF";
@@ -145,35 +146,30 @@ export default function TournamentSetupEventFamilyCard({
           />
         </label>
 
-        <label className={styles.label}>
-          Tournament day
-          <select
-            className={styles.select}
-            value={currentDay}
-            disabled={disabled}
-            onChange={(event) =>
-              onChange(
-                setRecordString(
-                  value,
-                  ["registration_day_id", "assigned_day"],
-                  event.target.value
-                )
-              )
-            }
-          >
-            <option value="">Choose a day</option>
+        <fieldset className={`${styles.wide} ${styles.rowCard}`} style={{ padding: "0.75rem" }}>
+          <legend style={{ fontWeight: 800 }}>Tournament days</legend>
+          <p style={{ margin: "0 0 0.55rem", color: "#64748b" }}>
+            Select every day on which this event may be played. A division may use all of these days or a selected subset.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.45rem" }}>
             {dayOptions.map((option) => (
-              <option
-                key={option.value}
-                value={option.value}
-                disabled={!option.enabled}
-              >
-                {option.label}
-                {option.enabled ? "" : " (disabled)"}
-              </option>
+              <label key={option.value} className={styles.checkbox}>
+                <input
+                  type="checkbox"
+                  checked={currentDays.includes(option.value)}
+                  disabled={disabled || !option.enabled}
+                  onChange={(event) => {
+                    const next = event.target.checked
+                      ? [...currentDays, option.value]
+                      : currentDays.filter((value) => value !== option.value);
+                    onChange(setEventDayReferences(value, next));
+                  }}
+                />
+                {option.label}{option.enabled ? "" : " (disabled)"}
+              </label>
             ))}
-          </select>
-        </label>
+          </div>
+        </fieldset>
 
         <label className={styles.label}>
           Participant type

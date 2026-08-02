@@ -16,6 +16,7 @@ export type PublicTournamentSettings = {
   partner_board_enabled?: boolean | null;
   rules_markdown?: string | null;
   refund_policy_markdown?: string | null;
+  weather_policy_markdown?: string | null;
   sponsor_markdown?: string | null;
 };
 
@@ -35,6 +36,7 @@ export type PublicRegistrationDay = {
 export type PublicRegistrationEvent = {
   id: string;
   registration_day_id: string;
+  scheduled_day_ids?: string[] | null;
   label: string;
   event_family_label: string;
   division_name: string;

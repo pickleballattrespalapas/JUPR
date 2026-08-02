@@ -107,7 +107,10 @@ def test_legacy_drafts_are_projected_only_for_impact_and_publish() -> None:
     assert "event_family_label: familyName" in BUILDER
     assert "event_format_default:" in BUILDER
     assert "scoring_default:" in BUILDER
-    assert "if (!usesLegacyShape) return projectCanonicalAgeRuleEdits(row);" in BUILDER
+    assert "const projected = projectCanonicalAgeRuleEdits(row);" in BUILDER
+    assert 'Object.prototype.hasOwnProperty.call(projected, "scheduled_day_ids")' in BUILDER
+    assert "scheduledDayIds.length > 1" in BUILDER
+    assert "return next;" in BUILDER
 
 
 def test_canonical_age_rules_and_legacy_family_defaults_use_pure_builder_helpers() -> None:
