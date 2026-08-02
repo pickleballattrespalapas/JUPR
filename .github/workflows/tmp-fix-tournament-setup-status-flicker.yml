@@ -42,7 +42,7 @@ jobs:
           test_text = tests.read_text()
           addition = '''\n\ndef test_setup_status_badges_wait_for_loaded_detail() -> None:\n    panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")\n    assert "const states = detail ? setupState(basics, settings, configuration) : {};" in panel\n    assert "states={states}" in panel\n    assert "busy && !detail" in panel\n'''
           if 'def test_setup_status_badges_wait_for_loaded_detail()' not in test_text:
-              tests.write_text(test_text.rstrip() + addition + '\n')
+              tests.write_text(test_text.rstrip() + addition.rstrip() + '\n')
           PY
           git diff --check
 
