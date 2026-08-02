@@ -4,23 +4,27 @@ import { useId } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import {
   AGE_MODES,
-  COMPETITION_FORMATS,
-  SCORING_OPTIONS,
   SKILL_LABEL_OPTIONS,
+  ageRuleText,
   ageRuleValue,
+  clearIncompatibleAgeRuleFields,
   cleanString,
   dayLabel,
   dayReference,
   eventAgeMode,
   eventDayReferences,
+  eventDivisionName,
   eventFamilyDefaults,
   eventFamilyName,
-  eventDivisionName,
+  finiteNumber,
   numberInputValue,
   recordBoolean,
   setAgeRuleNumber,
   setEventAgeMode,
   setEventDayReferences,
+  setEventDivisionName,
+  setEventSkillLabel,
+  setRecordBoolean,
   setRecordNumber,
   setRecordString,
   type BuilderRow,
@@ -44,24 +48,6 @@ type Props = {
 
 type EventMode = "STANDARD" | "COMBINED_RATING_CAP" | "FOUR_PLAYER_TEAM";
 
-const EVENT_MODES: Array<[EventMode, string]> = [
-  ["STANDARD", "Standard singles or doubles"],
-  ["COMBINED_RATING_CAP", "Combined-rating doubles"],
-  ["FOUR_PLAYER_TEAM", "Four-player team"]
-];
-
-const TIEBREAK_OPTIONS = [
-  ["SINGLES", "One singles game"],
-  ["SKINNY_RELAY", "Skinny-singles relay"]
-] as const;
-
-const PLAYOFF_OPTIONS = [
-  ["NONE", "No playoffs"],
-  ["TOP_2_FINAL", "Top two final"],
-  ["TOP_4_SEMIFINALS", "Top four semifinals and final"],
-  ["TOP_4_SEMIFINALS_WITH_BRONZE", "Top four with bronze match"]
-] as const;
-
 function optionLabel(value: string): string {
   return value
     .toLowerCase()
@@ -70,8 +56,16 @@ function optionLabel(value: string): string {
     .join(" ");
 }
 
-function optionsWithCurrent(options: readonly string[], current: string): string[] {
-  return current && !options.includes(current) ? [current, ...options] : [...options];
+function effectiveParticipantType(value: SetupRecord, eventFamilies: BuilderRow[]): string {
+  const defaults = eventFamilyDefaults(eventFamilies, eventFamilyName(value));
+  return cleanString(
+    value.event_type || value.participant_type || defaults?.participant_type
+  );
+}
+
+function effectiveGenderRestriction(value: SetupRecord, eventFamilies: BuilderRow[]): string {
+  const defaults = eventFamilyDefaults(eventFamilies, eventFamilyName(value));
+  return cleanString(value.gender_restriction || defaults?.gender_restriction);
 }
 
 function eventMode(value: SetupRecord): EventMode {
@@ -182,6 +176,12 @@ function applyFamily(value: SetupRecord, eventFamilies: BuilderRow[], familyName
   return setEventDayReferences(next, schedule);
 }
 
+function sameSchedule(left: readonly string[], right: readonly string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((dayId) => right.includes(dayId))
+  );
+}
 
 export default function TournamentSetupDivisionCard({
   row,
@@ -208,10 +208,12 @@ export default function TournamentSetupDivisionCard({
   const scoring = cleanString(value.scoring_override || value.division_scoring);
   const familyDefaults = eventFamilyDefaults(eventFamilies, family) || {};
   const parentDays = eventDayReferences(familyDefaults);
-  const scheduleMode = cleanString(value.schedule_mode) || "INHERIT_EVENT";
-  const selectedDays = scheduleMode === "CUSTOM"
-    ? eventDayReferences(value)
-    : parentDays;
+  const storedDays = eventDayReferences(value);
+  const storedScheduleMode = cleanString(value.schedule_mode);
+  const scheduleMode =
+    storedScheduleMode ||
+    (sameSchedule(storedDays, parentDays) ? "INHERIT_EVENT" : "CUSTOM");
+  const selectedDays = scheduleMode === "CUSTOM" ? storedDays : parentDays;
   const dayLabels = new Map(
     days.map((day) => [dayReference(day.value), dayLabel(day.value) || dayReference(day.value)])
   );
@@ -258,36 +260,14 @@ export default function TournamentSetupDivisionCard({
           title={`Remove ${name || `division ${position + 1}`}?`}
           description="This removes the division from the setup draft. Published tournament data does not change until final review."
           confirmLabel="Yes, remove division"
-          cancelLabel="No, keep division"
-          confirmationText=""
-          tone="danger"
           disabled={disabled}
-          onConfirm={onRemove}
+          onConfirm={() => onRemove()}
         />
       </div>
 
       <div className={styles.grid}>
-        <label className={`${styles.label} ${styles.wide}`}>
-          Division name
-          <input
-            className={styles.input}
-            value={name}
-            disabled={disabled}
-            placeholder="3.5 · 50+"
-            onChange={(event) =>
-              onChange(
-                setRecordString(
-                  value,
-                  ["division_name", "label"],
-                  event.target.value
-                )
-              )
-            }
-          />
-        </label>
-
         <label className={styles.label}>
-          Event
+          Parent event
           <select
             className={styles.select}
             value={family}
@@ -298,10 +278,10 @@ export default function TournamentSetupDivisionCard({
           >
             <option value="">Choose an event</option>
             {eventFamilies.map((event) => {
-              const option = eventFamilyName(event.value);
-              return option ? (
-                <option key={event.key} value={option}>
-                  {option}
+              const optionValue = eventFamilyName(event.value);
+              return optionValue ? (
+                <option key={event.key} value={optionValue}>
+                  {optionValue}
                 </option>
               ) : null;
             })}
@@ -368,16 +348,12 @@ export default function TournamentSetupDivisionCard({
           Skill division
           <input
             className={styles.input}
-            list={`skills-${row.key}`}
+            list={`skill-options-${row.key}`}
             value={skill}
             disabled={disabled}
-            onChange={(event) =>
-              onChange(
-                setRecordString(value, ["skill_label"], event.target.value)
-              )
-            }
+            onChange={(event) => onChange(setEventSkillLabel(value, event.target.value))}
           />
-          <datalist id={`skills-${row.key}`}>
+          <datalist id={`skill-options-${row.key}`}>
             {SKILL_LABEL_OPTIONS.map((option) => (
               <option key={option} value={option} />
             ))}
@@ -392,7 +368,7 @@ export default function TournamentSetupDivisionCard({
             disabled={disabled}
             onChange={(event) => onChange(setEventAgeMode(value, event.target.value))}
           >
-            {optionsWithCurrent(AGE_MODES, ageMode).map((option) => (
+            {AGE_MODES.map((option) => (
               <option key={option} value={option}>
                 {optionLabel(option)}
               </option>
@@ -402,36 +378,15 @@ export default function TournamentSetupDivisionCard({
 
         {ageMode === "FIXED_AGE_BRACKET" ? (
           <label className={styles.label}>
-            Age bracket label
+            Division name / age label
             <input
               className={styles.input}
-              value={cleanString(value.age_label)}
-              disabled={disabled}
-              placeholder="50+"
-              onChange={(event) =>
-                onChange(
-                  setRecordString(value, ["age_label"], event.target.value)
-                )
-              }
-            />
-          </label>
-        ) : null}
-
-        {ageMode === "AUTO_AGE_SPLIT" ? (
-          <label className={styles.label}>
-            Minimum teams per age group
-            <input
-              className={styles.input}
-              type="number"
-              min="2"
-              step="1"
-              value={numberInputValue(ageRuleValue(value, "min_teams_per_age_group"))}
+              value={cleanString(value.age_label ?? value.division_name ?? value.label)}
               disabled={disabled}
               onChange={(event) =>
                 onChange(
-                  setAgeRuleNumber(
-                    value,
-                    "min_teams_per_age_group",
+                  setEventDivisionName(
+                    setRecordString(value, ["age_label"], event.target.value),
                     event.target.value
                   )
                 )
@@ -441,25 +396,62 @@ export default function TournamentSetupDivisionCard({
         ) : null}
 
         {ageMode === "SPLIT_AGE" ? (
-          <label className={styles.label}>
-            Split-age threshold
-            <input
-              className={styles.input}
-              type="number"
-              min="1"
-              step="1"
-              value={numberInputValue(ageRuleValue(value, "split_age_threshold"))}
-              disabled={disabled}
-              onChange={(event) =>
-                onChange(
-                  setAgeRuleNumber(value, "split_age_threshold", event.target.value)
-                )
-              }
-            />
-          </label>
+          <>
+            <label className={styles.label}>
+              Split-age threshold
+              <input
+                className={styles.input}
+                type="number"
+                min="1"
+                max="120"
+                step="1"
+                value={numberInputValue(ageRuleValue(value, "split_age_threshold"))}
+                disabled={disabled}
+                onChange={(event) =>
+                  onChange(
+                    setAgeRuleNumber(
+                      value,
+                      "split_age_threshold",
+                      event.target.value
+                    )
+                  )
+                }
+              />
+            </label>
+            <label className={styles.label}>
+              Split-age minimum teams
+              <input
+                className={styles.input}
+                type="number"
+                min="1"
+                step="1"
+                value={numberInputValue(ageRuleValue(value, "min_teams_per_age_group"))}
+                disabled={disabled}
+                onChange={(event) =>
+                  onChange(
+                    setAgeRuleNumber(
+                      value,
+                      "min_teams_per_age_group",
+                      event.target.value
+                    )
+                  )
+                }
+              />
+            </label>
+          </>
         ) : null}
 
-        <label className={`${styles.label} ${styles.wide}`}>
+        <label className={styles.label}>
+          Division name
+          <input
+            className={styles.input}
+            value={name}
+            disabled={disabled}
+            onChange={(event) => onChange(setEventDivisionName(value, event.target.value))}
+          />
+        </label>
+
+        <label className={styles.label}>
           Division format
           <select
             className={styles.select}
@@ -469,17 +461,15 @@ export default function TournamentSetupDivisionCard({
               onChange(applyEventMode(value, event.target.value as EventMode))
             }
           >
-            {EVENT_MODES.map(([option, label]) => (
-              <option key={option} value={option}>
-                {label}
-              </option>
-            ))}
+            <option value="STANDARD">Standard singles or doubles</option>
+            <option value="COMBINED_RATING_CAP">Combined-rating doubles</option>
+            <option value="FOUR_PLAYER_TEAM">Four-player team</option>
           </select>
         </label>
 
         {mode === "COMBINED_RATING_CAP" ? (
           <label className={styles.label}>
-            Maximum combined rating
+            Maximum combined partner rating
             <input
               className={styles.input}
               type="number"
@@ -495,6 +485,7 @@ export default function TournamentSetupDivisionCard({
                 )
               }
             />
+            <small>Eligibility is strictly below this cap.</small>
           </label>
         ) : null}
 
@@ -508,19 +499,12 @@ export default function TournamentSetupDivisionCard({
                 disabled={disabled}
                 onChange={(event) =>
                   onChange(
-                    setRecordString(
-                      value,
-                      ["team_tiebreak_mode"],
-                      event.target.value
-                    )
+                    setRecordString(value, ["team_tiebreak_mode"], event.target.value)
                   )
                 }
               >
-                {TIEBREAK_OPTIONS.map(([option, label]) => (
-                  <option key={option} value={option}>
-                    {label}
-                  </option>
-                ))}
+                <option value="SINGLES">One singles game</option>
+                <option value="SKINNY_RELAY">Skinny-singles relay</option>
               </select>
             </label>
             <label className={styles.label}>
@@ -531,19 +515,16 @@ export default function TournamentSetupDivisionCard({
                 disabled={disabled}
                 onChange={(event) =>
                   onChange(
-                    setRecordString(
-                      value,
-                      ["team_playoff_format"],
-                      event.target.value
-                    )
+                    setRecordString(value, ["team_playoff_format"], event.target.value)
                   )
                 }
               >
-                {PLAYOFF_OPTIONS.map(([option, label]) => (
-                  <option key={option} value={option}>
-                    {label}
-                  </option>
-                ))}
+                <option value="NONE">No playoffs</option>
+                <option value="TOP_2_FINAL">Top two final</option>
+                <option value="TOP_4_SEMIFINALS">Top four semifinals and final</option>
+                <option value="TOP_4_SEMIFINALS_WITH_BRONZE">
+                  Top four with bronze match
+                </option>
               </select>
             </label>
             <label className={styles.checkbox}>
@@ -552,10 +533,9 @@ export default function TournamentSetupDivisionCard({
                 checked={recordBoolean(value.team_allow_substitutes, false)}
                 disabled={disabled}
                 onChange={(event) =>
-                  onChange({
-                    ...value,
-                    team_allow_substitutes: event.target.checked
-                  })
+                  onChange(
+                    setRecordBoolean(value, "team_allow_substitutes", event.target.checked)
+                  )
                 }
               />
               Allow substitutes
@@ -573,9 +553,7 @@ export default function TournamentSetupDivisionCard({
             value={numberInputValue(value.capacity_teams)}
             disabled={disabled}
             onChange={(event) =>
-              onChange(
-                setRecordNumber(value, "capacity_teams", event.target.value)
-              )
+              onChange(setRecordNumber(value, "capacity_teams", event.target.value))
             }
           />
         </label>
@@ -595,97 +573,106 @@ export default function TournamentSetupDivisionCard({
             }
           />
         </label>
-      </div>
 
-      <details style={{ marginTop: "0.85rem" }}>
-        <summary style={{ cursor: "pointer", fontWeight: 800 }}>
-          Division overrides
-        </summary>
-        <div className={styles.grid} style={{ marginTop: "0.75rem" }}>
-          <label className={styles.label}>
-            Draw format override
-            <select
-              className={styles.select}
-              value={drawFormat}
-              disabled={disabled}
-              onChange={(event) =>
-                onChange(
+        <label className={styles.checkbox}>
+          <input
+            type="checkbox"
+            checked={recordBoolean(value.waitlist_enabled, true)}
+            disabled={disabled}
+            onChange={(event) =>
+              onChange(
+                setRecordBoolean(value, "waitlist_enabled", event.target.checked)
+              )
+            }
+          />
+          Waitlist enabled
+        </label>
+
+        <label className={styles.checkbox}>
+          <input
+            type="checkbox"
+            checked={recordBoolean(value.partner_board_enabled, true)}
+            disabled={disabled}
+            onChange={(event) =>
+              onChange(
+                setRecordBoolean(value, "partner_board_enabled", event.target.checked)
+              )
+            }
+          />
+          Partner Board enabled
+        </label>
+
+        <label className={styles.label}>
+          Draw format override
+          <input
+            className={styles.input}
+            value={drawFormat}
+            placeholder="Use event default"
+            disabled={disabled}
+            onChange={(event) =>
+              onChange(
+                clearIncompatibleAgeRuleFields(
                   setRecordString(
                     value,
                     ["event_format_override", "division_format"],
                     event.target.value
-                  )
+                  ),
+                  ageMode
                 )
-              }
-            >
-              <option value="">Use event default</option>
-              {optionsWithCurrent(COMPETITION_FORMATS, drawFormat)
-                .filter(Boolean)
-                .map((option) => (
-                  <option key={option} value={option}>
-                    {optionLabel(option)}
-                  </option>
-                ))}
-            </select>
-          </label>
+              )
+            }
+          />
+        </label>
 
-          <label className={styles.label}>
-            Scoring override
-            <select
-              className={styles.select}
-              value={scoring}
-              disabled={disabled}
-              onChange={(event) =>
-                onChange(
-                  setRecordString(
-                    value,
-                    ["scoring_override", "division_scoring"],
-                    event.target.value
-                  )
+        <label className={styles.label}>
+          Scoring override
+          <input
+            className={styles.input}
+            value={scoring}
+            placeholder="Use event default"
+            disabled={disabled}
+            onChange={(event) =>
+              onChange(
+                setRecordString(
+                  value,
+                  ["scoring_override", "division_scoring"],
+                  event.target.value
                 )
-              }
-            >
-              <option value="">Use event default</option>
-              {optionsWithCurrent(SCORING_OPTIONS, scoring)
-                .filter(Boolean)
-                .map((option) => (
-                  <option key={option} value={option}>
-                    {optionLabel(option)}
-                  </option>
-                ))}
-            </select>
-          </label>
+              )
+            }
+          />
+        </label>
 
-          <label className={styles.checkbox}>
-            <input
-              type="checkbox"
-              checked={recordBoolean(value.enabled, true)}
-              disabled={disabled}
-              onChange={(event) =>
-                onChange({ ...value, enabled: event.target.checked })
-              }
-            />
-            Include division in registration
-          </label>
-        </div>
-      </details>
+        <label className={styles.wide}>
+          Division notes
+          <textarea
+            className={styles.textarea}
+            rows={2}
+            value={ageRuleText(value, "notes")}
+            disabled={disabled}
+            onChange={(event) =>
+              onChange(
+                setRecordString(value, ["division_notes"], event.target.value)
+              )
+            }
+          />
+        </label>
+      </div>
 
-      <article
-        style={{
-          marginTop: "0.85rem",
-          padding: "0.75rem",
-          borderRadius: "10px",
-          background: "#f8fafc",
-          color: "#334155"
-        }}
-      >
-        <strong>{eventSummary}</strong>
+      <div className={styles.reviewBox}>
+        <strong>Review:</strong> {modeSummary(value)}
         <br />
-        <small>{modeSummary(value)}</small>
-      </article>
+        <small>{eventSummary || "Choose an event."}</small>
+        <br />
+        <small>
+          Schedule: {selectedDays.length
+            ? selectedDays.map((dayId) => dayLabels.get(dayId) || dayId).join(", ")
+            : "No tournament day selected"}
+        </small>
+      </div>
 
       {issues.length ? (
-        <ul id={issueId} className={styles.issues}>
+        <ul id={issueId} className={styles.issueList}>
           {issues.map((issue) => (
             <li key={`${issue.path}-${issue.message}`}>{issue.message}</li>
           ))}
