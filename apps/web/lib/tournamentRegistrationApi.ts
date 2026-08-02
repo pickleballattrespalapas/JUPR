@@ -16,6 +16,7 @@ export type PublicTournamentSettings = {
   partner_board_enabled?: boolean | null;
   rules_markdown?: string | null;
   refund_policy_markdown?: string | null;
+  weather_policy_markdown?: string | null;
   sponsor_markdown?: string | null;
 };
 
@@ -35,6 +36,7 @@ export type PublicRegistrationDay = {
 export type PublicRegistrationEvent = {
   id: string;
   registration_day_id: string;
+  scheduled_day_ids?: string[] | null;
   label: string;
   event_family_label: string;
   division_name: string;
@@ -260,262 +262,343 @@ export type PublicRegistrationEditResponse = TournamentRegistrationResponse & {
   commerce_order?: TournamentCommerceOrder | null;
 };
 
-export type PublicRegistrationEditSubmitPayload = Omit<PublicRegistrationSubmitPayload, "email" | "selections"> & {
-  edit_token: string;
-  email?: string | null;
-  expected_updated_at: string;
-  expected_selection_versions: Array<{ id: string; updated_at: string }>;
-  selections: Array<PublicRegistrationSelectionPayload & { id?: string | null }>;
+export type TournamentCommerceExtraOption = {
+  id: string;
+  label: string;
+  sku?: string | null;
+  price_delta_cents?: number | null;
+  inventory_total?: number | null;
+  inventory_committed?: number | null;
+  inventory_reserved?: number | null;
+  inventory_available?: number | null;
+  status?: string | null;
 };
 
-export type PublicRegistrationEditLinkRequestPayload = {
-  tournament_id?: string | null;
-  registration_slug?: string | null;
-  email: string;
-  website?: string | null;
+export type TournamentCommerceExtra = {
+  id: string;
+  name: string;
+  description?: string | null;
+  category?: string | null;
+  base_price_cents?: number | null;
+  inventory_total?: number | null;
+  inventory_committed?: number | null;
+  inventory_reserved?: number | null;
+  inventory_available?: number | null;
+  max_per_registration?: number | null;
+  requires_fulfillment?: boolean | null;
+  fulfillment_instructions?: string | null;
+  status?: string | null;
+  available_from?: string | null;
+  available_through?: string | null;
+  options: TournamentCommerceExtraOption[];
 };
 
-export type PublicRegistrationEditLinkRequestResponse = {
-  club: { id: string; slug: string; name: string };
-  ok: boolean;
-  mode?: string | null;
-  accepted?: boolean | null;
-  message?: string | null;
-  email_status?: string | null;
-  provider_message_id?: string | null;
+export type TournamentCommerceBundleComponent = {
+  event_option_id?: string | null;
+  extra_option_id?: string | null;
+  quantity: number;
+  label?: string | null;
 };
 
-export type PublicRegistrationSubmitResponse = {
-  club: { id: string; slug: string; name: string };
-  ok: boolean;
-  tournament: PublicTournamentSummary;
-  settings?: PublicTournamentSettings | null;
+export type TournamentCommerceBundle = {
+  id: string;
+  name: string;
+  description?: string | null;
+  price_cents?: number | null;
+  max_per_registration?: number | null;
+  status?: string | null;
+  available_from?: string | null;
+  available_through?: string | null;
+  components: TournamentCommerceBundleComponent[];
+};
+
+export type TournamentCommerceGiveaway = {
+  id: string;
+  extra_option_id: string;
+  trigger_type: string;
+  first_n?: number | null;
+  available_from?: string | null;
+  available_through?: string | null;
+  status?: string | null;
+};
+
+export type TournamentCommerceCatalog = {
+  catalog_fingerprint: string;
+  extras: TournamentCommerceExtra[];
+  bundles: TournamentCommerceBundle[];
+  giveaways: TournamentCommerceGiveaway[];
+};
+
+export type TournamentCommerceSelection = {
+  item_type: "extra" | "bundle";
+  item_id: string;
+  option_id?: string | null;
+  quantity: number;
+};
+
+export type TournamentCommerceQuoteLine = {
+  line_key: string;
+  item_type: string;
+  item_id: string;
+  option_id?: string | null;
+  label: string;
+  quantity: number;
+  unit_price_cents: number;
+  line_total_cents: number;
+  giveaway_applied?: boolean | null;
+};
+
+export type TournamentCommerceQuote = {
+  tournament_id: string;
+  currency: string;
+  subtotal_cents: number;
+  discount_cents: number;
+  total_cents: number;
+  lines: TournamentCommerceQuoteLine[];
+  expected_quote_fingerprint: string;
+};
+
+export type TournamentCommerceOrderLine = {
+  id: string;
+  line_key: string;
+  item_type: string;
+  item_id: string;
+  option_id?: string | null;
+  label: string;
+  quantity: number;
+  unit_price_cents: number;
+  line_total_cents: number;
+  fulfillment_status?: string | null;
+};
+
+export type TournamentCommerceOrder = {
+  id: string;
+  tournament_id: string;
   registration_id: string;
-  submitted_at?: string | null;
-  selection_count?: number | null;
-  commerce_order?: Record<string, unknown> | null;
+  payment_status?: string | null;
+  fulfillment_status?: string | null;
+  total_cents?: number | null;
+  currency?: string | null;
   updated_at?: string | null;
-  confirmation_delivery?: {
-    status: "sent" | "staging_redirect" | "dry_run" | "failed" | "unknown";
-    delivered: boolean;
-  } | null;
-  confirmation_available?: boolean | null;
-  confirmation_token?: string | null;
-  email_delivery?: {
-    status?: "dry_run" | "staging_redirect" | "sent" | "failed" | string | null;
-    message?: string | null;
-  } | null;
+  lines: TournamentCommerceOrderLine[];
 };
 
-export type PublicRegistrationConfirmationResponse = {
-  club: { id: string; slug: string; name: string };
-  tournament: PublicTournamentSummary;
-  settings?: PublicTournamentSettings | null;
-  registration: {
-    display_name: string;
-    status?: string | null;
-    payment_status?: string | null;
-    submitted_at?: string | null;
-  };
-  selections: Array<{
-    event_label: string;
-    event_family_label: string;
-    day_label: string;
-    event_date?: string | null;
-    skill_label?: string | null;
-    age_label?: string | null;
-    price_usd?: number | null;
-    partner_mode?: string | null;
-    partner_name?: string | null;
-    show_on_partner_board?: boolean | null;
-  }>;
-  total_price_usd: number;
-  commerce_order?: TournamentCommerceOrder | null;
-  payment_note: string;
-  confirmation_expires_at?: string | null;
-  notification_sender?: {
-    from_name?: string | null;
-    from_email?: string | null;
-  } | null;
-};
-
-export type ApiResult<T> = {
-  data: T | null;
-  error: string | null;
-  status?: number | null;
-  current_quote?: TournamentCommerceQuote | null;
-};
-
-function baseUrl(): string | null {
-  return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
+function apiBase(): string | null {
+  return (
+    process.env.JUPR_API_BASE_URL ||
+    process.env.NEXT_PUBLIC_JUPR_API_BASE_URL ||
+    null
+  );
 }
 
-async function apiErrorDetails(
-  response: Response
-): Promise<{ message: string; currentQuote: TournamentCommerceQuote | null }> {
-  const fallback = `API error (${response.status}).`;
-  let bodyText = "";
-  try {
-    bodyText = await response.text();
-  } catch {
-    return { message: fallback, currentQuote: null };
-  }
-  if (!bodyText) return { message: fallback, currentQuote: null };
-  try {
-    const payload = JSON.parse(bodyText) as {
-      detail?: unknown;
-      message?: unknown;
-      error?: unknown;
-    };
-    const detail = payload.detail ?? payload.message ?? payload.error;
-    if (Array.isArray(detail)) {
-      return {
-        message: `${fallback} ${detail
-          .map((item) => JSON.stringify(item))
-          .join("; ")}`,
-        currentQuote: null
-      };
-    }
-    if (detail && typeof detail === "object") {
-      const record = detail as Record<string, unknown>;
-      return {
-        message: String(record.message || fallback),
-        currentQuote:
-          record.current_quote &&
-          typeof record.current_quote === "object"
-            ? (record.current_quote as TournamentCommerceQuote)
-            : null
-      };
-    }
-    if (detail) {
-      return {
-        message: `${fallback} ${String(detail)}`,
-        currentQuote: null
-      };
-    }
-  } catch {
-    // Fall through to short text excerpt below.
-  }
-  return {
-    message: `${fallback} ${bodyText.slice(0, 240)}`,
-    currentQuote: null
-  };
+function apiUrl(base: string, path: string): string {
+  return `${base.replace(/\/$/, "")}${path}`;
 }
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
-  const apiBase = baseUrl();
-  if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable.", status: null };
-  const url = `${apiBase.replace(/\/$/, "")}${path}`;
+async function getJson<T>(path: string): Promise<{ data: T | null; error: string | null }> {
+  const base = apiBase();
+  if (!base) return { data: null, error: "Missing JUPR API base URL." };
   try {
-    const response = await fetch(url, init ?? { next: { revalidate: 60 } });
+    const response = await fetch(apiUrl(base, path), { cache: "no-store" });
+    const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      const details = await apiErrorDetails(response);
       return {
         data: null,
-        error: details.message,
-        status: response.status,
-        current_quote: details.currentQuote
+        error: String(payload?.detail || `API error (${response.status}).`)
       };
     }
-    return { data: (await response.json()) as T, error: null, status: response.status };
+    return { data: payload as T, error: null };
   } catch (error) {
-    return { data: null, error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}`, status: null };
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "Unable to reach API."
+    };
   }
 }
 
 export async function getClubTournamentRegistration(
   clubSlug: string,
-  params?: { tournamentId?: string | null; registrationSlug?: string | null }
-): Promise<ApiResult<TournamentRegistrationResponse>> {
+  options: { registrationSlug?: string | null; tournamentId?: string | null } = {}
+): Promise<{ data: TournamentRegistrationResponse | null; error: string | null }> {
   const query = new URLSearchParams();
-  if (params?.tournamentId) query.set("tournament_id", params.tournamentId);
-  if (params?.registrationSlug) query.set("registration_slug", params.registrationSlug);
+  if (options.registrationSlug) query.set("tournament", options.registrationSlug);
+  if (options.tournamentId) query.set("tournament_id", options.tournamentId);
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return fetchJson<TournamentRegistrationResponse>(`/clubs/${clubSlug}/tournament-registration${suffix}`);
+  return getJson<TournamentRegistrationResponse>(
+    `/clubs/${encodeURIComponent(clubSlug)}/tournament-registration${suffix}`
+  );
 }
 
-export async function resolveClubTournamentRegistrationProfile(
+export async function getClubTournamentRoster(
+  clubSlug: string,
+  options: { registrationSlug?: string | null; tournamentId?: string | null } = {}
+): Promise<{ data: TournamentRosterResponse | null; error: string | null }> {
+  const query = new URLSearchParams();
+  if (options.registrationSlug) query.set("tournament", options.registrationSlug);
+  if (options.tournamentId) query.set("tournament_id", options.tournamentId);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return getJson<TournamentRosterResponse>(
+    `/clubs/${encodeURIComponent(clubSlug)}/tournament-roster${suffix}`
+  );
+}
+
+export async function resolveTournamentRegistrationProfile(
   clubSlug: string,
   payload: PublicRegistrationProfileResolutionPayload
-): Promise<ApiResult<PublicRegistrationProfileResolutionResponse>> {
-  return fetchJson<PublicRegistrationProfileResolutionResponse>(
-    `/clubs/${clubSlug}/tournament-registration/profile-resolution`,
+): Promise<PublicRegistrationProfileResolutionResponse> {
+  const base = apiBase();
+  if (!base) throw new Error("Missing JUPR API base URL.");
+  const response = await fetch(
+    apiUrl(
+      base,
+      `/clubs/${encodeURIComponent(clubSlug)}/tournament-registration/resolve-profile`
+    ),
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }
   );
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(String(result?.detail || `API error (${response.status})`));
+  }
+  return result as PublicRegistrationProfileResolutionResponse;
 }
 
-export async function getClubTournamentRegistrationEdit(
+export async function quoteTournamentRegistration(
   clubSlug: string,
-  params: { editToken: string; tournamentId?: string | null; registrationSlug?: string | null }
-): Promise<ApiResult<PublicRegistrationEditResponse>> {
-  const query = new URLSearchParams({ edit_token: params.editToken });
-  if (params?.tournamentId) query.set("tournament_id", params.tournamentId);
-  if (params?.registrationSlug) query.set("registration_slug", params.registrationSlug);
-  return fetchJson<PublicRegistrationEditResponse>(`/clubs/${clubSlug}/tournament-registration/edit?${query.toString()}`, {
-    cache: "no-store"
-  });
+  payload: {
+    tournament_id?: string | null;
+    registration_slug?: string | null;
+    event_option_ids: string[];
+    commerce: { item_selections: TournamentCommerceSelection[] };
+  }
+): Promise<TournamentCommerceQuote> {
+  const base = apiBase();
+  if (!base) throw new Error("Missing JUPR API base URL.");
+  const response = await fetch(
+    apiUrl(
+      base,
+      `/clubs/${encodeURIComponent(clubSlug)}/tournament-registration/quote`
+    ),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }
+  );
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(String(result?.detail || `API error (${response.status})`));
+  }
+  return result as TournamentCommerceQuote;
 }
 
-export async function requestClubTournamentRegistrationEditLink(
-  clubSlug: string,
-  payload: PublicRegistrationEditLinkRequestPayload
-): Promise<ApiResult<PublicRegistrationEditLinkRequestResponse>> {
-  return fetchJson<PublicRegistrationEditLinkRequestResponse>(`/clubs/${clubSlug}/tournament-registration/edit-link/request`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-}
-
-export async function getClubTournamentRoster(
-  clubSlug: string,
-  params?: { tournamentId?: string | null; registrationSlug?: string | null }
-): Promise<ApiResult<TournamentRosterResponse>> {
-  const query = new URLSearchParams();
-  if (params?.tournamentId) query.set("tournament_id", params.tournamentId);
-  if (params?.registrationSlug) query.set("registration_slug", params.registrationSlug);
-  const suffix = query.toString() ? `?${query.toString()}` : "";
-  return fetchJson<TournamentRosterResponse>(`/clubs/${clubSlug}/tournament-roster${suffix}`);
-}
-
-export async function submitClubTournamentRegistration(
+export async function submitTournamentRegistration(
   clubSlug: string,
   payload: PublicRegistrationSubmitPayload
-): Promise<ApiResult<PublicRegistrationSubmitResponse>> {
-  return fetchJson<PublicRegistrationSubmitResponse>(`/clubs/${clubSlug}/tournament-registration`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-}
-
-export async function submitClubTournamentRegistrationEdit(
-  clubSlug: string,
-  payload: PublicRegistrationEditSubmitPayload
-): Promise<ApiResult<PublicRegistrationSubmitResponse>> {
-  return fetchJson<PublicRegistrationSubmitResponse>(`/clubs/${clubSlug}/tournament-registration/edit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-}
-
-export async function getClubTournamentRegistrationConfirmation(
-  clubSlug: string,
-  confirmationToken: string
-): Promise<ApiResult<PublicRegistrationConfirmationResponse>> {
-  const query = new URLSearchParams({ confirmation_token: confirmationToken });
-  return fetchJson<PublicRegistrationConfirmationResponse>(
-    `/clubs/${clubSlug}/tournament-registration/confirmation?${query.toString()}`
+): Promise<Record<string, unknown>> {
+  const base = apiBase();
+  if (!base) throw new Error("Missing JUPR API base URL.");
+  const response = await fetch(
+    apiUrl(
+      base,
+      `/clubs/${encodeURIComponent(clubSlug)}/tournament-registration`
+    ),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }
   );
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(String(result?.detail || `API error (${response.status})`));
+  }
+  return result as Record<string, unknown>;
 }
-import type {
-  TournamentCommerceCatalog,
-  TournamentCommerceOrder,
-  TournamentCommerceQuote,
-  TournamentCommerceSelection
-} from "@/lib/tournamentCommerceApi";
+
+export async function fetchTournamentRegistrationEdit(
+  clubSlug: string,
+  token: string
+): Promise<PublicRegistrationEditResponse> {
+  const base = apiBase();
+  if (!base) throw new Error("Missing JUPR API base URL.");
+  const response = await fetch(
+    apiUrl(
+      base,
+      `/clubs/${encodeURIComponent(clubSlug)}/tournament-registration/edit?token=${encodeURIComponent(token)}`
+    ),
+    { cache: "no-store" }
+  );
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(String(result?.detail || `API error (${response.status})`));
+  }
+  return result as PublicRegistrationEditResponse;
+}
+
+export async function updateTournamentRegistration(
+  clubSlug: string,
+  payload: {
+    token: string;
+    expected_registration_updated_at: string;
+    registration: Record<string, unknown>;
+    selections: PublicRegistrationSelectionPayload[];
+    commerce?: {
+      item_selections: TournamentCommerceSelection[];
+      expected_quote_fingerprint: string;
+      idempotency_key: string;
+      expected_order_updated_at?: string | null;
+    } | null;
+  }
+): Promise<Record<string, unknown>> {
+  const base = apiBase();
+  if (!base) throw new Error("Missing JUPR API base URL.");
+  const response = await fetch(
+    apiUrl(
+      base,
+      `/clubs/${encodeURIComponent(clubSlug)}/tournament-registration/edit`
+    ),
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }
+  );
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(String(result?.detail || `API error (${response.status})`));
+  }
+  return result as Record<string, unknown>;
+}
+
+export async function requestTournamentRegistrationEditLink(
+  clubSlug: string,
+  payload: {
+    tournament_id?: string | null;
+    registration_slug?: string | null;
+    email: string;
+    website?: string | null;
+  }
+): Promise<{ ok: boolean; message: string }> {
+  const base = apiBase();
+  if (!base) throw new Error("Missing JUPR API base URL.");
+  const response = await fetch(
+    apiUrl(
+      base,
+      `/clubs/${encodeURIComponent(clubSlug)}/tournament-registration/edit-link`
+    ),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }
+  );
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(String(result?.detail || `API error (${response.status})`));
+  }
+  return result as { ok: boolean; message: string };
+}
