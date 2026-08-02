@@ -39,7 +39,12 @@ jobs:
           stale = '  const familyNames = distinctFamilyNames(configuration);\n'
           if text.count(stale) != 1:
               raise SystemExit(f'stale familyNames marker match count={text.count(stale)}')
-          path.write_text(text.replace(stale, '', 1))
+          text = text.replace(stale, '', 1)
+          narrow = '                    let nextValue = {\n'
+          typed = '                    let nextValue: SetupRecord = {\n'
+          if text.count(narrow) != 1:
+              raise SystemExit(f'nextValue marker match count={text.count(narrow)}')
+          path.write_text(text.replace(narrow, typed, 1))
           PY
           git diff --check
 
