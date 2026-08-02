@@ -15,6 +15,7 @@ from jupr_app.domain.adaptive_play_engine import (
     advance_generator_event,
     create_generator_preview,
     generator_event_standings,
+    mark_generator_round_played,
     mutate_generator_roster,
     save_generator_round,
     schedule_export_rows,
@@ -212,6 +213,7 @@ def public_play_generator_session_payload(row: dict[str, Any]) -> dict[str, Any]
         "total_rounds": int(event.get("totalRounds") or 0) if event else None,
         "event": event,
         "schedule_rows": schedule_export_rows(event) if event else [],
+        "scoring_mode": str(event.get("scoringMode") or "scored") if event else "scored",
         "standings_sort": str(event.get("standingsSort") or "wins") if event else "wins",
         "standings": generator_event_standings(event) if event else [],
         "unrated": True,
@@ -265,6 +267,7 @@ def preview_public_play_generator(
     total_rounds: int,
     court_count: int,
     standings_sort: str = "wins",
+    scoring_mode: str = "scored",
 ) -> dict[str, Any]:
     kind = _normalize_kind(generator_kind)
     fmt = _normalize_format(play_format)
@@ -285,6 +288,7 @@ def preview_public_play_generator(
             total_rounds=max(1, min(int(total_rounds or 1), 50)),
             court_count=max(0, min(int(court_count or 0), 20)),
             standings_sort=standings_sort,
+            scoring_mode=scoring_mode,
         )
     except ValueError as exc:
         raise PublicPlayGeneratorError(str(exc)) from exc
@@ -322,6 +326,7 @@ def create_public_play_generator_session(
     requester_hash: str,
     token_secret: str | None = None,
     standings_sort: str = "wins",
+    scoring_mode: str = "scored",
 ) -> dict[str, Any]:
     preview_result = preview_public_play_generator(
         supabase,
@@ -334,6 +339,7 @@ def create_public_play_generator_session(
         total_rounds=total_rounds,
         court_count=court_count,
         standings_sort=standings_sort,
+        scoring_mode=scoring_mode,
     )
     preview = preview_result["preview"]
     supplied = str(preview_fingerprint or "").strip()
@@ -347,6 +353,7 @@ def create_public_play_generator_session(
         "total_rounds": int(preview.get("totalRounds") or 1),
         "court_sizes": [int(preview.get("courtCount") or 0)],
         "standings_sort": str(preview.get("standingsSort") or "wins"),
+        "scoring_mode": str(preview.get("scoringMode") or "scored"),
         "live_mode": "quick",
     }
     operation, existed = begin_public_live_operation(
@@ -731,6 +738,35 @@ def save_public_play_generator_round(
         request_payload={"round_number": int(round_number), "score_count": len(scores or [])},
         mutate=lambda event: (
             save_generator_round(event, round_number=int(round_number), scores=scores),
+            {},
+        ),
+    )
+
+
+
+def mark_public_play_generator_round_played(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_key: str,
+    round_number: int,
+    edit_token: str,
+    expected_version: int,
+    idempotency_key: str,
+    requester_hash: str,
+) -> dict[str, Any]:
+    return _run_mutation(
+        supabase,
+        club_id=club_id,
+        session_key=session_key,
+        edit_token=edit_token,
+        expected_version=expected_version,
+        idempotency_key=idempotency_key,
+        requester_hash=requester_hash,
+        action="played",
+        request_payload={"round_number": int(round_number)},
+        mutate=lambda event: (
+            mark_generator_round_played(event, round_number=int(round_number)),
             {},
         ),
     )

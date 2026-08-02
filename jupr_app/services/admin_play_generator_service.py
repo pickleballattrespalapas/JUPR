@@ -11,6 +11,7 @@ from jupr_app.domain.adaptive_play_engine import (
     advance_generator_event,
     create_generator_preview,
     generator_event_standings,
+    mark_generator_round_played,
     mutate_generator_roster,
     save_generator_round,
     schedule_export_rows,
@@ -133,6 +134,7 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
         "total_rounds": int(event.get("totalRounds") or 0) if event else None,
         "event": event,
         "schedule_rows": schedule_export_rows(event) if event else [],
+        "scoring_mode": str(event.get("scoringMode") or "scored") if event else "scored",
         "standings_sort": str(event.get("standingsSort") or "wins") if event else "wins",
         "standings": generator_event_standings(event) if event else [],
         "official_publish": _as_dict(state.get("official_publish")),
@@ -253,6 +255,7 @@ def preview_play_generator(
     total_rounds: int,
     court_count: int,
     standings_sort: str = "wins",
+    scoring_mode: str = "scored",
 ) -> dict[str, Any]:
     names, ids = _resolve_names_and_ids(
         supabase,
@@ -269,6 +272,7 @@ def preview_play_generator(
         total_rounds=total_rounds,
         court_count=court_count,
         standings_sort=standings_sort,
+        scoring_mode=scoring_mode,
     )
     return {
         "ok": True,
@@ -320,6 +324,7 @@ def create_play_generator_session(
     actor_role: str,
     source: str,
     standings_sort: str = "wins",
+    scoring_mode: str = "scored",
 ) -> dict[str, Any]:
     preview = preview_play_generator(
         supabase,
@@ -332,6 +337,7 @@ def create_play_generator_session(
         total_rounds=total_rounds,
         court_count=court_count,
         standings_sort=standings_sort,
+        scoring_mode=scoring_mode,
     )["preview"]
     supplied = _clean_text(preview_fingerprint, limit=128)
     if supplied and supplied != str(preview.get("previewFingerprint") or ""):
@@ -529,6 +535,44 @@ def save_play_generator_round(
     return {"ok": True, "mode": "play_generator_round_scores", "session": session}
 
 
+
+def mark_play_generator_round_played(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_key: str,
+    round_number: int,
+    expected_version: str,
+    actor_email: str,
+    actor_role: str,
+    source: str,
+) -> dict[str, Any]:
+    before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    event = mark_generator_round_played(
+        _event_from_state(_state(before)),
+        round_number=int(round_number),
+    )
+    updated = _persist_event(
+        supabase,
+        before=before,
+        event=event,
+        expected_version=expected_version,
+    )
+    session = _session_payload(updated)
+    _audit(
+        supabase,
+        club_id=club_id,
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action_type="mark_play_generator_round_played",
+        entity_id=session_key,
+        before_json={"session": _session_payload(before)},
+        after_json={"session": session, "round_number": int(round_number)},
+        source=source,
+    )
+    return {"ok": True, "mode": "play_generator_round_played", "session": session}
+
+
 def skip_play_generator_round(
     supabase: Any,
     *,
@@ -674,8 +718,8 @@ def complete_play_generator_session(
         (row for row in event.get("rounds") or [] if int(row.get("number") or 0) == current),
         None,
     )
-    if current_row and str(current_row.get("status")) not in {"saved", "skipped"}:
-        raise ValueError("Save or skip the current round before completing the session.")
+    if current_row and str(current_row.get("status")) not in {"saved", "played", "skipped"}:
+        raise ValueError("Save scores, mark the round played, or skip it before completing the session.")
     event["status"] = "completed"
     event["completedAt"] = _now_iso()
     updated = _persist_event(

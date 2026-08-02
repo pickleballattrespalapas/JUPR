@@ -17,6 +17,7 @@ import { useAdminSession } from "@/lib/useAdminSession";
 type GeneratorKind = "round_robin" | "ladder";
 type PlayFormat = "singles" | "doubles";
 type StandingsSort = "wins" | "points" | "differential";
+type ScoringMode = "scored" | "unscored";
 
 type Participant = {
   id: string;
@@ -56,6 +57,7 @@ type PreviewEvent = {
   generatorKind: GeneratorKind;
   playFormat: PlayFormat;
   standingsSort?: StandingsSort;
+  scoringMode?: ScoringMode;
   totalRounds: number;
   courtCount: number;
   previewFingerprint: string;
@@ -76,6 +78,7 @@ type GeneratorSession = {
   version: string;
   generator_kind: GeneratorKind;
   play_format: PlayFormat;
+  scoring_mode?: ScoringMode;
   current_round_number?: number | null;
   total_rounds?: number | null;
   updated_at?: string | null;
@@ -218,6 +221,7 @@ export default function GeneratorWorkspace({
   );
   const [playFormat, setPlayFormat] = useState<PlayFormat>("doubles");
   const [standingsSort, setStandingsSort] = useState<StandingsSort>("wins");
+  const [scoringMode, setScoringMode] = useState<ScoringMode>("scored");
   const [targetCount, setTargetCount] = useState(8);
   const [participantText, setParticipantText] = useState("");
   const [linkedPlayerIds, setLinkedPlayerIds] = useState<Record<string, number>>({});
@@ -279,6 +283,7 @@ export default function GeneratorWorkspace({
       setTitle(stored.title);
       setPlayFormat(stored.playFormat);
       setStandingsSort(stored.standingsSort || "wins");
+      setScoringMode(generatorKind === "round_robin" ? stored.scoringMode || "scored" : "scored");
       setTargetCount(stored.targetCount);
       setParticipantText(stored.participantText);
       setLinkedPlayerIds(stored.linkedPlayerIds);
@@ -296,6 +301,7 @@ export default function GeneratorWorkspace({
       title,
       playFormat,
       standingsSort,
+      scoringMode,
       targetCount,
       participantText,
       linkedPlayerIds,
@@ -307,6 +313,7 @@ export default function GeneratorWorkspace({
     title,
     playFormat,
     standingsSort,
+    scoringMode,
     targetCount,
     participantText,
     linkedPlayerIds,
@@ -335,6 +342,7 @@ export default function GeneratorWorkspace({
       generator_kind: generatorKind,
       play_format: playFormat,
       standings_sort: standingsSort,
+      scoring_mode: generatorKind === "round_robin" ? scoringMode : "scored",
       title: title.trim(),
       participant_names: participantNames,
       player_ids: allLinked ? orderedIds : [],
@@ -560,25 +568,47 @@ export default function GeneratorWorkspace({
             </select>
           </label>
           {generatorKind === "round_robin" ? (
-            <label>
-              Standings ranked by
-              <br />
-              <select
-                value={standingsSort}
-                onChange={(event) => {
-                  setStandingsSort(event.target.value as StandingsSort);
-                  invalidatePreview();
-                }}
-                style={inputStyle}
-              >
-                <option value="wins">Total wins</option>
-                <option value="points">Total points</option>
-                <option value="differential">Point differential</option>
-              </select>
-              <small style={{ display: "block", marginTop: "0.35rem", color: "#64748b" }}>
-                This primary ranking applies to the full session standings.
-              </small>
-            </label>
+            <>
+              <label>
+                Round scoring
+                <br />
+                <select
+                  value={scoringMode}
+                  onChange={(event) => {
+                    setScoringMode(event.target.value as ScoringMode);
+                    invalidatePreview();
+                  }}
+                  style={inputStyle}
+                >
+                  <option value="scored">Scored — enter scores and show standings</option>
+                  <option value="unscored">Unscored — mark each round played</option>
+                </select>
+                <small style={{ display: "block", marginTop: "0.35rem", color: "#64748b" }}>
+                  Unscored sessions have no score fields or standings between rounds.
+                </small>
+              </label>
+              {scoringMode === "scored" ? (
+                <label>
+                  Standings ranked by
+                  <br />
+                  <select
+                    value={standingsSort}
+                    onChange={(event) => {
+                      setStandingsSort(event.target.value as StandingsSort);
+                      invalidatePreview();
+                    }}
+                    style={inputStyle}
+                  >
+                    <option value="wins">Total wins</option>
+                    <option value="points">Total points</option>
+                    <option value="differential">Point differential</option>
+                  </select>
+                  <small style={{ display: "block", marginTop: "0.35rem", color: "#64748b" }}>
+                    This primary ranking applies to the full session standings.
+                  </small>
+                </label>
+              ) : null}
+            </>
           ) : null}
         </div>
 
@@ -622,7 +652,9 @@ export default function GeneratorWorkspace({
           <p style={{ color: "#475569" }}>
             {generatorKind === "ladder"
               ? "Only Round 1 is shown. Round 2 and later are generated from saved results."
-              : "Review every planned round, matchup, and bye. Change the roster order above and regenerate when needed."}
+              : scoringMode === "unscored"
+                ? "Review every planned round, matchup, and bye. During play, use Round Played to move directly to the next round."
+                : "Review every planned round, matchup, and bye. Change the roster order above and regenerate when needed."}
           </p>
           <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginBottom: "1rem" }}>
             <button type="button" onClick={downloadCsv} style={secondaryButton}>
