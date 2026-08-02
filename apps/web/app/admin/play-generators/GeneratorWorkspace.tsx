@@ -4,6 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import GeneratorRosterSetup, { normalizeRosterName, recommendedGeneratorSetup, rosterNamesFromText } from "@/components/GeneratorRosterSetup";
+import {
+  clearPlayGeneratorDraft,
+  closePreparedPdfWindow,
+  openPdfBlobInNewTab,
+  preparePdfWindow,
+  readPlayGeneratorDraft,
+  writePlayGeneratorDraft
+} from "@/lib/playGeneratorDraft";
 import { useAdminSession } from "@/lib/useAdminSession";
 
 type GeneratorKind = "round_robin" | "ladder";
@@ -214,6 +222,11 @@ export default function GeneratorWorkspace({
   const [sessions, setSessions] = useState<GeneratorSession[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [draftHydrated, setDraftHydrated] = useState(false);
+  const draftKey = useMemo(
+    () => `admin-play-generator-draft:${clubId}:${generatorKind}`,
+    [clubId, generatorKind]
+  );
   const writesEnabled = status?.writes_enabled === true;
 
   const participantNames = useMemo(
@@ -255,6 +268,44 @@ export default function GeneratorWorkspace({
       setMessage(error instanceof Error ? error.message : "Unable to load sessions.");
     }
   }
+
+  useEffect(() => {
+    setDraftHydrated(false);
+    const stored = readPlayGeneratorDraft<PreviewEvent>(draftKey);
+    if (stored) {
+      setTitle(stored.title);
+      setPlayFormat(stored.playFormat);
+      setTargetCount(stored.targetCount);
+      setParticipantText(stored.participantText);
+      setLinkedPlayerIds(stored.linkedPlayerIds);
+      setPreview(stored.preview);
+      if (stored.preview) {
+        setMessage("Restored your unsaved schedule preview.");
+      }
+    }
+    setDraftHydrated(true);
+  }, [draftKey]);
+
+  useEffect(() => {
+    if (!draftHydrated) return;
+    writePlayGeneratorDraft(draftKey, {
+      title,
+      playFormat,
+      targetCount,
+      participantText,
+      linkedPlayerIds,
+      preview
+    });
+  }, [
+    draftHydrated,
+    draftKey,
+    title,
+    playFormat,
+    targetCount,
+    participantText,
+    linkedPlayerIds,
+    preview
+  ]);
 
   useEffect(() => {
     void loadSessions();
@@ -325,6 +376,7 @@ export default function GeneratorWorkspace({
       );
       const session = payload.session;
       if (!session?.session_key) throw new Error("The session was created without a session key.");
+      clearPlayGeneratorDraft(draftKey);
       const path = `/admin/${generatorSlug(generatorKind)}/sessions/${encodeURIComponent(
         session.session_key
       )}/rounds/${session.current_round_number || 1}`;
@@ -370,7 +422,9 @@ export default function GeneratorWorkspace({
 
   async function downloadPdf(): Promise<void> {
     if (!preview) return;
-    const { jsPDF } = await import("jspdf");
+    const pdfWindow = preparePdfWindow();
+    try {
+      const { jsPDF } = await import("jspdf");
     const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
     const participants = participantMap(preview);
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -434,7 +488,14 @@ export default function GeneratorWorkspace({
       });
       y += lineHeight * 0.45;
     }
-    doc.save(`${generatorSlug(generatorKind)}-schedule.pdf`);
+    const filename = `${generatorSlug(generatorKind)}-schedule.pdf`;
+    const blob = doc.output("blob");
+    openPdfBlobInNewTab(blob, filename, pdfWindow);
+    setMessage("Opened the PDF in a new tab. Your unsaved schedule remains here.");
+    } catch (error) {
+      closePreparedPdfWindow(pdfWindow);
+      setMessage(error instanceof Error ? error.message : "Unable to open the schedule PDF.");
+    }
   }
 
   const previewParticipants = preview ? participantMap(preview) : new Map<string, Participant>();
@@ -540,7 +601,7 @@ export default function GeneratorWorkspace({
               Download CSV
             </button>
             <button type="button" onClick={() => void downloadPdf()} style={secondaryButton}>
-              Download one-sheet PDF
+              Download one-sheet PDF (opens new tab)
             </button>
             <button
               type="button"
