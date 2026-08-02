@@ -1,0 +1,253 @@
+name: Temporary public play generator verification
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.head_ref == 'agent/verify-public-play-generators-9d8757'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: staging
+    env:
+      EXPECTED_SHA: 9d875722a3e1e7393c729df26dcded8352d7f85a
+      EXPECTED_VERCEL_DEPLOYMENT_ID: dpl_3j1HGRCLP2GfArwdCDX7gZqS3QSm
+      EXPECTED_VERCEL_ORIGIN: https://jupr-khl1hl71s-pickleballattrespalapas1.vercel.app
+      CANONICAL_URL: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      PUBLIC_GENERATOR_STATUS_URL: https://juprleagues-api-staging.fly.dev/clubs/tres-palapas/play-generators/status
+      PUBLIC_PREVIEW_URL: https://juprleagues-api-staging.fly.dev/clubs/tres-palapas/play-generators/preview
+      ADMIN_GENERATOR_STATUS_URL: https://juprleagues-api-staging.fly.dev/admin/clubs/tres_palapas/play-generators/status
+      MATCH_UPLOADER_STATUS_URL: https://juprleagues-api-staging.fly.dev/admin/clubs/tres_palapas/match-uploader/status
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 1
+
+      - name: Wait for exact Vercel and Fly candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          test -n "$VERCEL_AUTOMATION_BYPASS_SECRET"
+          for attempt in $(seq 1 120); do
+            web_ok=0
+            fly_ok=0
+            if curl -fsS --max-time 20 \
+              -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" \
+              "$EXPECTED_VERCEL_ORIGIN/api/environment" \
+              -o evidence/vercel-environment.json; then
+              web_sha="$(jq -r '.git_commit_sha // empty' evidence/vercel-environment.json)"
+              web_id="$(jq -r '.vercel_deployment_id // empty' evidence/vercel-environment.json)"
+              web_origin="$(jq -r '.vercel_deployment_origin // empty' evidence/vercel-environment.json)"
+              if [ "$web_sha" = "$EXPECTED_SHA" ] && [ "$web_id" = "$EXPECTED_VERCEL_DEPLOYMENT_ID" ] && [ "$web_origin" = "$EXPECTED_VERCEL_ORIGIN" ]; then
+                web_ok=1
+              fi
+            fi
+            if curl -fsS --max-time 20 "$FLY_HEALTH_URL" -o evidence/fly-health.json; then
+              fly_sha="$(jq -r '.git_commit_sha // .source_commit_sha // .source_sha // .commit_sha // empty' evidence/fly-health.json)"
+              image_sha="$(jq -r '.image_build_git_sha // .image_git_sha // empty' evidence/fly-health.json)"
+              if [ "$fly_sha" = "$EXPECTED_SHA" ] && { [ -z "$image_sha" ] || [ "$image_sha" = "$EXPECTED_SHA" ]; }; then
+                fly_ok=1
+              fi
+            fi
+            echo "attempt=$attempt web_ok=$web_ok fly_ok=$fly_ok"
+            if [ "$web_ok" -eq 1 ] && [ "$fly_ok" -eq 1 ]; then break; fi
+            if [ "$attempt" -eq 120 ]; then
+              echo "Exact staging identities did not converge." >&2
+              cat evidence/vercel-environment.json >&2 || true
+              cat evidence/fly-health.json >&2 || true
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Verify permanent-open staging safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path('evidence/fly-health.json').read_text())
+
+          def find(value, key):
+              if isinstance(value, dict):
+                  if key in value:
+                      return value[key]
+                  for child in value.values():
+                      found = find(child, key)
+                      if found is not None:
+                          return found
+              elif isinstance(value, list):
+                  for child in value:
+                      found = find(child, key)
+                      if found is not None:
+                          return found
+              return None
+
+          observed = {
+              'environment': find(payload, 'environment'),
+              'fly_app': find(payload, 'fly_app_name'),
+              'write_wave': find(payload, 'write_wave'),
+              'staging_write_wave': find(payload, 'staging_write_wave'),
+              'business_data_write_wave_active': find(payload, 'business_data_write_wave_active'),
+              'email_mode': find(payload, 'email_mode'),
+              'live_player_update_email_enabled': find(payload, 'live_player_update_email_enabled'),
+              'production_override': find(payload, 'public_live_production_override_enabled'),
+              'supabase_project_ref': find(payload, 'supabase_project_ref'),
+          }
+          expected = {
+              'environment': 'staging',
+              'fly_app': 'juprleagues-api-staging',
+              'write_wave': 'open',
+              'staging_write_wave': 'open',
+              'business_data_write_wave_active': True,
+              'email_mode': 'dry_run',
+              'live_player_update_email_enabled': False,
+              'production_override': False,
+              'supabase_project_ref': 'sijpxjxvdtrehmqvirfi',
+          }
+          mismatches = {
+              key: {'expected': expected[key], 'actual': observed.get(key)}
+              for key in expected
+              if observed.get(key) != expected[key]
+          }
+          Path('evidence/safety-contract.json').write_text(json.dumps(observed, indent=2, sort_keys=True) + '\n')
+          print(json.dumps(observed, indent=2, sort_keys=True))
+          if mismatches:
+              raise SystemExit('Safety mismatch: ' + json.dumps(mismatches, sort_keys=True))
+          PY
+
+      - name: Verify generator and Match Uploader status
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 20 "$PUBLIC_GENERATOR_STATUS_URL" -o evidence/public-generator-status.json
+          jq -e '(.enabled == true) and (.writes_enabled == true) and (.official_publish == false) and ((.status // "") != "guarded_off")' evidence/public-generator-status.json
+          curl -fsS --max-time 20 "$ADMIN_GENERATOR_STATUS_URL" -o evidence/admin-generator-status.json
+          jq -e '(.enabled == true) and (.writes_enabled == true) and ((.status // "") != "guarded_off")' evidence/admin-generator-status.json
+          curl -fsS --max-time 20 "$MATCH_UPLOADER_STATUS_URL" -o evidence/match-uploader-status.json
+          jq -e '(.enabled == true) and (.singles_write_enabled == true) and ((.status // "") != "guarded_off")' evidence/match-uploader-status.json
+
+      - name: Verify public preview behavior without creating sessions
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 30 \
+            -H 'Content-Type: application/json' \
+            -d '{"generator_kind":"round_robin","play_format":"singles","title":"Verifier Public Singles","participant_names":["A","B","C","D","E"],"participant_player_ids":{},"total_rounds":4,"court_count":2}' \
+            "$PUBLIC_PREVIEW_URL" -o evidence/public-rr-preview.json
+          jq -e '(.ok == true) and (.preview.generatorKind == "round_robin") and (.preview.playFormat == "singles") and ((.preview.rounds | length) == 4) and ([.preview.rounds[].byeParticipantIds | length] | all(. == 1))' evidence/public-rr-preview.json
+
+          curl -fsS --max-time 30 \
+            -H 'Content-Type: application/json' \
+            -d '{"generator_kind":"ladder","play_format":"doubles","title":"Verifier Public Ladder","participant_names":["P1","P2","P3","P4","P5","P6","P7","P8","P9"],"participant_player_ids":{},"total_rounds":4,"court_count":2}' \
+            "$PUBLIC_PREVIEW_URL" -o evidence/public-ladder-preview.json
+          jq -e '(.ok == true) and (.preview.generatorKind == "ladder") and (.preview.playFormat == "doubles") and ((.preview.rounds | length) == 1)' evidence/public-ladder-preview.json
+
+      - name: Verify canonical public and admin routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          headers=(-H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET")
+          routes=(
+            "/clubs/tres-palapas/play"
+            "/clubs/tres-palapas/round-robin-generator"
+            "/clubs/tres-palapas/ladder-generator"
+            "/admin/round-robin-generator"
+            "/admin/ladder-generator"
+            "/admin/match-uploader"
+          )
+          : > evidence/routes.txt
+          for path in "${routes[@]}"; do
+            outfile="evidence/route-$(echo "$path" | tr '/?' '__').html"
+            status="$(curl -fsS --max-time 30 "${headers[@]}" -o "$outfile" -w '%{http_code}' "$CANONICAL_URL$path")"
+            echo "$path $status" | tee -a evidence/routes.txt
+            test "$status" = "200"
+          done
+          grep -q 'Create and run play' evidence/route-_clubs_tres-palapas_play.html
+          grep -q 'Round-Robin Generator' evidence/route-_clubs_tres-palapas_round-robin-generator.html
+          grep -q 'Ladder Generator' evidence/route-_clubs_tres-palapas_ladder-generator.html
+
+      - name: Verify deployed source contracts and adaptive engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          from jupr_app.domain.adaptive_play_engine import (
+              advance_generator_event,
+              create_generator_preview,
+              mutate_generator_roster,
+              save_generator_round,
+              skip_generator_round,
+              start_generator_event,
+          )
+
+          root = Path('apps/web')
+          header = (root / 'components/PublicSiteHeader.tsx').read_text()
+          hub = (root / 'app/clubs/[clubSlug]/play/page.tsx').read_text()
+          workspace = (root / 'app/clubs/[clubSlug]/play-generators/PublicGeneratorWorkspace.tsx').read_text()
+          runner = (root / 'app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner.tsx').read_text()
+          routes = Path('services/api/public_play_generator_routes.py').read_text()
+          service = Path('jupr_app/services/public_play_generator_service.py').read_text()
+          legacy = (root / 'app/clubs/[clubSlug]/live/page.tsx').read_text()
+
+          assert 'label: "Play"' in header
+          assert 'Round-Robin Generator' in hub and 'Ladder Generator' in hub
+          assert 'Download CSV' in workspace and 'Download one-sheet PDF' in workspace
+          assert 'Preview matchups' in workspace and 'Start session' in workspace
+          assert 'View-only link' in runner and 'Skip round' in runner
+          assert 'Adaptive roster' in runner and 'Substitute player' in runner
+          assert 'Public generator sessions are unrated' in runner
+          assert 'Publish official matches' not in runner
+          assert 'edit_token' in routes and 'expected_version' in routes
+          assert 'begin_public_live_operation' in service
+          assert 'edit_token_matches' in service and 'hash_edit_token' in service
+          assert 'PUBLIC_GENERATOR_MODE' in service
+          assert 'redirect(`/clubs/${params.clubSlug}/play`)' in legacy
+
+          def matches(round_row):
+              return list(round_row.get('matches') or []) or [
+                  match
+                  for court in round_row.get('courts') or []
+                  for match in court.get('matches') or []
+              ]
+
+          event = start_generator_event(create_generator_preview(
+              generator_kind='round_robin',
+              play_format='singles',
+              title='Verifier',
+              participant_names=['A', 'B', 'C', 'D', 'E'],
+              total_rounds=4,
+              court_count=2,
+          ))
+          event = save_generator_round(event, round_number=1, scores=[
+              {'match_id': match['id'], 'score_a': 11, 'score_b': 7}
+              for match in matches(event['rounds'][0])
+          ])
+          event = advance_generator_event(event)
+          saved = event['rounds'][0]
+          event = mutate_generator_roster(event, action='add', name='F')
+          event = mutate_generator_roster(event, action='substitute', participant_id='p-1', name='Sub', substitute_scope='round')
+          assert event['rounds'][0] == saved
+          event = skip_generator_round(event, round_number=2, reason='Verifier skip')
+          event = advance_generator_event(event)
+          assert event['currentRoundNumber'] == 3
+          PY
+
+      - name: Upload verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-play-generator-deployment-evidence
+          path: evidence
+          if-no-files-found: error
