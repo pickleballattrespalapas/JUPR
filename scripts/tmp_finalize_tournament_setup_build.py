@@ -207,7 +207,7 @@ def test_public_registration_displays_required_weather_policy() -> None:
     assert "settings?.weather_policy_markdown" in public_page
     assert ">Weather policy<" in public_page
 '''
-    path.write_text(text.rstrip() + addition + "\n", encoding="utf-8")
+    path.write_text((text.rstrip() + addition).rstrip() + "\n", encoding="utf-8")
 
 
 def main() -> None:
