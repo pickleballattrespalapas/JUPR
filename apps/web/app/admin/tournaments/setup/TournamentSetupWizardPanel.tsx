@@ -21,6 +21,7 @@ import {
   dayReference,
   draftSignature,
   eventDayReference,
+  eventDayReferences,
   eventDivisionName,
   eventFamilyName,
   eventUsesLabelDayReference,
@@ -33,6 +34,7 @@ import {
   recordBoolean,
   removeBuilderRow,
   replaceBuilderRow,
+  setEventDayReferences,
   setRecordString,
   validateSetupConfiguration,
   wrapBuilderRows,
@@ -42,6 +44,8 @@ import {
 } from "../../tournament-setup/tournamentSetupBuilder";
 import TournamentSetupEventFamilyCard from "./TournamentSetupEventFamilyCard";
 import TournamentSetupDivisionCard from "./TournamentSetupDivisionCard";
+import TournamentSetupDivisionDialog from "./TournamentSetupDivisionDialog";
+import TournamentSetupPolicies, { withDefaultTournamentPolicies } from "./TournamentSetupPolicies";
 
 type SetupStatus = {
   enabled: boolean;
@@ -244,30 +248,48 @@ function derivedEventFamilies(events: SetupRecord[], days: SetupRecord[]): Setup
     const family = safeString(event.event_family_label ?? event.event_family);
     if (!family) continue;
     const key = family.toLowerCase();
-    if (rows.has(key)) continue;
-    const dayReferenceValue = safeString(event.registration_day_id ?? event.assigned_day);
+    const schedule = eventDayReferences(event);
+    const existing = rows.get(key);
+    if (existing) {
+      rows.set(
+        key,
+        setEventDayReferences(existing, [
+          ...eventDayReferences(existing),
+          ...schedule
+        ])
+      );
+      continue;
+    }
     const base = newEventFamilyRow(rows.size + 1, family);
-    rows.set(key, {
-      ...base,
-      event_family: family,
-      registration_day_id: dayReferenceValue,
-      participant_type: safeString(event.event_type ?? event.participant_type) || "GENDER_DOUBLES",
-      gender_restriction: safeString(event.gender_restriction) || "ANY",
-      default_format: safeString(event.event_format_default) || "ROUND_ROBIN_PLUS_PLAYOFF",
-      default_scoring: safeString(event.scoring_default) || "GAME_TO_15",
-      default_waitlist: recordBoolean(event.waitlist_enabled, true),
-      default_partner_board: recordBoolean(event.partner_board_enabled, true),
-      default_capacity_teams: Number(event.capacity_teams) || 16,
-      default_price_usd: Number(event.price_usd) || 0
-    });
+    rows.set(
+      key,
+      setEventDayReferences(
+        {
+          ...base,
+          event_family: family,
+          participant_type: safeString(event.event_type ?? event.participant_type) || "GENDER_DOUBLES",
+          gender_restriction: safeString(event.gender_restriction) || "ANY",
+          default_format: safeString(event.event_format_default) || "ROUND_ROBIN_PLUS_PLAYOFF",
+          default_scoring: safeString(event.scoring_default) || "GAME_TO_15",
+          default_waitlist: recordBoolean(event.waitlist_enabled, true),
+          default_partner_board: recordBoolean(event.partner_board_enabled, true),
+          default_capacity_teams: Number(event.capacity_teams) || 16,
+          default_price_usd: Number(event.price_usd) || 0
+        },
+        schedule
+      )
+    );
   }
   if (rows.size) return [...rows.values()];
   const firstDay = days.find((row) => recordBoolean(row.enabled, true)) || days[0] || {};
-  return [{
-    ...newEventFamilyRow(1, "Event 1"),
-    registration_day_id: dayReference(firstDay)
-  }];
+  return [
+    setEventDayReferences(
+      newEventFamilyRow(1, "Event 1"),
+      [dayReference(firstDay)].filter(Boolean)
+    )
+  ];
 }
+
 
 function globalDivisionStatus(registrationStatus: unknown): string {
   const status = safeString(registrationStatus).toLowerCase();
@@ -317,35 +339,56 @@ function setupState(
   configuration: SetupConfiguration
 ): Partial<Record<TournamentSetupStep, TournamentSetupStepState>> {
   const issues = validateSetupConfiguration(configuration);
-  const basicsComplete = Boolean(
-    basics.name.trim() && basics.startDate && basics.endDate && basics.locationName.trim() && basics.timezone
+  const policiesComplete = Boolean(
+    safeString(settings.registration_slug).trim() &&
+      safeString(settings.registration_open_at).trim() &&
+      safeString(settings.registration_close_at).trim() &&
+      safeString(settings.rules_markdown).trim() &&
+      safeString(settings.refund_policy_markdown).trim() &&
+      safeString(settings.weather_policy_markdown).trim()
   );
+  const basicsComplete = Boolean(
+    basics.name.trim() &&
+      basics.startDate &&
+      basics.endDate &&
+      basics.locationName.trim() &&
+      basics.timezone &&
+      policiesComplete
+  );
+  const scheduleComplete =
+    configuration.days.length > 0 &&
+    !issues.some((issue) => issue.path.startsWith("days"));
   const eventsComplete =
     configuration.eventFamilies.length > 0 &&
     !issues.some((issue) => issue.path.startsWith("families"));
   const divisionsComplete =
     configuration.eventOptions.length > 0 &&
     !issues.some((issue) => issue.path.startsWith("events"));
-  const rulesComplete = Boolean(
-    safeString(settings.registration_slug).trim() &&
-      safeString(settings.registration_close_at).trim()
-  );
-  const scheduleComplete =
-    configuration.days.length > 0 &&
-    !issues.some((issue) => issue.path.startsWith("days"));
   const reviewComplete =
-    basicsComplete && eventsComplete && divisionsComplete && rulesComplete && scheduleComplete;
+    basicsComplete && scheduleComplete && eventsComplete && divisionsComplete;
 
   return {
     basics: basicsComplete ? "complete" : "in-progress",
-    events: eventsComplete ? "complete" : configuration.eventFamilies.length ? "in-progress" : "not-started",
-    divisions: divisionsComplete ? "complete" : configuration.eventOptions.length ? "in-progress" : "not-started",
-    "registration-rules": rulesComplete ? "complete" : "in-progress",
+    schedule: scheduleComplete
+      ? "complete"
+      : configuration.days.length
+        ? "in-progress"
+        : "not-started",
+    events: eventsComplete
+      ? "complete"
+      : configuration.eventFamilies.length
+        ? "in-progress"
+        : "not-started",
+    divisions: divisionsComplete
+      ? "complete"
+      : configuration.eventOptions.length
+        ? "in-progress"
+        : "not-started",
     pricing: "in-progress",
-    schedule: scheduleComplete ? "complete" : configuration.days.length ? "in-progress" : "not-started",
     review: reviewComplete ? "in-progress" : "blocked"
   };
 }
+
 
 function initialDaysFromTournament(tournament: Record<string, unknown>): SetupRecord[] {
   const start = dateValue(tournament.start_date);
@@ -417,6 +460,7 @@ export default function TournamentSetupWizardPanel({
     useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [divisionDialogOpen, setDivisionDialogOpen] = useState(false);
 
   const detailRequest = useLatestRequestGuard(
     `${accessToken}\u0000${tournamentId}`,
@@ -435,6 +479,7 @@ export default function TournamentSetupWizardPanel({
     setSetupPublishedThisSession(false);
     setBusy(false);
     setMessage(null);
+    setDivisionDialogOpen(false);
   }
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -468,7 +513,7 @@ export default function TournamentSetupWizardPanel({
   const families = draftFamilies.length
     ? draftFamilies
     : derivedEventFamilies(events, days);
-  const loadedSettings = payload.settings || {};
+  const loadedSettings = withDefaultTournamentPolicies(payload.settings || {});
 
   setDetail(payload);
   setBasics({
@@ -555,6 +600,26 @@ async function loadDetail() {
     setMessage("Every sponsor needs a name or should be removed.");
     return;
   }
+  if (!safeString(settings.registration_slug).trim()) {
+    setMessage("Registration link is required before continuing.");
+    return;
+  }
+  if (!safeString(settings.registration_open_at).trim() || !safeString(settings.registration_close_at).trim()) {
+    setMessage("Registration opening and closing dates are required before continuing.");
+    return;
+  }
+  if (!safeString(settings.rules_markdown).trim()) {
+    setMessage("Choose or write registration rules before continuing.");
+    return;
+  }
+  if (!safeString(settings.refund_policy_markdown).trim()) {
+    setMessage("Choose or write a cancellation policy before continuing.");
+    return;
+  }
+  if (!safeString(settings.weather_policy_markdown).trim()) {
+    setMessage("Choose or write a weather policy before continuing.");
+    return;
+  }
   const expectedUpdatedAt = safeString(detail.tournament.updated_at);
   if (!expectedUpdatedAt) {
     setMessage("Reload the tournament before saving its basics.");
@@ -570,6 +635,17 @@ async function loadDetail() {
       {
         method: "PATCH",
         body: JSON.stringify({
+          registration_slug: safeString(settings.registration_slug).trim(),
+          locale: safeString(settings.locale) || "en",
+          registration_status: safeString(settings.registration_status) || "draft",
+          registration_open_at: settings.registration_open_at || null,
+          registration_close_at: settings.registration_close_at || null,
+          waitlist_enabled: Boolean(settings.waitlist_enabled),
+          partner_board_enabled: Boolean(settings.partner_board_enabled),
+          rules_markdown: safeString(settings.rules_markdown),
+          refund_policy_markdown: safeString(settings.refund_policy_markdown),
+          weather_policy_markdown: safeString(settings.weather_policy_markdown),
+          sponsor_markdown: safeString(settings.sponsor_markdown),
           location_name: basics.locationName.trim(),
           timezone: basics.timezone,
           sponsors_json: basics.sponsors.map((sponsor) => ({
@@ -581,7 +657,7 @@ async function loadDetail() {
           })),
           expected_state_fingerprint: detail.state_fingerprint,
           confirmation_text: "SAVE SETUP",
-          source: "next_tournament_setup_wizard_basics_metadata"
+          source: "next_tournament_setup_wizard_basics_and_policies"
         })
       }
     );
@@ -603,15 +679,16 @@ async function loadDetail() {
     if (!actionRequest.isCurrent(generation)) return;
     await loadDetail();
     if (!actionRequest.isCurrent(generation)) return;
-    goTo("events");
+    goTo("schedule");
   } catch (error) {
     if (actionRequest.isCurrent(generation)) {
-      setMessage(error instanceof Error ? error.message : "Unable to save tournament basics.");
+      setMessage(error instanceof Error ? error.message : "Unable to save tournament basics and policies.");
     }
   } finally {
     if (actionRequest.isCurrent(generation)) setBusy(false);
   }
 }
+
 
 async function saveDraftAndContinue(nextStep: TournamentSetupStep) {
   if (!detail) return;
@@ -622,11 +699,7 @@ async function saveDraftAndContinue(nextStep: TournamentSetupStep) {
       : step === "divisions"
         ? issues.filter((issue) => issue.path.startsWith("events"))
         : step === "schedule"
-          ? issues.filter(
-              (issue) =>
-                issue.path.startsWith("days") ||
-                issue.path.endsWith("registration_day_id")
-            )
+          ? issues.filter((issue) => issue.path.startsWith("days"))
           : issues;
   if (relevantIssues.length) {
     setMessage(relevantIssues[0].message);
@@ -661,46 +734,6 @@ async function saveDraftAndContinue(nextStep: TournamentSetupStep) {
   } catch (error) {
     if (actionRequest.isCurrent(generation)) {
       setMessage(error instanceof Error ? error.message : "Unable to save setup draft.");
-    }
-  } finally {
-    if (actionRequest.isCurrent(generation)) setBusy(false);
-  }
-}
-
-async function saveRegistrationRules() {
-  if (!detail) return;
-  if (!safeString(settings.registration_slug).trim()) {
-    setMessage("Registration link is required before continuing.");
-    return;
-  }
-  if (!safeString(settings.registration_close_at).trim()) {
-    setMessage("Registration close date and time are required before continuing.");
-    return;
-  }
-
-  const generation = actionRequest.begin();
-  setBusy(true);
-  setMessage(null);
-  try {
-    await requestJson<WriteResponse>(
-      `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(tournamentId)}/settings`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          ...settings,
-          registration_status: safeString(settings.registration_status) || "draft",
-          expected_state_fingerprint: detail.state_fingerprint,
-          confirmation_text: settingsConfirmation
-        })
-      }
-    );
-    if (!actionRequest.isCurrent(generation)) return;
-    await loadDetail();
-    if (!actionRequest.isCurrent(generation)) return;
-    goTo("pricing");
-  } catch (error) {
-    if (actionRequest.isCurrent(generation)) {
-      setMessage(error instanceof Error ? error.message : "Unable to save registration rules.");
     }
   } finally {
     if (actionRequest.isCurrent(generation)) setBusy(false);
@@ -897,51 +930,68 @@ async function reviewImpact() {
   }
 
   function renderBasics() {
-  return (
-    <article style={cardStyle}>
-      <h2 style={{ marginTop: 0 }}>1. Tournament basics</h2>
-      <p style={{ color: "#475569" }}>
-        Set the tournament identity, dates, location, timezone, and sponsors. Save and continue moves directly to Events without another confirmation.
-      </p>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
-          gap: "0.75rem"
-        }}
-      >
-        <label><strong>Tournament name</strong><br /><input value={basics.name} onChange={(event) => setBasics((current) => ({ ...current, name: event.target.value }))} disabled={busy} style={inputStyle} /></label>
-        <label><strong>Start date</strong><br /><input type="date" value={basics.startDate} onChange={(event) => setBasics((current) => ({ ...current, startDate: event.target.value }))} disabled={busy} style={inputStyle} /></label>
-        <label><strong>End date</strong><br /><input type="date" min={basics.startDate || undefined} value={basics.endDate} onChange={(event) => setBasics((current) => ({ ...current, endDate: event.target.value }))} disabled={busy} style={inputStyle} /></label>
-        <label><strong>Location or venue</strong><br /><input value={basics.locationName} onChange={(event) => setBasics((current) => ({ ...current, locationName: event.target.value }))} placeholder="Tres Palapas Baja Pickleball Resort" disabled={busy} style={inputStyle} /></label>
-        <label><strong>Timezone</strong><br /><select value={basics.timezone} onChange={(event) => setBasics((current) => ({ ...current, timezone: event.target.value }))} disabled={busy} style={inputStyle}>{TIMEZONE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-      </div>
-      <section style={{ marginTop: "1.25rem" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
-          <div><h3 style={{ margin: 0 }}>Sponsors</h3><p style={{ margin: "0.25rem 0 0", color: "#64748b" }}>Add, edit, or remove sponsors shown with this tournament.</p></div>
-          <button type="button" style={ghostButtonStyle} disabled={busy} onClick={() => setBasics((current) => ({ ...current, sponsors: [...current.sponsors, newSponsor()] }))}>Add sponsor</button>
+    return (
+      <div style={{ display: "grid", gap: "1rem" }}>
+        <article style={cardStyle}>
+          <h2 style={{ marginTop: 0 }}>1. Tournament basics and policies</h2>
+          <p style={{ color: "#475569" }}>
+            Set the tournament identity, registration window, public policies,
+            location, timezone, and sponsors. Save and continue moves directly to
+            Schedule and courts without another confirmation.
+          </p>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+              gap: "0.75rem"
+            }}
+          >
+            <label><strong>Tournament name</strong><br /><input value={basics.name} onChange={(event) => setBasics((current) => ({ ...current, name: event.target.value }))} disabled={busy} style={inputStyle} /></label>
+            <label><strong>Start date</strong><br /><input type="date" value={basics.startDate} onChange={(event) => setBasics((current) => ({ ...current, startDate: event.target.value }))} disabled={busy} style={inputStyle} /></label>
+            <label><strong>End date</strong><br /><input type="date" min={basics.startDate || undefined} value={basics.endDate} onChange={(event) => setBasics((current) => ({ ...current, endDate: event.target.value }))} disabled={busy} style={inputStyle} /></label>
+            <label><strong>Location or venue</strong><br /><input value={basics.locationName} onChange={(event) => setBasics((current) => ({ ...current, locationName: event.target.value }))} placeholder="Tres Palapas Baja Pickleball Resort" disabled={busy} style={inputStyle} /></label>
+            <label><strong>Timezone</strong><br /><select value={basics.timezone} onChange={(event) => setBasics((current) => ({ ...current, timezone: event.target.value }))} disabled={busy} style={inputStyle}>{TIMEZONE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          </div>
+        </article>
+
+        <article style={cardStyle}>
+          <h3 style={{ marginTop: 0 }}>Registration window and policies</h3>
+          <TournamentSetupPolicies
+            settings={settings}
+            registrationStatus={registrationStatus}
+            disabled={busy}
+            inputStyle={inputStyle}
+            onChange={setSettings}
+          />
+        </article>
+
+        <article style={cardStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+            <div><h3 style={{ margin: 0 }}>Sponsors</h3><p style={{ margin: "0.25rem 0 0", color: "#64748b" }}>Add, edit, or remove sponsors shown with this tournament.</p></div>
+            <button type="button" style={ghostButtonStyle} disabled={busy} onClick={() => setBasics((current) => ({ ...current, sponsors: [...current.sponsors, newSponsor()] }))}>Add sponsor</button>
+          </div>
+          <div style={{ display: "grid", gap: "0.75rem", marginTop: "0.75rem" }}>
+            {basics.sponsors.map((sponsor, index) => (
+              <article key={sponsor.id} style={{ ...cardStyle, background: "#f8fafc" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))", gap: "0.65rem" }}>
+                  <label><strong>Sponsor name</strong><br /><input value={sponsor.name} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, name: event.target.value } : row) }))} disabled={busy} style={inputStyle} /></label>
+                  <label><strong>Level or label</strong><br /><input value={sponsor.level} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, level: event.target.value } : row) }))} placeholder="Title sponsor" disabled={busy} style={inputStyle} /></label>
+                  <label><strong>Website</strong><br /><input type="url" value={sponsor.website} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, website: event.target.value } : row) }))} placeholder="https://" disabled={busy} style={inputStyle} /></label>
+                  <label><strong>Notes</strong><br /><input value={sponsor.notes} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, notes: event.target.value } : row) }))} disabled={busy} style={inputStyle} /></label>
+                </div>
+                <button type="button" style={{ ...ghostButtonStyle, marginTop: "0.65rem", color: "#991b1b", borderColor: "#fecaca" }} disabled={busy} onClick={() => setBasics((current) => ({ ...current, sponsors: current.sponsors.filter((row) => row.id !== sponsor.id) }))}>Remove sponsor {index + 1}</button>
+              </article>
+            ))}
+            {!basics.sponsors.length ? <p style={{ color: "#64748b" }}>No sponsors added yet.</p> : null}
+          </div>
+        </article>
+
+        <div>
+          <button type="button" style={buttonStyle} disabled={busy} onClick={() => void saveBasics()}>{busy ? "Saving…" : "Save and continue"}</button>
         </div>
-        <div style={{ display: "grid", gap: "0.75rem", marginTop: "0.75rem" }}>
-          {basics.sponsors.map((sponsor, index) => (
-            <article key={sponsor.id} style={{ ...cardStyle, background: "#f8fafc" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))", gap: "0.65rem" }}>
-                <label><strong>Sponsor name</strong><br /><input value={sponsor.name} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, name: event.target.value } : row) }))} disabled={busy} style={inputStyle} /></label>
-                <label><strong>Level or label</strong><br /><input value={sponsor.level} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, level: event.target.value } : row) }))} placeholder="Title sponsor" disabled={busy} style={inputStyle} /></label>
-                <label><strong>Website</strong><br /><input type="url" value={sponsor.website} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, website: event.target.value } : row) }))} placeholder="https://" disabled={busy} style={inputStyle} /></label>
-                <label><strong>Notes</strong><br /><input value={sponsor.notes} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, notes: event.target.value } : row) }))} disabled={busy} style={inputStyle} /></label>
-              </div>
-              <button type="button" style={{ ...ghostButtonStyle, marginTop: "0.65rem", color: "#991b1b", borderColor: "#fecaca" }} disabled={busy} onClick={() => setBasics((current) => ({ ...current, sponsors: current.sponsors.filter((row) => row.id !== sponsor.id) }))}>Remove sponsor {index + 1}</button>
-            </article>
-          ))}
-          {!basics.sponsors.length ? <p style={{ color: "#64748b" }}>No sponsors added yet.</p> : null}
-        </div>
-      </section>
-      <div style={{ marginTop: "1rem" }}>
-        <button type="button" style={buttonStyle} disabled={busy || !basics.name.trim() || !basics.startDate || !basics.endDate || !basics.locationName.trim() || !basics.timezone} onClick={() => void saveBasics()}>{busy ? "Saving…" : "Save and continue"}</button>
       </div>
-    </article>
-  );
-}
+    );
+  }
 
 function renderEvents() {
   const familyIssues = issues.filter((issue) => issue.path.startsWith("families"));
@@ -950,7 +1000,7 @@ function renderEvents() {
       <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "flex-start", flexWrap: "wrap" }}>
           <div>
-            <h2 style={{ marginTop: 0 }}>2. Events</h2>
+            <h2 style={{ marginTop: 0 }}>3. Events</h2>
             <p style={{ color: "#475569", marginBottom: 0 }}>
               Create event families such as Gender Doubles on Tuesday or Mixed Doubles on Wednesday. Skill and age divisions are created separately in Step 3.
             </p>
@@ -1004,8 +1054,7 @@ function renderEvents() {
               setConfiguration((current) => {
                 const previousName = eventFamilyName(row.value);
                 const nextName = eventFamilyName(value);
-                const previousDay = eventDayReference(row.value);
-                const nextDay = eventDayReference(value);
+                const nextDays = eventDayReferences(value);
                 return {
                   ...current,
                   eventFamilies: replaceBuilderRow(current.eventFamilies, row.key, value),
@@ -1021,12 +1070,11 @@ function renderEvents() {
                       event_family_label: nextName,
                       event_family: nextName
                     };
-                    if (previousDay !== nextDay) {
-                      nextValue = {
-                        ...nextValue,
-                        registration_day_id: nextDay,
-                        assigned_day: nextDay
-                      };
+                    if (safeString(division.value.schedule_mode || "INHERIT_EVENT") !== "CUSTOM") {
+                      nextValue = setEventDayReferences(
+                        { ...nextValue, schedule_mode: "INHERIT_EVENT" },
+                        nextDays
+                      );
                     }
                     return { ...division, value: nextValue };
                   })
@@ -1067,7 +1115,7 @@ function renderEvents() {
       {footerRow(
         <>
           <Link
-            href={tournamentSetupStepHref("basics", tournamentId, basics.name || tournamentName)}
+            href={tournamentSetupStepHref("schedule", tournamentId, basics.name || tournamentName)}
             style={ghostButtonStyle}
           >
             Back
@@ -1090,74 +1138,88 @@ function renderDivisions() {
   const divisionIssues = issues.filter((issue) => issue.path.startsWith("events"));
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
+      <TournamentSetupDivisionDialog
+        open={divisionDialogOpen}
+        initialValue={divisionForFirstEvent(configuration)}
+        eventFamilies={configuration.eventFamilies}
+        days={configuration.days}
+        onCancel={() => setDivisionDialogOpen(false)}
+        onConfirm={(value) => {
+          const divisionId = safeString(value.id);
+          setConfiguration((current) => ({
+            ...current,
+            eventOptions: appendBuilderRow(current.eventOptions, "event", value)
+          }));
+          setImpactReview(null);
+          setDivisionDialogOpen(false);
+          setMessage(`Division ${eventDivisionName(value) || "added"} added to the setup list.`);
+          globalThis.setTimeout(() => {
+            document.getElementById(`division-${divisionId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 50);
+        }}
+      />
+
       <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "flex-start", flexWrap: "wrap" }}>
           <div>
-            <h2 style={{ marginTop: 0 }}>3. Divisions</h2>
+            <h2 style={{ marginTop: 0 }}>4. Divisions</h2>
             <p style={{ color: "#475569", marginBottom: 0 }}>
-              Create skill and age divisions inside each event. For example, Gender Doubles can contain 3.5, 4.0, and 3.5 · 50+.
+              Create skill and age divisions inside each event. A division may use every parent-event day or a selected subset.
             </p>
           </div>
           <button
             type="button"
             style={buttonStyle}
             disabled={busy || !configuration.eventFamilies.length}
-            onClick={() =>
-              setConfiguration((current) => ({
-                ...current,
-                eventOptions: appendBuilderRow(
-                  current.eventOptions,
-                  "event",
-                  divisionForFirstEvent(current)
-                )
-              }))
-            }
+            onClick={() => setDivisionDialogOpen(true)}
           >
             Add division
           </button>
         </div>
         {!configuration.eventFamilies.length ? (
           <p role="alert" style={{ color: "#b91c1c" }}>
-            Create an event in Step 2 before adding divisions.
+            Create an event in Step 3 before adding divisions.
           </p>
         ) : null}
       </article>
 
       {configuration.eventOptions.map((row, index) => (
-        <TournamentSetupDivisionCard
-          key={row.key}
-          row={row}
-          position={index}
-          total={configuration.eventOptions.length}
-          eventFamilies={configuration.eventFamilies}
-          disabled={busy}
-          issues={issuesForPath(issues, `events.${index}`)}
-          onChange={(value) => {
-            setConfiguration((current) => ({
-              ...current,
-              eventOptions: replaceBuilderRow(current.eventOptions, row.key, value)
-            }));
-            setImpactReview(null);
-          }}
-          onMove={(direction) =>
-            setConfiguration((current) => ({
-              ...current,
-              eventOptions: moveBuilderRow(current.eventOptions, row.key, direction)
-            }))
-          }
-          onRemove={() =>
-            setConfiguration((current) => ({
-              ...current,
-              eventOptions: removeBuilderRow(current.eventOptions, row.key)
-            }))
-          }
-        />
+        <div key={row.key} id={`division-${safeString(row.value.id)}`}>
+          <TournamentSetupDivisionCard
+            row={row}
+            position={index}
+            total={configuration.eventOptions.length}
+            eventFamilies={configuration.eventFamilies}
+            days={configuration.days}
+            disabled={busy}
+            issues={issuesForPath(issues, `events.${index}`)}
+            onChange={(value) => {
+              setConfiguration((current) => ({
+                ...current,
+                eventOptions: replaceBuilderRow(current.eventOptions, row.key, value)
+              }));
+              setImpactReview(null);
+            }}
+            onMove={(direction) =>
+              setConfiguration((current) => ({
+                ...current,
+                eventOptions: moveBuilderRow(current.eventOptions, row.key, direction)
+              }))
+            }
+            onRemove={() =>
+              setConfiguration((current) => ({
+                ...current,
+                eventOptions: removeBuilderRow(current.eventOptions, row.key)
+              }))
+            }
+          />
+        </div>
       ))}
 
       {!configuration.eventOptions.length ? (
         <article style={cardStyle}>
           <p style={{ margin: 0, color: "#64748b" }}>
-            No divisions yet. Click Add division to create the first one.
+            No divisions yet. Click Add division to open the focused setup dialog.
           </p>
         </article>
       ) : null}
@@ -1184,7 +1246,7 @@ function renderDivisions() {
             type="button"
             style={buttonStyle}
             disabled={busy || !configuration.eventOptions.length || divisionIssues.length > 0}
-            onClick={() => void saveDraftAndContinue("registration-rules")}
+            onClick={() => void saveDraftAndContinue("pricing")}
           >
             {busy ? "Saving…" : "Save and continue"}
           </button>
@@ -1193,170 +1255,6 @@ function renderDivisions() {
     </div>
   );
 }
-
-function renderRegistrationRules() {
-    return (
-      <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>4. Registration rules</h2>
-        <p style={{ color: "#475569" }}>
-          Set when registration is available and how waitlists, partner requests,
-          and public policies behave. Registration remains closed until Step 6.
-        </p>
-        <article style={{ margin: "0.75rem 0", padding: "0.75rem", borderRadius: "10px", background: "#eff6ff", color: "#1e3a8a" }}>
-          <strong>Tournament-wide registration status</strong><br />
-          <small>Registration status is controlled for the whole tournament here and in Step 7. Divisions do not have separate registration statuses. Current status: {registrationStatus}.</small>
-        </article>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
-            gap: "0.75rem"
-          }}
-        >
-          <label>
-            <strong>Registration link</strong>
-            <br />
-            <input
-              value={safeString(settings.registration_slug)}
-              onChange={(event) =>
-                setSettings((current) => ({
-                  ...current,
-                  registration_slug: event.target.value
-                }))
-              }
-              disabled={busy}
-              style={inputStyle}
-            />
-          </label>
-          <label>
-            <strong>Registration opens</strong>
-            <br />
-            <input
-              type="datetime-local"
-              value={safeString(settings.registration_open_at).slice(0, 16)}
-              onChange={(event) =>
-                setSettings((current) => ({
-                  ...current,
-                  registration_open_at: event.target.value
-                }))
-              }
-              disabled={busy}
-              style={inputStyle}
-            />
-          </label>
-          <label>
-            <strong>Registration closes</strong>
-            <br />
-            <input
-              type="datetime-local"
-              value={safeString(settings.registration_close_at).slice(0, 16)}
-              onChange={(event) =>
-                setSettings((current) => ({
-                  ...current,
-                  registration_close_at: event.target.value
-                }))
-              }
-              disabled={busy}
-              style={inputStyle}
-            />
-          </label>
-          <label
-            style={{
-              display: "flex",
-              gap: "0.5rem",
-              alignItems: "center",
-              alignSelf: "end"
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={Boolean(settings.waitlist_enabled)}
-              onChange={(event) =>
-                setSettings((current) => ({
-                  ...current,
-                  waitlist_enabled: event.target.checked
-                }))
-              }
-              disabled={busy}
-            />
-            Waitlist enabled
-          </label>
-          <label
-            style={{
-              display: "flex",
-              gap: "0.5rem",
-              alignItems: "center",
-              alignSelf: "end"
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={Boolean(settings.partner_board_enabled)}
-              onChange={(event) =>
-                setSettings((current) => ({
-                  ...current,
-                  partner_board_enabled: event.target.checked
-                }))
-              }
-              disabled={busy}
-            />
-            Partner Board enabled
-          </label>
-        </div>
-
-        <label style={{ display: "block", marginTop: "0.75rem" }}>
-          <strong>Registration rules</strong>
-          <br />
-          <textarea
-            value={safeString(settings.rules_markdown)}
-            onChange={(event) =>
-              setSettings((current) => ({
-                ...current,
-                rules_markdown: event.target.value
-              }))
-            }
-            rows={5}
-            disabled={busy}
-            style={inputStyle}
-          />
-        </label>
-        <label style={{ display: "block", marginTop: "0.75rem" }}>
-          <strong>Cancellation and refund policy</strong>
-          <br />
-          <textarea
-            value={safeString(settings.refund_policy_markdown)}
-            onChange={(event) =>
-              setSettings((current) => ({
-                ...current,
-                refund_policy_markdown: event.target.value
-              }))
-            }
-            rows={4}
-            disabled={busy}
-            style={inputStyle}
-          />
-        </label>
-
-        <div style={{ marginTop: "1rem" }}>
-          {footerRow(
-            <>
-              <Link
-                href={tournamentSetupStepHref(
-                  "divisions",
-                  tournamentId,
-                  basics.name || tournamentName
-                )}
-                style={ghostButtonStyle}
-              >
-                Back
-              </Link>
-              <button type="button" style={buttonStyle} disabled={busy || !safeString(settings.registration_slug).trim() || !safeString(settings.registration_close_at).trim()} onClick={() => void saveRegistrationRules()}>{busy ? "Saving…" : "Save and continue"}</button>
-            </>
-          )}
-        </div>
-      </article>
-    );
-  }
 
   function renderPricing() {
     return (
@@ -1378,7 +1276,7 @@ function renderRegistrationRules() {
           <>
             <Link
               href={tournamentSetupStepHref(
-                "registration-rules",
+                "divisions",
                 tournamentId,
                 basics.name || tournamentName
               )}
@@ -1389,9 +1287,9 @@ function renderRegistrationRules() {
             <button
               type="button"
               style={buttonStyle}
-              onClick={() => goTo("schedule")}
+              onClick={() => goTo("review")}
             >
-              Continue to schedule and courts
+              Continue to final review
             </button>
           </>
         )}
@@ -1400,34 +1298,15 @@ function renderRegistrationRules() {
   }
 
   function renderSchedule() {
-    const dayIssues = issues.filter(
-      (issue) =>
-        issue.path.startsWith("days") ||
-        issue.path.endsWith("registration_day_id")
-    );
-    const dayOptions = configuration.days.map((day) => ({
-      id: dayReference(day.value),
-      label: dayLabel(day.value) || dayReference(day.value),
-      enabled: recordBoolean(day.value.enabled, true)
-    }));
+    const dayIssues = issues.filter((issue) => issue.path.startsWith("days"));
     return (
       <div style={{ display: "grid", gap: "1rem" }}>
         <article style={cardStyle}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: "0.75rem",
-              alignItems: "flex-start",
-              flexWrap: "wrap"
-            }}
-          >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "flex-start", flexWrap: "wrap" }}>
             <div>
-              <h2 style={{ marginTop: 0 }}>6. Schedule and courts</h2>
+              <h2 style={{ marginTop: 0 }}>2. Schedule and courts</h2>
               <p style={{ color: "#475569", marginBottom: 0 }}>
-                Confirm the tournament days and assign every event to a day.
-                Exact court numbers and match times are finalized in Live
-                Operations after registration closes.
+                Create every tournament day before Events and Divisions. Events can span multiple days, and each division can inherit all event days or use a selected subset.
               </p>
             </div>
             <button
@@ -1460,31 +1339,28 @@ function renderRegistrationRules() {
             issues={issuesForPath(issues, `days.${index}`)}
             onChange={(value) =>
               setConfiguration((current) => {
-                const previous = current.days.find(
-                  (day) => day.key === row.key
-                )?.value;
-                const previousLabel = dayLabel(previous || {});
-                const nextLabel = dayLabel(value);
-                const eventOptions =
-                  previousLabel && previousLabel !== nextLabel
-                    ? current.eventOptions.map((event) =>
-                        eventUsesLabelDayReference(event.value) &&
-                        eventDayReference(event.value) === previousLabel
-                          ? {
-                              ...event,
-                              value: setRecordString(
-                                event.value,
-                                ["assigned_day"],
-                                nextLabel
-                              )
-                            }
-                          : event
-                      )
-                    : current.eventOptions;
+                const previousReferences = new Set([
+                  dayReference(row.value),
+                  dayLabel(row.value)
+                ].filter(Boolean));
+                const nextReference = dayReference(value) || dayLabel(value);
+                const replaceReferences = (record: SetupRecord) => {
+                  const refs = eventDayReferences(record).map((reference) =>
+                    previousReferences.has(reference) ? nextReference : reference
+                  );
+                  return setEventDayReferences(record, refs);
+                };
                 return {
                   ...current,
                   days: replaceBuilderRow(current.days, row.key, value),
-                  eventOptions
+                  eventFamilies: current.eventFamilies.map((family) => ({
+                    ...family,
+                    value: replaceReferences(family.value)
+                  })),
+                  eventOptions: current.eventOptions.map((division) => ({
+                    ...division,
+                    value: replaceReferences(division.value)
+                  }))
                 };
               })
             }
@@ -1498,14 +1374,15 @@ function renderRegistrationRules() {
               const references = new Set([
                 dayReference(row.value),
                 dayLabel(row.value)
-              ]);
-              const attached = configuration.eventOptions.find((event) =>
-                references.has(eventDayReference(event.value))
+              ].filter(Boolean));
+              const attachedEvent = configuration.eventFamilies.find((event) =>
+                eventDayReferences(event.value).some((reference) => references.has(reference))
               );
-              if (attached) {
-                setMessage(
-                  `Move ${eventDivisionName(attached.value) || "the attached event"} before removing this day.`
-                );
+              const attachedDivision = configuration.eventOptions.find((event) =>
+                eventDayReferences(event.value).some((reference) => references.has(reference))
+              );
+              if (attachedEvent || attachedDivision) {
+                setMessage("Remove this day from its events and divisions before deleting it.");
                 return;
               }
               setConfiguration((current) => ({
@@ -1515,87 +1392,6 @@ function renderRegistrationRules() {
             }}
           />
         ))}
-
-        <article style={cardStyle}>
-          <h3 style={{ marginTop: 0 }}>Event day assignments</h3>
-          <div style={{ display: "grid", gap: "0.65rem" }}>
-            {configuration.eventOptions.map((event) => {
-              const usesLabel = eventUsesLabelDayReference(event.value);
-              return (
-                <label
-                  key={event.key}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "minmax(180px, 1fr) minmax(180px, 1fr)",
-                    gap: "0.75rem",
-                    alignItems: "center"
-                  }}
-                >
-                  <strong>{eventDivisionName(event.value) || "Untitled event"}</strong>
-                  <select
-                    value={eventDayReference(event.value)}
-                    disabled={busy}
-                    style={inputStyle}
-                    onChange={(changeEvent) =>
-                      setConfiguration((current) => ({
-                        ...current,
-                        eventOptions: replaceBuilderRow(
-                          current.eventOptions,
-                          event.key,
-                          setRecordString(
-                            event.value,
-                            usesLabel
-                              ? ["assigned_day"]
-                              : ["registration_day_id"],
-                            changeEvent.target.value
-                          )
-                        )
-                      }))
-                    }
-                  >
-                    <option value="">Choose a day</option>
-                    {dayOptions.map((option) => (
-                      <option
-                        key={option.id}
-                        value={usesLabel ? option.label : option.id}
-                        disabled={!option.enabled}
-                      >
-                        {option.label}
-                        {option.enabled ? "" : " (disabled)"}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              );
-            })}
-          </div>
-        </article>
-
-        <article style={{ ...cardStyle, background: "#f8fafc" }}>
-          <h3 style={{ marginTop: 0 }}>Schedule summary</h3>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: "0.75rem"
-            }}
-          >
-            {eventsByDay.map((day) => (
-              <div key={day.key}>
-                <strong>{day.label}</strong>
-                <br />
-                <small>{day.date || "Date not set"}</small>
-                <ul>
-                  {day.events.map((event) => (
-                    <li key={event.key}>
-                      {eventDivisionName(event.value) || "Untitled event"}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-        </article>
 
         {dayIssues.length ? (
           <article style={{ ...cardStyle, borderColor: "#fecaca" }}>
@@ -1611,16 +1407,19 @@ function renderRegistrationRules() {
         {footerRow(
           <>
             <Link
-              href={tournamentSetupStepHref(
-                "pricing",
-                tournamentId,
-                basics.name || tournamentName
-              )}
+              href={tournamentSetupStepHref("basics", tournamentId, basics.name || tournamentName)}
               style={ghostButtonStyle}
             >
               Back
             </Link>
-            <button type="button" style={buttonStyle} disabled={busy || !configuration.days.length || dayIssues.length > 0} onClick={() => void saveDraftAndContinue("review")}>{busy ? "Saving…" : "Save and continue"}</button>
+            <button
+              type="button"
+              style={buttonStyle}
+              disabled={busy || !configuration.days.length || dayIssues.length > 0}
+              onClick={() => void saveDraftAndContinue("events")}
+            >
+              {busy ? "Saving…" : "Save and continue"}
+            </button>
           </>
         )}
       </div>
@@ -1631,26 +1430,21 @@ function renderRegistrationRules() {
     const impact = impactReview?.publish_impact || {};
     const blocked = Array.isArray(impact.blocked) ? impact.blocked : [];
     const warnings = Array.isArray(impact.warnings) ? impact.warnings : [];
-    const basicsReady = Boolean(
-      basics.name.trim() && basics.startDate && basics.endDate
-    );
-    const eventsReady = configuration.eventOptions.length > 0;
-    const scheduleReady = configuration.days.length > 0;
-    const rulesReady = Boolean(
-      safeString(settings.registration_slug).trim() &&
-        safeString(settings.registration_close_at).trim()
-    );
+    const basicsReady = states.basics === "complete";
+    const scheduleReady = states.schedule === "complete";
+    const eventFamiliesReady = states.events === "complete";
+    const divisionsReady = states.divisions === "complete";
     const ready =
       basicsReady &&
-      eventsReady &&
       scheduleReady &&
-      rulesReady &&
+      eventFamiliesReady &&
+      divisionsReady &&
       issues.length === 0;
 
     return (
       <div style={{ display: "grid", gap: "1rem" }}>
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>7. Review and open registration</h2>
+          <h2 style={{ marginTop: 0 }}>6. Review and open registration</h2>
           <p style={{ color: "#475569" }}>
             Review the complete tournament before anything becomes public. The
             three actions below are deliberate: review changes, publish setup,
@@ -1664,12 +1458,11 @@ function renderRegistrationRules() {
             }}
           >
             {[
-              ["Tournament basics", basicsReady, `${basics.startDate || "No start"} – ${basics.endDate || "No end"}`],
-              ["Events", configuration.eventFamilies.length > 0, `${configuration.eventFamilies.length} event(s)`],
-              ["Divisions", eventsReady, `${configuration.eventOptions.length} division(s)`],
-              ["Registration rules", rulesReady, `Status: ${registrationStatus}`],
-              ["Pricing and extras", true, "Review the saved catalog from Step 4"],
-              ["Schedule and courts", scheduleReady, `${configuration.days.length} tournament day(s)`]
+              ["Tournament basics and policies", basicsReady, `${basics.startDate || "No start"} – ${basics.endDate || "No end"} · registration ${registrationStatus}`],
+              ["Schedule and courts", scheduleReady, `${configuration.days.length} tournament day(s)`],
+              ["Events", eventFamiliesReady, `${configuration.eventFamilies.length} event(s)`],
+              ["Divisions", divisionsReady, `${configuration.eventOptions.length} division(s)`],
+              ["Pricing and extras", true, "Review the saved catalog from Step 5"]
             ].map(([label, complete, note]) => (
               <div
                 key={String(label)}
@@ -1797,7 +1590,7 @@ function renderRegistrationRules() {
           <>
             <Link
               href={tournamentSetupStepHref(
-                "schedule",
+                "pricing",
                 tournamentId,
                 basics.name || tournamentName
               )}
@@ -1837,7 +1630,7 @@ function renderRegistrationRules() {
             fontWeight: 900
           }}
         >
-          Step {definition.number} of 7
+          Step {definition.number} of 6
         </p>
         <h1 style={{ margin: 0 }}>{definition.label}</h1>
         <p style={{ color: "#475569", marginBottom: 0 }}>
@@ -1857,16 +1650,14 @@ function renderRegistrationRules() {
       {detail ? (
         step === "basics" ? (
           renderBasics()
+        ) : step === "schedule" ? (
+          renderSchedule()
         ) : step === "events" ? (
           renderEvents()
         ) : step === "divisions" ? (
           renderDivisions()
-) : step === "registration-rules" ? (
-          renderRegistrationRules()
         ) : step === "pricing" ? (
           renderPricing()
-        ) : step === "schedule" ? (
-          renderSchedule()
         ) : (
           renderReview()
         )

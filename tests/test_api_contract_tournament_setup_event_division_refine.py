@@ -14,11 +14,11 @@ def test_setup_wizard_has_separate_event_and_division_steps() -> None:
     assert '| "divisions"' in nav
     assert 'label: "Events"' in nav
     assert 'label: "Divisions"' in nav
-    assert "Step {definition.number} of 7" in panel
+    assert "Step {definition.number} of 6" in panel
     assert "TournamentSetupEventFamilyCard" in panel
     assert "TournamentSetupDivisionCard" in panel
     assert 'saveDraftAndContinue("divisions")' in panel
-    assert 'saveDraftAndContinue("registration-rules")' in panel
+    assert 'saveDraftAndContinue("pricing")' in panel
     assert (WEB / "app/admin/tournaments/setup/divisions/page.tsx").exists()
 
 
@@ -37,8 +37,8 @@ def test_routine_save_and_continue_actions_do_not_require_confirmation_dialogs()
     panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
     assert "Save registration rules?" not in panel
     assert "Save the tournament schedule?" not in panel
-    assert 'onClick={() => void saveRegistrationRules()}' in panel
-    assert 'onClick={() => void saveDraftAndContinue("review")}' in panel
+    assert 'onClick={() => void saveBasics()}' in panel
+    assert 'onClick={() => void saveDraftAndContinue("events")}' in panel
 
 
 def test_divisions_do_not_expose_registration_status() -> None:
@@ -46,8 +46,8 @@ def test_divisions_do_not_expose_registration_status() -> None:
     rules = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
     assert "Registration status" not in division
     assert "DIVISION_STATUSES" not in division
-    assert "Tournament-wide registration status" in rules
-    assert "Divisions do not have separate registration statuses" in rules
+    assert "TournamentSetupPolicies" in rules
+    assert "weather_policy_markdown" in rules
     assert "configurationWithGlobalStatus" in rules
 
 

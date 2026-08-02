@@ -9,8 +9,10 @@ import {
   SKILL_LABEL_OPTIONS,
   ageRuleValue,
   cleanString,
+  dayLabel,
+  dayReference,
   eventAgeMode,
-  eventDayReference,
+  eventDayReferences,
   eventFamilyDefaults,
   eventFamilyName,
   eventDivisionName,
@@ -18,6 +20,7 @@ import {
   recordBoolean,
   setAgeRuleNumber,
   setEventAgeMode,
+  setEventDayReferences,
   setRecordNumber,
   setRecordString,
   type BuilderRow,
@@ -31,6 +34,7 @@ type Props = {
   position: number;
   total: number;
   eventFamilies: BuilderRow[];
+  days: BuilderRow[];
   disabled: boolean;
   issues: ValidationIssue[];
   onChange: (value: SetupRecord) => void;
@@ -150,13 +154,11 @@ function modeSummary(value: SetupRecord): string {
 
 function applyFamily(value: SetupRecord, eventFamilies: BuilderRow[], familyName: string): SetupRecord {
   const defaults = eventFamilyDefaults(eventFamilies, familyName) || {};
-  const day = eventDayReference(defaults);
+  const schedule = eventDayReferences(defaults);
   const next: SetupRecord = {
     ...value,
     event_family_label: familyName,
     event_family: familyName,
-    registration_day_id: day || value.registration_day_id,
-    assigned_day: day || value.assigned_day,
     event_type: cleanString(defaults.participant_type) || value.event_type,
     participant_type: cleanString(defaults.participant_type) || value.participant_type,
     gender_restriction:
@@ -168,7 +170,8 @@ function applyFamily(value: SetupRecord, eventFamilies: BuilderRow[], familyName
     partner_board_enabled: recordBoolean(
       value.partner_board_enabled,
       recordBoolean(defaults.default_partner_board, true)
-    )
+    ),
+    schedule_mode: "INHERIT_EVENT"
   };
   if (value.capacity_teams == null && defaults.default_capacity_teams != null) {
     next.capacity_teams = defaults.default_capacity_teams;
@@ -176,14 +179,16 @@ function applyFamily(value: SetupRecord, eventFamilies: BuilderRow[], familyName
   if (value.price_usd == null && defaults.default_price_usd != null) {
     next.price_usd = defaults.default_price_usd;
   }
-  return next;
+  return setEventDayReferences(next, schedule);
 }
+
 
 export default function TournamentSetupDivisionCard({
   row,
   position,
   total,
   eventFamilies,
+  days,
   disabled,
   issues,
   onChange,
@@ -202,6 +207,14 @@ export default function TournamentSetupDivisionCard({
   );
   const scoring = cleanString(value.scoring_override || value.division_scoring);
   const familyDefaults = eventFamilyDefaults(eventFamilies, family) || {};
+  const parentDays = eventDayReferences(familyDefaults);
+  const scheduleMode = cleanString(value.schedule_mode) || "INHERIT_EVENT";
+  const selectedDays = scheduleMode === "CUSTOM"
+    ? eventDayReferences(value)
+    : parentDays;
+  const dayLabels = new Map(
+    days.map((day) => [dayReference(day.value), dayLabel(day.value) || dayReference(day.value)])
+  );
   const eventSummary = [
     family || "No event selected",
     cleanString(familyDefaults.participant_type)
@@ -294,6 +307,62 @@ export default function TournamentSetupDivisionCard({
             })}
           </select>
         </label>
+
+        <fieldset className={`${styles.wide} ${styles.rowCard}`} style={{ padding: "0.75rem" }}>
+          <legend style={{ fontWeight: 800 }}>Division schedule</legend>
+          <div style={{ display: "grid", gap: "0.45rem" }}>
+            <label className={styles.checkbox}>
+              <input
+                type="radio"
+                name={`schedule-mode-${row.key}`}
+                checked={scheduleMode === "INHERIT_EVENT"}
+                disabled={disabled}
+                onChange={() =>
+                  onChange(
+                    setEventDayReferences(
+                      { ...value, schedule_mode: "INHERIT_EVENT" },
+                      parentDays
+                    )
+                  )
+                }
+              />
+              Use every day selected for the parent event
+            </label>
+            <label className={styles.checkbox}>
+              <input
+                type="radio"
+                name={`schedule-mode-${row.key}`}
+                checked={scheduleMode === "CUSTOM"}
+                disabled={disabled}
+                onChange={() =>
+                  onChange({ ...value, schedule_mode: "CUSTOM" })
+                }
+              />
+              Choose specific event days
+            </label>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.45rem", marginTop: "0.6rem" }}>
+            {parentDays.map((dayId) => (
+              <label key={dayId} className={styles.checkbox}>
+                <input
+                  type="checkbox"
+                  checked={selectedDays.includes(dayId)}
+                  disabled={disabled || scheduleMode !== "CUSTOM"}
+                  onChange={(event) => {
+                    const next = event.target.checked
+                      ? [...selectedDays, dayId]
+                      : selectedDays.filter((value) => value !== dayId);
+                    onChange(setEventDayReferences(value, next));
+                  }}
+                />
+                {dayLabels.get(dayId) || dayId}
+              </label>
+            ))}
+          </div>
+          {!parentDays.length ? (
+            <p style={{ color: "#b91c1c" }}>Return to Events and select at least one tournament day.</p>
+          ) : null}
+        </fieldset>
 
         <label className={styles.label}>
           Skill division

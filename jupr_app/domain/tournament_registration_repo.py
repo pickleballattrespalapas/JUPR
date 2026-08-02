@@ -103,6 +103,7 @@ REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "location_name",
         "timezone",
         "sponsors_json",
+        "weather_policy_markdown",
     ),
     "tournament_registration_days": (
         "id",
@@ -113,6 +114,7 @@ REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "id",
         "tournament_id",
         "registration_day_id",
+        "scheduled_day_ids",
         "event_family_label",
         "division_name",
         "event_format_default",
@@ -515,6 +517,7 @@ def get_registration_settings(supabase, tournament_id: str, *, tournament_name: 
         "partner_board_enabled": True,
         "rules_markdown": "",
         "refund_policy_markdown": "",
+        "weather_policy_markdown": "",
         "sponsor_markdown": "",
         "location_name": "",
         "timezone": "America/Mazatlan",
@@ -535,6 +538,7 @@ def upsert_registration_settings(supabase, payload: dict[str, Any]) -> dict[str,
         "partner_board_enabled": _coerce_bool(payload.get("partner_board_enabled", True)),
         "rules_markdown": str(payload.get("rules_markdown") or ""),
         "refund_policy_markdown": str(payload.get("refund_policy_markdown") or ""),
+        "weather_policy_markdown": str(payload.get("weather_policy_markdown") or ""),
         "sponsor_markdown": str(payload.get("sponsor_markdown") or ""),
         "location_name": str(payload.get("location_name") or "").strip(),
         "timezone": str(payload.get("timezone") or "America/Mazatlan").strip(),
@@ -778,6 +782,7 @@ EVENT_CONFIGURATION_WRITE_FIELDS = {
     "id",
     "tournament_id",
     "registration_day_id",
+    "scheduled_day_ids",
     "sort_order",
     "label",
     "event_type",
@@ -881,10 +886,25 @@ def normalize_registration_configuration_payload(
         if row_id in event_ids:
             raise ValueError(f"Invalid event payload at row {index}: duplicate id '{row_id}'.")
         event_ids.add(row_id)
+        raw_scheduled = raw.get("scheduled_day_ids")
+        scheduled_day_ids = [
+            day_aliases.get(str(value or "").strip(), str(value or "").strip())
+            for value in (raw_scheduled if isinstance(raw_scheduled, list) else [])
+            if str(value or "").strip()
+        ]
         registration_day_id = str(raw.get("registration_day_id") or "").strip()
         registration_day_id = day_aliases.get(registration_day_id, registration_day_id)
-        if not registration_day_id and len(normalized_days) == 1:
-            registration_day_id = str(normalized_days[0]["id"])
+        if not scheduled_day_ids and registration_day_id:
+            scheduled_day_ids = [registration_day_id]
+        if not scheduled_day_ids and len(normalized_days) == 1:
+            scheduled_day_ids = [str(normalized_days[0]["id"])]
+        scheduled_day_ids = list(dict.fromkeys(scheduled_day_ids))
+        invalid_scheduled = [day_id for day_id in scheduled_day_ids if day_id not in day_ids]
+        if invalid_scheduled:
+            raise ValueError(
+                f"Invalid event payload at row {index}: scheduled day '{invalid_scheduled[0]}' is not present in day payload."
+            )
+        registration_day_id = scheduled_day_ids[0] if scheduled_day_ids else registration_day_id
         if registration_day_id not in day_ids:
             raise ValueError(
                 f"Invalid event payload at row {index}: registration_day_id '{registration_day_id}' is not present in day payload."
@@ -896,6 +916,7 @@ def normalize_registration_configuration_payload(
                 "id": row_id,
                 "tournament_id": tournament_id,
                 "registration_day_id": registration_day_id,
+                "scheduled_day_ids": scheduled_day_ids,
                 "sort_order": raw.get("sort_order") or index,
                 "label": str(raw.get("label") or raw.get("division_name") or raw.get("event_family_label") or f"Event {index}"),
                 "event_type": event_type,
@@ -1008,7 +1029,11 @@ def analyze_registration_publish_impact(
         existing_day_id = str(existing.get("registration_day_id") or "")
         draft_day_id = str(event.get("registration_day_id") or "")
         if has_usage and existing_day_id != draft_day_id:
-            blocked.append(f"Cannot move populated division '{label}' to a different day.")
+            blocked.append(f"Cannot move populated division '{label}' to a different primary day.")
+        existing_schedule = list(existing.get("scheduled_day_ids") or ([existing_day_id] if existing_day_id else []))
+        draft_schedule = list(event.get("scheduled_day_ids") or ([draft_day_id] if draft_day_id else []))
+        if has_usage and existing_schedule != draft_schedule:
+            blocked.append(f"Cannot change the multi-day schedule for populated division '{label}'.")
         if has_usage and str(existing.get("event_type") or "") != str(event.get("event_type") or ""):
             blocked.append(f"Cannot change participant type for populated division '{label}'.")
         if has_usage and str(existing.get("gender_restriction") or "") != str(event.get("gender_restriction") or ""):
