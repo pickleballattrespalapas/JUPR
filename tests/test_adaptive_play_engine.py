@@ -271,3 +271,29 @@ def test_schedule_export_has_score_columns_and_byes():
     assert rows
     assert {"round", "court", "side_a", "score_a", "score_b", "side_b", "byes"}.issubset(rows[0])
     assert any(row["byes"] for row in rows)
+
+
+def test_ladder_prefers_four_and_five_player_courts_and_three_games_for_four():
+    event = create_generator_preview(
+        generator_kind="ladder",
+        play_format="doubles",
+        title="Twelve-player Ladder",
+        participant_names=[f"Player {idx}" for idx in range(1, 13)],
+        total_rounds=3,
+        court_count=0,
+    )
+
+    courts = event["rounds"][0]["courts"]
+    assert [court["size"] for court in courts] == [4, 4, 4]
+    assert all(len(court["matches"]) == 3 for court in courts)
+
+    nine = create_generator_preview(
+        generator_kind="ladder",
+        play_format="doubles",
+        title="Nine-player Ladder",
+        participant_names=[f"Player {idx}" for idx in range(1, 10)],
+        total_rounds=2,
+        court_count=0,
+    )
+    assert [court["size"] for court in nine["rounds"][0]["courts"]] == [5, 4]
+    assert [len(court["matches"]) for court in nine["rounds"][0]["courts"]] == [5, 3]

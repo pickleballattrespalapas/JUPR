@@ -380,18 +380,40 @@ def _balanced_group_sizes(player_count: int, court_count: int, play_format: str)
     minimum = 2 if play_format == "singles" else 4
     if player_count < minimum:
         return []
+
     if court_count > 0:
-        max_courts = min(court_count, max(1, player_count // minimum))
+        group_count = min(int(court_count), max(1, player_count // minimum))
+    elif play_format == "doubles":
+        # Preserve the familiar 4-player / 5-player ladder court model whenever
+        # the roster can fit it exactly. Prefer the most simultaneous courts.
+        exact: list[tuple[int, int, int]] = []
+        for fives in range(0, (player_count // 5) + 1):
+            remainder = player_count - (fives * 5)
+            if remainder >= 0 and remainder % 4 == 0:
+                fours = remainder // 4
+                if fours + fives:
+                    exact.append((fours + fives, fours, fives))
+        if exact:
+            _groups, fours, fives = max(exact, key=lambda item: (item[0], item[1]))
+            return [5] * fives + [4] * fours
+        group_count = min(
+            max(1, math.ceil(player_count / 5)),
+            max(1, player_count // minimum),
+        )
     else:
-        target = 4 if play_format == "singles" else 5
-        max_courts = max(1, round(player_count / target))
-        max_courts = min(max_courts, max(1, player_count // minimum))
-    while max_courts > 1 and player_count // max_courts < minimum:
-        max_courts -= 1
-    sizes = [player_count // max_courts] * max_courts
-    for idx in range(player_count % max_courts):
+        # Singles ladder courts are kept at five players or fewer when the
+        # roster permits it, while still supporting every roster size.
+        group_count = min(
+            max(1, math.ceil(player_count / 5)),
+            max(1, player_count // minimum),
+        )
+
+    while group_count > 1 and player_count // group_count < minimum:
+        group_count -= 1
+    sizes = [player_count // group_count] * group_count
+    for idx in range(player_count % group_count):
         sizes[idx] += 1
-    return sizes
+    return sorted(sizes, reverse=True)
 
 def _circle_singles_matches(ids: list[str], *, round_number: int, court_number: int) -> list[dict[str, Any]]:
     if len(ids) < 2:
@@ -456,7 +478,7 @@ def _ladder_group_matches(
     }
     history = _blank_history(local_event)
     matches: list[dict[str, Any]] = []
-    mini_count = max(3, len(ids))
+    mini_count = 3 if len(ids) == 4 else max(3, len(ids))
     for mini in range(1, mini_count + 1):
         generated, byes, _warnings = _doubles_round(
             active_ids=ids,

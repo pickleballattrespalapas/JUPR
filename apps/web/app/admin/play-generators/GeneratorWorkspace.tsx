@@ -553,7 +553,11 @@ export default function GeneratorWorkspace({
               type="number"
               style={inputStyle}
             />
-            <small style={{ color: "#64748b" }}>Use 0 to schedule the maximum simultaneous courts.</small>
+            <small style={{ color: "#64748b" }}>
+              {generatorKind === "ladder"
+                ? "Use 0 to create balanced ladder courts automatically."
+                : "Use 0 to schedule the maximum simultaneous courts."}
+            </small>
           </label>
         </div>
 
