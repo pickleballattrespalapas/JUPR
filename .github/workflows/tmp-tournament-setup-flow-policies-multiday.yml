@@ -64,6 +64,17 @@ jobs:
               policies_text = policies_text[:second] + policies_text[end + 2 :]
               policies_path.write_text(policies_text)
 
+          panel_path = Path("apps/web/app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+          panel_text = panel_path.read_text()
+          duplicate_review = "async function reviewImpact()\n\nasync function reviewImpact() {"
+          if duplicate_review in panel_text:
+              panel_text = panel_text.replace(
+                  duplicate_review,
+                  "async function reviewImpact() {",
+                  1,
+              )
+              panel_path.write_text(panel_text)
+
           setup_test = Path("tests/test_api_contract_tournament_setup_event_division_refine.py")
           setup_text = setup_test.read_text()
           setup_replacements = {
