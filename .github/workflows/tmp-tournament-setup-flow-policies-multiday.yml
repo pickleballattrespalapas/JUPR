@@ -26,7 +26,7 @@ jobs:
       - name: Apply flow, policy, modal, and multi-day patch
         run: PYTHONPATH=. python scripts/tmp_tournament_setup_flow_policies_multiday.py
 
-      - name: Refresh production migration contract
+      - name: Refresh migration and focused-test contracts
         shell: bash
         run: |
           set -euo pipefail
@@ -50,6 +50,28 @@ jobs:
               "\n".join(records).encode("utf-8")
           ).hexdigest()
           contract_path.write_text(json.dumps(contract, indent=2) + "\n")
+
+          setup_test = Path("tests/test_api_contract_tournament_setup_event_division_refine.py")
+          setup_text = setup_test.read_text()
+          old = "    assert 'onClick={() => void saveRegistrationRules()}' in panel\n"
+          new = "    assert 'onClick={() => void saveBasics()}' in panel\n"
+          if setup_text.count(old) != 1:
+              raise SystemExit(f"routine save assertion match count={setup_text.count(old)}")
+          setup_test.write_text(setup_text.replace(old, new, 1))
+
+          production_test = Path("tests/test_production_deployment_hardening.py")
+          production_text = production_test.read_text()
+          replacements = {
+              "    assert len(versions) == 55\n": "    assert len(versions) == 56\n",
+              "    assert len(names) == 55\n": "    assert len(names) == 56\n",
+              "    assert len(contract[\"required_ledger_names\"]) == 55\n": "    assert len(contract[\"required_ledger_names\"]) == 56\n",
+              '''    assert versions[-5:] == (\n        "20260728041000",\n        "20260731033000",\n        "20260731210000",\n        "20261020000000",\n        "20261021000000",\n    )\n''': '''    assert versions[-5:] == (\n        "20260731033000",\n        "20260731210000",\n        "20261020000000",\n        "20261021000000",\n        "20261022000000",\n    )\n''',
+          }
+          for old_value, new_value in replacements.items():
+              if production_text.count(old_value) != 1:
+                  raise SystemExit(f"production contract marker match count={production_text.count(old_value)} for {old_value!r}")
+              production_text = production_text.replace(old_value, new_value, 1)
+          production_test.write_text(production_text)
           PY
 
       - uses: actions/setup-python@v5
