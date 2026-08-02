@@ -81,3 +81,19 @@ def test_round_robin_previews_all_rounds_but_ladder_generates_adaptively() -> No
     assert 'if kind == "ladder":' in engine
     assert "_ladder_next_order" in engine
     assert "Save or skip the current round before continuing." in engine
+
+
+def test_every_play_generator_unsafe_route_is_classified_for_staging() -> None:
+    waves = read("scripts/staging_write_waves.py")
+    required = (
+        '("POST", "/admin/clubs/{club_id}/play-generators/preview")',
+        '("POST", "/admin/clubs/{club_id}/play-generators/sessions")',
+        '("PATCH", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/scores")',
+        '("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/skip")',
+        '("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/advance")',
+        '("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/roster")',
+        '("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/complete")',
+        '("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/publish")',
+    )
+    for route in required:
+        assert route in waves
