@@ -1,1 +1,2 @@
 Temporary trigger for the corrected standings publisher. Remove before merge.
+Second corrected run.
