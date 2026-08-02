@@ -1,0 +1,63 @@
+name: Temporary Tournament Setup build fixer
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-build:
+    if: github.head_ref == 'agent/tournament-setup-event-division-refine' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NEXT_PUBLIC_JUPR_API_BASE_URL: http://localhost:8000
+      JUPR_API_BASE_URL: http://localhost:8000
+      NEXT_PUBLIC_JUPR_WEB_BASE_URL: https://pickleballclubsandwich.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/tournament-setup-event-division-refine
+          fetch-depth: 0
+
+      - name: Add missing event-family import
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('apps/web/app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx')
+          text = path.read_text()
+          old = '  eventDayReference,\n  eventDivisionName,\n'
+          new = '  eventDayReference,\n  eventDivisionName,\n  eventFamilyName,\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'import marker match count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm install --no-audit --no-fund
+
+      - name: Build Next app
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Commit clean build fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/tmp-tournament-setup-build-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix Tournament Setup wizard build"
+          git push origin HEAD:agent/tournament-setup-event-division-refine
