@@ -23,6 +23,32 @@ def test_guided_setup_order_and_policy_merge() -> None:
     assert 'saveDraftAndContinue("pricing")' in panel
 
 
+def test_lifecycle_overview_and_phase_nav_match_refined_setup_flow() -> None:
+    overview = read("app/admin/tournaments/TournamentLifecycleOverviewPanel.tsx")
+    phase_nav = read("components/TournamentPhaseNav.tsx")
+    for label in (
+        "1. Tournament basics and policies",
+        "2. Schedule and courts",
+        "3. Events",
+        "4. Divisions",
+        "5. Pricing, extras, and fulfillment",
+        "6. Review and open registration",
+    ):
+        assert label in overview
+    for label in (
+        "1. Basics & policies",
+        "2. Schedule & courts",
+        "3. Events",
+        "4. Divisions",
+        "5. Pricing & extras",
+        "6. Review & open",
+    ):
+        assert label in phase_nav
+    assert '"registration-rules"' not in phase_nav
+    assert overview.index("1. Tournament basics and policies") < overview.index("2. Schedule and courts")
+    assert overview.index("2. Schedule and courts") < overview.index("3. Events") < overview.index("4. Divisions")
+
+
 def test_legacy_registration_rules_route_redirects_to_basics() -> None:
     route = read("app/admin/tournaments/setup/registration-rules/page.tsx")
     assert 'redirect(`/admin/tournaments/setup/basics?' in route
