@@ -346,10 +346,15 @@ export function newDayRow(position: number, label = `Day ${position}`): SetupRec
   };
 }
 
-export function newEventFamilyRow(position: number, name = `Event ${position}`): SetupRecord {
+export function newEventFamilyRow(
+  position: number,
+  name = `Event ${position}`,
+  registrationDayId = ""
+): SetupRecord {
   return {
     id: newContractId("family"),
     event_family: name,
+    registration_day_id: registrationDayId,
     participant_type: "GENDER_DOUBLES",
     gender_restriction: "ANY",
     default_format: "ROUND_ROBIN_PLUS_PLAYOFF",

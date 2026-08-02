@@ -79,7 +79,7 @@ export default async function TournamentSetupWizardPage({
       </p>
       <h1 style={{ marginTop: 0 }}>{tournamentName || "Tournament"} setup</h1>
       <p style={{ color: "#334155", maxWidth: "860px" }}>
-        Complete the six setup steps in order. Each save keeps the current
+        Complete the seven setup steps in order. Each save keeps the current
         tournament context and moves you directly to the next task.
       </p>
       {error ? (
