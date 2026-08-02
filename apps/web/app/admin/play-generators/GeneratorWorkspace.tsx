@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import GeneratorRosterSetup, { normalizeRosterName, recommendedGeneratorSetup, rosterNamesFromText } from "@/components/GeneratorRosterSetup";
 import { useAdminSession } from "@/lib/useAdminSession";
 
 type GeneratorKind = "round_robin" | "ladder";
@@ -88,11 +89,6 @@ type StatusResponse = {
   warnings?: string[];
 };
 
-type PlayerDraft = {
-  key: string;
-  name: string;
-  playerId: string;
-};
 
 type Props = {
   generatorKind: GeneratorKind;
@@ -160,14 +156,6 @@ function operationKey(): string {
   return `generator-${newKey()}`;
 }
 
-function initialPlayers(count = 4): PlayerDraft[] {
-  return Array.from({ length: count }, () => ({
-    key: newKey(),
-    name: "",
-    playerId: ""
-  }));
-}
-
 function flattenMatches(round: RoundRow): MatchRow[] {
   if (round.matches?.length) return round.matches;
   return (round.courts || []).flatMap((court) => court.matches || []);
@@ -219,19 +207,24 @@ export default function GeneratorWorkspace({
     `${generatorTitle(generatorKind)} ${new Date().toISOString().slice(0, 10)}`
   );
   const [playFormat, setPlayFormat] = useState<PlayFormat>("doubles");
-  const [totalRounds, setTotalRounds] = useState(generatorKind === "ladder" ? "4" : "6");
-  const [courtCount, setCourtCount] = useState("0");
-  const [players, setPlayers] = useState<PlayerDraft[]>(() => initialPlayers(4));
+  const [targetCount, setTargetCount] = useState(8);
+  const [participantText, setParticipantText] = useState("");
+  const [linkedPlayerIds, setLinkedPlayerIds] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<PreviewEvent | null>(null);
   const [sessions, setSessions] = useState<GeneratorSession[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const writesEnabled = status?.writes_enabled === true;
 
-  const cleanRows = useMemo(
-    () => players.filter((row) => row.name.trim()),
-    [players]
+  const participantNames = useMemo(
+    () => rosterNamesFromText(participantText),
+    [participantText]
   );
+  const automaticSetup = useMemo(
+    () => recommendedGeneratorSetup(generatorKind, playFormat, targetCount),
+    [generatorKind, playFormat, targetCount]
+  );
+  const rosterReady = participantNames.length === targetCount;
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("Missing API base URL.");
@@ -273,49 +266,22 @@ export default function GeneratorWorkspace({
     setMessage(null);
   }
 
-  function updatePlayer(key: string, patch: Partial<PlayerDraft>): void {
-    setPlayers((current) =>
-      current.map((row) => (row.key === key ? { ...row, ...patch } : row))
-    );
-    invalidatePreview();
-  }
-
-  function movePlayer(index: number, direction: -1 | 1): void {
-    setPlayers((current) => {
-      const next = [...current];
-      const target = index + direction;
-      if (target < 0 || target >= next.length) return current;
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
-    invalidatePreview();
-  }
-
-  function removePlayer(key: string): void {
-    setPlayers((current) => current.filter((row) => row.key !== key));
-    invalidatePreview();
-  }
-
-  function addPlayer(): void {
-    setPlayers((current) => [...current, { key: newKey(), name: "", playerId: "" }]);
-    invalidatePreview();
-  }
-
   function requestBody(): Record<string, unknown> {
-    const names = cleanRows.map((row) => row.name.trim());
-    const rawIds = cleanRows.map((row) => row.playerId.trim());
-    const hasAnyId = rawIds.some(Boolean);
-    if (hasAnyId && rawIds.some((value) => !value)) {
-      throw new Error("Either link every entered player to an official player ID or leave all IDs blank.");
+    if (!rosterReady) {
+      throw new Error(`Add exactly ${targetCount} unique players before previewing.`);
     }
+    const orderedIds = participantNames.map((name) =>
+      Number(linkedPlayerIds[normalizeRosterName(name)] || 0)
+    );
+    const allLinked = orderedIds.every((playerId) => playerId > 0);
     return {
       generator_kind: generatorKind,
       play_format: playFormat,
       title: title.trim(),
-      participant_names: names,
-      player_ids: hasAnyId ? rawIds.map(Number) : [],
-      total_rounds: Number(totalRounds),
-      court_count: Number(courtCount)
+      participant_names: participantNames,
+      player_ids: allLinked ? orderedIds : [],
+      total_rounds: automaticSetup.totalRounds,
+      court_count: automaticSetup.courtCount
     };
   }
 
@@ -471,7 +437,6 @@ export default function GeneratorWorkspace({
     doc.save(`${generatorSlug(generatorKind)}-schedule.pdf`);
   }
 
-  const minimumPlayers = playFormat === "singles" ? 2 : 4;
   const previewParticipants = preview ? participantMap(preview) : new Map<string, Participant>();
 
   return (
@@ -515,7 +480,9 @@ export default function GeneratorWorkspace({
             <select
               value={playFormat}
               onChange={(event) => {
-                setPlayFormat(event.target.value as PlayFormat);
+                const nextFormat = event.target.value as PlayFormat;
+                setPlayFormat(nextFormat);
+                setTargetCount((current) => Math.max(current, nextFormat === "singles" ? 2 : 4));
                 invalidatePreview();
               }}
               style={inputStyle}
@@ -524,110 +491,26 @@ export default function GeneratorWorkspace({
               <option value="singles">Singles</option>
             </select>
           </label>
-          <label>
-            Planned rounds
-            <br />
-            <input
-              value={totalRounds}
-              onChange={(event) => {
-                setTotalRounds(event.target.value);
-                invalidatePreview();
-              }}
-              min={1}
-              max={50}
-              type="number"
-              style={inputStyle}
-            />
-          </label>
-          <label>
-            Available courts
-            <br />
-            <input
-              value={courtCount}
-              onChange={(event) => {
-                setCourtCount(event.target.value);
-                invalidatePreview();
-              }}
-              min={0}
-              max={20}
-              type="number"
-              style={inputStyle}
-            />
-            <small style={{ color: "#64748b" }}>
-              {generatorKind === "ladder"
-                ? "Use 0 to create balanced ladder courts automatically."
-                : "Use 0 to schedule the maximum simultaneous courts."}
-            </small>
-          </label>
         </div>
 
-        <h3>Starting roster</h3>
-        <div style={{ display: "grid", gap: "0.55rem" }}>
-          {players.map((row, index) => (
-            <div
-              key={row.key}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "2.2rem minmax(150px, 1fr) minmax(110px, 0.45fr) auto",
-                gap: "0.5rem",
-                alignItems: "center"
-              }}
-            >
-              <strong aria-label={`Roster position ${index + 1}`}>{index + 1}</strong>
-              <input
-                value={row.name}
-                onChange={(event) => updatePlayer(row.key, { name: event.target.value })}
-                placeholder={`Player ${index + 1}`}
-                aria-label={`Player ${index + 1} name`}
-                style={inputStyle}
-              />
-              <input
-                value={row.playerId}
-                onChange={(event) => updatePlayer(row.key, { playerId: event.target.value })}
-                placeholder="Official ID optional"
-                inputMode="numeric"
-                aria-label={`Player ${index + 1} official ID`}
-                style={inputStyle}
-              />
-              <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
-                <button
-                  type="button"
-                  onClick={() => movePlayer(index, -1)}
-                  disabled={index === 0}
-                  aria-label={`Move ${row.name || `player ${index + 1}`} up`}
-                  style={secondaryButton}
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  onClick={() => movePlayer(index, 1)}
-                  disabled={index === players.length - 1}
-                  aria-label={`Move ${row.name || `player ${index + 1}`} down`}
-                  style={secondaryButton}
-                >
-                  ↓
-                </button>
-                <button
-                  type="button"
-                  onClick={() => removePlayer(row.key)}
-                  aria-label={`Remove ${row.name || `player ${index + 1}`}`}
-                  style={secondaryButton}
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
-          <button type="button" onClick={addPlayer} style={secondaryButton}>
-            Add player
-          </button>
+        <GeneratorRosterSetup
+          apiBase={apiBase}
+          clubKey={clubId}
+          generatorKind={generatorKind}
+          playFormat={playFormat}
+          targetCount={targetCount}
+          participantText={participantText}
+          linkedPlayerIds={linkedPlayerIds}
+          onTargetCountChange={setTargetCount}
+          onParticipantTextChange={setParticipantText}
+          onLinkedPlayerIdsChange={setLinkedPlayerIds}
+          onInvalidate={invalidatePreview}
+        />
+        <div style={{ marginTop: "0.9rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
           <button
             type="button"
             onClick={() => void generatePreview()}
-            disabled={busy || cleanRows.length < minimumPlayers}
+            disabled={busy || !rosterReady}
             style={primaryButton}
           >
             {busy ? "Generating…" : "Preview matchups"}
