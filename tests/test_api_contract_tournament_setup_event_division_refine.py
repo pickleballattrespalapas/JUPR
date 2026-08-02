@@ -1,0 +1,55 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+WEB = ROOT / "apps" / "web"
+
+
+def read(path: str) -> str:
+    return (WEB / path).read_text(encoding="utf-8")
+
+
+def test_setup_wizard_has_separate_event_and_division_steps() -> None:
+    nav = read("components/TournamentSetupWizardNav.tsx")
+    panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+    assert '| "divisions"' in nav
+    assert 'label: "Events"' in nav
+    assert 'label: "Divisions"' in nav
+    assert "Step {definition.number} of 7" in panel
+    assert "TournamentSetupEventFamilyCard" in panel
+    assert "TournamentSetupDivisionCard" in panel
+    assert 'saveDraftAndContinue("divisions")' in panel
+    assert 'saveDraftAndContinue("registration-rules")' in panel
+    assert (WEB / "app/admin/tournaments/setup/divisions/page.tsx").exists()
+
+
+def test_basics_has_location_timezone_sponsors_and_no_save_confirmation() -> None:
+    panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+    basics = panel.split("function renderBasics()", 1)[1].split("function renderEvents()", 1)[0]
+    assert "Location or venue" in basics
+    assert "Timezone" in basics
+    assert "Add sponsor" in basics
+    assert "Sponsor name" in basics
+    assert "ConfirmAction" not in basics
+    assert "void saveBasics()" in basics
+
+
+def test_divisions_do_not_expose_registration_status() -> None:
+    division = read("app/admin/tournaments/setup/TournamentSetupDivisionCard.tsx")
+    rules = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+    assert "Registration status" not in division
+    assert "DIVISION_STATUSES" not in division
+    assert "Tournament-wide registration status" in rules
+    assert "Divisions do not have separate registration statuses" in rules
+    assert "configurationWithGlobalStatus" in rules
+
+
+def test_setup_metadata_is_structured_and_migrated() -> None:
+    migration = (ROOT / "supabase/migrations/20261021000000_tournament_setup_basics_metadata.sql").read_text()
+    routes = (ROOT / "services/api/admin_tournament_setup_routes.py").read_text()
+    service = (ROOT / "jupr_app/services/admin_tournament_setup_service.py").read_text()
+    repo = (ROOT / "jupr_app/domain/tournament_registration_repo.py").read_text()
+    for field in ("location_name", "timezone", "sponsors_json"):
+        assert field in migration
+        assert field in routes
+        assert field in service
+        assert field in repo

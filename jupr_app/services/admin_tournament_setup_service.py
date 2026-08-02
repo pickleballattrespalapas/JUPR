@@ -114,6 +114,9 @@ def _settings_payload(row: dict[str, Any]) -> dict[str, Any]:
         "rules_markdown": row.get("rules_markdown"),
         "refund_policy_markdown": row.get("refund_policy_markdown"),
         "sponsor_markdown": row.get("sponsor_markdown"),
+        "location_name": row.get("location_name"),
+        "timezone": row.get("timezone"),
+        "sponsors_json": list(row.get("sponsors_json") or []),
         "updated_at": row.get("updated_at"),
     }
 
@@ -433,6 +436,9 @@ def update_admin_tournament_setup_settings(
         "rules_markdown",
         "refund_policy_markdown",
         "sponsor_markdown",
+        "location_name",
+        "timezone",
+        "sponsors_json",
     }
     payload = {key: patch.get(key) for key in allowed if key in patch}
     payload["id"] = before.get("id") or payload.get("id")

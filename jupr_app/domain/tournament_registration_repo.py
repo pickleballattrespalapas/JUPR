@@ -100,6 +100,9 @@ REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "tournament_id",
         "builder_draft_json",
         "builder_draft_updated_at",
+        "location_name",
+        "timezone",
+        "sponsors_json",
     ),
     "tournament_registration_days": (
         "id",
@@ -513,6 +516,9 @@ def get_registration_settings(supabase, tournament_id: str, *, tournament_name: 
         "rules_markdown": "",
         "refund_policy_markdown": "",
         "sponsor_markdown": "",
+        "location_name": "",
+        "timezone": "America/Mazatlan",
+        "sponsors_json": [],
     }
 
 
@@ -530,6 +536,13 @@ def upsert_registration_settings(supabase, payload: dict[str, Any]) -> dict[str,
         "rules_markdown": str(payload.get("rules_markdown") or ""),
         "refund_policy_markdown": str(payload.get("refund_policy_markdown") or ""),
         "sponsor_markdown": str(payload.get("sponsor_markdown") or ""),
+        "location_name": str(payload.get("location_name") or "").strip(),
+        "timezone": str(payload.get("timezone") or "America/Mazatlan").strip(),
+        "sponsors_json": _json_safe_value(
+            payload.get("sponsors_json")
+            if isinstance(payload.get("sponsors_json"), list)
+            else []
+        ),
         "updated_at": _now_iso(),
     }
     resp = (

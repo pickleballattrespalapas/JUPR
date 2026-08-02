@@ -46,6 +46,9 @@ class TournamentSetupSettingsRequest(BaseModel):
     rules_markdown: str | None = None
     refund_policy_markdown: str | None = None
     sponsor_markdown: str | None = None
+    location_name: str | None = None
+    timezone: str | None = None
+    sponsors_json: list[dict[str, Any]] | None = None
     confirmation_text: str = ""
     expected_state_fingerprint: str | None = None
     source: str = "next_tournament_setup_settings"

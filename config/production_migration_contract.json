@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-team-competition-2026-07-28",
-  "repository_migration_content_sha256": "32b5365251fa7cdbc4af124088ba2b04af24deb5a4092936b3d7bc694ea1a6ae",
+  "repository_migration_content_sha256": "dee700a1ecd2f40359eb91d35d0b6725c188f28c8a2dd87c580a44a0756864fc",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -57,7 +57,8 @@
     "tournament_commerce",
     "tournament_live_operations",
     "tournament_operations_guard_surface",
-    "tournament_playoff_winner_bonus"
+    "tournament_playoff_winner_bonus",
+    "tournament_setup_basics_metadata"
   ],
   "schema_contract_only_repository_migrations": [
     "tournament_registrations_player_id_postgrest_reload"
