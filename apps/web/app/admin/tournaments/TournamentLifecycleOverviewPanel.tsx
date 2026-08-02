@@ -100,43 +100,83 @@ function setupSteps(
   const datesReady = Boolean(
     detail.tournament.start_date && detail.tournament.end_date
   );
-  const eventsReady = detail.event_options.length > 0;
+  const policiesReady = Boolean(
+    detail.settings?.registration_open_at &&
+      detail.settings?.registration_close_at &&
+      detail.settings?.rules_markdown &&
+      detail.settings?.refund_policy_markdown &&
+      detail.settings?.weather_policy_markdown
+  );
+  const basicsReady = Boolean(
+    datesReady &&
+      detail.settings?.location_name &&
+      detail.settings?.timezone &&
+      policiesReady
+  );
   const daysReady = detail.days.length > 0;
-  const reviewReady = datesReady && eventsReady && daysReady;
+  const eventFamilies = new Set(
+    detail.event_options
+      .map((event) => String(event.event_family_label || "").trim())
+      .filter(Boolean)
+  );
+  const eventsReady = eventFamilies.size > 0;
+  const divisionsReady = detail.event_options.length > 0;
+  const reviewReady = basicsReady && daysReady && eventsReady && divisionsReady;
   return [
     {
-      title: "1. Tournament basics",
-      description: "Name, dates, venue, timezone, contact, description, and visibility.",
+      title: "1. Tournament basics and policies",
+      description:
+        "Name, dates, venue, timezone, sponsors, registration window, rules, cancellation policy, and weather policy.",
       href: selectedHref(
         "/admin/tournaments/setup/basics",
         tournamentId,
         tournamentName
       ),
-      state: datesReady ? "Complete" : "In progress"
+      state: basicsReady ? "Complete" : "In progress"
     },
     {
-      title: "2. Events and formats",
-      description: "Standard, combined-rating, and four-player team formats with relevant rules only.",
+      title: "2. Schedule and courts",
+      description:
+        "Create the tournament days first so events and divisions can use one or several days.",
+      href: selectedHref(
+        "/admin/tournaments/setup/schedule",
+        tournamentId,
+        tournamentName
+      ),
+      state: daysReady ? "Complete" : "Not started"
+    },
+    {
+      title: "3. Events",
+      description:
+        "Create event families, choose every available day, and set draw, scoring, capacity, and pricing defaults.",
       href: selectedHref(
         "/admin/tournaments/setup/events",
         tournamentId,
         tournamentName
       ),
-      state: eventsReady ? "In progress" : "Not started"
+      state: eventsReady ? "Complete" : "Not started",
+      note: eventsReady
+        ? `${eventFamilies.size} event${eventFamilies.size === 1 ? "" : "s"}`
+        : undefined
     },
     {
-      title: "3. Registration rules",
-      description: "Registration window, capacity, waitlist, partner board, identity, and cancellation rules.",
+      title: "4. Divisions",
+      description:
+        "Create skill and age divisions within each event and inherit all event days or choose a subset.",
       href: selectedHref(
-        "/admin/tournaments/setup/registration-rules",
+        "/admin/tournaments/setup/divisions",
         tournamentId,
         tournamentName
       ),
-      state: detail.settings ? "In progress" : "Not started"
+      state: divisionsReady ? "Complete" : "Not started",
+      note: divisionsReady
+        ? `${detail.event_options.length} division${detail.event_options.length === 1 ? "" : "s"}`
+        : undefined
     },
     {
-      title: "4. Pricing, extras, and fulfillment",
-      description: "Entry fees, additional events, extras, bundles, inventory, pickup, and offline payment.",
+      title: "5. Pricing, extras, and fulfillment",
+      description:
+        "Entry fees, additional events, extras, bundles, inventory, pickup, and offline payment.",
       href: selectedHref(
         "/admin/tournaments/setup/pricing",
         tournamentId,
@@ -145,18 +185,9 @@ function setupSteps(
       state: "In progress"
     },
     {
-      title: "5. Schedule and courts",
-      description: "Days, event blocks, courts, match duration, warm-up, and check-in assumptions.",
-      href: selectedHref(
-        "/admin/tournaments/setup/schedule",
-        tournamentId,
-        tournamentName
-      ),
-      state: daysReady ? "In progress" : "Not started"
-    },
-    {
       title: "6. Review and open registration",
-      description: "Resolve missing fields, conflicts, capacity, pricing, and schedule warnings before opening.",
+      description:
+        "Resolve missing fields, conflicts, capacity, pricing, policies, and schedule warnings before opening.",
       href: selectedHref(
         "/admin/tournaments/setup/review",
         tournamentId,
@@ -164,11 +195,12 @@ function setupSteps(
       ),
       state: reviewReady ? "Ready" : "Blocked",
       note: reviewReady
-        ? "Core dates, events, and tournament days are present."
-        : "Complete dates, at least one event, and tournament days first."
+        ? "Basics, policies, days, events, and divisions are present."
+        : "Complete basics and policies, tournament days, events, and divisions first."
     }
   ];
 }
+
 
 function registrationSteps(
   detail: AdminTournamentDetailResponse,
