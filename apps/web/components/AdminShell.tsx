@@ -66,9 +66,15 @@ const adminGroups: AdminGroup[] = [
           pathname.startsWith("/admin/tournament-")
       },
       {
-        label: "JUPR Live",
-        href: "/admin/jupr-live",
-        active: (pathname) => pathname.startsWith("/admin/jupr-live")
+        label: "Round-Robin Generator",
+        href: "/admin/round-robin-generator",
+        active: (pathname) =>
+          pathname.startsWith("/admin/round-robin-generator")
+      },
+      {
+        label: "Ladder Generator",
+        href: "/admin/ladder-generator",
+        active: (pathname) => pathname.startsWith("/admin/ladder-generator")
       },
       {
         label: "Challenge Ladder",
