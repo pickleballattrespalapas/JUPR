@@ -300,6 +300,13 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/clubs/{club_slug}/live-sessions/{session_key}/advance"),
         ("POST", "/clubs/{club_slug}/live-sessions/{session_key}/substitutions"),
         ("POST", "/clubs/{club_slug}/live-sessions/{session_key}/complete"),
+        ("POST", "/clubs/{club_slug}/play-generators/preview"),
+        ("POST", "/clubs/{club_slug}/play-generators/sessions"),
+        ("PATCH", "/clubs/{club_slug}/play-generators/sessions/{session_key}/rounds/{round_number}/scores"),
+        ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/rounds/{round_number}/skip"),
+        ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/advance"),
+        ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/roster"),
+        ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/complete"),
     ),
     "tournament-mutations": (
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}"),
