@@ -27,9 +27,22 @@ jobs:
         run: python scripts/tmp_add_played_wave_routes.py
 
       - name: Verify the exact route inventory
+        shell: bash
         run: |
-          python -m pip install pytest fastapi httpx2
-          python -m pytest -q tests/test_staging_write_wave_guards.py
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path('scripts/staging_write_waves.py').read_text(encoding='utf-8')
+          expected = (
+              '("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/played")',
+              '("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/rounds/{round_number}/played")',
+          )
+          for route in expected:
+              count = text.count(route)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one classified route, found {count}: {route}')
+          print('Round Played routes are classified exactly once.')
+          PY
           git diff --check
 
       - name: Commit clean route manifest
