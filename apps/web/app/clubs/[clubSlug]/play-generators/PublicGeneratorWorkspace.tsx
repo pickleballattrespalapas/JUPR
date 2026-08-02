@@ -601,7 +601,7 @@ export default function GeneratorWorkspace({
               Download CSV
             </button>
             <button type="button" onClick={() => void downloadPdf()} style={secondaryButton}>
-              Open / print one-sheet PDF
+              Download one-sheet PDF (opens new tab)
             </button>
             <button
               type="button"

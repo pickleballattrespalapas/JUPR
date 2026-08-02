@@ -33,7 +33,7 @@ def test_public_and_admin_generators_preserve_unsaved_previews() -> None:
         assert "const pdfWindow = preparePdfWindow();" in source
         assert 'const blob = doc.output("blob")' in source
         assert "openPdfBlobInNewTab(blob, filename, pdfWindow)" in source
-        assert "Open / print one-sheet PDF" in source
+        assert "Download one-sheet PDF (opens new tab)" in source
 
 
 def test_pdf_tab_is_prepared_before_async_jspdf_import() -> None:
