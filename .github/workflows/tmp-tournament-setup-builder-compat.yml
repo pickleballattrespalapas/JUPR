@@ -1,3 +1,4 @@
+# Temporary staging-only publisher; removes itself after a clean payload test and build.
 name: Temporary Tournament Setup builder compatibility fixer
 
 on:
