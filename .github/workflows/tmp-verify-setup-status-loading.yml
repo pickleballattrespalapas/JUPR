@@ -1,0 +1,147 @@
+name: Temporary Tournament Setup status-loading verifier
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.head_ref == 'agent/verify-setup-status-loading-d0dd86'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EXPECTED_SHA: d0dd868dfe3aa055f4ec6a5334d5593fafe76d38
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      MATCH_UPLOADER_STATUS_URL: https://juprleagues-api-staging.fly.dev/admin/clubs/tres_palapas/match-uploader/status
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 1
+
+      - name: Wait for exact Fly candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          for attempt in $(seq 1 120); do
+            if curl -fsS --max-time 20 "$FLY_HEALTH_URL" -o evidence/health.json; then
+              source_sha="$(jq -r '.git_commit_sha // .source_commit_sha // .source_sha // .commit_sha // empty' evidence/health.json)"
+              image_sha="$(jq -r '.image_build_git_sha // .image_git_sha // empty' evidence/health.json)"
+              echo "attempt=$attempt source=$source_sha image=$image_sha"
+              if [ "$source_sha" = "$EXPECTED_SHA" ] && { [ -z "$image_sha" ] || [ "$image_sha" = "$EXPECTED_SHA" ]; }; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 120 ]; then
+              echo "Fly did not reach exact staging candidate." >&2
+              cat evidence/health.json >&2 || true
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Verify permanent-open staging safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path('evidence/health.json').read_text())
+          expected_sha = os.environ['EXPECTED_SHA']
+
+          def find_key(value, key):
+              if isinstance(value, dict):
+                  if key in value:
+                      return value[key]
+                  for child in value.values():
+                      found = find_key(child, key)
+                      if found is not None:
+                          return found
+              elif isinstance(value, list):
+                  for child in value:
+                      found = find_key(child, key)
+                      if found is not None:
+                          return found
+              return None
+
+          def first(*keys):
+              for key in keys:
+                  value = find_key(payload, key)
+                  if value is not None:
+                      return value
+              return None
+
+          observed = {
+              'environment': first('environment'),
+              'source_sha': first('git_commit_sha', 'source_commit_sha', 'source_sha', 'commit_sha'),
+              'image_sha': first('image_build_git_sha', 'image_git_sha'),
+              'fly_app': first('fly_app_name', 'app_name', 'app'),
+              'write_wave': first('write_wave'),
+              'staging_write_wave': first('staging_write_wave'),
+              'business_data_write_wave_active': first('business_data_write_wave_active'),
+              'email_mode': first('email_mode'),
+              'live_player_update_email_enabled': first('live_player_update_email_enabled'),
+              'public_live_production_override_enabled': first('public_live_production_override_enabled'),
+              'supabase_project_ref': first('supabase_project_ref', 'supabase_project'),
+          }
+          expected = {
+              'environment': 'staging',
+              'source_sha': expected_sha,
+              'image_sha': expected_sha,
+              'fly_app': 'juprleagues-api-staging',
+              'write_wave': 'open',
+              'staging_write_wave': 'open',
+              'business_data_write_wave_active': True,
+              'email_mode': 'dry_run',
+              'live_player_update_email_enabled': False,
+              'public_live_production_override_enabled': False,
+              'supabase_project_ref': 'sijpxjxvdtrehmqvirfi',
+          }
+          Path('evidence/observed-health-contract.json').write_text(json.dumps(observed, indent=2, sort_keys=True) + '\n')
+          mismatches = {
+              key: {'expected': expected[key], 'actual': observed.get(key)}
+              for key in expected
+              if observed.get(key) != expected[key]
+          }
+          print(json.dumps(observed, indent=2, sort_keys=True))
+          if mismatches:
+              print(json.dumps(mismatches, indent=2, sort_keys=True))
+              raise SystemExit(1)
+          PY
+
+      - name: Verify Match Uploader remains enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 20 "$MATCH_UPLOADER_STATUS_URL" -o evidence/match-uploader-status.json
+          jq -e '(.enabled == true) and (.singles_write_enabled == true) and ((.status // "") != "guarded_off")' evidence/match-uploader-status.json
+
+      - name: Verify status-loading source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          panel = Path('apps/web/app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx').read_text()
+          tests = Path('tests/test_api_contract_tournament_setup_event_division_refine.py').read_text()
+          assert 'const states = detail ? setupState(basics, settings, configuration) : {};' in panel
+          assert 'states={states}' in panel
+          assert 'busy && !detail' in panel
+          assert 'test_setup_status_badges_wait_for_loaded_detail' in tests
+          Path('evidence/source-contract.txt').write_text('Tournament Setup status-loading source contract passed.\n')
+          PY
+
+      - name: Upload verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: tournament-setup-status-loading-evidence
+          path: evidence
+          if-no-files-found: error
