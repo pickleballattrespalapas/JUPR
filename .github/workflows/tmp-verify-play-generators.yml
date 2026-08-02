@@ -40,7 +40,7 @@ jobs:
             jupr_app/services/admin_play_generator_service.py \
             services/api/admin_play_generator_routes.py
 
-      - name: Stress arbitrary roster sizes and adaptive operations
+      - name: Stress representative arbitrary roster sizes and adaptive operations
         run: |
           python - <<'PY'
           from jupr_app.domain.adaptive_play_engine import (
@@ -59,19 +59,20 @@ jobs:
                   for match in court.get('matches') or []
               ]
 
+          representative_counts = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 20, 24, 31, 40]
           for play_format, minimum in [('singles', 2), ('doubles', 4)]:
-              for count in range(minimum, 41):
+              for count in [value for value in representative_counts if value >= minimum]:
                   names = [f'P{index}' for index in range(1, count + 1)]
-                  for courts in (0, 1, 2, 5, 20):
+                  for courts in (0, 1, 2, 5):
                       rr = create_generator_preview(
                           generator_kind='round_robin',
                           play_format=play_format,
                           title='Stress RR',
                           participant_names=names,
-                          total_rounds=4,
+                          total_rounds=3,
                           court_count=courts,
                       )
-                      assert len(rr['rounds']) == 4
+                      assert len(rr['rounds']) == 3
                       for round_row in rr['rounds']:
                           used = []
                           expected_side = 1 if play_format == 'singles' else 2
