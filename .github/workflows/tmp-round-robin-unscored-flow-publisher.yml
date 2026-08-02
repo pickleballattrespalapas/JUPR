@@ -30,6 +30,20 @@ jobs:
       - name: Apply unscored and standings-flow patch
         run: python scripts/tmp_round_robin_unscored_flow_patch.py
 
+      - name: Preserve existing Ladder validation contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('jupr_app/domain/adaptive_play_engine.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'raise ValueError("Save scores, mark the round played, or skip it before continuing.")'
+          new = 'raise ValueError("Save or skip the current round before continuing. Unscored Round-Robins may mark it played.")'
+          if old not in text:
+              raise SystemExit('Expected unscored advancement message was not found.')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
       - name: Install focused Python dependency
         run: python -m pip install pytest
 
