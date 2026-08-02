@@ -1,0 +1,215 @@
+name: Temporary final Tournament Setup staging verification
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify-staging:
+    if: github.head_ref == 'agent/verify-tournament-setup-staging-1d7e05'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    env:
+      EXPECTED_CANDIDATE_SHA: 1d7e050adb9c1460f13673193670d26148f8b476
+      STAGING_API_ORIGIN: https://juprleagues-api-staging.fly.dev
+      STAGING_WEB_ALIAS: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      STAGING_SUPABASE_REF: sijpxjxvdtrehmqvirfi
+      FIXTURE_TOURNAMENT_ID: 93000000-0000-4000-8000-000000000001
+    steps:
+      - name: Verify exact deployments, public payload, and rendered routes
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+
+          expected_sha = os.environ["EXPECTED_CANDIDATE_SHA"]
+          api_origin = os.environ["STAGING_API_ORIGIN"].rstrip("/")
+          web_alias = os.environ["STAGING_WEB_ALIAS"].rstrip("/")
+          supabase_ref = os.environ["STAGING_SUPABASE_REF"]
+          tournament_id = os.environ["FIXTURE_TOURNAMENT_ID"]
+          bypass = os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", "").strip()
+          if not bypass:
+              raise SystemExit("Vercel automation bypass secret is unavailable")
+
+          def request_bytes(url, headers=None):
+              request = Request(url, headers=headers or {}, method="GET")
+              with urlopen(request, timeout=40) as response:
+                  if response.status != 200:
+                      raise RuntimeError(f"{url} returned HTTP {response.status}")
+                  return response.geturl(), response.read()
+
+          def get_json(url, headers=None):
+              final_url, raw = request_bytes(url, headers)
+              return final_url, json.loads(raw.decode("utf-8"))
+
+          def get_text(url, headers=None):
+              final_url, raw = request_bytes(url, headers)
+              return final_url, raw.decode("utf-8", errors="replace")
+
+          immutable_origin = ""
+          deployment_id = ""
+          web = {}
+          api = {}
+          last_errors = []
+          for attempt in range(1, 81):
+              errors = []
+              try:
+                  _, web = get_json(
+                      f"{web_alias}/api/environment",
+                      {"x-vercel-protection-bypass": bypass},
+                  )
+              except (HTTPError, URLError, TimeoutError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+                  web = {}
+                  errors.append(f"Vercel identity unavailable: {exc.__class__.__name__}")
+              try:
+                  _, api = get_json(f"{api_origin}/health")
+              except (HTTPError, URLError, TimeoutError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+                  api = {}
+                  errors.append(f"Fly health unavailable: {exc.__class__.__name__}")
+
+              immutable_origin = str(web.get("vercel_deployment_origin") or "").rstrip("/")
+              deployment_id = str(web.get("vercel_deployment_id") or "")
+              expected_web = {
+                  "environment": "staging",
+                  "vercel_environment": "preview",
+                  "git_commit_sha": expected_sha,
+                  "api_origin": api_origin,
+                  "auth_origin": f"https://{supabase_ref}.supabase.co",
+                  "preview_isolation_active": True,
+                  "preview_auth_isolation_active": True,
+              }
+              for key, value in expected_web.items():
+                  if web.get(key) != value:
+                      errors.append(f"Vercel {key} mismatch")
+              if not re.fullmatch(r"dpl_[A-Za-z0-9]{8,128}", deployment_id):
+                  errors.append("Vercel deployment ID is invalid")
+              if (
+                  not immutable_origin.startswith("https://jupr-")
+                  or immutable_origin == web_alias
+                  or not immutable_origin.endswith("-pickleballattrespalapas1.vercel.app")
+              ):
+                  errors.append("Vercel immutable origin is invalid")
+
+              expected_api = {
+                  "ok": True,
+                  "environment": "staging",
+                  "git_commit_sha": expected_sha,
+                  "image_build_git_sha": expected_sha,
+                  "fly_app_name": "juprleagues-api-staging",
+                  "web_origin": web_alias,
+                  "supabase_project_ref": supabase_ref,
+                  "jwt_verification_configured": True,
+                  "jwt_verification_mode": "jwks",
+                  "jwt_verification_project_ref": supabase_ref,
+                  "staging_write_wave": "open",
+                  "business_data_write_wave_active": True,
+              }
+              for key, value in expected_api.items():
+                  if api.get(key) != value:
+                      errors.append(f"Fly {key} mismatch")
+              prerequisites = api.get("write_prerequisites")
+              if not isinstance(prerequisites, dict):
+                  errors.append("Fly write prerequisites are missing")
+              else:
+                  if prerequisites.get("email_mode") != "dry_run":
+                      errors.append("Fly email mode is not dry_run")
+                  if prerequisites.get("live_player_update_email_enabled") is not False:
+                      errors.append("Live player-update email safety gate is not false")
+                  for key in ("service_role_configured", "api_audit_required", "worker_run_log_required"):
+                      if prerequisites.get(key) is not True:
+                          errors.append(f"Fly prerequisite {key} is not true")
+
+              if not errors:
+                  break
+              last_errors = errors
+              print(f"Attempt {attempt}/80: " + "; ".join(errors[:10]))
+              time.sleep(15)
+          else:
+              raise SystemExit("Exact staging deployments did not become ready: " + "; ".join(last_errors))
+
+          query = urlencode({"tournament_id": tournament_id})
+          _, payload = get_json(
+              f"{api_origin}/clubs/tres-palapas/tournament-registration?{query}"
+          )
+          assert payload.get("tournament", {}).get("id") == tournament_id
+          assert payload.get("registration_open") is True
+          settings = payload.get("settings") or {}
+          for key in ("rules_markdown", "refund_policy_markdown", "weather_policy_markdown"):
+              assert str(settings.get(key) or "").strip(), key
+
+          events = {str(row.get("id")): row for row in payload.get("events") or []}
+          men = events["staging-event-summer-classic-men-35"]
+          women = events["staging-event-summer-classic-women-35"]
+          assert men.get("registration_day_id") == "staging-day-summer-classic-1"
+          assert men.get("scheduled_day_ids") == [
+              "staging-day-summer-classic-1",
+              "staging-day-summer-classic-2",
+          ]
+          assert women.get("scheduled_day_ids") == ["staging-day-summer-classic-1"]
+
+          headers = {"x-vercel-protection-bypass": bypass}
+          public_query = urlencode({"tournament_id": tournament_id})
+          _, public_html = get_text(
+              f"{immutable_origin}/clubs/tres-palapas/tournament-registration?{public_query}",
+              headers,
+          )
+          for marker in (
+              "Tournament Registration",
+              "Rules and registration notes",
+              "Refund policy",
+              "Weather policy",
+          ):
+              assert marker in public_html, marker
+          assert "Internal Server Error" not in public_html
+
+          admin_query = urlencode({
+              "tournament": tournament_id,
+              "name": "Staging Summer Classic",
+          })
+          setup_routes = []
+          for step in ("basics", "schedule", "events", "divisions"):
+              final_url, html = get_text(
+                  f"{immutable_origin}/admin/tournaments/setup/{step}?{admin_query}",
+                  headers,
+              )
+              assert f"/admin/tournaments/setup/{step}" in final_url
+              assert "Internal Server Error" not in html
+              assert "<!DOCTYPE html" in html or "<!doctype html" in html
+              setup_routes.append(step)
+
+          legacy_url = f"{immutable_origin}/admin/tournaments/setup/registration-rules?{admin_query}"
+          final_url, legacy_html = get_text(legacy_url, headers)
+          assert "/admin/tournaments/setup/basics?" in final_url
+          assert "Internal Server Error" not in legacy_html
+
+          print(json.dumps({
+              "candidate_sha": expected_sha,
+              "vercel_deployment_id": deployment_id,
+              "vercel_deployment_origin": immutable_origin,
+              "fly_image_ref": api.get("fly_image_ref"),
+              "fly_machine_version": api.get("fly_machine_version"),
+              "staging_write_wave": api.get("staging_write_wave"),
+              "supabase_project_ref": api.get("supabase_project_ref"),
+              "email_mode": (api.get("write_prerequisites") or {}).get("email_mode"),
+              "fixture_tournament_id": tournament_id,
+              "registration_open": payload.get("registration_open"),
+              "policies_present": True,
+              "men_schedule": men.get("scheduled_day_ids"),
+              "women_schedule": women.get("scheduled_day_ids"),
+              "public_page": "rendered",
+              "setup_routes": setup_routes,
+              "legacy_rules_redirect": final_url,
+          }, indent=2, sort_keys=True))
+          PY
