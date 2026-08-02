@@ -1,0 +1,91 @@
+name: Temporary player-count generator setup publisher
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.head_ref == 'agent/player-count-generator-setup' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONPATH: .
+      NEXT_PUBLIC_JUPR_API_BASE_URL: http://localhost:8000
+      JUPR_API_BASE_URL: http://localhost:8000
+      NEXT_PUBLIC_JUPR_WEB_BASE_URL: https://pickleballclubsandwich.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/player-count-generator-setup
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Apply player-count setup redesign
+        run: python scripts/tmp_player_count_generator_setup.py
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Run focused generator contracts
+        run: |
+          python -m pytest -q \
+            tests/test_play_generator_player_count_setup.py \
+            tests/test_adaptive_play_engine.py \
+            tests/test_admin_play_generator_service.py \
+            tests/test_api_contract_play_generators.py \
+            tests/test_public_play_generator_service.py \
+            tests/test_api_contract_public_play_generators.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: Run component checks
+        working-directory: apps/web
+        run: npm run test:component
+
+      - name: Build Next app
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Verify clean setup surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'Number of players' apps/web/components/GeneratorRosterSetup.tsx
+          grep -q 'Search current players' apps/web/components/GeneratorRosterSetup.tsx
+          grep -q 'Names or roster entry' apps/web/components/GeneratorRosterSetup.tsx
+          grep -q 'Automatic setup' apps/web/components/GeneratorRosterSetup.tsx
+          ! grep -q 'Planned rounds' apps/web/app/admin/play-generators/GeneratorWorkspace.tsx
+          ! grep -q 'Available courts' apps/web/app/admin/play-generators/GeneratorWorkspace.tsx
+          ! grep -q 'Planned rounds' apps/web/app/clubs/'[clubSlug]'/play-generators/PublicGeneratorWorkspace.tsx
+          ! grep -q 'Available courts' apps/web/app/clubs/'[clubSlug]'/play-generators/PublicGeneratorWorkspace.tsx
+          git diff --check
+
+      - name: Commit clean application change
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/tmp-player-count-generator-setup.yml
+          rm scripts/tmp_player_count_generator_setup.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Restore player-count generator setup"
+          git push origin HEAD:agent/player-count-generator-setup
