@@ -46,9 +46,13 @@ const navigationItems: NavigationItem[] = [
       pathname.startsWith(`${clubBase}/tournament-`)
   },
   {
-    label: "Live",
-    href: `${clubBase}/live`,
-    active: (pathname) => pathname.startsWith(`${clubBase}/live`)
+    label: "Play",
+    href: `${clubBase}/play`,
+    active: (pathname) =>
+      pathname.startsWith(`${clubBase}/play`) ||
+      pathname.startsWith(`${clubBase}/round-robin-generator`) ||
+      pathname.startsWith(`${clubBase}/ladder-generator`) ||
+      pathname.startsWith(`${clubBase}/live`)
   },
   {
     label: "Leaderboards",

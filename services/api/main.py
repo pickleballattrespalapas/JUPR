@@ -58,6 +58,7 @@ from services.api.public_badge_codex_routes import install_public_badge_codex_ro
 from services.api.public_challenge_ladder_routes import install_public_challenge_ladder_routes
 from services.api.public_league_results_routes import install_public_league_results_routes
 from services.api.public_match_explorer_routes import install_public_match_explorer_routes
+from services.api.public_play_generator_routes import install_public_play_generator_routes
 from services.api.public_team_league_routes import install_public_team_league_routes
 from services.api.public_tournament_team_routes import (
     install_public_tournament_team_routes,
@@ -957,6 +958,18 @@ install_public_challenge_ladder_routes(app, get_club=get_club, get_supabase_clie
 install_public_weekly_recap_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
 install_public_team_league_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
 install_public_tournament_team_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
+install_public_play_generator_routes(
+    app,
+    get_club=get_club,
+    get_supabase_client=get_supabase_client,
+    public_club_payload=_public_club_payload,
+    require_public_writes=_require_public_live_writes,
+    require_service_role=_require_live_sessions_service_role,
+    requester_hash=_public_live_requester_hash,
+    raise_public_error=_raise_public_live_write_error,
+    public_writes_enabled=is_public_live_write_enabled,
+    service_role_configured=_has_supabase_service_role_key,
+)
 install_admin_team_league_routes(app, get_supabase_client=get_supabase_client)
 install_admin_play_generator_routes(app, get_supabase_client=get_supabase_client)
 install_admin_tournament_team_competition_routes(app, get_supabase_client=get_supabase_client)
