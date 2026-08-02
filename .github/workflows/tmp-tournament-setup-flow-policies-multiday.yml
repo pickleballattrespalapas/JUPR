@@ -1,16 +1,16 @@
 name: Temporary Tournament Setup flow and policy refinement publisher
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/tournament-setup-flow-policies-multiday
+      - staging
 
 permissions:
   contents: write
 
 jobs:
   patch-test-build:
-    if: github.actor != 'github-actions[bot]'
+    if: github.head_ref == 'agent/tournament-setup-flow-policies-multiday' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
