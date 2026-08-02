@@ -276,12 +276,23 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/moneyball/operations/{operation_key}/reconcile"),
     ),
     "jupr-live": (
+        # Legacy API paths remain classified during the generator migration.
         ("POST", "/admin/clubs/{club_id}/jupr-live/sessions"),
         ("PATCH", "/admin/clubs/{club_id}/jupr-live/sessions/{session_key}"),
         ("PATCH", "/admin/clubs/{club_id}/jupr-live/sessions/{session_key}/scores"),
         ("POST", "/admin/clubs/{club_id}/jupr-live/sessions/{session_key}/advance"),
         ("POST", "/admin/clubs/{club_id}/jupr-live/sessions/{session_key}/publish"),
         ("POST", "/admin/clubs/{club_id}/jupr-live/operations/{operation_key}/reconcile"),
+        # Round-Robin Generator and Ladder Generator share the reviewed
+        # permanent-open staging gate while using their own product-facing API.
+        ("POST", "/admin/clubs/{club_id}/play-generators/preview"),
+        ("POST", "/admin/clubs/{club_id}/play-generators/sessions"),
+        ("PATCH", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/scores"),
+        ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/skip"),
+        ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/advance"),
+        ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/roster"),
+        ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/complete"),
+        ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/publish"),
     ),
     "public-live": (
         ("POST", "/clubs/{club_slug}/live-sessions"),

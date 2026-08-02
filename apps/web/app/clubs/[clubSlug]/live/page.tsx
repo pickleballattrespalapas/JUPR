@@ -45,11 +45,11 @@ export default async function ClubLivePage({ params }: LivePageProps) {
     <section>
       <div style={{ marginBottom: "1.25rem" }}>
         <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-          Live Events
+          Play Generators
         </p>
-        <h1 style={{ margin: "0 0 0.5rem", fontSize: "2.2rem", lineHeight: 1.1 }}>{clubName} live sessions</h1>
+        <h1 style={{ margin: "0 0 0.5rem", fontSize: "2.2rem", lineHeight: 1.1 }}>{clubName} play sessions</h1>
         <p style={{ color: "#334155", marginTop: 0, maxWidth: "900px" }}>
-          Start a durable Round Robin, League / Ladder, or Club Social session; resume after refresh, substitute players, export results, and share a view-only scoreboard. Official rated workflows remain separate in JUPR Live Admin.
+          Create a Round-Robin or Ladder session, resume after refresh, manage players, export results, and share a view-only scoreboard. Official rated publishing remains in the staff generators.
         </p>
       </div>
 
@@ -57,22 +57,22 @@ export default async function ClubLivePage({ params }: LivePageProps) {
         <PublicLiveCreator apiBase={apiBase()} clubSlug={clubSlug} players={players} />
       ) : (
         <div style={{ ...cardStyle, marginBottom: "1rem", background: "#f8fafc" }}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>New public sessions are paused here</h2>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>New public generators are paused here</h2>
           <p style={{ color: "#475569" }}>Shared scoreboards remain viewable. Creation and editing stay on the guarded staging pilot until the consolidated smoke test is approved.</p>
-          {data?.write_fallback_url ? <a href={data.write_fallback_url}>Open the Streamlit JUPR Live fallback</a> : null}
+          {data?.write_fallback_url ? <a href={data.write_fallback_url}>Open the legacy live-session fallback</a> : null}
         </div>
       )}
 
       {error ? (
-        <p style={{ color: "#b91c1c" }}>Live sessions are temporarily unavailable. {error}</p>
+        <p style={{ color: "#b91c1c" }}>Play sessions are temporarily unavailable. {error}</p>
       ) : null}
       {playersResult.error ? <p style={{ color: "#b45309" }}>Current-player picker unavailable. {playersResult.error}</p> : null}
 
       {!error && sessions.length === 0 ? (
         <div style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>No shared live sessions right now</h2>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>No shared play sessions right now</h2>
           <p style={{ color: "#475569" }}>
-            Create a public live event above, or open a shared session link from an organizer.
+            Create a play session above, or open a shared session link from an organizer.
           </p>
           <Link href={`/clubs/${clubSlug}/leaderboards`}>View leaderboards instead</Link>
         </div>

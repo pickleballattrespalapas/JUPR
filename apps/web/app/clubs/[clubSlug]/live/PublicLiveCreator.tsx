@@ -197,9 +197,9 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
     <section style={{ border: "1px solid #bfdbfe", borderRadius: "14px", padding: "1rem", background: "#eff6ff", marginBottom: "1rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "flex-start" }}>
         <div>
-          <h2 style={{ margin: "0 0 0.35rem", fontSize: "1.35rem" }}>🔴 JUPR Live</h2>
+          <h2 style={{ margin: "0 0 0.35rem", fontSize: "1.35rem" }}>Round-Robin and Ladder Generators</h2>
           <p style={{ color: "#334155", marginTop: 0 }}>
-            Run a durable Round Robin or League / Ladder session. Quick sessions stay unrated; Club Social sends completed results to moderation without changing ratings.
+            Create a durable Round-Robin or Ladder session. Quick sessions stay unrated; Club Social sends completed results to moderation without changing ratings.
           </p>
         </div>
         <span style={{ border: "1px solid #bfdbfe", borderRadius: "999px", padding: "0.25rem 0.75rem", background: "white", color: "#1d4ed8", fontWeight: 800, fontSize: "0.85rem" }}>Public</span>

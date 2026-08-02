@@ -20,11 +20,11 @@ export default async function ClubLiveSessionPage({ params }: LiveSessionPagePro
     return (
       <section style={{ maxWidth: "760px" }}>
         <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-          Live Events
+          Play Generators
         </p>
-        <h1>Live session unavailable</h1>
+        <h1>Play session unavailable</h1>
         <p style={{ color: "#b91c1c" }}>We could not load this live session. {error}</p>
-        <p><Link href={`/clubs/${clubSlug}/live`}>Back to live sessions</Link></p>
+        <p><Link href={`/clubs/${clubSlug}/live`}>Back to play sessions</Link></p>
       </section>
     );
   }
@@ -32,7 +32,7 @@ export default async function ClubLiveSessionPage({ params }: LiveSessionPagePro
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        {clubName} · Live Events
+        {clubName} · Play Generators
       </p>
       <LiveSessionRunner
         apiBase={apiBase()}

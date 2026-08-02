@@ -50,6 +50,7 @@ from services.api.auth import (
 )
 from services.api.middleware import StagingWriteWaveMiddleware, StructuredRequestLoggingMiddleware
 from services.api.admin_team_league_routes import install_admin_team_league_routes
+from services.api.admin_play_generator_routes import install_admin_play_generator_routes
 from services.api.admin_tournament_team_competition_routes import (
     install_admin_tournament_team_competition_routes,
 )
@@ -957,6 +958,7 @@ install_public_weekly_recap_routes(app, get_club=get_club, get_supabase_client=g
 install_public_team_league_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
 install_public_tournament_team_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
 install_admin_team_league_routes(app, get_supabase_client=get_supabase_client)
+install_admin_play_generator_routes(app, get_supabase_client=get_supabase_client)
 install_admin_tournament_team_competition_routes(app, get_supabase_client=get_supabase_client)
 
 

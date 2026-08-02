@@ -29,7 +29,7 @@ function formatTimestamp(value?: string | null): string {
 
 function eventTypeLabel(value?: string | null): string {
   const normalized = String(value || "").replace(/_/g, " ").trim();
-  return normalized ? normalized.replace(/\b\w/g, (char) => char.toUpperCase()) : "Live Event";
+  return normalized ? normalized.replace(/\b\w/g, (char) => char.toUpperCase()) : "Play Session";
 }
 
 function teamLabel(names: string[]): string {
