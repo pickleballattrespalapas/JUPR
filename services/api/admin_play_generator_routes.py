@@ -32,6 +32,7 @@ from jupr_app.services.admin_play_generator_service import (
     create_play_generator_session,
     get_play_generator_session,
     list_play_generator_sessions,
+    mark_play_generator_round_played,
     mutate_play_generator_roster,
     preview_play_generator,
     publish_play_generator_matches,
@@ -50,6 +51,7 @@ class GeneratorPreviewRequest(BaseModel):
     total_rounds: int = Field(default=3, ge=1, le=50)
     court_count: int = Field(default=0, ge=0, le=20)
     standings_sort: str = Field(default="wins", pattern=r"^(wins|points|differential)$")
+    scoring_mode: str = Field(default="scored", pattern=r"^(scored|unscored)$")
 
 
 class GeneratorDurableRequest(BaseModel):
@@ -71,6 +73,10 @@ class GeneratorScorePayload(BaseModel):
 class GeneratorScoresRequest(GeneratorDurableRequest):
     scores: list[GeneratorScorePayload] = Field(min_length=1, max_length=1000)
     source: str = "next_play_generator_scores"
+
+
+class GeneratorPlayedRequest(GeneratorDurableRequest):
+    source: str = "next_play_generator_played"
 
 
 class GeneratorSkipRequest(GeneratorDurableRequest):
@@ -220,6 +226,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                 total_rounds=payload.total_rounds,
                 court_count=payload.court_count,
                 standings_sort=payload.standings_sort,
+                scoring_mode=payload.scoring_mode,
             )
         except Exception as exc:
             _handle(exc)
@@ -294,6 +301,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                     court_count=payload.court_count,
                     preview_fingerprint=payload.preview_fingerprint,
                     standings_sort=payload.standings_sort,
+                scoring_mode=payload.scoring_mode,
                     actor_email=actor_email,
                     actor_role=actor_role,
                     source=payload.source,
@@ -390,6 +398,71 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
             )
         except Exception as exc:
             _handle(exc)
+
+
+    @app.post(
+        "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/played"
+    )
+    def post_generator_round_played(
+        club_id: str,
+        session_key: str,
+        round_number: int,
+        payload: GeneratorPlayedRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_write_gate()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            current = get_play_generator_session(
+                supabase,
+                club_id=str(club_id),
+                session_key=str(session_key),
+            )["session"]
+            return run_durable_admin_operation(
+                supabase,
+                club_id=str(club_id),
+                surface="play_generator",
+                operation_type="mark_round_played",
+                entity_id=str(session_key),
+                idempotency_key=payload.idempotency_key,
+                expected_version=payload.expected_version,
+                current_version=str(current.get("version") or ""),
+                request_payload=_model_payload(payload),
+                recovery=operation_recovery_handoff(
+                    surface="play_generator",
+                    entity_id=str(session_key),
+                ),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+                mutate=lambda: mark_play_generator_round_played(
+                    supabase,
+                    club_id=str(club_id),
+                    session_key=str(session_key),
+                    round_number=int(round_number),
+                    expected_version=payload.expected_version,
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    source=payload.source,
+                ),
+                current_version_resolver=lambda: str(
+                    get_play_generator_session(
+                        supabase,
+                        club_id=str(club_id),
+                        session_key=str(session_key),
+                    )["session"].get("version")
+                    or ""
+                ),
+            )
+        except Exception as exc:
+            _handle(exc)
+
 
     @app.post(
         "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/skip"

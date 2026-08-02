@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type GeneratorKind = "round_robin" | "ladder";
+type ScoringMode = "scored" | "unscored";
 
 type Participant = {
   id: string;
@@ -31,7 +32,7 @@ type MatchRow = {
 
 type RoundRow = {
   number: number;
-  status: "preview" | "active" | "saved" | "skipped" | string;
+  status: "preview" | "active" | "saved" | "played" | "skipped" | string;
   matches?: MatchRow[];
   courts?: Array<{
     courtNumber: number;
@@ -47,6 +48,7 @@ type GeneratorEvent = {
   name: string;
   generatorKind: GeneratorKind;
   playFormat: "singles" | "doubles";
+  scoringMode?: ScoringMode;
   status: string;
   currentRoundNumber: number;
   totalRounds: number;
@@ -62,6 +64,7 @@ type GeneratorSession = {
   version: string | number;
   generator_kind: GeneratorKind;
   play_format: "singles" | "doubles";
+  scoring_mode?: ScoringMode;
   current_round_number?: number | null;
   total_rounds?: number | null;
   event: GeneratorEvent;
@@ -364,13 +367,15 @@ export default function GeneratorRoundRunner({
   const matches = flattenMatches(round);
   const isCurrent =
     Boolean(event) && Number(event?.currentRoundNumber || 1) === Number(roundNumber);
+  const scoringMode: ScoringMode = session?.scoring_mode || event?.scoringMode || "scored";
+  const scoredSession = scoringMode === "scored";
   const canEditRound =
     Boolean(session) &&
     Boolean(editToken) &&
     session?.status === "active" &&
     isCurrent &&
     round?.status === "active";
-  const anyDraftScore = Object.values(scores).some((value) => value !== "");
+  const anyDraftScore = scoredSession && Object.values(scores).some((value) => value !== "");
   const results = round ? roundStandings(round, participants) : [];
   const byeNames = (round?.byeParticipantIds || [])
     .map((id) => participants.get(id)?.name || id)
@@ -429,6 +434,56 @@ export default function GeneratorRoundRunner({
     }
   }
 
+  async function markRoundPlayed(): Promise<void> {
+    if (!session || !round || generatorKind !== "round_robin" || scoredSession) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const playedPayload = await requestJson<MutationResponse>(
+        `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(
+          sessionKey
+        )}/rounds/${roundNumber}/played`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            edit_token: editToken,
+            expected_version: Number(session.version),
+            idempotency_key: operationKey("played")
+          })
+        }
+      );
+      if (!playedPayload.session) throw new Error("Round marked played without a refreshed session.");
+      applySession(playedPayload.session);
+      const advancedPayload = await requestJson<MutationResponse>(
+        `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(
+          sessionKey
+        )}/advance`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            edit_token: editToken,
+            expected_version: Number(playedPayload.session.version),
+            idempotency_key: operationKey("advance-after-played")
+          })
+        }
+      );
+      if (!advancedPayload.session) throw new Error("Round advanced without a refreshed session.");
+      applySession(advancedPayload.session);
+      if (advancedPayload.session.status === "completed") {
+        setMessage("Session completed.");
+        router.refresh();
+        return;
+      }
+      const nextRound = advancedPayload.session.current_round_number || roundNumber + 1;
+      router.push(roundPath(generatorKind, clubId, sessionKey, nextRound));
+      router.refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to mark the round played.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function skipRound(): Promise<void> {
     if (!session || !round) return;
     if (anyDraftScore && !window.confirm("Discard the unsaved score entries and skip this round?")) {
@@ -453,6 +508,32 @@ export default function GeneratorRoundRunner({
       );
       if (!payload.session) throw new Error("Round skipped without a refreshed session.");
       applySession(payload.session);
+      if (generatorKind === "round_robin" && !scoredSession) {
+        const advancedPayload = await requestJson<MutationResponse>(
+          `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(
+            sessionKey
+          )}/advance`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              edit_token: editToken,
+              expected_version: Number(payload.session.version),
+              idempotency_key: operationKey("advance-after-skip")
+            })
+          }
+        );
+        if (!advancedPayload.session) throw new Error("Skipped round advanced without a refreshed session.");
+        applySession(advancedPayload.session);
+        if (advancedPayload.session.status === "completed") {
+          setMessage("Session completed.");
+          router.refresh();
+        } else {
+          const nextRound = advancedPayload.session.current_round_number || roundNumber + 1;
+          router.push(roundPath(generatorKind, clubId, sessionKey, nextRound));
+          router.refresh();
+        }
+        return;
+      }
       setMessage(`Round ${roundNumber} skipped.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to skip the round.");
@@ -601,7 +682,7 @@ export default function GeneratorRoundRunner({
         <h1 style={{ margin: "0 0 0.4rem" }}>{session.title}</h1>
         <p style={{ margin: 0, color: "#475569" }}>
           {session.play_format === "singles" ? "Singles" : "Doubles"} · Round {roundNumber} of{" "}
-          {event.totalRounds} · {round.status} · Unrated public session
+          {event.totalRounds} · {scoredSession ? "Scored" : "Unscored"} · {round.status} · Unrated public session
         </p>
         {!editToken ? <p style={{ color: "#64748b" }}>View-only link. The private organizer link enables scores and roster changes.</p> : null}
       </article>
@@ -617,7 +698,7 @@ export default function GeneratorRoundRunner({
             ) : null}
           </div>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-            {generatorKind === "round_robin" ? (
+            {generatorKind === "round_robin" && scoredSession ? (
               <Link href={standingsPath(clubId, sessionKey)} style={secondaryButton}>
                 Standings
               </Link>
@@ -643,7 +724,7 @@ export default function GeneratorRoundRunner({
 
         <div style={{ display: "grid", gap: "0.75rem" }}>
           {matches.map((match) => {
-            const editable = canEditRound;
+            const editable = canEditRound && scoredSession;
             return (
               <article
                 key={match.id}
@@ -704,9 +785,11 @@ export default function GeneratorRoundRunner({
                     </>
                   ) : (
                     <strong>
-                      {match.scoreA == null || match.scoreB == null
-                        ? "—"
-                        : `${match.scoreA}–${match.scoreB}`}
+                      {!scoredSession
+                        ? "vs."
+                        : match.scoreA == null || match.scoreB == null
+                          ? "—"
+                          : `${match.scoreA}–${match.scoreB}`}
                     </strong>
                   )}
                   <strong style={{ textAlign: "right" }}>{sideLabel(match, "B", participants)}</strong>
@@ -719,9 +802,15 @@ export default function GeneratorRoundRunner({
         {canEditRound ? (
           <div style={{ marginTop: "1rem", display: "grid", gap: "0.75rem" }}>
             <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
-              <button type="button" onClick={() => void saveRound()} disabled={busy} style={primaryButton}>
-                {busy ? "Saving…" : "Save round scores"}
-              </button>
+              {scoredSession ? (
+                <button type="button" onClick={() => void saveRound()} disabled={busy} style={primaryButton}>
+                  {busy ? "Saving…" : "Save round scores"}
+                </button>
+              ) : (
+                <button type="button" onClick={() => void markRoundPlayed()} disabled={busy} style={primaryButton}>
+                  {busy ? "Saving…" : "Round Played"}
+                </button>
+              )}
               <input
                 value={skipReason}
                 onChange={(event_) => setSkipReason(event_.target.value)}
@@ -735,11 +824,11 @@ export default function GeneratorRoundRunner({
           </div>
         ) : null}
 
-        {round.status === "saved" ? (
+        {round.status === "saved" && scoredSession ? (
           <section style={{ marginTop: "1rem", borderTop: "1px solid #e2e8f0", paddingTop: "1rem" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
               <h3 style={{ margin: 0 }}>Round {roundNumber} results</h3>
-              {generatorKind === "round_robin" ? (
+              {generatorKind === "round_robin" && scoredSession ? (
                 <Link href={standingsPath(clubId, sessionKey)} style={secondaryButton}>View full standings</Link>
               ) : null}
             </div>
@@ -768,25 +857,37 @@ export default function GeneratorRoundRunner({
           </section>
         ) : null}
 
+        {round.status === "played" ? (
+          <p style={{ marginTop: "1rem", padding: "0.7rem", background: "#dcfce7", borderRadius: "8px" }}>
+            Round {roundNumber} was marked played.
+          </p>
+        ) : null}
+
         {round.status === "skipped" ? (
           <p style={{ marginTop: "1rem", padding: "0.7rem", background: "#fef3c7", borderRadius: "8px" }}>
             This round was skipped{round.skipReason ? `: ${round.skipReason}` : "."}
           </p>
         ) : null}
 
-        {isCurrent && ["saved", "skipped"].includes(round.status) && session.status === "active" ? (
-          <button
-            type="button"
-            onClick={() => void advanceRound()}
-            disabled={busy}
-            style={{ ...primaryButton, marginTop: "1rem" }}
-          >
-            {roundNumber >= event.totalRounds
-              ? "Finish session"
-              : generatorKind === "ladder"
-                ? `Generate Round ${roundNumber + 1}`
-                : `Go to Round ${roundNumber + 1}`}
-          </button>
+        {isCurrent && ["saved", "played", "skipped"].includes(round.status) && session.status === "active" ? (
+          generatorKind === "round_robin" && scoredSession ? (
+            <Link href={standingsPath(clubId, sessionKey)} style={{ ...primaryButton, display: "inline-flex", marginTop: "1rem", textDecoration: "none" }}>
+              View standings and continue
+            </Link>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void advanceRound()}
+              disabled={busy}
+              style={{ ...primaryButton, marginTop: "1rem" }}
+            >
+              {roundNumber >= event.totalRounds
+                ? "Finish session"
+                : generatorKind === "ladder"
+                  ? `Generate Round ${roundNumber + 1}`
+                  : `Continue to Round ${roundNumber + 1}`}
+            </button>
+          )
         ) : null}
       </article>
 
