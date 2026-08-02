@@ -51,6 +51,19 @@ jobs:
           ).hexdigest()
           contract_path.write_text(json.dumps(contract, indent=2) + "\n")
 
+          policies_path = Path("apps/web/app/admin/tournaments/setup/TournamentSetupPolicies.tsx")
+          policies_text = policies_path.read_text()
+          function_start = "export function withDefaultTournamentPolicies(settings: SetupRecord): SetupRecord {"
+          first = policies_text.find(function_start)
+          second = policies_text.find(function_start, first + 1) if first >= 0 else -1
+          if second >= 0:
+              end_marker = "\n\nfunction text(value: unknown): string {"
+              end = policies_text.find(end_marker, second)
+              if end < 0:
+                  raise SystemExit("Unable to locate duplicate policy hydrator end marker")
+              policies_text = policies_text[:second] + policies_text[end + 2 :]
+              policies_path.write_text(policies_text)
+
           setup_test = Path("tests/test_api_contract_tournament_setup_event_division_refine.py")
           setup_text = setup_test.read_text()
           setup_replacements = {
