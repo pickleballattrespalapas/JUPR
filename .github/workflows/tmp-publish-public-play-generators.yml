@@ -31,7 +31,7 @@ jobs:
       - name: Apply public generator mirror
         run: python scripts/tmp_public_play_generator_mirror.py
 
-      - name: Fix generated JSX text
+      - name: Fix generated public runner
         shell: bash
         run: |
           set -euo pipefail
@@ -39,11 +39,19 @@ jobs:
           from pathlib import Path
           path = Path("apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner.tsx")
           text = path.read_text()
-          old = "The organizer's private link enables scores and roster changes."
-          new = "The private organizer link enables scores and roster changes."
-          if text.count(old) != 1:
-              raise SystemExit(f"organizer-copy match count={text.count(old)}")
-          path.write_text(text.replace(old, new, 1))
+
+          old_copy = "The organizer's private link enables scores and roster changes."
+          new_copy = "The private organizer link enables scores and roster changes."
+          if text.count(old_copy) != 1:
+              raise SystemExit(f"organizer-copy match count={text.count(old_copy)}")
+          text = text.replace(old_copy, new_copy, 1)
+
+          old_path = "roundPath(\n            generatorKind,\n            sessionKey,"
+          new_path = "roundPath(\n            generatorKind,\n            clubId,\n            sessionKey,"
+          if text.count(old_path) != 1:
+              raise SystemExit(f"multiline roundPath match count={text.count(old_path)}")
+          text = text.replace(old_path, new_path, 1)
+          path.write_text(text)
           PY
 
       - name: Install Python dependencies
