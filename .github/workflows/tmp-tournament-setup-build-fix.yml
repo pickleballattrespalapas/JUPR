@@ -23,7 +23,7 @@ jobs:
           ref: agent/tournament-setup-event-division-refine
           fetch-depth: 0
 
-      - name: Add missing event-family import
+      - name: Apply Tournament Setup TypeScript build fixes
         shell: bash
         run: |
           set -euo pipefail
@@ -31,11 +31,15 @@ jobs:
           from pathlib import Path
           path = Path('apps/web/app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx')
           text = path.read_text()
-          old = '  eventDayReference,\n  eventDivisionName,\n'
-          new = '  eventDayReference,\n  eventDivisionName,\n  eventFamilyName,\n'
-          if text.count(old) != 1:
-              raise SystemExit(f'import marker match count={text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
+          old_import = '  eventDayReference,\n  eventDivisionName,\n'
+          new_import = '  eventDayReference,\n  eventDivisionName,\n  eventFamilyName,\n'
+          if text.count(old_import) != 1:
+              raise SystemExit(f'import marker match count={text.count(old_import)}')
+          text = text.replace(old_import, new_import, 1)
+          stale = '  const familyNames = distinctFamilyNames(configuration);\n'
+          if text.count(stale) != 1:
+              raise SystemExit(f'stale familyNames marker match count={text.count(stale)}')
+          path.write_text(text.replace(stale, '', 1))
           PY
           git diff --check
 
