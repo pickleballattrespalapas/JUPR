@@ -1,0 +1,11 @@
+name: Temporary Tournament Setup publisher placeholder
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo placeholder
