@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import type { SetupRecord } from "../../tournament-setup/tournamentSetupBuilder";
 
 type PolicyTemplate = {
@@ -12,7 +13,7 @@ type Props = {
   settings: SetupRecord;
   registrationStatus: string;
   disabled: boolean;
-  inputStyle: React.CSSProperties;
+  inputStyle: CSSProperties;
   onChange: (next: SetupRecord) => void;
 };
 
@@ -79,6 +80,17 @@ const WEATHER_TEMPLATES: PolicyTemplate[] = [
   }
 ];
 
+export function withDefaultTournamentPolicies(settings: SetupRecord): SetupRecord {
+  return {
+    ...settings,
+    rules_markdown: text(settings.rules_markdown) || REGISTRATION_RULE_TEMPLATES[0].text,
+    refund_policy_markdown:
+      text(settings.refund_policy_markdown) || CANCELLATION_TEMPLATES[1].text,
+    weather_policy_markdown:
+      text(settings.weather_policy_markdown) || WEATHER_TEMPLATES[0].text
+  };
+}
+
 function text(value: unknown): string {
   return value == null ? "" : String(value);
 }
@@ -118,7 +130,7 @@ function PolicyEditor({
   rows: number;
   required?: boolean;
   disabled: boolean;
-  inputStyle: React.CSSProperties;
+  inputStyle: CSSProperties;
   onChange: (next: SetupRecord) => void;
 }) {
   return (
