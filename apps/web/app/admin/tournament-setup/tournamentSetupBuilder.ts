@@ -440,6 +440,9 @@ export function newEventOptionRow(configuration: SetupConfiguration): SetupRecor
   const inheritedSchedule = eventDayReferences(defaults || {});
   const fallbackSchedule = [dayReference(firstDay)].filter(Boolean);
   const scheduledDayIds = inheritedSchedule.length ? inheritedSchedule : fallbackSchedule;
+  const primaryDay = configuration.days.find(
+    (row) => dayReference(row.value) === scheduledDayIds[0]
+  )?.value || firstDay;
   const existingNames = new Set(configuration.eventOptions.map((row) => eventDivisionName(row.value).toLowerCase()));
   let divisionName = `${familyName} Open`;
   let suffix = position;
@@ -460,8 +463,7 @@ export function newEventOptionRow(configuration: SetupConfiguration): SetupRecor
       skill_label: "Open",
       age_mode: "ALL_AGES",
       age_label: "All Ages",
-      assigned_day: scheduledDayIds[0] || dayLabel(firstDay),
-      registration_day_id: scheduledDayIds[0] || dayReference(firstDay),
+      assigned_day: dayLabel(primaryDay) || scheduledDayIds[0] || dayLabel(firstDay),
       scheduled_day_ids: scheduledDayIds,
       schedule_mode: "INHERIT_EVENT",
       capacity_teams: Number(defaults?.default_capacity_teams ?? 16),
@@ -675,11 +677,19 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
         )
         .filter((reference) => dayIdsByLabel.has(normalizedLookupKey(reference)) || days.some((day) => cleanString(day.id) === reference));
       const primary = scheduledDayIds[0] || cleanString(projected.registration_day_id);
-      return {
+      const next: SetupRecord = {
         ...projected,
-        registration_day_id: primary,
-        scheduled_day_ids: scheduledDayIds.length ? scheduledDayIds : (primary ? [primary] : [])
+        registration_day_id: primary
       };
+      if (
+        Object.prototype.hasOwnProperty.call(projected, "scheduled_day_ids") ||
+        scheduledDayIds.length > 1
+      ) {
+        next.scheduled_day_ids = scheduledDayIds.length
+          ? scheduledDayIds
+          : (primary ? [primary] : []);
+      }
+      return next;
     }
 
     const familyName = eventFamilyName(row);
@@ -819,7 +829,17 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
   const duplicateFamilyIds = duplicateIndexes(familyIds);
   families.forEach((row, index) => {
     if (!eventFamilyName(row)) issues.push({ path: `families.${index}.event_family`, message: "Event name is required." });
-    const scheduledDays = eventDayReferences(row);
+    const explicitScheduledDays = eventDayReferences(row);
+    const inferredScheduledDays = events
+      .filter(
+        (event) =>
+          normalizedLookupKey(eventFamilyName(event)) ===
+          normalizedLookupKey(eventFamilyName(row))
+      )
+      .flatMap(eventDayReferences);
+    const scheduledDays = explicitScheduledDays.length
+      ? explicitScheduledDays
+      : [...new Set(inferredScheduledDays)];
     if (!scheduledDays.length) {
       issues.push({ path: `families.${index}.scheduled_day_ids`, message: "Choose at least one tournament day for this event." });
     }
@@ -866,7 +886,7 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
     if (!scheduledDays.length) {
       issues.push({ path: `events.${index}.scheduled_day_ids`, message: "Choose at least one tournament day for this division." });
     } else if (scheduledDays.some((day) => !enabledDayReferences.has(day))) {
-      issues.push({ path: `events.${index}.scheduled_day_ids`, message: "Choose only enabled tournament days." });
+      issues.push({ path: `events.${index}.scheduled_day_ids`, message: "Choose an enabled tournament day." });
     }
     const familyDefaults = families.find(
       (familyRow) => normalizedLookupKey(eventFamilyName(familyRow)) === normalizedLookupKey(family)
