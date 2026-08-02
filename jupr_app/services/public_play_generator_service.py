@@ -14,6 +14,7 @@ from typing import Any, Callable
 from jupr_app.domain.adaptive_play_engine import (
     advance_generator_event,
     create_generator_preview,
+    generator_event_standings,
     mutate_generator_roster,
     save_generator_round,
     schedule_export_rows,
@@ -211,6 +212,8 @@ def public_play_generator_session_payload(row: dict[str, Any]) -> dict[str, Any]
         "total_rounds": int(event.get("totalRounds") or 0) if event else None,
         "event": event,
         "schedule_rows": schedule_export_rows(event) if event else [],
+        "standings_sort": str(event.get("standingsSort") or "wins") if event else "wins",
+        "standings": generator_event_standings(event) if event else [],
         "unrated": True,
     }
 
@@ -261,6 +264,7 @@ def preview_public_play_generator(
     participant_player_ids: dict[str, int] | None,
     total_rounds: int,
     court_count: int,
+    standings_sort: str = "wins",
 ) -> dict[str, Any]:
     kind = _normalize_kind(generator_kind)
     fmt = _normalize_format(play_format)
@@ -280,6 +284,7 @@ def preview_public_play_generator(
             player_ids=ids,
             total_rounds=max(1, min(int(total_rounds or 1), 50)),
             court_count=max(0, min(int(court_count or 0), 20)),
+            standings_sort=standings_sort,
         )
     except ValueError as exc:
         raise PublicPlayGeneratorError(str(exc)) from exc
@@ -316,6 +321,7 @@ def create_public_play_generator_session(
     idempotency_key: str,
     requester_hash: str,
     token_secret: str | None = None,
+    standings_sort: str = "wins",
 ) -> dict[str, Any]:
     preview_result = preview_public_play_generator(
         supabase,
@@ -327,6 +333,7 @@ def create_public_play_generator_session(
         participant_player_ids=participant_player_ids,
         total_rounds=total_rounds,
         court_count=court_count,
+        standings_sort=standings_sort,
     )
     preview = preview_result["preview"]
     supplied = str(preview_fingerprint or "").strip()
@@ -339,6 +346,7 @@ def create_public_play_generator_session(
         "participant_player_ids": participant_player_ids or {},
         "total_rounds": int(preview.get("totalRounds") or 1),
         "court_sizes": [int(preview.get("courtCount") or 0)],
+        "standings_sort": str(preview.get("standingsSort") or "wins"),
         "live_mode": "quick",
     }
     operation, existed = begin_public_live_operation(

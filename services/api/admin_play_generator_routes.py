@@ -49,6 +49,7 @@ class GeneratorPreviewRequest(BaseModel):
     player_ids: list[int] = Field(default_factory=list, max_length=40)
     total_rounds: int = Field(default=3, ge=1, le=50)
     court_count: int = Field(default=0, ge=0, le=20)
+    standings_sort: str = Field(default="wins", pattern=r"^(wins|points|differential)$")
 
 
 class GeneratorDurableRequest(BaseModel):
@@ -218,6 +219,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                 player_ids=payload.player_ids,
                 total_rounds=payload.total_rounds,
                 court_count=payload.court_count,
+                standings_sort=payload.standings_sort,
             )
         except Exception as exc:
             _handle(exc)
@@ -291,6 +293,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                     total_rounds=payload.total_rounds,
                     court_count=payload.court_count,
                     preview_fingerprint=payload.preview_fingerprint,
+                    standings_sort=payload.standings_sort,
                     actor_email=actor_email,
                     actor_role=actor_role,
                     source=payload.source,

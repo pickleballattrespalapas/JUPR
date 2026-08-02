@@ -10,6 +10,7 @@ from jupr_app.data.load import load_data
 from jupr_app.domain.adaptive_play_engine import (
     advance_generator_event,
     create_generator_preview,
+    generator_event_standings,
     mutate_generator_roster,
     save_generator_round,
     schedule_export_rows,
@@ -132,6 +133,8 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
         "total_rounds": int(event.get("totalRounds") or 0) if event else None,
         "event": event,
         "schedule_rows": schedule_export_rows(event) if event else [],
+        "standings_sort": str(event.get("standingsSort") or "wins") if event else "wins",
+        "standings": generator_event_standings(event) if event else [],
         "official_publish": _as_dict(state.get("official_publish")),
     }
 
@@ -249,6 +252,7 @@ def preview_play_generator(
     player_ids: list[int] | None,
     total_rounds: int,
     court_count: int,
+    standings_sort: str = "wins",
 ) -> dict[str, Any]:
     names, ids = _resolve_names_and_ids(
         supabase,
@@ -264,6 +268,7 @@ def preview_play_generator(
         player_ids=ids,
         total_rounds=total_rounds,
         court_count=court_count,
+        standings_sort=standings_sort,
     )
     return {
         "ok": True,
@@ -314,6 +319,7 @@ def create_play_generator_session(
     actor_email: str,
     actor_role: str,
     source: str,
+    standings_sort: str = "wins",
 ) -> dict[str, Any]:
     preview = preview_play_generator(
         supabase,
@@ -325,6 +331,7 @@ def create_play_generator_session(
         player_ids=player_ids,
         total_rounds=total_rounds,
         court_count=court_count,
+        standings_sort=standings_sort,
     )["preview"]
     supplied = _clean_text(preview_fingerprint, limit=128)
     if supplied and supplied != str(preview.get("previewFingerprint") or ""):

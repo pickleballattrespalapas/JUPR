@@ -16,6 +16,7 @@ import { useAdminSession } from "@/lib/useAdminSession";
 
 type GeneratorKind = "round_robin" | "ladder";
 type PlayFormat = "singles" | "doubles";
+type StandingsSort = "wins" | "points" | "differential";
 
 type Participant = {
   id: string;
@@ -54,6 +55,7 @@ type PreviewEvent = {
   name: string;
   generatorKind: GeneratorKind;
   playFormat: PlayFormat;
+  standingsSort?: StandingsSort;
   totalRounds: number;
   courtCount: number;
   previewFingerprint: string;
@@ -215,6 +217,7 @@ export default function GeneratorWorkspace({
     `${generatorTitle(generatorKind)} ${new Date().toISOString().slice(0, 10)}`
   );
   const [playFormat, setPlayFormat] = useState<PlayFormat>("doubles");
+  const [standingsSort, setStandingsSort] = useState<StandingsSort>("wins");
   const [targetCount, setTargetCount] = useState(8);
   const [participantText, setParticipantText] = useState("");
   const [linkedPlayerIds, setLinkedPlayerIds] = useState<Record<string, number>>({});
@@ -275,6 +278,7 @@ export default function GeneratorWorkspace({
     if (stored) {
       setTitle(stored.title);
       setPlayFormat(stored.playFormat);
+      setStandingsSort(stored.standingsSort || "wins");
       setTargetCount(stored.targetCount);
       setParticipantText(stored.participantText);
       setLinkedPlayerIds(stored.linkedPlayerIds);
@@ -291,6 +295,7 @@ export default function GeneratorWorkspace({
     writePlayGeneratorDraft(draftKey, {
       title,
       playFormat,
+      standingsSort,
       targetCount,
       participantText,
       linkedPlayerIds,
@@ -301,6 +306,7 @@ export default function GeneratorWorkspace({
     draftKey,
     title,
     playFormat,
+    standingsSort,
     targetCount,
     participantText,
     linkedPlayerIds,
@@ -328,6 +334,7 @@ export default function GeneratorWorkspace({
     return {
       generator_kind: generatorKind,
       play_format: playFormat,
+      standings_sort: standingsSort,
       title: title.trim(),
       participant_names: participantNames,
       player_ids: allLinked ? orderedIds : [],
@@ -552,6 +559,27 @@ export default function GeneratorWorkspace({
               <option value="singles">Singles</option>
             </select>
           </label>
+          {generatorKind === "round_robin" ? (
+            <label>
+              Standings ranked by
+              <br />
+              <select
+                value={standingsSort}
+                onChange={(event) => {
+                  setStandingsSort(event.target.value as StandingsSort);
+                  invalidatePreview();
+                }}
+                style={inputStyle}
+              >
+                <option value="wins">Total wins</option>
+                <option value="points">Total points</option>
+                <option value="differential">Point differential</option>
+              </select>
+              <small style={{ display: "block", marginTop: "0.35rem", color: "#64748b" }}>
+                This primary ranking applies to the full session standings.
+              </small>
+            </label>
+          ) : null}
         </div>
 
         <GeneratorRosterSetup
