@@ -2,11 +2,10 @@ import Link from "next/link";
 
 export type TournamentSetupStep =
   | "basics"
+  | "schedule"
   | "events"
   | "divisions"
-  | "registration-rules"
   | "pricing"
-  | "schedule"
   | "review";
 
 export type TournamentSetupStepState =
@@ -32,30 +31,34 @@ export const TOURNAMENT_SETUP_STEPS: Array<{
   {
     key: "basics",
     number: 1,
-    label: "Tournament basics",
+    label: "Tournament basics and policies",
     shortLabel: "Basics",
-    description: "Identity, dates, location, timezone, and sponsors."
+    description:
+      "Identity, dates, venue, timezone, sponsors, registration window, and public policies."
+  },
+  {
+    key: "schedule",
+    number: 2,
+    label: "Schedule and courts",
+    shortLabel: "Schedule",
+    description:
+      "Create the tournament days before assigning events and divisions."
   },
   {
     key: "events",
-    number: 2,
+    number: 3,
     label: "Events",
     shortLabel: "Events",
-    description: "Create event families, assign days, and set defaults."
+    description:
+      "Create event families and choose every tournament day on which they may be played."
   },
   {
     key: "divisions",
-    number: 3,
+    number: 4,
     label: "Divisions",
     shortLabel: "Divisions",
-    description: "Create skill and age divisions inside each event."
-  },
-  {
-    key: "registration-rules",
-    number: 4,
-    label: "Registration rules",
-    shortLabel: "Rules",
-    description: "Tournament-wide registration window, waitlist, Partner Board, and policies."
+    description:
+      "Create skill and age divisions inside each event and set their schedule."
   },
   {
     key: "pricing",
@@ -65,15 +68,8 @@ export const TOURNAMENT_SETUP_STEPS: Array<{
     description: "Entry fees, merchandise, bundles, inventory, and pickup."
   },
   {
-    key: "schedule",
-    number: 6,
-    label: "Schedule and courts",
-    shortLabel: "Schedule",
-    description: "Tournament days and division-day assignments."
-  },
-  {
     key: "review",
-    number: 7,
+    number: 6,
     label: "Review and open registration",
     shortLabel: "Review",
     description: "Resolve warnings, publish setup, and open registration."
