@@ -53,11 +53,15 @@ jobs:
 
           setup_test = Path("tests/test_api_contract_tournament_setup_event_division_refine.py")
           setup_text = setup_test.read_text()
-          old = "    assert 'onClick={() => void saveRegistrationRules()}' in panel\n"
-          new = "    assert 'onClick={() => void saveBasics()}' in panel\n"
-          if setup_text.count(old) != 1:
-              raise SystemExit(f"routine save assertion match count={setup_text.count(old)}")
-          setup_test.write_text(setup_text.replace(old, new, 1))
+          setup_replacements = {
+              "    assert 'onClick={() => void saveRegistrationRules()}' in panel\n": "    assert 'onClick={() => void saveBasics()}' in panel\n",
+              "    assert 'onClick={() => void saveDraftAndContinue(\"review\")}' in panel\n": "    assert 'onClick={() => void saveDraftAndContinue(\"events\")}' in panel\n",
+          }
+          for old_value, new_value in setup_replacements.items():
+              if setup_text.count(old_value) != 1:
+                  raise SystemExit(f"setup contract marker match count={setup_text.count(old_value)} for {old_value!r}")
+              setup_text = setup_text.replace(old_value, new_value, 1)
+          setup_test.write_text(setup_text)
 
           production_test = Path("tests/test_production_deployment_hardening.py")
           production_text = production_test.read_text()
