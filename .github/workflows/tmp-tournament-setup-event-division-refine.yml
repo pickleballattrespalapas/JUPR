@@ -20,7 +20,18 @@ jobs:
           fetch-depth: 0
 
       - name: Apply Tournament Setup refinement
-        run: PYTHONPATH=. python scripts/tmp_tournament_setup_refine.py
+        run: |
+          PYTHONPATH=. python scripts/tmp_tournament_setup_refine.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("tests/test_production_deployment_hardening.py")
+          text = path.read_text()
+          old = 'assert migrations[-1] == "20261020000000"'
+          new = 'assert migrations[-1] == "20261021000000"'
+          if text.count(old) != 1:
+              raise SystemExit(f"latest migration assertion match count={text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+          PY
 
       - name: Install focused test dependency
         run: python -m pip install pytest
