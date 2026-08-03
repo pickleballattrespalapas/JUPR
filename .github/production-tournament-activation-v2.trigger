@@ -1,1 +1,1 @@
-trigger=2026-08-03-production-tournament-activation-v2
+trigger=2026-08-03-production-tournament-activation-v3
