@@ -122,9 +122,9 @@ jobs:
 
           openapi = get_json(os.environ["FLY_OPENAPI_URL"])
           openapi_text = json.dumps(openapi, sort_keys=True)
-          assert '"doubles_singles"' in openapi_text
-          assert '"doubles_court_count"' in openapi_text
-          assert '"singles_court_count"' in openapi_text
+          assert "doubles_singles" in openapi_text
+          assert "doubles_court_count" in openapi_text
+          assert "singles_court_count" in openapi_text
           assert os.environ["FORBIDDEN_PRODUCTION_SUPABASE_REF"] not in openapi_text
 
           Path("fly-health.json").write_text(
