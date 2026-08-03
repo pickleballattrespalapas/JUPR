@@ -1,0 +1,175 @@
+name: Temporary production migration plan v2
+
+on:
+  push:
+    branches:
+      - agent/preflight-production-tournament-schema-20260803
+    paths:
+      - .github/production-migration-plan-v2.trigger
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      STATUS_CONTEXT: production-migration-plan-v2
+      EXPECTED_SOURCE_SHA: 1bcb4ccc26875190aae1ace9ff4640f941f5a7ba
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Mark plan pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          print(json.dumps({
+            "state": "pending",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Reviewing exact production migration inventory",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Build reviewed migration plan
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import re
+          from pathlib import Path
+
+          root = Path.cwd()
+          contract = json.loads((root / "config/production_migration_contract.json").read_text())
+          names = set(contract.get("required_ledger_names") or [])
+          names.update(contract.get("schema_contract_only_repository_migrations") or [])
+          selected = []
+          missing = set(names)
+          for path in sorted((root / "supabase/migrations").glob("*.sql")):
+              match = re.fullmatch(r"(?P<version>\d{8}(?:\d{6})?)_(?P<name>[A-Za-z0-9][A-Za-z0-9_]*)\.sql", path.name)
+              if not match:
+                  continue
+              name = match.group("name")
+              if name not in names:
+                  continue
+              missing.discard(name)
+              raw = path.read_bytes()
+              text = raw.decode("utf-8")
+              # Strip line comments only for keyword screening; SQL is not modified.
+              screened = "\n".join(line.split("--", 1)[0] for line in text.splitlines())
+              risks = {
+                  "drop_table": len(re.findall(r"\bdrop\s+table\b", screened, re.I)),
+                  "drop_schema": len(re.findall(r"\bdrop\s+schema\b", screened, re.I)),
+                  "truncate": len(re.findall(r"\btruncate\b", screened, re.I)),
+                  "delete_from": len(re.findall(r"\bdelete\s+from\b", screened, re.I)),
+                  "drop_column": len(re.findall(r"\bdrop\s+column\b", screened, re.I)),
+                  "drop_constraint": len(re.findall(r"\bdrop\s+constraint\b", screened, re.I)),
+                  "drop_index": len(re.findall(r"\bdrop\s+index\b", screened, re.I)),
+                  "drop_function": len(re.findall(r"\bdrop\s+function\b", screened, re.I)),
+              }
+              selected.append({
+                  "version": match.group("version"),
+                  "name": name,
+                  "path": str(path.relative_to(root)),
+                  "sha256": hashlib.sha256(raw).hexdigest(),
+                  "bytes": len(raw),
+                  "risks": risks,
+              })
+          selected.sort(key=lambda row: (row["version"], row["path"]))
+          hard = [row for row in selected if row["risks"]["drop_table"] or row["risks"]["drop_schema"] or row["risks"]["truncate"]]
+          plan = {
+              "source_sha": "1bcb4ccc26875190aae1ace9ff4640f941f5a7ba",
+              "profile": contract.get("profile"),
+              "selected_count": len(selected),
+              "selected": selected,
+              "missing_logical_names": sorted(missing),
+              "hard_destructive_files": [row["path"] for row in hard],
+              "mutation_keyword_files": [
+                  row for row in selected
+                  if any(row["risks"][key] for key in ("delete_from", "drop_column", "drop_constraint", "drop_index", "drop_function"))
+              ],
+          }
+          output = Path(__import__("os").environ["RUNNER_TEMP"]) / "production-migration-plan-v2.json"
+          output.write_text(json.dumps(plan, indent=2, sort_keys=True), encoding="utf-8")
+          print(json.dumps({
+              "selected_count": len(selected),
+              "missing_logical_names": sorted(missing),
+              "hard_destructive_files": plan["hard_destructive_files"],
+              "files_with_delete_from": [row["path"] for row in selected if row["risks"]["delete_from"]],
+              "files_with_drop_column": [row["path"] for row in selected if row["risks"]["drop_column"]],
+              "largest_files": [
+                  {"path": row["path"], "bytes": row["bytes"]}
+                  for row in sorted(selected, key=lambda row: row["bytes"], reverse=True)[:10]
+              ],
+          }, indent=2))
+          if missing:
+              raise SystemExit("Required logical migration names are missing from the repository.")
+          if hard:
+              raise SystemExit("Hard-destructive migration keywords require separate review.")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-migration-plan-v2-${{ github.run_id }}
+          path: ${{ runner.temp }}/production-migration-plan-v2.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Mark plan successful
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status-success.json"
+          import json, os
+          print(json.dumps({
+            "state": "success",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Exact migration inventory passed hard-destructive scan",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-success.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Mark plan failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status-failure.json"
+          import json, os
+          print(json.dumps({
+            "state": "failure",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Production migration inventory needs review",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-failure.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
