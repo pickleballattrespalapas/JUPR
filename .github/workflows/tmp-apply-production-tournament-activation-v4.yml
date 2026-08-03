@@ -1,0 +1,86 @@
+name: Temporary apply production tournament activation v4
+
+on:
+  push:
+    branches: [rollback-feb8]
+    paths: [.github/production-tournament-activation-v4.trigger]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: production-tournament-activation-builder-v4
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BASE_SHA: 1bcb4ccc26875190aae1ace9ff4640f941f5a7ba
+      TARGET_BRANCH: agent/production-tournament-activation-v3
+      PATCH_SHA256: e2d33a59795932bf5e8a8a7b69fdc39376652d7f484f682b6555502079c6f628
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply exact patch
+        run: |
+          set -euo pipefail
+          cat .github/production-tournament-patch/chunk-*.txt | base64 -d | gzip -d > "$RUNNER_TEMP/activation.patch"
+          echo "$PATCH_SHA256  $RUNNER_TEMP/activation.patch" | sha256sum -c -
+          git checkout --detach "$BASE_SHA"
+          git apply --check "$RUNNER_TEMP/activation.patch"
+          git apply "$RUNNER_TEMP/activation.patch"
+          git diff --check
+          python -m compileall -q jupr_app/services services/api scripts tests
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pip install -r requirements.txt
+          pip install -r services/api/requirements.txt
+      - name: Run tournament contracts
+        run: |
+          python -m pytest -q \
+            tests/test_production_tournament_activation.py \
+            tests/test_tournament_admin_guarded_operations.py \
+            tests/test_tournament_team_runtime_security.py \
+            tests/test_public_tournament_commerce_service.py \
+            tests/test_admin_tournament_live_runner.py \
+            tests/test_api_contract_admin_tournament_guarded.py \
+            tests/test_api_contract_admin_tournament_setup.py \
+            tests/test_api_contract_tournament_registration.py \
+            tests/test_api_contract_tournament_registration_edit.py \
+            tests/test_api_contract_tournament_partner_flow.py \
+            tests/test_api_contract_admin_tournament_game_generation.py \
+            tests/test_api_contract_admin_tournament_game_scoring.py \
+            tests/test_api_contract_admin_tournament_playoff_generation.py \
+            tests/test_api_contract_admin_tournament_match_publish.py \
+            tests/test_api_contract_admin_tournament_team_editor.py \
+            tests/test_public_tournament_team_setup_recovery.py \
+            tests/test_tournament_pairing_lifecycle_email.py
+      - name: Run full API contract suite
+        run: python -m pytest -q tests/test_api_contract_*.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Build web
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run build
+      - name: Publish tested branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config/production_migration_contract.json jupr_app/services scripts/deployment_verifier.py services/api/public_tournament_pairing_routes.py services/api/public_tournament_registration_routes.py services/api/public_tournament_team_routes.py tests/test_production_tournament_activation.py tests/test_tournament_admin_guarded_operations.py tests/test_tournament_team_runtime_security.py tests/test_public_tournament_commerce_service.py
+          git commit -m "Authorize reviewed tournament workflows in production"
+          git push --force-with-lease="refs/heads/$TARGET_BRANCH:$BASE_SHA" origin HEAD:"refs/heads/$TARGET_BRANCH"
