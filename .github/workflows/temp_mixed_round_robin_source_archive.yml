@@ -1,0 +1,42 @@
+name: Temporary Mixed Round-Robin Source Archive
+
+on:
+  push:
+    branches:
+      - agent/mixed-round-robin-format
+
+permissions:
+  contents: read
+
+jobs:
+  archive-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Confirm source identity
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "agent/mixed-round-robin-format"
+          echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Create source archive
+        run: |
+          set -euo pipefail
+          tar \
+            --exclude=.git \
+            --exclude=apps/web/node_modules \
+            --exclude=apps/web/.next \
+            -czf "$RUNNER_TEMP/jupr-mixed-round-robin-source.tgz" .
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: jupr-mixed-round-robin-source-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/jupr-mixed-round-robin-source.tgz
+          if-no-files-found: error
+          retention-days: 2
