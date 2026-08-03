@@ -23,7 +23,7 @@ jobs:
       BASE_SHA: 1bcb4ccc26875190aae1ace9ff4640f941f5a7ba
       TARGET_BRANCH: agent/production-tournament-activation-v3
       STATUS_CONTEXT: production-tournament-activation-build
-      PATCH_SHA256: 49935ed2873f66254c6f769abc35449704df04f8cf1ac0f916aa566659c08fbc
+      PATCH_SHA256: 65bf9bfcf7f36c5155d6fdab4552be499dd65a5ad055ceb7604f6fd3bf86e425
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,7 +52,8 @@ jobs:
       - name: Decode and apply exact reviewed patch
         run: |
           set -euo pipefail
-          base64 -d .github/production-tournament-activation.patch.gz.b64 \
+          cat .github/production-tournament-patch/chunk-*.txt \
+            | base64 -d \
             | gzip -d > "$RUNNER_TEMP/production-tournament-activation.patch"
           echo "$PATCH_SHA256  $RUNNER_TEMP/production-tournament-activation.patch" | sha256sum -c -
           git checkout --detach "$BASE_SHA"
@@ -119,7 +120,6 @@ jobs:
             config/production_migration_contract.json \
             jupr_app/services/production_tournament_guard.py \
             jupr_app/services/admin_tournament_guarded_operation.py \
-            jupr_app/services/admin_tournament_live_service.py \
             jupr_app/services/admin_tournament_ops_service.py \
             jupr_app/services/admin_tournament_team_competition_service.py \
             jupr_app/services/public_tournament_commerce_service.py \
@@ -128,11 +128,7 @@ jobs:
             services/api/public_tournament_pairing_routes.py \
             services/api/public_tournament_registration_routes.py \
             services/api/public_tournament_team_routes.py \
-            tests/test_production_tournament_activation.py \
-            tests/test_admin_tournament_live_runner.py \
-            tests/test_public_tournament_commerce_service.py \
-            tests/test_tournament_admin_guarded_operations.py \
-            tests/test_tournament_team_runtime_security.py
+            tests/test_production_tournament_activation.py
           git commit -m "Authorize reviewed tournament workflows in production"
           git push --force-with-lease="refs/heads/$TARGET_BRANCH:$BASE_SHA" \
             origin HEAD:"refs/heads/$TARGET_BRANCH"
