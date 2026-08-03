@@ -1,0 +1,135 @@
+name: Temporary diagnose production registration edit safety
+
+on:
+  push:
+    branches:
+      - rollback-feb8
+    paths:
+      - .github/production-registration-edit-diagnostic.trigger
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: production-registration-edit-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      FLY_APP_NAME: juprleagues-api
+      FLY_ORIGIN: https://juprleagues-api.fly.dev
+      STATUS_CONTEXT: production-registration-edit-diagnostic
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 94dae143c89cfc44282879308531b1baad94b51b
+          persist-credentials: false
+
+      - name: Set up pinned flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: "0.4.49"
+
+      - name: Inspect secret names and fail-closed runtime
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${FLY_API_TOKEN:-}"
+          flyctl secrets list --app "$FLY_APP_NAME" --json > "$RUNNER_TEMP/secrets.json"
+          curl --fail --silent --show-error --max-time 20 "$FLY_ORIGIN/health" > "$RUNNER_TEMP/health.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          raw = json.loads(Path(os.environ["RUNNER_TEMP"] + "/secrets.json").read_text())
+          if isinstance(raw, dict):
+              entries = raw.get("secrets") or raw.get("data") or []
+          else:
+              entries = raw
+          names = set()
+          for entry in entries or []:
+              if isinstance(entry, dict):
+                  name = entry.get("Name") or entry.get("name")
+                  if name:
+                      names.add(str(name))
+          required_smtp = {
+              "SMTP_HOST",
+              "SMTP_PORT",
+              "SMTP_USERNAME",
+              "SMTP_PASSWORD",
+              "SMTP_FROM_EMAIL",
+          }
+          optional_smtp = {"SMTP_FROM_NAME", "SMTP_REPLY_TO", "SMTP_USE_TLS"}
+          health = json.loads(Path(os.environ["RUNNER_TEMP"] + "/health.json").read_text())
+          result = {
+              "signing_secret_configured": "JUPR_REGISTRATION_EDIT_SECRET" in names,
+              "confirmation_secret_configured": "JUPR_REGISTRATION_CONFIRMATION_SECRET" in names,
+              "smtp_required_ready": required_smtp <= names,
+              "missing_smtp_required": sorted(required_smtp - names),
+              "smtp_optional_present": sorted(optional_smtp & names),
+              "email_mode": health.get("email_mode"),
+              "environment": health.get("environment"),
+              "production_write_policy": health.get("production_business_write_policy"),
+              "candidate_sha": health.get("git_commit_sha"),
+              "tournament_write_gate": (health.get("feature_flags") or {}).get("JUPR_ENABLE_TOURNAMENT_WRITES_PRODUCTION"),
+          }
+          print(json.dumps(result, indent=2, sort_keys=True))
+          Path(os.environ["RUNNER_TEMP"] + "/registration-edit-diagnostic.json").write_text(
+              json.dumps(result, indent=2, sort_keys=True), encoding="utf-8"
+          )
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-registration-edit-diagnostic-${{ github.run_id }}
+          path: ${{ runner.temp }}/registration-edit-diagnostic.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Mark diagnostic successful
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          print(json.dumps({
+            "state": "success",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Registration edit safety diagnostic completed",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Mark diagnostic failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          print(json.dumps({
+            "state": "failure",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Registration edit safety diagnostic failed",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
