@@ -1,0 +1,30 @@
+name: Low-level ref Actions probe
+
+on:
+  push:
+    branches: [agent/actions-low-level-trigger]
+    paths: [.github/low-level-actions.trigger]
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Publish low-level execution probe to production branch
+        run: |
+          set -euo pipefail
+          git fetch origin rollback-feb8
+          git checkout -B publish-probe origin/rollback-feb8
+          mkdir -p apps/web/public
+          printf '{"status":"executed","event_sha":"%s"}\n' "$GITHUB_SHA" > apps/web/public/low-level-actions-probe.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/web/public/low-level-actions-probe.json
+          git commit -m "Publish low-level Actions probe"
+          git push origin HEAD:rollback-feb8
