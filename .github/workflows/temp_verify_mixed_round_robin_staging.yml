@@ -1,0 +1,178 @@
+name: Temporary Verify Mixed Round-Robin Staging
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify-staging:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      CANDIDATE_SHA: 1bcb4ccc26875190aae1ace9ff4640f941f5a7ba
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      FLY_OPENAPI_URL: https://juprleagues-api-staging.fly.dev/openapi.json
+      EXPECTED_FLY_APP: juprleagues-api-staging
+      EXPECTED_WEB_ORIGIN: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      EXPECTED_SUPABASE_REF: sijpxjxvdtrehmqvirfi
+      FORBIDDEN_PRODUCTION_SUPABASE_REF: dnoockbwfenunhcibwfn
+    steps:
+      - name: Check out exact canonical staging candidate
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Confirm canonical staging source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin staging
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse origin/staging)" = "$CANDIDATE_SHA"
+          echo "Canonical staging source: $CANDIDATE_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify exact Fly identity, staging posture, and mixed API contract
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          from scripts.staging_write_waves import expected_write_flags
+
+          def get_json(url: str) -> dict:
+              request = urllib.request.Request(
+                  url,
+                  headers={"User-Agent": "jupr-mixed-round-robin-staging-verifier/1.0"},
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+              if not isinstance(payload, dict):
+                  raise RuntimeError(f"{url} did not return a JSON object")
+              return payload
+
+          candidate = os.environ["CANDIDATE_SHA"].lower()
+          health = None
+          last_error = None
+          for attempt in range(90):
+              try:
+                  current = get_json(os.environ["FLY_HEALTH_URL"])
+                  image_sha = str(current.get("image_build_git_sha") or "").lower()
+                  runtime_sha = str(current.get("git_commit_sha") or "").lower()
+                  print(
+                      f"Fly identity attempt {attempt + 1}: "
+                      f"image={image_sha or '<missing>'} runtime={runtime_sha or '<missing>'}"
+                  )
+                  if image_sha == candidate and runtime_sha == candidate:
+                      health = current
+                      break
+              except Exception as exc:
+                  last_error = exc
+                  print(f"Fly identity attempt {attempt + 1} failed: {exc}")
+              time.sleep(10)
+
+          if health is None:
+              raise SystemExit(
+                  f"Fly never attested candidate {candidate}. Last error: {last_error}"
+              )
+
+          prerequisites = health.get("write_prerequisites") or {}
+          feature_flags = health.get("feature_flags") or {}
+          health_text = json.dumps(health, sort_keys=True)
+          fly_image = str(health.get("fly_image_ref") or "")
+
+          assert health.get("ok") is True
+          assert health.get("service") == "jupr-api"
+          assert health.get("environment") == "staging"
+          assert str(health.get("git_commit_sha") or "").lower() == candidate
+          assert str(health.get("image_build_git_sha") or "").lower() == candidate
+          assert health.get("fly_app_name") == os.environ["EXPECTED_FLY_APP"]
+          assert re.fullmatch(
+              r"registry\.fly\.io/juprleagues-api-staging:deployment-[A-Za-z0-9]{8,128}",
+              fly_image,
+          )
+          assert health.get("web_origin") == os.environ["EXPECTED_WEB_ORIGIN"]
+          assert health.get("supabase_project_ref") == os.environ["EXPECTED_SUPABASE_REF"]
+          assert health.get("jwt_verification_project_ref") == os.environ["EXPECTED_SUPABASE_REF"]
+          assert health.get("staging_write_wave") == "open"
+          assert health.get("write_wave") == "open"
+          assert health.get("business_data_write_wave_active") is True
+          assert health.get("controlled_write_flags") == expected_write_flags("open")
+          assert prerequisites.get("email_mode") == "dry_run"
+          assert feature_flags.get("JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION") is False
+          assert health.get("public_live_production_override_enabled") is False
+          assert str(health.get("production_business_write_policy") or "").lower() not in {
+              "enabled", "write", "writable"
+          }
+          assert os.environ["FORBIDDEN_PRODUCTION_SUPABASE_REF"] not in health_text
+
+          openapi = get_json(os.environ["FLY_OPENAPI_URL"])
+          openapi_text = json.dumps(openapi, sort_keys=True)
+          assert '"doubles_singles"' in openapi_text
+          assert '"doubles_court_count"' in openapi_text
+          assert '"singles_court_count"' in openapi_text
+          assert os.environ["FORBIDDEN_PRODUCTION_SUPABASE_REF"] not in openapi_text
+
+          Path("fly-health.json").write_text(
+              json.dumps(health, indent=2, sort_keys=True), encoding="utf-8"
+          )
+          Path("fly-openapi.json").write_text(
+              json.dumps(openapi, indent=2, sort_keys=True), encoding="utf-8"
+          )
+          print(
+              f"Exact mixed Round-Robin staging candidate verified: {candidate}; "
+              f"Fly image={fly_image}; Supabase={health.get('supabase_project_ref')}; "
+              "write_wave=open; email_mode=dry_run."
+          )
+
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r services/api/requirements.txt
+          python -m pip install pytest
+
+      - name: Reconfirm mixed scheduling and API contracts
+        run: |
+          python -m pytest -q \
+            tests/test_api_contract_round_robin_mixed_format.py \
+            tests/test_play_generator_player_count_setup.py \
+            tests/test_api_contract_play_generators.py
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Reconfirm mixed component contract
+        working-directory: apps/web
+        run: |
+          npm ci --no-audit --no-fund
+          node tests/mixed-round-robin-format.cjs
+
+      - name: Upload verifier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mixed-round-robin-staging-identity-${{ github.run_id }}
+          path: |
+            fly-health.json
+            fly-openapi.json
+          if-no-files-found: ignore
+          retention-days: 7
