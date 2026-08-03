@@ -1,0 +1,27 @@
+name: Minimal GitHub Actions execution probe
+
+on:
+  push:
+    paths: [.github/minimal-actions-probe.trigger]
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Publish probe file
+        run: |
+          set -euo pipefail
+          mkdir -p apps/web/public
+          printf '{"status":"executed","sha":"%s"}\n' "$GITHUB_SHA" > apps/web/public/minimal-actions-probe.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/web/public/minimal-actions-probe.json
+          git commit -m "Publish minimal Actions execution probe"
+          git push origin HEAD
