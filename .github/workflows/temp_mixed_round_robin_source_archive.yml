@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/mixed-round-robin-format
+  pull_request:
+    branches:
+      - staging
 
 permissions:
   contents: read
@@ -12,16 +15,16 @@ jobs:
   archive-source:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out feature branch
+      - name: Check out feature source
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Confirm source identity
+      - name: Record source identity
         run: |
           set -euo pipefail
-          test "$(git branch --show-current)" = "agent/mixed-round-robin-format"
           echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Create source archive
