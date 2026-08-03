@@ -1,0 +1,79 @@
+name: Snapshot production tournament cutover
+
+on:
+  push:
+    branches: [rollback-feb8]
+    paths: [.github/snapshot-production-tournament-cutover.trigger]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: snapshot-production-tournament-cutover
+  cancel-in-progress: true
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Collect current builder and deploy state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+          import json, os, urllib.request
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          api=os.environ['GITHUB_API_URL']; repo=os.environ['GITHUB_REPOSITORY']; token=os.environ['GH_TOKEN']
+          headers={'Accept':'application/vnd.github+json','Authorization':f'Bearer {token}','X-GitHub-Api-Version':'2022-11-28'}
+          def get(url):
+              req=urllib.request.Request(url,headers=headers)
+              with urllib.request.urlopen(req,timeout=60) as response:return json.loads(response.read().decode())
+          runs=get(f'{api}/repos/{repo}/actions/runs?per_page=100').get('workflow_runs',[])
+          names=['Build final production tournament activation v2','Deploy operational production tournaments v2']
+          report={'status':'pending','scope':'production-tournaments','captured_at':datetime.now(timezone.utc).isoformat(),'workflows':[]}
+          for name in names:
+              rows=[row for row in runs if row.get('name')==name]
+              if not rows:
+                  report['workflows'].append({'name':name,'found':False,'status':'not_found','conclusion':None})
+                  continue
+              run=max(rows,key=lambda row:row.get('created_at',''))
+              item={key:run.get(key) for key in ('id','name','status','conclusion','head_sha','created_at','updated_at','html_url')}
+              item['found']=True
+              jobs=get(f'{api}/repos/{repo}/actions/runs/{run["id"]}/jobs?per_page=100').get('jobs',[])
+              item['jobs']=[{
+                  'id':job.get('id'),'name':job.get('name'),'status':job.get('status'),'conclusion':job.get('conclusion'),
+                  'failed_steps':[step.get('name') for step in job.get('steps',[]) if step.get('conclusion')=='failure'],
+                  'current_steps':[step.get('name') for step in job.get('steps',[]) if step.get('status')=='in_progress'],
+              } for job in jobs]
+              report['workflows'].append(item)
+          builder=report['workflows'][0]; deploy=report['workflows'][1]
+          if builder.get('conclusion') and builder.get('conclusion')!='success': report['status']='failed'
+          elif deploy.get('conclusion') and deploy.get('conclusion')!='success': report['status']='failed'
+          elif builder.get('conclusion')=='success' and deploy.get('conclusion')=='success': report['status']='operational'
+          elif not builder.get('found'): report['status']='not_found'
+          Path('/tmp/production-tournament-cutover-snapshot.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
+          PY
+
+      - uses: actions/checkout@v4
+        with:
+          ref: rollback-feb8
+          fetch-depth: 0
+
+      - name: Publish snapshot
+        run: |
+          set -euo pipefail
+          git fetch origin rollback-feb8
+          git checkout -B rollback-feb8 origin/rollback-feb8
+          mkdir -p apps/web/public
+          cp /tmp/production-tournament-cutover-snapshot.json apps/web/public/production-tournament-cutover-snapshot.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/web/public/production-tournament-cutover-snapshot.json
+          git commit -m "Publish production tournament cutover snapshot"
+          git push origin HEAD:rollback-feb8
