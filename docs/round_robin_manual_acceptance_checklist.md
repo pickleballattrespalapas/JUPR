@@ -41,6 +41,9 @@ Use the exact staging candidate and deployment named in the acceptance handoff. 
 
 ## PRR-15 — Doubles + Singles Mix
 
+Run this section with at least two valid court combinations, including one setup
+that produces byes, before marking it complete.
+
 - [ ] Select **Doubles + Singles Mix** during Round-Robin setup.
 - [ ] Select the total number of players, then choose at least one doubles court
       and one singles court.
