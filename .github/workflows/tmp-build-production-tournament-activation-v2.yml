@@ -1,0 +1,631 @@
+name: Temporary build production tournament activation v2
+
+on:
+  push:
+    branches:
+      - agent/enable-production-tournaments-v2-20260803
+    paths:
+      - .github/production-tournament-code-v2.trigger
+
+permissions:
+  contents: write
+  statuses: write
+
+concurrency:
+  group: build-production-tournament-activation-v2
+  cancel-in-progress: false
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      STATUS_CONTEXT: production-tournament-code-v2
+      TARGET_BRANCH: agent/enable-production-tournaments-v2-20260803
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/enable-production-tournaments-v2-20260803
+          fetch-depth: 0
+
+      - name: Mark build pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          print(json.dumps({
+            "state": "pending",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Building explicit production tournament authorization",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Apply production tournament authorization patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import re
+          from pathlib import Path
+
+          def read(path: str) -> str:
+              return Path(path).read_text(encoding="utf-8")
+
+          def write(path: str, value: str) -> None:
+              Path(path).write_text(value, encoding="utf-8")
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              value = read(path)
+              count = value.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one exact replacement, found {count}")
+              write(path, value.replace(old, new))
+
+          def replace_regex(path: str, pattern: str, replacement: str) -> None:
+              value = read(path)
+              updated, count = re.subn(pattern, replacement, value, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f"{path}: regex did not match exactly once: {pattern[:90]}")
+              write(path, updated)
+
+          Path("jupr_app/services/production_tournament_guard.py").write_text(
+              '''from __future__ import annotations
+
+import os
+
+TRUTHY = {"1", "true", "yes", "y", "on"}
+PRODUCTION_TOURNAMENT_WRITE_FLAG = "JUPR_ENABLE_TOURNAMENT_WRITES_PRODUCTION"
+
+
+def _truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in TRUTHY
+
+
+def production_tournament_writes_enabled() -> bool:
+    return bool(
+        os.getenv("JUPR_ENV", "").strip().lower() == "production"
+        and os.getenv("JUPR_PRODUCTION_WRITE_POLICY", "").strip().lower() == "enabled"
+        and _truthy(PRODUCTION_TOURNAMENT_WRITE_FLAG)
+        and os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    )
+
+
+def require_production_tournament_writes() -> None:
+    if os.getenv("JUPR_ENV", "").strip().lower() != "production":
+        return
+    if os.getenv("JUPR_PRODUCTION_WRITE_POLICY", "").strip().lower() != "enabled":
+        raise PermissionError("Production tournament writes are disabled by the production write policy.")
+    if not _truthy(PRODUCTION_TOURNAMENT_WRITE_FLAG):
+        raise PermissionError(
+            f"Production tournament writes require {PRODUCTION_TOURNAMENT_WRITE_FLAG}=1."
+        )
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+        raise RuntimeError(
+            "Production tournament writes require the server-only Supabase service credential."
+        )
+''',
+              encoding="utf-8",
+          )
+
+          guarded = "jupr_app/services/admin_tournament_guarded_operation.py"
+          replace_once(
+              guarded,
+              "from jupr_app.domain.tournament_admin_operations import build_tournament_admin_operation_request\n",
+              "from jupr_app.domain.tournament_admin_operations import build_tournament_admin_operation_request\n"
+              "from jupr_app.services.production_tournament_guard import (\n"
+              "    production_tournament_writes_enabled,\n"
+              "    require_production_tournament_writes,\n"
+              ")\n",
+          )
+          replace_regex(
+              guarded,
+              r"def tournament_admin_guarded_runtime_enabled\(surface: str\) -> bool:.*?(?=\ndef require_tournament_admin_mutation_runtime)",
+              '''def tournament_admin_guarded_runtime_enabled(surface: str) -> bool:
+    """Require both the environment-wide and per-surface write gates."""
+
+    environment = os.getenv("JUPR_ENV", "").strip().lower()
+    flag = SURFACE_MUTATION_FLAGS.get(str(surface), "")
+    if not flag or not _truthy_env(flag):
+        return False
+    if environment == "staging":
+        return True
+    if environment == "production":
+        return production_tournament_writes_enabled()
+    return False
+
+''',
+          )
+          replace_regex(
+              guarded,
+              r"def require_tournament_admin_mutation_runtime\(surface: str\) -> None:.*?(?=\ndef tournament_admin_mutation_status)",
+              '''def require_tournament_admin_mutation_runtime(surface: str) -> None:
+    environment = os.getenv("JUPR_ENV", "").strip().lower()
+    flag = SURFACE_MUTATION_FLAGS.get(str(surface))
+    if flag is None:
+        raise PermissionError("Unknown Tournament Admin mutation surface.")
+    if environment == "production":
+        require_production_tournament_writes()
+        if not _truthy_env(flag):
+            raise PermissionError(
+                f"Production Tournament Admin mutation is disabled for {surface}. Enable {flag} only with the approved production tournament gate."
+            )
+    elif environment == "staging":
+        if not _truthy_env(flag):
+            raise PermissionError(
+                f"Tournament Admin mutation is disabled. Enable {flag} only for the approved staging exercise."
+            )
+    else:
+        return
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+        raise RuntimeError(
+            "Tournament Admin hosted mutations require SUPABASE_SERVICE_ROLE_KEY on FastAPI. Never expose this secret to Next or the browser."
+        )
+
+''',
+          )
+          replace_regex(
+              guarded,
+              r"def tournament_admin_mutation_status\(\) -> dict\[str, Any\]:.*?(?=\ndef _safe_rows)",
+              '''def tournament_admin_mutation_status() -> dict[str, Any]:
+    environment = os.getenv("JUPR_ENV", "").strip().lower() or "local"
+    return {
+        "environment": environment,
+        "staging_only": False,
+        "production_authorized": production_tournament_writes_enabled(),
+        "service_role_ready": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()),
+        "surface_flags": {
+            surface: {"name": flag, "enabled": tournament_admin_guarded_runtime_enabled(surface)}
+            for surface, flag in SURFACE_MUTATION_FLAGS.items()
+        },
+    }
+
+''',
+          )
+
+          ops = "jupr_app/services/admin_tournament_ops_service.py"
+          replace_once(
+              ops,
+              "from jupr_app.services.admin_player_updates_service import is_auto_player_updates_enabled\n",
+              "from jupr_app.services.admin_player_updates_service import is_auto_player_updates_enabled\n"
+              "from jupr_app.services.production_tournament_guard import (\n"
+              "    production_tournament_writes_enabled,\n"
+              "    require_production_tournament_writes,\n"
+              ")\n",
+          )
+          replace_regex(
+              ops,
+              r"def require_admin_tournament_official_publish_runtime\(\) -> None:.*?(?=\ndef build_admin_tournament_ops_runtime_status)",
+              '''def require_admin_tournament_official_publish_runtime() -> None:
+    """Apply the extra rating/email gates used only by official publishing."""
+
+    environment = os.getenv("JUPR_ENV", "").strip().lower()
+    if environment == "production":
+        require_production_tournament_writes()
+    elif environment != "staging":
+        return
+    if not _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH"):
+        raise PermissionError(
+            "Tournament official publishing is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH only with the approved tournament write gate."
+        )
+    if is_auto_player_updates_enabled():
+        if not _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF"):
+            raise PermissionError(
+                "Automatic tournament player-update email handoff is disabled. Open its separate gate before official publish."
+            )
+        allowed_modes = {"dry_run"} if environment == "production" else {"dry_run", "staging_redirect"}
+        if get_email_mode() not in allowed_modes:
+            raise PermissionError("Tournament official publishing requires a non-live email mode.")
+
+''',
+          )
+          replace_regex(
+              ops,
+              r"def build_admin_tournament_ops_runtime_status\(\) -> dict\[str, Any\]:.*?(?=\ndef get_admin_tournament_ops_snapshot)",
+              '''def build_admin_tournament_ops_runtime_status() -> dict[str, Any]:
+    environment = os.getenv("JUPR_ENV", "").strip().lower() or "local"
+    hosted_write_runtime = environment == "staging" or production_tournament_writes_enabled()
+    return {
+        "environment": environment,
+        "operations_mutations_enabled": tournament_admin_guarded_runtime_enabled("operations"),
+        "official_publish_enabled": bool(
+            hosted_write_runtime
+            and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH")
+        ),
+        "email_handoff_enabled": bool(
+            hosted_write_runtime
+            and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF")
+        ),
+        "auto_player_updates_enabled": is_auto_player_updates_enabled(),
+        "email_mode": get_email_mode(),
+        "staging_only": False,
+        "production_authorized": production_tournament_writes_enabled(),
+    }
+
+''',
+          )
+
+          admin_team = "jupr_app/services/admin_tournament_team_competition_service.py"
+          replace_once(
+              admin_team,
+              "from jupr_app.services.admin_tournament_service import (\n    is_admin_tournament_admin_enabled,\n)\n",
+              "from jupr_app.services.admin_tournament_service import (\n    is_admin_tournament_admin_enabled,\n)\n"
+              "from jupr_app.services.production_tournament_guard import require_production_tournament_writes\n",
+          )
+          replace_regex(
+              admin_team,
+              r"def require_admin_team_tournament_runtime\(\) -> None:.*?(?=\ndef _safe_rows)",
+              '''def require_admin_team_tournament_runtime() -> None:
+    if not is_admin_team_tournament_enabled():
+        raise PermissionError("Team tournament management is disabled.")
+    if os.getenv("JUPR_ENV", "").strip().lower() == "production":
+        require_production_tournament_writes()
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+        raise PermissionError("Team tournament management requires the server database credential.")
+
+''',
+          )
+
+          public_team = "jupr_app/services/public_tournament_team_service.py"
+          replace_once(
+              public_team,
+              "from jupr_app.services.staging_write_guard import staging_write_wave_allows\n",
+              "from jupr_app.services.staging_write_guard import staging_write_wave_allows\n"
+              "from jupr_app.services.production_tournament_guard import require_production_tournament_writes\n",
+          )
+          replace_regex(
+              public_team,
+              r"def require_public_team_tournament_mutation_runtime\(\) -> None:.*?(?=\ndef _one)",
+              '''def require_public_team_tournament_mutation_runtime() -> None:
+    """Require the public-registration surface flag in hosted environments."""
+
+    if not is_admin_team_tournament_enabled():
+        raise PermissionError("Four-player team registration is disabled.")
+    environment = os.getenv("JUPR_ENV", "").strip().lower()
+    if environment == "production":
+        require_production_tournament_writes()
+        if os.getenv(PUBLIC_INTAKE_WRITE_FLAG, "").strip().lower() not in TRUTHY:
+            raise PermissionError(
+                f"Production four-player team writes require {PUBLIC_INTAKE_WRITE_FLAG}=1."
+            )
+    elif environment == "staging":
+        if (
+            not staging_write_wave_allows(PUBLIC_TEAM_WRITE_WAVE)
+            or os.getenv(PUBLIC_INTAKE_WRITE_FLAG, "").strip().lower() not in TRUTHY
+        ):
+            raise PermissionError(
+                "Four-player team writes are disabled. Use permanent-open staging "
+                f"or the approved {PUBLIC_TEAM_WRITE_WAVE} wave."
+            )
+    else:
+        return
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+        raise RuntimeError(
+            "Four-player team hosted writes require the server-only database credential."
+        )
+
+''',
+          )
+
+          commerce = "jupr_app/services/public_tournament_commerce_service.py"
+          replace_once(
+              commerce,
+              "from jupr_app.services.staging_write_guard import staging_write_wave_allows\n",
+              "from jupr_app.services.staging_write_guard import staging_write_wave_allows\n"
+              "from jupr_app.services.production_tournament_guard import (\n"
+              "    production_tournament_writes_enabled,\n"
+              "    require_production_tournament_writes,\n"
+              ")\n",
+          )
+          replace_regex(
+              commerce,
+              r"def tournament_commerce_runtime_status\(\) -> dict\[str, Any\]:.*?(?=\ndef require_tournament_commerce_mutation_runtime)",
+              '''def tournament_commerce_runtime_status() -> dict[str, Any]:
+    environment = os.getenv("JUPR_ENV", "").strip().lower() or "local"
+    wave = os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip() or "none"
+    production_authorized = production_tournament_writes_enabled()
+    mutation_enabled = _truthy(MUTATION_FLAG)
+    service_role_ready = bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip())
+    return {
+        "enabled": is_tournament_commerce_enabled(),
+        "environment": environment,
+        "staging_only": False,
+        "production_authorized": production_authorized,
+        "service_role_ready": service_role_ready,
+        "mutation_flag": {"name": MUTATION_FLAG, "enabled": mutation_enabled},
+        "write_wave": wave,
+        "admin_write_ready": bool(
+            mutation_enabled and service_role_ready and (
+                production_authorized
+                or (environment == "staging" and staging_write_wave_allows(ADMIN_WRITE_WAVE))
+            )
+        ),
+        "public_registration_write_ready": bool(
+            mutation_enabled and service_role_ready and (
+                production_authorized
+                or (environment == "staging" and staging_write_wave_allows(PUBLIC_WRITE_WAVE))
+            )
+        ),
+        "offline_payment_only": True,
+    }
+
+''',
+          )
+          replace_regex(
+              commerce,
+              r"def require_tournament_commerce_mutation_runtime\(\*, actor_type: str\) -> None:.*?(?=\ndef _clean_text)",
+              '''def require_tournament_commerce_mutation_runtime(*, actor_type: str) -> None:
+    """Require explicit hosted write gates while keeping payment offline."""
+
+    environment = os.getenv("JUPR_ENV", "").strip().lower()
+    if environment == "production":
+        require_production_tournament_writes()
+        if not _truthy(MUTATION_FLAG):
+            raise PermissionError(
+                f"Production tournament commerce writes require {MUTATION_FLAG}=1."
+            )
+    elif environment == "staging":
+        expected_wave = (
+            PUBLIC_WRITE_WAVE
+            if str(actor_type).upper() == "PUBLIC_REGISTRANT"
+            else ADMIN_WRITE_WAVE
+        )
+        if not staging_write_wave_allows(expected_wave) or not _truthy(MUTATION_FLAG):
+            raise PermissionError(
+                "Tournament commerce writes are disabled. Use permanent-open staging "
+                f"or the approved {expected_wave} wave."
+            )
+    else:
+        return
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+        raise TournamentCommerceUnavailableError(
+            "Tournament commerce hosted writes require the server-only Supabase service credential."
+        )
+
+''',
+          )
+
+          routes = "services/api/public_tournament_registration_routes.py"
+          replace_once(
+              routes,
+              "from services.api.staging_write_guard import require_public_intake_or_403\n",
+              "from jupr_app.services.production_tournament_guard import require_production_tournament_writes\n"
+              "from services.api.staging_write_guard import require_public_intake_or_403 as require_public_intake_base_or_403\n",
+          )
+          replace_once(
+              routes,
+              "\ndef _handle_commerce_error(exc: Exception) -> None:\n",
+              '''
+def _require_public_tournament_write_or_403() -> None:
+    require_public_intake_base_or_403()
+    try:
+        require_production_tournament_writes()
+    except (PermissionError, RuntimeError) as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+def _handle_commerce_error(exc: Exception) -> None:
+''',
+          )
+          route_text = read(routes)
+          count = route_text.count("require_public_intake_or_403()")
+          if count < 1:
+              raise SystemExit("No public tournament mutation routes were found to gate")
+          write(routes, route_text.replace("require_public_intake_or_403()", "_require_public_tournament_write_or_403()"))
+
+          verifier = "scripts/deployment_verifier.py"
+          replace_once(
+              verifier,
+              "PRODUCTION_FEATURE_FLAGS = tuple(\n    sorted(\n        set(PRODUCTION_READ_FEATURE_FLAGS)\n        | set(ALL_STAGING_WRITE_FLAGS)\n        | set(ALWAYS_DISABLED_FLAGS)\n    )\n)\n",
+              "PRODUCTION_TOURNAMENT_FEATURE_FLAGS = (\n"
+              "    \"JUPR_ENABLE_TOURNAMENT_WRITES_PRODUCTION\",\n"
+              ")\n"
+              "PRODUCTION_FEATURE_FLAGS = tuple(\n"
+              "    sorted(\n"
+              "        set(PRODUCTION_READ_FEATURE_FLAGS)\n"
+              "        | set(PRODUCTION_TOURNAMENT_FEATURE_FLAGS)\n"
+              "        | set(ALL_STAGING_WRITE_FLAGS)\n"
+              "        | set(ALWAYS_DISABLED_FLAGS)\n"
+              "    )\n"
+              ")\n",
+          )
+
+          contract_path = Path("config/production_migration_contract.json")
+          contract = json.loads(contract_path.read_text(encoding="utf-8"))
+          contract["allow_additional_ledger_names"] = True
+          contract_path.write_text(json.dumps(contract, indent=2) + "\n", encoding="utf-8")
+
+          Path("tests/test_production_tournament_activation.py").write_text(
+              '''from __future__ import annotations
+
+import pytest
+
+from jupr_app.services.admin_tournament_guarded_operation import (
+    require_tournament_admin_mutation_runtime,
+    tournament_admin_guarded_runtime_enabled,
+)
+from jupr_app.services.admin_tournament_ops_service import (
+    build_admin_tournament_ops_runtime_status,
+    require_admin_tournament_official_publish_runtime,
+)
+from jupr_app.services.admin_tournament_team_competition_service import (
+    require_admin_team_tournament_runtime,
+)
+from jupr_app.services.production_tournament_guard import (
+    production_tournament_writes_enabled,
+)
+from jupr_app.services.public_tournament_commerce_service import (
+    require_tournament_commerce_mutation_runtime,
+    tournament_commerce_runtime_status,
+)
+from jupr_app.services.public_tournament_team_service import (
+    require_public_team_tournament_mutation_runtime,
+)
+
+
+def _enable(monkeypatch: pytest.MonkeyPatch) -> None:
+    values = {
+        "JUPR_ENV": "production",
+        "JUPR_PRODUCTION_WRITE_POLICY": "enabled",
+        "JUPR_ENABLE_TOURNAMENT_WRITES_PRODUCTION": "1",
+        "SUPABASE_SERVICE_ROLE_KEY": "server-only-test-key",
+        "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS": "1",
+        "JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION": "1",
+        "JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES": "1",
+        "JUPR_ENABLE_STAGING_TOURNAMENT_COMMERCE_WRITES": "1",
+        "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OPERATIONS_MUTATIONS": "1",
+        "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH": "1",
+        "JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS": "0",
+        "JUPR_EMAIL_MODE": "dry_run",
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+
+
+def test_production_gate_fails_closed_without_top_level_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable(monkeypatch)
+    monkeypatch.delenv("JUPR_ENABLE_TOURNAMENT_WRITES_PRODUCTION")
+    assert production_tournament_writes_enabled() is False
+    with pytest.raises(PermissionError):
+        require_tournament_admin_mutation_runtime("operations")
+
+
+def test_reviewed_production_surfaces_require_both_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable(monkeypatch)
+    assert production_tournament_writes_enabled() is True
+    assert tournament_admin_guarded_runtime_enabled("operations") is True
+    require_tournament_admin_mutation_runtime("operations")
+    require_admin_tournament_official_publish_runtime()
+    require_admin_team_tournament_runtime()
+    require_public_team_tournament_mutation_runtime()
+    require_tournament_commerce_mutation_runtime(actor_type="PUBLIC_REGISTRANT")
+    assert build_admin_tournament_ops_runtime_status()["production_authorized"] is True
+    status = tournament_commerce_runtime_status()
+    assert status["production_authorized"] is True
+    assert status["public_registration_write_ready"] is True
+    assert status["offline_payment_only"] is True
+
+
+def test_per_surface_flag_still_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable(monkeypatch)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OPERATIONS_MUTATIONS", "0")
+    assert tournament_admin_guarded_runtime_enabled("operations") is False
+    with pytest.raises(PermissionError):
+        require_tournament_admin_mutation_runtime("operations")
+
+
+def test_live_email_remains_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable(monkeypatch)
+    monkeypatch.setenv("JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF", "1")
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "live")
+    with pytest.raises(PermissionError):
+        require_admin_tournament_official_publish_runtime()
+''',
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r services/api/requirements.txt
+
+      - name: Run focused activation contracts
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_production_tournament_activation.py \
+            tests/test_api_contract_admin_tournament_guarded.py \
+            tests/test_api_contract_admin_tournament_setup.py \
+            tests/test_api_contract_tournament_registration.py \
+            tests/test_api_contract_tournament_registration_edit.py \
+            tests/test_api_contract_admin_tournament_game_generation.py \
+            tests/test_api_contract_admin_tournament_game_scoring.py \
+            tests/test_api_contract_admin_tournament_playoff_generation.py
+          python -m compileall -q jupr_app/services services/api
+
+      - name: Reject remaining unconditional service denials
+        run: |
+          set -euo pipefail
+          if grep -R -n -E 'staging-only until manual (parity )?acceptance' jupr_app/services/*tournament*.py; then
+            echo "::error::An unconditional tournament production denial remains."
+            exit 1
+          fi
+
+      - name: Commit verified activation code
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            jupr_app/services/production_tournament_guard.py \
+            jupr_app/services/admin_tournament_guarded_operation.py \
+            jupr_app/services/admin_tournament_ops_service.py \
+            jupr_app/services/admin_tournament_team_competition_service.py \
+            jupr_app/services/public_tournament_team_service.py \
+            jupr_app/services/public_tournament_commerce_service.py \
+            services/api/public_tournament_registration_routes.py \
+            scripts/deployment_verifier.py \
+            config/production_migration_contract.json \
+            tests/test_production_tournament_activation.py
+          git commit -m "Authorize reviewed tournament workflows in production"
+          git push origin HEAD:"$TARGET_BRANCH"
+
+      - name: Mark build successful
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status-success.json"
+          import json, os
+          print(json.dumps({
+            "state": "success",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Production tournament authorization patch passed",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-success.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Mark build failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status-failure.json"
+          import json, os
+          print(json.dumps({
+            "state": "failure",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Production tournament authorization patch failed",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-failure.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
