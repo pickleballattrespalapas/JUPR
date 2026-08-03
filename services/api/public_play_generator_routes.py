@@ -13,6 +13,7 @@ from jupr_app.services.public_play_generator_service import (
     create_public_play_generator_session,
     get_public_play_generator_session,
     list_public_play_generator_sessions,
+    mark_public_play_generator_round_played,
     mutate_public_play_generator_roster,
     preview_public_play_generator,
     save_public_play_generator_round,
@@ -29,6 +30,7 @@ class PublicGeneratorPreviewRequest(BaseModel):
     total_rounds: int = Field(default=3, ge=1, le=50)
     court_count: int = Field(default=0, ge=0, le=20)
     standings_sort: str = Field(default="wins", pattern=r"^(wins|points|differential)$")
+    scoring_mode: str = Field(default="scored", pattern=r"^(scored|unscored)$")
 
 
 class PublicGeneratorStartRequest(PublicGeneratorPreviewRequest):
@@ -124,6 +126,7 @@ def install_public_play_generator_routes(
                 total_rounds=payload.total_rounds,
                 court_count=payload.court_count,
                 standings_sort=payload.standings_sort,
+                scoring_mode=payload.scoring_mode,
             )
         except Exception as exc:
             raise_public_error(exc)
@@ -172,6 +175,7 @@ def install_public_play_generator_routes(
                 court_count=payload.court_count,
                 preview_fingerprint=payload.preview_fingerprint,
                 standings_sort=payload.standings_sort,
+                scoring_mode=payload.scoring_mode,
                 idempotency_key=payload.idempotency_key,
                 requester_hash=requester_hash(request),
             )
@@ -225,6 +229,35 @@ def install_public_play_generator_routes(
             raise_public_error(exc)
             raise
         return {"club": public_club_payload(club, club_slug), **result}
+
+
+    @app.post("/clubs/{club_slug}/play-generators/sessions/{session_key}/rounds/{round_number}/played")
+    def post_public_generator_round_played(
+        club_slug: str,
+        session_key: str,
+        round_number: int,
+        payload: PublicGeneratorMutationRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        require_public_writes()
+        require_service_role()
+        club, club_id, supabase = context(club_slug)
+        try:
+            result = mark_public_play_generator_round_played(
+                supabase,
+                club_id=club_id,
+                session_key=session_key,
+                round_number=round_number,
+                edit_token=payload.edit_token,
+                expected_version=payload.expected_version,
+                idempotency_key=payload.idempotency_key,
+                requester_hash=requester_hash(request),
+            )
+        except Exception as exc:
+            raise_public_error(exc)
+            raise
+        return {"club": public_club_payload(club, club_slug), **result}
+
 
     @app.post("/clubs/{club_slug}/play-generators/sessions/{session_key}/rounds/{round_number}/skip")
     def post_public_generator_round_skip(

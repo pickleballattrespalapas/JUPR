@@ -20,6 +20,20 @@ from uuid import uuid4
 
 
 STANDINGS_SORTS = {"wins", "points", "differential"}
+SCORING_MODES = {"scored", "unscored"}
+
+
+def normalize_scoring_mode(value: Any) -> str:
+    mode = str(value or "scored").strip().lower().replace("-", "_")
+    aliases = {
+        "score": "scored",
+        "scores": "scored",
+        "no_scores": "unscored",
+        "round_played": "unscored",
+        "played": "unscored",
+    }
+    mode = aliases.get(mode, mode)
+    return mode if mode in SCORING_MODES else "scored"
 
 
 def normalize_standings_sort(value: Any) -> str:
@@ -122,7 +136,7 @@ def history_before_round(event: dict[str, Any], round_number: int, *, include_pr
         status = str(round_row.get("status") or "")
         if status == "skipped":
             continue
-        if status not in {"saved", "active", "preview"}:
+        if status not in {"saved", "played", "active", "preview"}:
             continue
         if status in {"active", "preview"} and not include_preview:
             continue
@@ -561,6 +575,7 @@ def create_generator_preview(
     total_rounds: int = 3,
     court_count: int = 0,
     standings_sort: str = "wins",
+    scoring_mode: str = "scored",
 ) -> dict[str, Any]:
     kind = str(generator_kind or "").strip().lower().replace("-", "_")
     if kind not in {"round_robin", "ladder"}:
@@ -568,6 +583,9 @@ def create_generator_preview(
     fmt = str(play_format or "").strip().lower()
     if fmt not in {"singles", "doubles"}:
         raise ValueError("play_format must be singles or doubles")
+    scoring = normalize_scoring_mode(scoring_mode)
+    if kind == "ladder" and scoring != "scored":
+        raise ValueError("Ladder Generator requires scored rounds because later rounds depend on results.")
     names = [_clean_name(x) for x in participant_names if _clean_name(x)]
     seen = set()
     unique_names = []
@@ -606,6 +624,7 @@ def create_generator_preview(
         "type": "round_robin" if kind == "round_robin" else "league",
         "generatorKind": kind,
         "playFormat": fmt,
+        "scoringMode": scoring,
         "standingsSort": normalize_standings_sort(standings_sort),
         "status": "preview",
         "participants": participants,
@@ -636,6 +655,7 @@ def create_generator_preview(
                 "rounds": event["totalRounds"],
                 "courts": event["courtCount"],
                 "standings_sort": event["standingsSort"],
+                "scoring_mode": event["scoringMode"],
                 "schedule": event["rounds"],
             },
             sort_keys=True,
@@ -676,6 +696,8 @@ def save_generator_round(
     scores: list[dict[str, Any]],
 ) -> dict[str, Any]:
     next_event = copy.deepcopy(event)
+    if normalize_scoring_mode(next_event.get("scoringMode")) != "scored":
+        raise ValueError("This unscored Round-Robin uses Round Played instead of score entry.")
     row = _get_round(next_event, round_number)
     if str(row.get("status")) not in {"active", "preview"}:
         raise ValueError("Only an active round can be scored.")
@@ -711,6 +733,33 @@ def save_generator_round(
     row["savedAt"] = _now_iso()
     row["skippedAt"] = None
     return next_event
+
+
+def mark_generator_round_played(event: dict[str, Any], *, round_number: int) -> dict[str, Any]:
+    next_event = copy.deepcopy(event)
+    if str(next_event.get("generatorKind") or "") != "round_robin":
+        raise ValueError("Round Played is available only for Round-Robin Generator sessions.")
+    if normalize_scoring_mode(next_event.get("scoringMode")) != "unscored":
+        raise ValueError("Scored Round-Robins must save scores or skip the round.")
+    row = _get_round(next_event, round_number)
+    round_status = str(row.get("status"))
+    if round_status == "played":
+        return next_event
+    if round_status not in {"active", "preview"}:
+        raise ValueError("Only an active round can be marked played.")
+    if _round_has_any_scores(row):
+        raise ValueError("Clear entered scores before marking this round played.")
+    row["status"] = "played"
+    row["playedAt"] = _now_iso()
+    row["savedAt"] = None
+    row["skippedAt"] = None
+    for match in row.get("matches") or []:
+        match["status"] = "played"
+    for court in row.get("courts") or []:
+        for match in court.get("matches") or []:
+            match["status"] = "played"
+    return next_event
+
 
 def skip_generator_round(event: dict[str, Any], *, round_number: int, reason: str = "") -> dict[str, Any]:
     next_event = copy.deepcopy(event)
@@ -770,6 +819,8 @@ def generator_event_standings(event: dict[str, Any]) -> list[dict[str, Any]]:
     substituted, or have not yet completed a game. Skipped and unsaved rounds do
     not affect the table.
     """
+    if normalize_scoring_mode(event.get("scoringMode")) == "unscored":
+        return []
     participants = _participant_map(event)
     stats: dict[str, dict[str, Any]] = {}
     for participant in event.get("participants") or []:
@@ -893,8 +944,8 @@ def advance_generator_event(event: dict[str, Any]) -> dict[str, Any]:
     next_event = copy.deepcopy(event)
     current = int(next_event.get("currentRoundNumber") or 1)
     row = _get_round(next_event, current)
-    if str(row.get("status")) not in {"saved", "skipped"}:
-        raise ValueError("Save or skip the current round before continuing.")
+    if str(row.get("status")) not in {"saved", "played", "skipped"}:
+        raise ValueError("Save or skip the current round before continuing. Unscored Round-Robins may mark it played.")
     total = int(next_event.get("totalRounds") or 1)
     if current >= total:
         next_event["status"] = "completed"
@@ -924,7 +975,7 @@ def _effective_roster_round(event: dict[str, Any]) -> int:
         return 1
     current = int(event.get("currentRoundNumber") or 1)
     row = _get_round(event, current)
-    if str(row.get("status")) in {"saved", "skipped"} or _round_has_any_scores(row):
+    if str(row.get("status")) in {"saved", "played", "skipped"} or _round_has_any_scores(row):
         return current + 1
     return current
 

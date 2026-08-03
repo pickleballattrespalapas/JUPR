@@ -3,6 +3,7 @@ export type StoredPlayGeneratorDraft<TPreview> = {
   title: string;
   playFormat: "singles" | "doubles";
   standingsSort?: "wins" | "points" | "differential";
+  scoringMode?: "scored" | "unscored";
   targetCount: number;
   participantText: string;
   linkedPlayerIds: Record<string, number>;
