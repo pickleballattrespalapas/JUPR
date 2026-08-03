@@ -1,0 +1,149 @@
+name: Temporary Round-Robin staging identity verifier
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify-staging:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      CANDIDATE_SHA: ff0d3dd35b76a24f66e3496a33e09fd8fc8149a9
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      FLY_OPENAPI_URL: https://juprleagues-api-staging.fly.dev/openapi.json
+      EXPECTED_FLY_APP: juprleagues-api-staging
+      EXPECTED_WEB_ORIGIN: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      EXPECTED_SUPABASE_REF: sijpxjxvdtrehmqvirfi
+      FORBIDDEN_PRODUCTION_SUPABASE_REF: dnoockbwfenunhcibwfn
+    steps:
+      - name: Check out exact staging candidate
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Confirm canonical staging source identity
+        run: |
+          git fetch origin staging
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse origin/staging)" = "$CANDIDATE_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify exact Fly identity and staging posture
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+          import urllib.request
+          from pathlib import Path
+
+          from scripts.staging_write_waves import expected_write_flags
+
+          def get_json(url: str) -> dict:
+              request = urllib.request.Request(
+                  url,
+                  headers={"User-Agent": "jupr-round-robin-staging-verifier/1.0"},
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+              if not isinstance(payload, dict):
+                  raise RuntimeError(f"{url} did not return a JSON object")
+              return payload
+
+          candidate = os.environ["CANDIDATE_SHA"].lower()
+          expected_supabase = os.environ["EXPECTED_SUPABASE_REF"]
+          forbidden_supabase = os.environ["FORBIDDEN_PRODUCTION_SUPABASE_REF"]
+          health = get_json(os.environ["FLY_HEALTH_URL"])
+          openapi = get_json(os.environ["FLY_OPENAPI_URL"])
+          prerequisites = health.get("write_prerequisites") or {}
+          feature_flags = health.get("feature_flags") or {}
+          fly_image = str(health.get("fly_image_ref") or "")
+
+          assert health.get("ok") is True
+          assert health.get("service") == "jupr-api"
+          assert health.get("environment") == "staging"
+          assert str(health.get("git_commit_sha") or "").lower() == candidate
+          assert str(health.get("image_build_git_sha") or "").lower() == candidate
+          assert health.get("fly_app_name") == os.environ["EXPECTED_FLY_APP"]
+          assert re.fullmatch(
+              r"registry\.fly\.io/juprleagues-api-staging:deployment-[A-Za-z0-9]{8,128}",
+              fly_image,
+          )
+          assert health.get("web_origin") == os.environ["EXPECTED_WEB_ORIGIN"]
+          assert health.get("supabase_project_ref") == expected_supabase
+          assert health.get("jwt_verification_project_ref") == expected_supabase
+          assert health.get("staging_write_wave") == "open"
+          assert health.get("write_wave") == "open"
+          assert health.get("business_data_write_wave_active") is True
+          assert health.get("controlled_write_flags") == expected_write_flags("open")
+          assert prerequisites.get("email_mode") == "dry_run"
+          assert feature_flags.get("JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION") is False
+          assert health.get("public_live_production_override_enabled") is False
+          assert health.get("production_business_write_policy") is None
+
+          paths = openapi.get("paths") or {}
+          assert "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/played" in paths
+          assert "/clubs/{club_slug}/play-generators/sessions/{session_key}/rounds/{round_number}/played" in paths
+          assert '"scoring_mode"' in json.dumps(openapi, sort_keys=True)
+          assert forbidden_supabase not in json.dumps(health, sort_keys=True)
+          assert forbidden_supabase not in json.dumps(openapi, sort_keys=True)
+
+          Path("fly-health.json").write_text(
+              json.dumps(health, indent=2, sort_keys=True), encoding="utf-8"
+          )
+          Path("fly-openapi.json").write_text(
+              json.dumps(openapi, indent=2, sort_keys=True), encoding="utf-8"
+          )
+          print(
+              f"Exact Fly candidate verified: {candidate}; "
+              f"Supabase={expected_supabase}; write_wave=open; email_mode=dry_run."
+          )
+
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r services/api/requirements.txt
+          python -m pip install pytest
+
+      - name: Verify Round-Robin and Match Uploader compatibility
+        run: |
+          python -m pytest -q \
+            tests/test_round_robin_unscored_flow.py \
+            tests/test_api_contract_admin_match_uploader.py \
+            tests/test_admin_match_uploader_service.py
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Verify Match Uploader component contract
+        working-directory: apps/web
+        run: |
+          npm ci --no-audit --no-fund
+          node tests/match-uploader-layout.cjs
+
+      - name: Upload verifier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: round-robin-staging-identity-${{ github.run_id }}
+          path: |
+            fly-health.json
+            fly-openapi.json
+          if-no-files-found: ignore
+          retention-days: 7
