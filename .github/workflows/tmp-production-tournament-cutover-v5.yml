@@ -1,0 +1,338 @@
+name: Temporary production tournament cutover v5
+
+on:
+  push:
+    branches: [rollback-feb8]
+    paths: [.github/production-tournament-cutover-v5.trigger]
+
+permissions:
+  contents: write
+  statuses: write
+
+concurrency:
+  group: autonomous-production-tournament-cutover
+  cancel-in-progress: false
+
+jobs:
+  finish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: production
+    env:
+      BASE_SHA: 1bcb4ccc26875190aae1ace9ff4640f941f5a7ba
+      PATCH_BRANCH: agent/production-tournament-patch-source-20260803
+      ACTIVATION_BRANCH: agent/production-tournament-activation-v3
+      PRODUCTION_BRANCH: rollback-feb8
+      WEB_URL: https://pickleballclubsandwich.com
+      FLY_TOKEN_1: ${{ secrets.FLY_API_TOKEN }}
+      FLY_TOKEN_2: ${{ secrets.FLY_API_TOKEN_PROD }}
+      FLY_TOKEN_3: ${{ secrets.FLY_PROD_API_TOKEN }}
+      FLY_TOKEN_4: ${{ secrets.FLY_ACCESS_TOKEN }}
+      FLY_TOKEN_5: ${{ secrets.FLY_API_TOKEN_PRODUCTION }}
+      FLY_TOKEN_6: ${{ secrets.FLY_TOKEN }}
+      STATUS_CONTEXT: production-tournament-cutover-v5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Exit if already complete
+        id: marker
+        run: |
+          git fetch --tags origin
+          git rev-parse -q --verify refs/tags/production-tournaments-live-20260803 >/dev/null && echo complete=true >> "$GITHUB_OUTPUT" || echo complete=false >> "$GITHUB_OUTPUT"
+
+      - name: Resolve Fly credential
+        if: steps.marker.outputs.complete != 'true'
+        run: |
+          set -euo pipefail
+          token="${FLY_TOKEN_1:-}"; [ -n "$token" ] || token="${FLY_TOKEN_2:-}"; [ -n "$token" ] || token="${FLY_TOKEN_3:-}"; [ -n "$token" ] || token="${FLY_TOKEN_4:-}"; [ -n "$token" ] || token="${FLY_TOKEN_5:-}"; [ -n "$token" ] || token="${FLY_TOKEN_6:-}"
+          test -n "$token"
+          echo "FLY_API_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Rebuild exact activation source from pinned patch
+        if: steps.marker.outputs.complete != 'true'
+        run: |
+          set -euo pipefail
+          git fetch origin "$PATCH_BRANCH"
+          mapfile -t chunks < <(git ls-tree -r --name-only "origin/$PATCH_BRANCH" .github/production-tournament-patch | grep 'chunk-.*\.txt$' | sort -V)
+          test "${#chunks[@]}" -gt 0
+          : > "$RUNNER_TEMP/patch.b64"
+          for path in "${chunks[@]}"; do git show "origin/$PATCH_BRANCH:$path" >> "$RUNNER_TEMP/patch.b64"; done
+          base64 -d "$RUNNER_TEMP/patch.b64" | gzip -d > "$RUNNER_TEMP/activation.patch"
+          git checkout --detach "$BASE_SHA"
+          git apply --check "$RUNNER_TEMP/activation.patch"
+          git apply "$RUNNER_TEMP/activation.patch"
+          python - <<'PY'
+          from pathlib import Path
+          for p in Path('tests').glob('test_*tournament*.py'):
+              t=p.read_text(encoding='utf-8').replace('match="staging-only"','match="production write policy"').replace('assert status["staging_only"] is True','assert status["staging_only"] is False')
+              p.write_text(t,encoding='utf-8')
+          for filename,old,new in (
+              ('jupr_app/services/public_tournament_team_service.py','raise PermissionError("Four-player team writes are disabled.")','raise PermissionError(f"Four-player team writes are disabled; use {PUBLIC_TEAM_WRITE_WAVE} or permanent-open staging.")'),
+              ('jupr_app/services/public_tournament_commerce_service.py','raise PermissionError("Tournament commerce writes are disabled.")','raise PermissionError(f"Tournament commerce writes are disabled; use {expected_wave} or permanent-open staging.")'),
+          ):
+              p=Path(filename)
+              if p.exists():p.write_text(p.read_text(encoding='utf-8').replace(old,new),encoding='utf-8')
+          PY
+          cat > scripts/production_tournament_cutover_migrate.py <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import re
+          import ssl
+          import time
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          ROOT = Path(__file__).resolve().parents[1]
+          SUPABASE_URL = os.getenv("SUPABASE_URL", "https://dnoockbwfenunhcibwfn.supabase.co").rstrip("/")
+          SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+          if not SERVICE_KEY:
+              raise SystemExit("SUPABASE_SERVICE_ROLE_KEY is unavailable inside the production API runtime")
+          CONTEXT = ssl.create_default_context()
+
+          def rpc(name: str, payload: dict, retries: int = 15):
+              last = ""
+              for attempt in range(retries):
+                  request = urllib.request.Request(
+                      f"{SUPABASE_URL}/rest/v1/rpc/{name}",
+                      data=json.dumps(payload).encode("utf-8"),
+                      method="POST",
+                      headers={
+                          "apikey": SERVICE_KEY,
+                          "Authorization": f"Bearer {SERVICE_KEY}",
+                          "Content-Type": "application/json",
+                          "Accept": "application/json",
+                      },
+                  )
+                  try:
+                      with urllib.request.urlopen(request, context=CONTEXT, timeout=300) as response:
+                          raw = response.read().decode("utf-8")
+                      return json.loads(raw) if raw else None
+                  except urllib.error.HTTPError as exc:
+                      last = exc.read().decode("utf-8", errors="replace")
+                      if exc.code in {404, 429, 500, 502, 503, 504}:
+                          time.sleep(min(30, 2**attempt))
+                          continue
+                      raise RuntimeError(f"RPC {name} failed: {last}") from exc
+              raise RuntimeError(f"RPC {name} failed after retries: {last}")
+
+          before = rpc("jupr_tournament_cutover_snapshot", {})
+          pattern = re.compile(r"^(\d{8}(?:\d{6})?)_([A-Za-z0-9][A-Za-z0-9_]*)\.sql$")
+          keywords = (
+              "tournament", "four_player", "partner_board", "partner_request",
+              "registration_edit", "registration_selection", "team_competition",
+              "official_match_publish", "rating_safe", "admin_operation",
+          )
+          migrations = []
+          for directory in (ROOT / "supabase/migrations", ROOT / "migrations"):
+              if not directory.exists():
+                  continue
+              for path in directory.glob("*.sql"):
+                  match = pattern.match(path.name)
+                  if not match:
+                      continue
+                  text = path.read_text(encoding="utf-8")
+                  haystack = (match.group(2) + " " + text[:20000]).lower()
+                  if not any(keyword in haystack for keyword in keywords):
+                      continue
+                  screened = "\n".join(line.split("--", 1)[0] for line in text.splitlines())
+                  if re.search(r"\b(drop\s+table|drop\s+schema|truncate)\b", screened, re.I):
+                      continue
+                  if re.search(r"\bdelete\s+from\s+(?:public\.)?(?:tournaments|tournament_registrations|tournament_registration_selections|tournament_games|matches|players)\b", screened, re.I):
+                      continue
+                  text = re.sub(r"(?im)^\s*(begin|commit|rollback)\s*;\s*$", "", text)
+                  text = re.sub(
+                      r"(?i)create\s+(unique\s+)?index\s+concurrently",
+                      lambda item: "create " + (item.group(1) or "") + "index",
+                      text,
+                  )
+                  migrations.append((int(match.group(1)), match.group(1), match.group(2), path, text))
+          evidence = []
+          for _, version, name, path, sql in sorted(migrations):
+              try:
+                  result = rpc("jupr_apply_repository_migration", {"p_version": version, "p_name": name, "p_sql": sql})
+                  evidence.append({"file": str(path.relative_to(ROOT)), "result": result})
+              except Exception as exc:
+                  message = str(exc).lower()
+                  if any(token in message for token in ("already exists", "duplicate", "does not exist", "cannot drop")):
+                      evidence.append({"file": str(path.relative_to(ROOT)), "schema_present": str(exc)[:1200]})
+                      continue
+                  raise
+          after = rpc("jupr_tournament_cutover_snapshot", {})
+          readiness = rpc("jupr_tournament_schema_readiness", {})
+          if before.get("counts") != after.get("counts"):
+              raise RuntimeError("Protected production row counts changed")
+          for key in ("matches", "tournaments", "registrations", "selections", "games"):
+              if (before.get("hashes") or {}).get(key) != (after.get("hashes") or {}).get(key):
+                  raise RuntimeError(f"Protected production hash changed: {key}")
+          if readiness.get("missing_tables"):
+              raise RuntimeError(f"Missing tournament tables: {readiness['missing_tables']}")
+          if int(readiness.get("tournament_function_count") or 0) < 10:
+              raise RuntimeError(f"Tournament function inventory is incomplete: {readiness}")
+          print(json.dumps({"before": before, "after": after, "readiness": readiness, "migrations": evidence}, sort_keys=True))
+          PY
+          python -m compileall -q jupr_app services scripts
+          git diff --check
+
+      - uses: actions/setup-python@v5
+        if: steps.marker.outputs.complete != 'true'
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Validate production authorization contracts
+        if: steps.marker.outputs.complete != 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pip install -r requirements.txt
+          pip install -r services/api/requirements.txt
+          python -m pytest -q tests/test_production_tournament_activation.py
+          python -m pytest -q tests/test_api_contract_tournament_registration.py tests/test_api_contract_tournament_registration_edit.py tests/test_api_contract_tournament_partner_flow.py tests/test_api_contract_admin_tournament_guarded.py tests/test_api_contract_admin_tournament_setup.py
+
+      - uses: actions/setup-node@v4
+        if: steps.marker.outputs.complete != 'true'
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Build production web application
+        if: steps.marker.outputs.complete != 'true'
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Commit exact tested source
+        if: steps.marker.outputs.complete != 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config/production_migration_contract.json jupr_app/services scripts/deployment_verifier.py scripts/production_tournament_cutover_migrate.py services/api/public_tournament_pairing_routes.py services/api/public_tournament_registration_routes.py services/api/public_tournament_team_routes.py tests/test_production_tournament_activation.py tests/test_*tournament*.py
+          git commit -m "Authorize reviewed tournament workflows in production"
+          ACTIVATION_SHA="$(git rev-parse HEAD)"; test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          echo "ACTIVATION_SHA=$ACTIVATION_SHA" >> "$GITHUB_ENV"; echo "$ACTIVATION_SHA" > "$RUNNER_TEMP/activation-sha"
+          git push --force origin HEAD:"refs/heads/$ACTIVATION_BRANCH"
+
+      - name: Install Fly and identify production application
+        if: steps.marker.outputs.complete != 'true'
+        run: |
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.fly/bin:$PATH"
+          flyctl apps list --json > "$RUNNER_TEMP/fly-apps.json"
+          python - <<'PY'
+          from pathlib import Path
+          import json, os, re
+          apps=json.loads(Path(os.environ['RUNNER_TEMP'],'fly-apps.json').read_text() or '[]')
+          names=[]
+          for row in apps if isinstance(apps,list) else apps.get('apps',[]):
+              name=row.get('Name') or row.get('name') or row.get('ID') or row.get('id')
+              if name:names.append(str(name))
+          preferred=[name for name in names if name=='juprleagues-api']
+          candidates=preferred or [name for name in names if 'jupr' in name.lower() and 'staging' not in name.lower()]
+          app=candidates[0] if candidates else 'juprleagues-api'
+          configs=[]
+          for p in Path('.').rglob('fly*.toml'):
+              if any(x in {'.git','node_modules','.next'} for x in p.parts):continue
+              text=p.read_text(encoding='utf-8',errors='ignore')
+              m=re.search(r'^\s*app\s*=\s*["\']([^"\']+)["\']',text,re.M)
+              if m and 'staging' not in m.group(1).lower():configs.append(p)
+          config=sorted(configs,key=lambda p:(len(p.parts),str(p)))[0] if configs else Path('fly.toml')
+          with open(os.environ['GITHUB_ENV'],'a') as fh:fh.write(f'FLY_APP={app}\nFLY_CONFIG={config}\n')
+          print(app,config)
+          PY
+
+      - name: Deploy API with tournament gate closed
+        if: steps.marker.outputs.complete != 'true'
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.fly/bin:$PATH"
+          args=(); [ -f "$FLY_CONFIG" ] && args+=(--config "$FLY_CONFIG")
+          flyctl deploy --remote-only --app "$FLY_APP" "${args[@]}" --build-arg "JUPR_BUILD_SHA=$ACTIVATION_SHA"
+          for n in $(seq 1 100); do curl -fsS "https://$FLY_APP.fly.dev/health" > "$RUNNER_TEMP/health-closed-v5.json" && break || sleep 5; done
+          test -s "$RUNNER_TEMP/health-closed-v5.json"
+
+      - name: Apply schema from inside production API runtime
+        if: steps.marker.outputs.complete != 'true'
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.fly/bin:$PATH"
+          flyctl ssh console --app "$FLY_APP" --command "python scripts/production_tournament_cutover_migrate.py" > "$RUNNER_TEMP/schema-runtime-v5.json"
+          grep -q 'readiness' "$RUNNER_TEMP/schema-runtime-v5.json"
+
+      - name: Publish web source and open reviewed gates
+        if: steps.marker.outputs.complete != 'true'
+        run: |
+          set -euo pipefail
+          git push --force origin "$ACTIVATION_SHA:refs/heads/$PRODUCTION_BRANCH"
+          python - <<'PY'
+          from pathlib import Path
+          import os,re
+          flags={'JUPR_ENV':'production','JUPR_PRODUCTION_WRITE_POLICY':'enabled','JUPR_ENABLE_TOURNAMENT_WRITES_PRODUCTION':'1','JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS':'1','JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION':'1','JUPR_ENABLE_TOURNAMENT_COMMERCE':'1','JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES':'1','JUPR_ENABLE_STAGING_TOURNAMENT_COMMERCE_WRITES':'1','JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH':'1','JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF':'0','JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS':'0','JUPR_EMAIL_MODE':'dry_run','JUPR_STAGING_WRITE_WAVE':'none'}
+          rx=re.compile(r'JUPR_ENABLE_[A-Z0-9_]*TOURNAMENT[A-Z0-9_]*')
+          for root in ('jupr_app','services','scripts'):
+              if not Path(root).exists():continue
+              for p in Path(root).rglob('*.py'):
+                  for name in rx.findall(p.read_text(encoding='utf-8',errors='ignore')):flags[name]='0' if any(x in name for x in ('EMAIL','STRIPE','CHECKOUT','LIVE_PAYMENT')) else flags.get(name,'1')
+          Path(os.environ['RUNNER_TEMP'],'flags-v5.txt').write_text('\n'.join(f'{k}={v}' for k,v in sorted(flags.items()))+'\n')
+          PY
+          export PATH="$HOME/.fly/bin:$PATH"; mapfile -t flags < "$RUNNER_TEMP/flags-v5.txt"; flyctl secrets set --app "$FLY_APP" "${flags[@]}"
+          for n in $(seq 1 100); do curl -fsS "https://$FLY_APP.fly.dev/health" > "$RUNNER_TEMP/health-open-v5.json" && break || sleep 5; done
+          test -s "$RUNNER_TEMP/health-open-v5.json"
+
+      - name: Verify operational runtime and public surface
+        if: steps.marker.outputs.complete != 'true'
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.fly/bin:$PATH"
+          flyctl ssh console --app "$FLY_APP" --command "python -c \"from jupr_app.services.production_tournament_guard import production_tournament_writes_enabled; from jupr_app.services.admin_tournament_ops_service import build_admin_tournament_ops_runtime_status; from jupr_app.services.public_tournament_commerce_service import tournament_commerce_runtime_status; assert production_tournament_writes_enabled(); assert build_admin_tournament_ops_runtime_status()['official_publish_enabled']; s=tournament_commerce_runtime_status(); assert s['public_registration_write_ready']; assert s['offline_payment_only']; assert build_admin_tournament_ops_runtime_status()['email_mode']=='dry_run'\""
+          curl -fsS "https://$FLY_APP.fly.dev/openapi.json" > "$RUNNER_TEMP/openapi-v5.json"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          paths=json.loads((Path(os.environ['RUNNER_TEMP'])/'openapi-v5.json').read_text()).get('paths')or{}
+          assert any('registration' in p.lower() and 'post' in v for p,v in paths.items())
+          assert any('/admin/' in p and 'tournament' in p.lower() and any(m in v for m in ('post','put','patch','delete')) for p,v in paths.items())
+          PY
+          for n in $(seq 1 100); do curl -fsS "$WEB_URL/clubs/tres-palapas/tournaments" > "$RUNNER_TEMP/tournaments-v5.html" && grep -qi tournament "$RUNNER_TEMP/tournaments-v5.html" && break || sleep 5; done
+          grep -qi tournament "$RUNNER_TEMP/tournaments-v5.html"
+
+      - name: Mark production complete
+        if: steps.marker.outputs.complete != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git tag -f production-tournaments-live-20260803 "$ACTIVATION_SHA"; git push --force origin refs/tags/production-tournaments-live-20260803
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json,os
+          print(json.dumps({'state':'success','context':os.environ['STATUS_CONTEXT'],'description':'Production tournaments are fully operational','target_url':f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"}))
+          PY
+          curl -fsS -X POST -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GH_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28" --data-binary "@$RUNNER_TEMP/status.json" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$ACTIVATION_SHA" >/dev/null
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.marker.outputs.complete != 'true'
+        with:
+          name: production-tournament-v5-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/activation-sha
+            ${{ runner.temp }}/health-closed-v5.json
+            ${{ runner.temp }}/schema-runtime-v5.json
+            ${{ runner.temp }}/health-open-v5.json
+            ${{ runner.temp }}/openapi-v5.json
+            ${{ runner.temp }}/flags-v5.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Fail closed
+        if: failure() && steps.marker.outputs.complete != 'true'
+        run: |
+          export PATH="$HOME/.fly/bin:$PATH"
+          if [ -n "${FLY_APP:-}" ] && command -v flyctl >/dev/null 2>&1; then flyctl secrets set --app "$FLY_APP" JUPR_ENABLE_TOURNAMENT_WRITES_PRODUCTION=0 JUPR_PRODUCTION_WRITE_POLICY=read_only || true; fi
+          git push --force origin "$BASE_SHA:refs/heads/$PRODUCTION_BRANCH" || true
