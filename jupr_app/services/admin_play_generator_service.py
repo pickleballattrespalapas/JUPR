@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -11,6 +12,7 @@ from jupr_app.domain.adaptive_play_engine import (
     advance_generator_event,
     create_generator_preview,
     generator_event_standings,
+    generator_match_play_format,
     mark_generator_round_played,
     normalize_scoring_mode,
     mutate_generator_roster,
@@ -32,7 +34,7 @@ from jupr_app.services.direct_match_entry_service import submit_atomic_direct_ma
 
 
 GENERATOR_KINDS = {"round_robin", "ladder"}
-PLAY_FORMATS = {"singles", "doubles"}
+PLAY_FORMATS = {"singles", "doubles", "doubles_singles"}
 
 
 def _now_iso() -> str:
@@ -133,6 +135,8 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
         "play_format": str(event.get("playFormat") or state.get("play_format") or ""),
         "current_round_number": int(event.get("currentRoundNumber") or 1) if event else None,
         "total_rounds": int(event.get("totalRounds") or 0) if event else None,
+        "doubles_court_count": int(event.get("doublesCourtCount") or 0) if event else 0,
+        "singles_court_count": int(event.get("singlesCourtCount") or 0) if event else 0,
         "event": event,
         "schedule_rows": schedule_export_rows(event) if event else [],
         "scoring_mode": str(event.get("scoringMode") or "scored") if event else "scored",
@@ -255,6 +259,8 @@ def preview_play_generator(
     player_ids: list[int] | None,
     total_rounds: int,
     court_count: int,
+    doubles_court_count: int = 0,
+    singles_court_count: int = 0,
     standings_sort: str = "wins",
     scoring_mode: str = "scored",
 ) -> dict[str, Any]:
@@ -272,6 +278,8 @@ def preview_play_generator(
         player_ids=ids,
         total_rounds=total_rounds,
         court_count=court_count,
+        doubles_court_count=doubles_court_count,
+        singles_court_count=singles_court_count,
         standings_sort=standings_sort,
         scoring_mode=scoring_mode,
     )
@@ -320,6 +328,8 @@ def create_play_generator_session(
     player_ids: list[int] | None,
     total_rounds: int,
     court_count: int,
+    doubles_court_count: int = 0,
+    singles_court_count: int = 0,
     preview_fingerprint: str | None,
     actor_email: str,
     actor_role: str,
@@ -337,6 +347,8 @@ def create_play_generator_session(
         player_ids=player_ids,
         total_rounds=total_rounds,
         court_count=court_count,
+        doubles_court_count=doubles_court_count,
+        singles_court_count=singles_court_count,
         standings_sort=standings_sort,
         scoring_mode=scoring_mode,
     )["preview"]
@@ -781,7 +793,7 @@ def _publish_payloads(
         for row in event.get("participants") or []
         if row.get("id")
     }
-    play_format = str(event.get("playFormat") or "doubles")
+    event_play_format = str(event.get("playFormat") or "doubles")
     generator_kind = str(event.get("generatorKind") or "round_robin")
     context_type = (
         "round_robin_generator"
@@ -800,9 +812,10 @@ def _publish_payloads(
             continue
         side_a = [str(value) for value in match.get("sideA") or match.get("teamA") or []]
         side_b = [str(value) for value in match.get("sideB") or match.get("teamB") or []]
-        expected_side = 1 if play_format == "singles" else 2
+        match_format = generator_match_play_format(match, event_play_format)
+        expected_side = 1 if match_format == "singles" else 2
         if len(side_a) != expected_side or len(side_b) != expected_side:
-            raise ValueError(f"Match {match_id} does not match the selected play format.")
+            raise ValueError(f"Match {match_id} does not match its scheduled play format.")
         try:
             ids_a = [int(participants[pid]["player_id"]) for pid in side_a]
             ids_b = [int(participants[pid]["player_id"]) for pid in side_b]
@@ -826,13 +839,13 @@ def _publish_payloads(
                 slot=f"{session_key}:{match_id}",
             ),
             "live_match_id": match_id,
-            "match_format": play_format,
+            "match_format": match_format,
             "s1": score_a,
             "s2": score_b,
             "score_t1": score_a,
             "score_t2": score_b,
         }
-        if play_format == "singles":
+        if match_format == "singles":
             base.update({"t1_p1": ids_a[0], "t2_p1": ids_b[0]})
         else:
             base.update(
@@ -845,6 +858,14 @@ def _publish_payloads(
             )
         payloads.append(base)
     return payloads
+
+
+def _format_publish_idempotency_key(value: str, match_format: str) -> str:
+    raw = f"{str(value)}:{match_format}"
+    if len(raw) <= 160:
+        return raw
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"{str(value)[:120]}:{digest}"
 
 
 def publish_play_generator_matches(
@@ -900,20 +921,45 @@ def publish_play_generator_matches(
         _schema_degraded_reason,
     ) = load_data(supabase, str(club_id))
 
-    play_format = str(event.get("playFormat") or "doubles")
-    result = submit_atomic_direct_matches(
-        supabase,
-        club_id=str(club_id),
-        matches=payloads,
-        match_format=play_format,
-        idempotency_key=str(idempotency_key),
-        actor_email=str(actor_email or ""),
-        actor_role=str(actor_role or ""),
-        source=source,
-        name_to_id=name_to_id,
-        df_players_all=df_players_all,
-        df_leagues=df_leagues if play_format == "doubles" else None,
-        df_meta=df_meta,
+    payloads_by_format = {
+        match_format: [
+            payload
+            for payload in payloads
+            if str(payload.get("match_format") or "") == match_format
+        ]
+        for match_format in ("doubles", "singles")
+    }
+    active_formats = [
+        match_format
+        for match_format in ("doubles", "singles")
+        if payloads_by_format[match_format]
+    ]
+    results_by_format: dict[str, Any] = {}
+    for match_format in active_formats:
+        format_payloads = payloads_by_format[match_format]
+        format_key = (
+            str(idempotency_key)
+            if len(active_formats) == 1
+            else _format_publish_idempotency_key(str(idempotency_key), match_format)
+        )
+        results_by_format[match_format] = submit_atomic_direct_matches(
+            supabase,
+            club_id=str(club_id),
+            matches=format_payloads,
+            match_format=match_format,
+            idempotency_key=format_key,
+            actor_email=str(actor_email or ""),
+            actor_role=str(actor_role or ""),
+            source=source,
+            name_to_id=name_to_id,
+            df_players_all=df_players_all,
+            df_leagues=df_leagues if match_format == "doubles" else None,
+            df_meta=df_meta,
+        )
+    result: Any = (
+        next(iter(results_by_format.values()))
+        if len(results_by_format) == 1
+        else {"mixed_formats": True, "by_format": results_by_format}
     )
     newly_published = [str(payload["live_match_id"]) for payload in payloads]
     official["published_match_ids"] = sorted(published_ids.union(newly_published))

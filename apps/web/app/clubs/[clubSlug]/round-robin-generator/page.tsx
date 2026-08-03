@@ -26,7 +26,7 @@ export default async function PublicGeneratorPage({ params }: Props) {
         Public play tools
       </p>
       <h1 style={{ marginTop: 0 }}>Round-Robin Generator</h1>
-      <p style={{ color: "#334155", maxWidth: "900px" }}>Build singles or doubles schedules, preview every planned matchup and bye, download a paper schedule, and run one round at a time.</p>
+      <p style={{ color: "#334155", maxWidth: "900px" }}>Build singles, doubles, or mixed doubles-and-singles schedules; preview every planned matchup and bye, download a paper schedule, and run one round at a time.</p>
       <p style={{ color: "#475569", maxWidth: "900px" }}>
         Public sessions are unrated. Keep the organizer link private; share the clean page URL as the view-only scoreboard.
       </p>

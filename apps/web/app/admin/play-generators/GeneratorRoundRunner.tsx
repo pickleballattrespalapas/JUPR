@@ -7,6 +7,7 @@ import { useAdminSession } from "@/lib/useAdminSession";
 
 type GeneratorKind = "round_robin" | "ladder";
 type ScoringMode = "scored" | "unscored";
+type PlayFormat = "singles" | "doubles" | "doubles_singles";
 
 type Participant = {
   id: string;
@@ -29,6 +30,7 @@ type MatchRow = {
   teamB?: string[];
   scoreA?: number | null;
   scoreB?: number | null;
+  playFormat?: "singles" | "doubles";
 };
 
 type RoundRow = {
@@ -42,13 +44,14 @@ type RoundRow = {
   }>;
   byeParticipantIds?: string[];
   warnings?: string[];
+  formatCounts?: { doubles?: number; singles?: number };
   skipReason?: string | null;
 };
 
 type GeneratorEvent = {
   name: string;
   generatorKind: GeneratorKind;
-  playFormat: "singles" | "doubles";
+  playFormat: PlayFormat;
   scoringMode?: ScoringMode;
   status: string;
   currentRoundNumber: number;
@@ -64,7 +67,7 @@ type GeneratorSession = {
   status: string;
   version: string;
   generator_kind: GeneratorKind;
-  play_format: "singles" | "doubles";
+  play_format: PlayFormat;
   scoring_mode?: ScoringMode;
   current_round_number?: number | null;
   total_rounds?: number | null;
@@ -136,6 +139,20 @@ function generatorSlug(kind: GeneratorKind): string {
 
 function generatorTitle(kind: GeneratorKind): string {
   return kind === "round_robin" ? "Round-Robin Generator" : "Ladder Generator";
+}
+
+function playFormatLabel(playFormat: PlayFormat | string): string {
+  if (playFormat === "singles") return "Singles";
+  if (playFormat === "doubles_singles") return "Doubles + Singles Mix";
+  return "Doubles";
+}
+
+function matchFormatLabel(match: MatchRow, eventFormat: PlayFormat): string {
+  if (match.playFormat === "singles" || match.playFormat === "doubles") {
+    return playFormatLabel(match.playFormat);
+  }
+  const sideSize = (match.sideA || match.teamA || []).length;
+  return playFormatLabel(sideSize === 1 ? "singles" : eventFormat === "doubles_singles" ? "doubles" : eventFormat);
 }
 
 function apiUrl(apiBase: string, path: string): string {
@@ -645,6 +662,12 @@ export default function GeneratorRoundRunner({
   const nextExisting = event.rounds.some((row) => row.number === roundNumber + 1)
     ? roundNumber + 1
     : null;
+  const doublesGames = round.formatCounts?.doubles ?? matches.filter(
+    (match) => matchFormatLabel(match, event.playFormat) === "Doubles"
+  ).length;
+  const singlesGames = round.formatCounts?.singles ?? matches.filter(
+    (match) => matchFormatLabel(match, event.playFormat) === "Singles"
+  ).length;
 
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
@@ -656,7 +679,7 @@ export default function GeneratorRoundRunner({
         </p>
         <h1 style={{ margin: "0 0 0.4rem" }}>{session.title}</h1>
         <p style={{ margin: 0, color: "#475569" }}>
-          {session.play_format === "singles" ? "Singles" : "Doubles"} · Round {roundNumber} of{" "}
+          {playFormatLabel(session.play_format)} · Round {roundNumber} of{" "}
           {event.totalRounds} · {scoredSession ? "Scored" : "Unscored"} · {round.status}
         </p>
       </article>
@@ -672,6 +695,11 @@ export default function GeneratorRoundRunner({
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
           <div>
             <h2 style={{ marginTop: 0 }}>Round {roundNumber}</h2>
+            {event.playFormat === "doubles_singles" ? (
+              <p style={{ color: "#475569" }}>
+                {doublesGames} doubles game{doublesGames === 1 ? "" : "s"} · {singlesGames} singles game{singlesGames === 1 ? "" : "s"}
+              </p>
+            ) : null}
             {generatorKind === "ladder" ? (
               <p style={{ color: "#475569" }}>
                 Later rounds are created only after this round is saved or skipped.
@@ -717,7 +745,7 @@ export default function GeneratorRoundRunner({
                 }}
               >
                 <p style={{ margin: "0 0 0.4rem", color: "#64748b" }}>
-                  Court {match.court || "—"}
+                  {matchFormatLabel(match, event.playFormat)} · Court {match.court || "—"}
                   {match.miniRound ? ` · Game ${match.miniRound}` : ""}
                 </p>
                 <div
@@ -1029,8 +1057,8 @@ export default function GeneratorRoundRunner({
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Official results</h2>
           <p style={{ color: "#475569" }}>
-            Publication requires an official player ID for every player in each saved match. Singles sessions
-            publish to singles ratings; doubles sessions publish to doubles ratings.
+            Publication requires an official player ID for every player in each saved match. Singles games publish
+            to singles ratings, and doubles games publish to doubles ratings.
           </p>
           <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", alignItems: "end" }}>
             <label>

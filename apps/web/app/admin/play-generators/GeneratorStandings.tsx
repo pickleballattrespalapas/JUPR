@@ -42,6 +42,12 @@ const primaryButton = { border: 0, borderRadius: "999px", padding: "0.65rem 1rem
 function apiUrl(apiBase: string, path: string): string { return `${apiBase.replace(/\/$/, "")}${path}`; }
 function operationKey(action: string): string { return `${action}-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 
+function playFormatLabel(value: string): string {
+  if (value === "singles") return "Singles";
+  if (value === "doubles_singles") return "Doubles + Singles Mix";
+  return "Doubles";
+}
+
 export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }: Props) {
   const router = useRouter();
   const { accessToken } = useAdminSession();
@@ -119,7 +125,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
         <p style={{ margin: "0 0 0.4rem" }}><Link href="/admin/round-robin-generator">← Round-Robin Generator</Link></p>
         <h1 style={{ margin: "0 0 0.35rem" }}>{session.title} standings</h1>
-        <p style={{ margin: 0, color: "#475569" }}>{session.play_format === "singles" ? "Singles" : "Doubles"} · {standingsSortLabel(sortMode)} · {session.status}</p>
+        <p style={{ margin: 0, color: "#475569" }}>{playFormatLabel(session.play_format)} · {standingsSortLabel(sortMode)} · {session.status}</p>
       </article>
       <nav aria-label="Round-Robin session navigation" style={{ ...cardStyle, display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         <Link href={`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`} style={linkButton}>Current round</Link>

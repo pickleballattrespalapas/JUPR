@@ -44,12 +44,14 @@ from services.api.auth import authenticate_bearer, auth_header
 
 class GeneratorPreviewRequest(BaseModel):
     generator_kind: str = Field(pattern=r"^(round_robin|ladder)$")
-    play_format: str = Field(pattern=r"^(singles|doubles)$")
+    play_format: str = Field(pattern=r"^(singles|doubles|doubles_singles)$")
     title: str = Field(default="Play session", max_length=160)
     participant_names: list[str] = Field(min_length=2, max_length=40)
     player_ids: list[int] = Field(default_factory=list, max_length=40)
     total_rounds: int = Field(default=3, ge=1, le=50)
     court_count: int = Field(default=0, ge=0, le=20)
+    doubles_court_count: int = Field(default=0, ge=0, le=20)
+    singles_court_count: int = Field(default=0, ge=0, le=20)
     standings_sort: str = Field(default="wins", pattern=r"^(wins|points|differential)$")
     scoring_mode: str = Field(default="scored", pattern=r"^(scored|unscored)$")
 
@@ -225,6 +227,8 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                 player_ids=payload.player_ids,
                 total_rounds=payload.total_rounds,
                 court_count=payload.court_count,
+                doubles_court_count=payload.doubles_court_count,
+                singles_court_count=payload.singles_court_count,
                 standings_sort=payload.standings_sort,
                 scoring_mode=payload.scoring_mode,
             )
@@ -299,6 +303,8 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                     player_ids=payload.player_ids,
                     total_rounds=payload.total_rounds,
                     court_count=payload.court_count,
+                    doubles_court_count=payload.doubles_court_count,
+                    singles_court_count=payload.singles_court_count,
                     preview_fingerprint=payload.preview_fingerprint,
                     standings_sort=payload.standings_sort,
                 scoring_mode=payload.scoring_mode,

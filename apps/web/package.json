@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:component": "node tests/challenge-ladder-result-render.cjs && node tests/match-uploader-layout.cjs",
+    "test:component": "node tests/challenge-ladder-result-render.cjs && node tests/match-uploader-layout.cjs && node tests/mixed-round-robin-format.cjs",
     "test:e2e:public-read": "playwright test e2e/staging.smoke.spec.ts e2e/leaderboards.staging.spec.ts e2e/league-results.parity.spec.ts e2e/players.staging.spec.ts e2e/public-explorer-recap.spec.ts e2e/admin-operations-auth.spec.ts e2e/tournament-admin-navigation.spec.ts --retries=0 --forbid-only",
     "test:e2e:staging": "playwright test"
   },

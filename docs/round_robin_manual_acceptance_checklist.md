@@ -38,3 +38,30 @@ Use the exact staging candidate and deployment named in the acceptance handoff. 
 - [ ] Finish the final unscored round with **Round Played** and confirm a clear
       Session complete state without competitive standings.
 - [ ] Confirm refresh and Back preserve the completed session.
+
+## PRR-15 — Doubles + Singles Mix
+
+- [ ] Select **Doubles + Singles Mix** during Round-Robin setup.
+- [ ] Select the total number of players, then choose at least one doubles court
+      and one singles court.
+- [ ] Confirm the selected courts fit the player count and the setup summary shows
+      doubles courts, singles courts, players active each round, byes per round,
+      and the automatically balanced round count.
+- [ ] Preview the schedule and confirm every round has the requested number of
+      doubles games and singles games, with no player appearing twice in one round.
+- [ ] Confirm CSV and PDF exports label every game as Singles or Doubles.
+- [ ] Across the full preview, confirm singles games, doubles games, and byes are
+      distributed as evenly as mathematically possible.
+- [ ] Confirm repeated doubles partners and repeated singles opponents are avoided
+      until the available unique combinations require a repeat.
+- [ ] Start a scored mixed session and confirm Singles and Doubles labels remain
+      visible during score entry, Round Results, cumulative Standings, and final
+      completion.
+- [ ] In staff mode, publish the scored results and confirm singles games use the
+      singles match path while doubles games use the doubles match path.
+- [ ] Start an unscored mixed session and confirm **Round Played** advances directly
+      with no score fields, Round Results, or competitive Standings.
+- [ ] Add, remove, reorder, and substitute players after a round; confirm completed
+      history remains unchanged and future mixed rounds rebalance safely.
+- [ ] Confirm public and staff setup behavior is aligned.
+- [ ] Open a public view-only session and confirm organizer controls remain hidden.

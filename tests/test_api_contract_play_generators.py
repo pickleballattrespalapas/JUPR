@@ -69,7 +69,9 @@ def test_generator_backend_routes_and_adaptive_engine_are_installed() -> None:
     assert "substitute_scope" in engine
     assert "schedule_export_rows" in engine
 
-    assert "match_format=play_format" in service
+    assert "generator_match_play_format" in service
+    assert "payloads_by_format" in service
+    assert "match_format=match_format" in service
     assert "Official publication requires every participant" in service
 
 
