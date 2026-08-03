@@ -1,0 +1,559 @@
+name: Guarded production Round-Robin API cutover
+
+on:
+  push:
+    branches:
+      - agent/production-round-robin-cutover-1bcb4c
+    paths:
+      - .github/production-round-robin-cutover.trigger
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: jupr-production-round-robin-cutover
+  cancel-in-progress: false
+
+jobs:
+  deploy-production-api:
+    name: Deploy exact Round-Robin API candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    environment: production
+    env:
+      CANDIDATE_SHA: 1bcb4ccc26875190aae1ace9ff4640f941f5a7ba
+      PREVIOUS_SHA: e7d51bb1a0fae9146fccde9c3dc7b429d3481d52
+      FLY_APP_NAME: juprleagues-api
+      PRODUCTION_FLY_ORIGIN: https://juprleagues-api.fly.dev
+      PRODUCTION_API_ORIGIN: https://api.juprleagues.com
+      PRODUCTION_WEB_ORIGIN: https://pickleballclubsandwich.com
+      EXPECTED_SUPABASE_PROJECT_REF: dnoockbwfenunhcibwfn
+      STATUS_CONTEXT: production-round-robin-api
+
+    steps:
+      - name: Check out exact accepted candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact candidate and trigger provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$GITHUB_REF" = "refs/heads/agent/production-round-robin-cutover-1bcb4c"
+          git merge-base --is-ancestor "$PREVIOUS_SHA" "$CANDIDATE_SHA"
+
+      - name: Mark cutover pending
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status-pending.json"
+          import json, os
+          print(json.dumps({
+              "state": "pending",
+              "context": os.environ["STATUS_CONTEXT"],
+              "description": "Deploying accepted Round-Robin API candidate",
+              "target_url": (
+                  f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+                  f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+              ),
+          }))
+          PY
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-pending.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            > /dev/null
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: "0.4.49"
+
+      - name: Validate production identity and current safe runtime
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          for name in FLY_API_TOKEN SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY; do
+            test -n "${!name:-}"
+          done
+          python - <<'PY'
+          import os
+          from urllib.parse import urlsplit
+          expected = os.environ["EXPECTED_SUPABASE_PROJECT_REF"]
+          parsed = urlsplit(os.environ["SUPABASE_URL"])
+          if (
+              parsed.scheme != "https"
+              or parsed.hostname != f"{expected}.supabase.co"
+              or parsed.username is not None
+              or parsed.password is not None
+              or parsed.port is not None
+              or parsed.path not in {"", "/"}
+              or parsed.query
+              or parsed.fragment
+          ):
+              raise SystemExit("Production Supabase URL does not match the approved project.")
+          PY
+          curl --fail --silent --show-error --max-time 30 \
+            "$PRODUCTION_FLY_ORIGIN/health" \
+            --output "$RUNNER_TEMP/health-before.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          health = json.loads(Path(os.environ["RUNNER_TEMP"], "health-before.json").read_text())
+          errors = []
+          if health.get("ok") is not True: errors.append("current production API is not healthy")
+          if health.get("environment") != "production": errors.append("current API is not production")
+          if health.get("git_commit_sha") != os.environ["PREVIOUS_SHA"]: errors.append("current API SHA is unexpected")
+          if health.get("supabase_project_ref") != os.environ["EXPECTED_SUPABASE_PROJECT_REF"]: errors.append("current API is not using production Supabase")
+          if health.get("public_live_writes_enabled") is not True: errors.append("current public generator writes are not enabled")
+          if health.get("public_live_production_override_enabled") is not True: errors.append("current production public-live override is not enabled")
+          if errors:
+              raise SystemExit("; ".join(errors))
+          PY
+          auth_headers=(
+            --header "apikey: $SUPABASE_SERVICE_ROLE_KEY"
+            --header "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
+          )
+          curl --fail --silent --show-error --max-time 30 \
+            "${auth_headers[@]}" \
+            "$SUPABASE_URL/rest/v1/live_sessions?select=version%2Cedit_token_hash%2Ccreation_operation_key%2Clast_operation_key%2Ccompleted_at&limit=1" \
+            --output "$RUNNER_TEMP/live-sessions-schema.json"
+          curl --fail --silent --show-error --max-time 30 \
+            "${auth_headers[@]}" \
+            "$SUPABASE_URL/rest/v1/public_live_operations?select=operation_key%2Cstatus%2Cexecutor_token%2Clease_expires_at&limit=1" \
+            --output "$RUNNER_TEMP/public-live-operations-schema.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          sessions = json.loads((root / "live-sessions-schema.json").read_text())
+          operations = json.loads((root / "public-live-operations-schema.json").read_text())
+          if not isinstance(sessions, list) or not isinstance(operations, list):
+              raise SystemExit("Production public-session durability schema is unavailable.")
+          PY
+
+      - name: Capture production Fly rollback snapshot
+        id: rollback_snapshot
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fly-before"
+          flyctl machines list --app "$FLY_APP_NAME" --json > "$RUNNER_TEMP/fly-before/machines.json"
+          (
+            cd "$RUNNER_TEMP/fly-before"
+            flyctl config save --app "$FLY_APP_NAME" --yes
+          )
+          cp "$RUNNER_TEMP/health-before.json" "$RUNNER_TEMP/fly-before/health.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"], "fly-before")
+          machines = json.loads((root / "machines.json").read_text())
+          candidates = []
+          for machine in machines if isinstance(machines, list) else []:
+              config = machine.get("config") or {}
+              image = str(config.get("image") or machine.get("image_ref") or machine.get("image") or "").strip()
+              state = str(machine.get("state") or "")
+              if image:
+                  candidates.append((state != "started", image))
+          if not candidates:
+              raise SystemExit("Unable to capture current production Fly image.")
+          candidates.sort()
+          image = candidates[0][1]
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              print(f"ROLLBACK_IMAGE={image}", file=handle)
+          print(f"Captured rollback image: {image}")
+          PY
+
+      - name: Derive production public-session secrets
+        shell: bash
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          mapfile -t derived < <(
+            python - <<'PY'
+          import base64, hashlib, hmac, os
+          root = os.environ["SUPABASE_SERVICE_ROLE_KEY"].strip().encode("utf-8")
+          if len(root) < 32:
+              raise SystemExit("Production service-role key is unavailable.")
+          for label in (
+              b"jupr:production:public-live:token:v1",
+              b"jupr:production:public-live:rate-limit:v1",
+          ):
+              digest = hmac.new(root, label, hashlib.sha256).digest()
+              print(base64.urlsafe_b64encode(digest).decode("ascii").rstrip("="))
+          PY
+          )
+          test "${#derived[@]}" = "2"
+          test "${#derived[0]}" -ge 32
+          test "${#derived[1]}" -ge 32
+          test "${derived[0]}" != "${derived[1]}"
+          echo "::add-mask::${derived[0]}"
+          echo "::add-mask::${derived[1]}"
+          {
+            printf 'PUBLIC_LIVE_TOKEN_SECRET=%s\n' "${derived[0]}"
+            printf 'PUBLIC_LIVE_RATE_LIMIT_SECRET=%s\n' "${derived[1]}"
+          } >> "$GITHUB_ENV"
+
+      - name: Stage least-privilege production runtime
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          secret_args=(
+            "JUPR_ENV=production"
+            "JUPR_EMAIL_MODE=dry_run"
+            "JUPR_PRODUCTION_WRITE_POLICY=enabled"
+            "JUPR_STAGING_WRITE_WAVE=none"
+            "JUPR_WEB_BASE_URL=$PRODUCTION_WEB_ORIGIN"
+            "JUPR_ALLOWED_ORIGINS=https://juprleagues.com,https://www.juprleagues.com,https://pickleballclubsandwich.com,https://www.pickleballclubsandwich.com"
+            "JUPR_REQUIRE_API_AUDIT_LOG=1"
+            "JUPR_REQUIRE_WORKER_RUN_LOG=1"
+            "JUPR_SUPABASE_JWT_MODE=jwks"
+            "JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS=0"
+            "JUPR_DEPLOYMENT_GIT_SHA=$CANDIDATE_SHA"
+            "SUPABASE_URL=$SUPABASE_URL"
+            "SUPABASE_JWKS_URL=${SUPABASE_URL%/}/auth/v1/.well-known/jwks.json"
+            "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY"
+            "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+            "JUPR_PUBLIC_LIVE_TOKEN_SECRET=$PUBLIC_LIVE_TOKEN_SECRET"
+            "JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET=$PUBLIC_LIVE_RATE_LIMIT_SECRET"
+          )
+          while IFS= read -r name; do
+            case "$name" in
+              JUPR_ENABLE_PUBLIC_LIVE_WRITES|JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION)
+                ;;
+              *) secret_args+=("$name=0") ;;
+            esac
+          done < <(
+            python -c 'from scripts.deployment_verifier import PRODUCTION_FEATURE_FLAGS; print("\n".join(PRODUCTION_FEATURE_FLAGS))'
+          )
+          secret_args+=(
+            "JUPR_ENABLE_PUBLIC_LIVE_WRITES=1"
+            "JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION=1"
+          )
+          flyctl secrets set --stage --app "$FLY_APP_NAME" "${secret_args[@]}"
+
+      - name: Deploy exact accepted production API
+        id: deploy
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl config validate --app "$FLY_APP_NAME" --config fly.toml
+          flyctl deploy \
+            --remote-only \
+            --app "$FLY_APP_NAME" \
+            --config fly.toml \
+            --build-arg "JUPR_DEPLOYMENT_GIT_SHA=$CANDIDATE_SHA"
+
+      - name: Wait for exact production API
+        id: wait_health
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 20 \
+              "$PRODUCTION_FLY_ORIGIN/health" \
+              --output "$RUNNER_TEMP/production-health.json"; then
+              if python - <<'PY'
+          import json, os
+          from pathlib import Path
+          health = json.loads(Path(os.environ["RUNNER_TEMP"], "production-health.json").read_text())
+          expected = os.environ["CANDIDATE_SHA"]
+          if (
+              health.get("ok") is True
+              and health.get("environment") == "production"
+              and health.get("git_commit_sha") == expected
+              and health.get("image_build_git_sha") == expected
+          ):
+              raise SystemExit(0)
+          raise SystemExit(1)
+          PY
+              then
+                exit 0
+              fi
+            fi
+            echo "Exact production API not ready ($attempt/30)."
+            sleep 10
+          done
+          exit 1
+
+      - name: Verify runtime, new contracts, CORS, and previews
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 20 \
+            "$PRODUCTION_API_ORIGIN/health" \
+            --output "$RUNNER_TEMP/custom-health.json"
+          curl --fail --silent --show-error --max-time 20 \
+            "$PRODUCTION_FLY_ORIGIN/health/live-sessions" \
+            --output "$RUNNER_TEMP/live-health.json"
+          curl --fail --silent --show-error --max-time 20 \
+            "$PRODUCTION_FLY_ORIGIN/clubs/tres-palapas/play-generators/status" \
+            --output "$RUNNER_TEMP/generator-status.json"
+          curl --fail --silent --show-error --max-time 20 \
+            "$PRODUCTION_FLY_ORIGIN/openapi.json" \
+            --output "$RUNNER_TEMP/openapi.json"
+          curl --fail --silent --show-error --max-time 20 \
+            --request OPTIONS \
+            --header "Origin: https://pickleballclubsandwich.com" \
+            --header "Access-Control-Request-Method: POST" \
+            --dump-header "$RUNNER_TEMP/cors.headers" \
+            --output /dev/null \
+            "$PRODUCTION_FLY_ORIGIN/clubs/tres-palapas/play-generators/preview"
+
+          cat > "$RUNNER_TEMP/mixed-preview.json" <<'JSON'
+          {
+            "generator_kind": "round_robin",
+            "play_format": "doubles_singles",
+            "title": "Production mixed preview verification",
+            "participant_names": ["Mix A","Mix B","Mix C","Mix D","Mix E","Mix F","Mix G","Mix H","Mix I","Mix J"],
+            "participant_player_ids": {},
+            "total_rounds": 3,
+            "court_count": 0,
+            "doubles_court_count": 2,
+            "singles_court_count": 1,
+            "standings_sort": "points",
+            "scoring_mode": "scored"
+          }
+          JSON
+          cat > "$RUNNER_TEMP/unscored-preview.json" <<'JSON'
+          {
+            "generator_kind": "round_robin",
+            "play_format": "doubles",
+            "title": "Production unscored preview verification",
+            "participant_names": ["Open A","Open B","Open C","Open D"],
+            "participant_player_ids": {},
+            "total_rounds": 1,
+            "court_count": 1,
+            "doubles_court_count": 0,
+            "singles_court_count": 0,
+            "standings_sort": "wins",
+            "scoring_mode": "unscored"
+          }
+          JSON
+          curl --fail --silent --show-error --max-time 30 \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --data-binary "@$RUNNER_TEMP/mixed-preview.json" \
+            "$PRODUCTION_FLY_ORIGIN/clubs/tres-palapas/play-generators/preview" \
+            --output "$RUNNER_TEMP/mixed-preview-response.json"
+          curl --fail --silent --show-error --max-time 30 \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --data-binary "@$RUNNER_TEMP/unscored-preview.json" \
+            "$PRODUCTION_FLY_ORIGIN/clubs/tres-palapas/play-generators/preview" \
+            --output "$RUNNER_TEMP/unscored-preview-response.json"
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          health = json.loads((root / "production-health.json").read_text())
+          custom = json.loads((root / "custom-health.json").read_text())
+          live = json.loads((root / "live-health.json").read_text())
+          status = json.loads((root / "generator-status.json").read_text())
+          openapi = json.loads((root / "openapi.json").read_text())
+          mixed = json.loads((root / "mixed-preview-response.json").read_text())
+          unscored = json.loads((root / "unscored-preview-response.json").read_text())
+          errors = []
+          for label, payload in (("Fly", health), ("custom domain", custom)):
+              if payload.get("ok") is not True: errors.append(f"{label} health is not OK")
+              if payload.get("environment") != "production": errors.append(f"{label} environment is not production")
+              if payload.get("git_commit_sha") != os.environ["CANDIDATE_SHA"]: errors.append(f"{label} SHA mismatch")
+              if payload.get("image_build_git_sha") != os.environ["CANDIDATE_SHA"]: errors.append(f"{label} image SHA mismatch")
+              if payload.get("supabase_project_ref") != os.environ["EXPECTED_SUPABASE_PROJECT_REF"]: errors.append(f"{label} Supabase mismatch")
+              if payload.get("production_business_write_policy") != "enabled": errors.append(f"{label} write policy not enabled")
+              if payload.get("public_live_writes_enabled") is not True: errors.append(f"{label} public writes disabled")
+              if payload.get("public_live_production_override_enabled") is not True: errors.append(f"{label} production override disabled")
+              if payload.get("staging_write_wave") != "none": errors.append(f"{label} staging wave not none")
+              prereq = payload.get("write_prerequisites") or {}
+              if prereq.get("email_mode") != "dry_run": errors.append(f"{label} email mode not dry_run")
+              if prereq.get("live_player_update_email_enabled") is not False: errors.append(f"{label} live email enabled")
+              controlled = payload.get("controlled_write_flags") or {}
+              enabled = {k for k, v in controlled.items() if v is True}
+              if enabled - {"JUPR_ENABLE_PUBLIC_LIVE_WRITES"}:
+                  errors.append(f"{label} unapproved controlled flags: {sorted(enabled)}")
+          if live.get("ok") is not True or live.get("durability_schema_ready") is not True:
+              errors.append("public-session durability health is not ready")
+          if status.get("enabled") is not True or status.get("writes_enabled") is not True:
+              errors.append("public generator status is not writable")
+          if status.get("official_publish") is not False:
+              errors.append("public official publishing is not disabled")
+
+          schemas = ((openapi.get("components") or {}).get("schemas") or {})
+          preview_schema = schemas.get("PublicGeneratorPreviewRequest") or {}
+          props = preview_schema.get("properties") or {}
+          for required in ("doubles_court_count", "singles_court_count", "standings_sort", "scoring_mode"):
+              if required not in props:
+                  errors.append(f"OpenAPI missing {required}")
+          play_pattern = json.dumps(props.get("play_format") or {})
+          if "doubles_singles" not in play_pattern:
+              errors.append("OpenAPI does not expose mixed play format")
+          paths = openapi.get("paths") or {}
+          played_path = "/clubs/{club_slug}/play-generators/sessions/{session_key}/rounds/{round_number}/played"
+          if played_path not in paths:
+              errors.append("OpenAPI missing Round Played route")
+
+          mixed_preview = mixed.get("preview") or {}
+          if mixed.get("ok") is not True: errors.append("mixed preview is not OK")
+          if mixed_preview.get("playFormat") != "doubles_singles": errors.append("mixed preview format mismatch")
+          if int(mixed_preview.get("doublesCourtCount") or 0) != 2: errors.append("mixed doubles court count mismatch")
+          if int(mixed_preview.get("singlesCourtCount") or 0) != 1: errors.append("mixed singles court count mismatch")
+          if mixed_preview.get("standingsSort") != "points": errors.append("mixed standings sort mismatch")
+          if mixed_preview.get("scoringMode") != "scored": errors.append("mixed scoring mode mismatch")
+
+          unscored_preview = unscored.get("preview") or {}
+          if unscored.get("ok") is not True: errors.append("unscored preview is not OK")
+          if unscored_preview.get("scoringMode") != "unscored": errors.append("unscored preview mode mismatch")
+
+          if errors:
+              for error in errors:
+                  print(f"::error title=Production verification failed::{error}")
+              raise SystemExit(1)
+          print("Exact Round-Robin production API candidate is verified.")
+          PY
+          grep -qi '^access-control-allow-origin: https://pickleballclubsandwich.com' "$RUNNER_TEMP/cors.headers"
+
+      - name: Upload production API cutover evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-round-robin-api-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/production-health.json
+            ${{ runner.temp }}/custom-health.json
+            ${{ runner.temp }}/live-health.json
+            ${{ runner.temp }}/generator-status.json
+            ${{ runner.temp }}/openapi.json
+            ${{ runner.temp }}/mixed-preview-response.json
+            ${{ runner.temp }}/unscored-preview-response.json
+            ${{ runner.temp }}/cors.headers
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Restore prior API and write posture after failure
+        if: failure() && steps.rollback_snapshot.outcome == 'success' && steps.deploy.outcome != 'skipped'
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl secrets set --stage --app "$FLY_APP_NAME" \
+            "JUPR_PRODUCTION_WRITE_POLICY=enabled" \
+            "JUPR_ENABLE_PUBLIC_LIVE_WRITES=1" \
+            "JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION=1" \
+            "JUPR_EMAIL_MODE=dry_run" \
+            "JUPR_DEPLOYMENT_GIT_SHA=$PREVIOUS_SHA"
+          flyctl deploy \
+            --app "$FLY_APP_NAME" \
+            --config "$RUNNER_TEMP/fly-before/fly.toml" \
+            --image "$ROLLBACK_IMAGE"
+          for attempt in $(seq 1 24); do
+            if curl --fail --silent --show-error --max-time 20 \
+              "$PRODUCTION_FLY_ORIGIN/health" \
+              --output "$RUNNER_TEMP/rollback-health.json"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Mark cutover successful
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status-success.json"
+          import json, os
+          print(json.dumps({
+              "state": "success",
+              "context": os.environ["STATUS_CONTEXT"],
+              "description": "Accepted Round-Robin production API is ready",
+              "target_url": (
+                  f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+                  f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+              ),
+          }))
+          PY
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-success.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            > /dev/null
+
+      - name: Mark cutover failed
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status-failure.json"
+          import json, os
+          print(json.dumps({
+              "state": "failure",
+              "context": os.environ["STATUS_CONTEXT"],
+              "description": "Round-Robin API cutover failed; rollback was attempted",
+              "target_url": (
+                  f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+                  f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+              ),
+          }))
+          PY
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-failure.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            > /dev/null
+
+      - name: Upload rollback snapshot
+        if: always() && steps.rollback_snapshot.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-round-robin-rollback-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/fly-before/fly.toml
+            ${{ runner.temp }}/fly-before/machines.json
+            ${{ runner.temp }}/fly-before/health.json
+            ${{ runner.temp }}/rollback-health.json
+          if-no-files-found: warn
+          retention-days: 30
