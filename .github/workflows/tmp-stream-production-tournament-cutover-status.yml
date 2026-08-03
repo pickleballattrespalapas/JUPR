@@ -1,0 +1,104 @@
+name: Stream production tournament cutover status
+
+on:
+  push:
+    branches: [rollback-feb8]
+    paths: [.github/stream-production-tournament-cutover-status.trigger]
+
+permissions:
+  actions: read
+
+concurrency:
+  group: stream-production-tournament-cutover-status
+  cancel-in-progress: true
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    environment: production
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_PROD_URL || secrets.PROD_SUPABASE_URL || secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_PROD_SERVICE_ROLE_KEY || secrets.PROD_SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      EXPECTED_PROJECT_REF: dnoockbwfenunhcibwfn
+      STATUS_BUCKET: pcs-public-deployment-status
+      STATUS_PATH: tournament-cutover.json
+    steps:
+      - name: Stream workflow state to public deployment-status storage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_URL:-}"
+          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}"
+          case "$SUPABASE_URL" in *"$EXPECTED_PROJECT_REF"*) ;; *) echo '::error::Wrong production Supabase target'; exit 1;; esac
+          python - <<'PY'
+          from __future__ import annotations
+          import json, os, time, urllib.error, urllib.request
+          from datetime import datetime, timezone
+
+          api=os.environ['GITHUB_API_URL']; repo=os.environ['GITHUB_REPOSITORY']; token=os.environ['GH_TOKEN']
+          gh_headers={'Accept':'application/vnd.github+json','Authorization':f'Bearer {token}','X-GitHub-Api-Version':'2022-11-28'}
+          storage_url=(os.environ['SUPABASE_URL'].rstrip('/') + '/storage/v1/object/' + os.environ['STATUS_BUCKET'] + '/' + os.environ['STATUS_PATH'])
+          storage_key=os.environ['SUPABASE_SERVICE_ROLE_KEY']
+          builder_name='Build final production tournament activation v2'
+          deploy_name='Deploy operational production tournaments v2'
+
+          def gh_get(url):
+              request=urllib.request.Request(url,headers=gh_headers)
+              with urllib.request.urlopen(request,timeout=60) as response:return json.loads(response.read().decode())
+
+          def upload(payload):
+              data=json.dumps(payload,indent=2).encode()
+              request=urllib.request.Request(storage_url,data=data,method='POST',headers={
+                  'apikey':storage_key,
+                  'Authorization':f'Bearer {storage_key}',
+                  'Content-Type':'application/json',
+                  'x-upsert':'true',
+              })
+              try:
+                  with urllib.request.urlopen(request,timeout=60) as response: response.read()
+              except urllib.error.HTTPError as exc:
+                  raise RuntimeError(f'Status upload failed: HTTP {exc.code}: {exc.read().decode(errors="replace")}') from exc
+
+          def latest(name,runs):
+              rows=[row for row in runs if row.get('name')==name]
+              return max(rows,key=lambda row:row.get('created_at','')) if rows else None
+
+          def describe(run):
+              if not run:return {'found':False,'status':'not_found','conclusion':None,'jobs':[]}
+              jobs=gh_get(f'{api}/repos/{repo}/actions/runs/{run["id"]}/jobs?per_page=100').get('jobs',[])
+              return {
+                  'found':True,'id':run.get('id'),'name':run.get('name'),'status':run.get('status'),
+                  'conclusion':run.get('conclusion'),'head_sha':run.get('head_sha'),
+                  'created_at':run.get('created_at'),'updated_at':run.get('updated_at'),'url':run.get('html_url'),
+                  'jobs':[{
+                      'id':job.get('id'),'name':job.get('name'),'status':job.get('status'),'conclusion':job.get('conclusion'),
+                      'failed_steps':[step.get('name') for step in job.get('steps',[]) if step.get('conclusion')=='failure'],
+                      'running_steps':[step.get('name') for step in job.get('steps',[]) if step.get('status')=='in_progress'],
+                      'pending_steps':[step.get('name') for step in job.get('steps',[]) if step.get('status')=='queued'],
+                  } for job in jobs],
+              }
+
+          deadline=time.time()+6300
+          while time.time()<deadline:
+              runs=gh_get(f'{api}/repos/{repo}/actions/runs?per_page=100').get('workflow_runs',[])
+              builder=latest(builder_name,runs); deploy=latest(deploy_name,runs)
+              b=describe(builder); d=describe(deploy)
+              state='pending'
+              if b.get('conclusion') and b.get('conclusion')!='success':state='failed'
+              elif d.get('conclusion') and d.get('conclusion')!='success':state='failed'
+              elif b.get('conclusion')=='success' and d.get('conclusion')=='success':state='operational'
+              elif not b.get('found'):state='not_found'
+              payload={
+                  'status':state,
+                  'scope':'production-tournaments',
+                  'updated_at':datetime.now(timezone.utc).isoformat(),
+                  'builder':b,
+                  'deploy':d,
+              }
+              upload(payload)
+              print(json.dumps({'status':state,'builder':b.get('status'),'builder_conclusion':b.get('conclusion'),'deploy':d.get('status'),'deploy_conclusion':d.get('conclusion')}))
+              if state in {'operational','failed'}:break
+              time.sleep(15)
+          PY
