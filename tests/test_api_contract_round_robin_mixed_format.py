@@ -405,7 +405,7 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
         match_date="2026-08-03",
         expected_version=saved["version"],
         idempotency_key="mixed-publish-123",
-        operation_key="mixed-operation-123",
+        operation_key="a" * 64,
         actor_email="admin@example.com",
         actor_role="admin",
         source="test",
