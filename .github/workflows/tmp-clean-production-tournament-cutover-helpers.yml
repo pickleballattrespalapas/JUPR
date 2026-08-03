@@ -1,0 +1,89 @@
+name: Temporary clean production tournament cutover helpers
+
+on:
+  push:
+    branches: [ops/production-tournament-status]
+    paths: [evidence/production-tournament-status.json]
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      FLY_TOKEN_1: ${{ secrets.FLY_API_TOKEN }}
+      FLY_TOKEN_2: ${{ secrets.FLY_API_TOKEN_PROD }}
+      FLY_TOKEN_3: ${{ secrets.FLY_PROD_API_TOKEN }}
+      FLY_TOKEN_4: ${{ secrets.FLY_ACCESS_TOKEN }}
+      FLY_TOKEN_5: ${{ secrets.FLY_API_TOKEN_PRODUCTION }}
+      FLY_TOKEN_6: ${{ secrets.FLY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ops/production-tournament-status
+          sparse-checkout: evidence/production-tournament-status.json
+          sparse-checkout-cone-mode: false
+
+      - name: Require independently verified operational status
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          status=json.loads(Path('evidence/production-tournament-status.json').read_text())
+          assert status.get('state')=='operational', status
+          assert status.get('activation_sha')==status.get('production_sha'), status
+          assert (status.get('safeguards') or {}).get('payments')=='offline', status
+          assert (status.get('safeguards') or {}).get('email_mode')=='dry_run', status
+          PY
+
+      - name: Resolve Fly token
+        run: |
+          set -euo pipefail
+          token="${FLY_TOKEN_1:-}"; [ -n "$token" ] || token="${FLY_TOKEN_2:-}"; [ -n "$token" ] || token="${FLY_TOKEN_3:-}"; [ -n "$token" ] || token="${FLY_TOKEN_4:-}"; [ -n "$token" ] || token="${FLY_TOKEN_5:-}"; [ -n "$token" ] || token="${FLY_TOKEN_6:-}"
+          test -n "$token"
+          echo "FLY_API_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Install Fly and identify production app
+        run: |
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.fly/bin:$PATH"
+          flyctl apps list --json > "$RUNNER_TEMP/apps.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          raw=json.loads(Path(os.environ['RUNNER_TEMP'],'apps.json').read_text() or '[]')
+          rows=raw if isinstance(raw,list) else raw.get('apps',[])
+          names=[]
+          for row in rows:
+              name=row.get('Name') or row.get('name') or row.get('ID') or row.get('id')
+              if name: names.append(str(name))
+          candidates=[n for n in names if n=='juprleagues-api'] or [n for n in names if 'jupr' in n.lower() and 'staging' not in n.lower()]
+          if not candidates: raise SystemExit('Production Fly application was not found')
+          with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as fh: fh.write(f'FLY_APP={candidates[0]}\n')
+          PY
+
+      - name: Remove migration, snapshot, and readiness helpers
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.fly/bin:$PATH"
+          flyctl ssh console --app "$FLY_APP" --command "python - <<'PY'
+import json, os, ssl, urllib.request
+key=os.getenv('SUPABASE_SERVICE_ROLE_KEY','').strip()
+url=os.getenv('SUPABASE_URL','https://dnoockbwfenunhcibwfn.supabase.co').rstrip('/')
+sql='''
+drop function if exists public.jupr_apply_repository_migration(text,text,text);
+drop function if exists public.jupr_tournament_cutover_snapshot();
+drop function if exists public.jupr_tournament_schema_readiness();
+'''
+request=urllib.request.Request(f'{url}/rest/v1/rpc/jupr_execute_cutover_sql',data=json.dumps({'p_sql':sql}).encode(),method='POST',headers={'apikey':key,'Authorization':f'Bearer {key}','Content-Type':'application/json','Accept':'application/json'})
+with urllib.request.urlopen(request,context=ssl.create_default_context(),timeout=60) as response:
+    print(response.read().decode())
+PY"
+
+      - name: Confirm operational API remains healthy
+        run: |
+          curl -fsS "https://$FLY_APP.fly.dev/health" > "$RUNNER_TEMP/post-cleanup-health.json"
