@@ -1,0 +1,533 @@
+{
+  "captured_at": "2026-08-03T18:47:24.182986+00:00",
+  "workflows": [
+    {
+      "id": 30842529065,
+      "name": "Complete production tournament cutover v2",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ecdfaffb878804d6043d0494fca397b014c40ebd",
+      "event": "push",
+      "created_at": "2026-08-03T18:43:14Z",
+      "updated_at": "2026-08-03T18:43:30Z",
+      "html_url": "https://github.com/pickleballattrespalapas/JUPR/actions/runs/30842529065",
+      "found": true,
+      "jobs": [
+        {
+          "id": 91782837509,
+          "name": "complete",
+          "status": "completed",
+          "conclusion": "failure",
+          "started_at": "2026-08-03T18:43:18Z",
+          "completed_at": "2026-08-03T18:43:29Z",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Mark cutover pending",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 4,
+              "name": "Rebuild exact activation source from accepted production",
+              "status": "completed",
+              "conclusion": "failure"
+            },
+            {
+              "number": 5,
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 6,
+              "name": "Install validation dependencies",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 7,
+              "name": "Run production authorization and tournament contracts",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 8,
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 9,
+              "name": "Build production web application",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 10,
+              "name": "Commit exact tested activation source",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 11,
+              "name": "Validate production targets",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 12,
+              "name": "Apply reviewed tournament migrations",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 13,
+              "name": "Verify production tournament database readiness",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 14,
+              "name": "Install Fly CLI",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 15,
+              "name": "Open explicit production tournament gates",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 16,
+              "name": "Deploy exact FastAPI source",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 17,
+              "name": "Verify API health and deployed tournament gates",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 18,
+              "name": "Run disposable public registration acceptance",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 19,
+              "name": "Promote exact tested source to production web branch",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 20,
+              "name": "Wait for Vercel and verify public pages",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 21,
+              "name": "Upload completion evidence",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 22,
+              "name": "Mark cutover successful",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 23,
+              "name": "Close tournament gate after failure",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 24,
+              "name": "Mark cutover failed",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 48,
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 49,
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ],
+          "failed_steps": [
+            "Rebuild exact activation source from accepted production"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 30842117006,
+      "name": "Complete production tournament cutover",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "655b7efd3bd427eb2e7e9ae26b7e500b38d87f70",
+      "event": "push",
+      "created_at": "2026-08-03T18:37:41Z",
+      "updated_at": "2026-08-03T18:37:52Z",
+      "html_url": "https://github.com/pickleballattrespalapas/JUPR/actions/runs/30842117006",
+      "found": true,
+      "jobs": [
+        {
+          "id": 91781443910,
+          "name": "complete",
+          "status": "completed",
+          "conclusion": "failure",
+          "started_at": "2026-08-03T18:37:44Z",
+          "completed_at": "2026-08-03T18:37:51Z",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "failure"
+            },
+            {
+              "number": 3,
+              "name": "Mark cutover pending",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 4,
+              "name": "Verify exact activation source",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 5,
+              "name": "Run actions/setup-python@v5",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 6,
+              "name": "Install validation dependencies",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 7,
+              "name": "Revalidate tournament and API contracts",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 8,
+              "name": "Run actions/setup-node@v4",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 9,
+              "name": "Revalidate production web build",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 10,
+              "name": "Validate production credentials and target",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 11,
+              "name": "Apply reviewed tournament database contract",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 12,
+              "name": "Verify database contract used by tournament services",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 13,
+              "name": "Install Fly CLI",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 14,
+              "name": "Configure production tournament feature gates",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 15,
+              "name": "Deploy exact API source to production",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 16,
+              "name": "Verify production API health and identity",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 17,
+              "name": "Run live public registration acceptance and clean up",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 18,
+              "name": "Verify authenticated tournament administration when credentials are available",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 19,
+              "name": "Promote exact source to the production web branch",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 20,
+              "name": "Wait for Vercel production deployment",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 21,
+              "name": "Verify public production tournament pages",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 22,
+              "name": "Upload final cutover evidence",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 23,
+              "name": "Mark cutover successful",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 24,
+              "name": "Close production tournament gate after a failed pre-promotion cutover",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 25,
+              "name": "Mark cutover failed",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 50,
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 51,
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ],
+          "failed_steps": [
+            "Run actions/checkout@v4"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 30842667203,
+      "name": "Publish production tournament completion marker",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "82f0dd81ece8a3971e46d102f48a196729ae5e48",
+      "event": "push",
+      "created_at": "2026-08-03T18:45:04Z",
+      "updated_at": "2026-08-03T18:45:19Z",
+      "html_url": "https://github.com/pickleballattrespalapas/JUPR/actions/runs/30842667203",
+      "found": true,
+      "jobs": [
+        {
+          "id": 91783285498,
+          "name": "marker",
+          "status": "completed",
+          "conclusion": "failure",
+          "started_at": "2026-08-03T18:45:13Z",
+          "completed_at": "2026-08-03T18:45:18Z",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Wait for successful self-contained cutover",
+              "status": "completed",
+              "conclusion": "failure"
+            },
+            {
+              "number": 3,
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 4,
+              "name": "Confirm production source contains activation code",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 5,
+              "name": "Publish public completion marker",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 6,
+              "name": "Wait for public marker deployment",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 7,
+              "name": "Run actions/upload-artifact@v4",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 8,
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ],
+          "failed_steps": [
+            "Wait for successful self-contained cutover"
+          ]
+        }
+      ]
+    },
+    {
+      "id": 30841077917,
+      "name": "Temporary production tournament database cutover",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "6d52b2aabc8f4192e71a1d8ba0652aad83e8ca9e",
+      "event": "push",
+      "created_at": "2026-08-03T18:23:50Z",
+      "updated_at": "2026-08-03T18:24:02Z",
+      "html_url": "https://github.com/pickleballattrespalapas/JUPR/actions/runs/30841077917",
+      "found": true,
+      "jobs": [
+        {
+          "id": 91777981153,
+          "name": "migrate",
+          "status": "completed",
+          "conclusion": "failure",
+          "started_at": "2026-08-03T18:23:54Z",
+          "completed_at": "2026-08-03T18:24:01Z",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Mark database cutover pending",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 4,
+              "name": "Apply exact reviewed tournament migrations",
+              "status": "completed",
+              "conclusion": "failure"
+            },
+            {
+              "number": 5,
+              "name": "Upload database cutover evidence",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 6,
+              "name": "Mark database cutover successful",
+              "status": "completed",
+              "conclusion": "skipped"
+            },
+            {
+              "number": 7,
+              "name": "Mark database cutover failed",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 14,
+              "name": "Post Run actions/checkout@v4",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 15,
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ],
+          "failed_steps": [
+            "Apply exact reviewed tournament migrations"
+          ]
+        }
+      ]
+    }
+  ]
+}
