@@ -1,0 +1,361 @@
+name: Disposable production Round-Robin smoke
+
+on:
+  push:
+    branches:
+      - agent/production-round-robin-smoke-1bcb4c
+    paths:
+      - .github/production-round-robin-smoke.trigger
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: jupr-production-round-robin-smoke
+  cancel-in-progress: false
+
+jobs:
+  production-round-robin-smoke:
+    name: Verify mixed scored and unscored public lifecycles
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API_BASE_URL: https://api.juprleagues.com
+      CLUB_SLUG: tres-palapas
+      EXPECTED_CANDIDATE_SHA: 1bcb4ccc26875190aae1ace9ff4640f941f5a7ba
+      STATUS_CONTEXT: production-round-robin-smoke
+
+    steps:
+      - name: Check out exact accepted candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_CANDIDATE_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CANDIDATE_SHA"
+          test "$GITHUB_REF" = "refs/heads/agent/production-round-robin-smoke-1bcb4c"
+
+      - name: Mark smoke pending
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          print(json.dumps({
+              "state": "pending",
+              "context": os.environ["STATUS_CONTEXT"],
+              "description": "Running mixed scored and unscored production Round-Robin lifecycles",
+              "target_url": (
+                  f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+                  f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+              ),
+          }))
+          PY
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            > /dev/null
+
+      - name: Run disposable public Round-Robin lifecycles
+        shell: python
+        run: |
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+          from typing import Any
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          base = os.environ["API_BASE_URL"].rstrip("/")
+          club = os.environ["CLUB_SLUG"]
+          run_id = os.environ["GITHUB_RUN_ID"]
+          evidence_path = Path(os.environ["RUNNER_TEMP"]) / "production-round-robin-smoke.json"
+
+          def call(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+              body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
+              headers = {
+                  "Accept": "application/json",
+                  "User-Agent": f"PCS-production-round-robin-smoke/{run_id}",
+              }
+              if body is not None:
+                  headers["Content-Type"] = "application/json"
+              request = Request(f"{base}{path}", data=body, headers=headers, method=method)
+              try:
+                  with urlopen(request, timeout=60) as response:
+                      raw = response.read().decode("utf-8")
+              except HTTPError as exc:
+                  raw = exc.read().decode("utf-8", errors="replace")
+                  raise RuntimeError(f"{method} {path} returned HTTP {exc.code}: {raw[:1400]}") from exc
+              except URLError as exc:
+                  raise RuntimeError(f"{method} {path} failed: {exc}") from exc
+              decoded = json.loads(raw)
+              if not isinstance(decoded, dict):
+                  raise RuntimeError(f"{method} {path} returned an unexpected payload")
+              return decoded
+
+          def matches_for_round(round_row: dict[str, Any]) -> list[dict[str, Any]]:
+              direct = [dict(row) for row in round_row.get("matches") or []]
+              if direct:
+                  return direct
+              matches: list[dict[str, Any]] = []
+              for court in round_row.get("courts") or []:
+                  matches.extend(dict(row) for row in court.get("matches") or [])
+                  for mini_round in court.get("miniRounds") or []:
+                      matches.extend(dict(row) for row in mini_round.get("matches") or [])
+              return matches
+
+          status = call("GET", f"/clubs/{club}/play-generators/status")
+          if status.get("enabled") is not True or status.get("writes_enabled") is not True:
+              raise RuntimeError(f"Production public generators are not writable: {status}")
+          if status.get("official_publish") is not False:
+              raise RuntimeError("Public official publishing is not disabled")
+
+          results: list[dict[str, Any]] = []
+
+          mixed_setup = {
+              "generator_kind": "round_robin",
+              "play_format": "doubles_singles",
+              "title": f"PCS PROD SMOKE MIXED {run_id}",
+              "participant_names": [f"Mixed Smoke {index} {run_id}" for index in range(1, 11)],
+              "participant_player_ids": {},
+              "total_rounds": 1,
+              "court_count": 0,
+              "doubles_court_count": 2,
+              "singles_court_count": 1,
+              "standings_sort": "points",
+              "scoring_mode": "scored",
+          }
+          mixed_preview_payload = call(
+              "POST", f"/clubs/{club}/play-generators/preview", mixed_setup
+          )
+          mixed_preview = dict(mixed_preview_payload.get("preview") or {})
+          if mixed_preview.get("playFormat") != "doubles_singles":
+              raise RuntimeError("Mixed preview did not preserve the play format")
+          if int(mixed_preview.get("doublesCourtCount") or 0) != 2:
+              raise RuntimeError("Mixed preview did not preserve doubles courts")
+          if int(mixed_preview.get("singlesCourtCount") or 0) != 1:
+              raise RuntimeError("Mixed preview did not preserve singles courts")
+          mixed_rounds = list(mixed_preview.get("rounds") or [])
+          if len(mixed_rounds) != 1:
+              raise RuntimeError("Mixed preview did not contain exactly one round")
+          formats = [
+              str(match.get("playFormat") or match.get("play_format") or "")
+              for match in matches_for_round(dict(mixed_rounds[0]))
+          ]
+          if formats.count("doubles") != 2 or formats.count("singles") != 1:
+              raise RuntimeError(f"Mixed round formats were incorrect: {formats}")
+
+          mixed_create = call(
+              "POST",
+              f"/clubs/{club}/play-generators/sessions",
+              {
+                  **mixed_setup,
+                  "preview_fingerprint": mixed_preview.get("previewFingerprint"),
+                  "idempotency_key": f"prod-rr-smoke-{run_id}-mixed-create",
+              },
+          )
+          mixed_token = str(mixed_create.get("edit_token") or "")
+          mixed_session = dict(mixed_create.get("session") or {})
+          if not mixed_token or not mixed_session.get("session_key"):
+              raise RuntimeError("Mixed session creation returned no organizer credentials")
+          print(f"::add-mask::{mixed_token}")
+          if mixed_session.get("unrated") is not True:
+              raise RuntimeError("Mixed public session is not explicitly unrated")
+
+          mixed_event = dict(mixed_session.get("event") or {})
+          mixed_current = int(mixed_session.get("current_round_number") or mixed_event.get("currentRoundNumber") or 1)
+          mixed_round = next(
+              dict(row)
+              for row in mixed_event.get("rounds") or []
+              if int(row.get("number") or 0) == mixed_current
+          )
+          mixed_matches = matches_for_round(mixed_round)
+          scores = []
+          for index, match in enumerate(mixed_matches):
+              match_id = str(match.get("id") or "").strip()
+              if not match_id:
+                  raise RuntimeError("Mixed round contains a match without an id")
+              scores.append({"match_id": match_id, "score_a": 11, "score_b": 5 + index})
+          mixed_scored = call(
+              "PATCH",
+              f"/clubs/{club}/play-generators/sessions/{mixed_session['session_key']}/rounds/{mixed_current}/scores",
+              {
+                  "scores": scores,
+                  "edit_token": mixed_token,
+                  "expected_version": int(mixed_session.get("version") or 1),
+                  "idempotency_key": f"prod-rr-smoke-{run_id}-mixed-scores",
+              },
+          )
+          mixed_session = dict(mixed_scored.get("session") or {})
+          mixed_advanced = call(
+              "POST",
+              f"/clubs/{club}/play-generators/sessions/{mixed_session['session_key']}/advance",
+              {
+                  "edit_token": mixed_token,
+                  "expected_version": int(mixed_session.get("version") or 1),
+                  "idempotency_key": f"prod-rr-smoke-{run_id}-mixed-advance",
+              },
+          )
+          mixed_final = dict(mixed_advanced.get("session") or {})
+          if str(mixed_final.get("status") or "") != "completed":
+              raise RuntimeError("Mixed scored session did not complete")
+          final_event = dict(mixed_final.get("event") or {})
+          if final_event.get("scoringMode") != "scored" or final_event.get("standingsSort") != "points":
+              raise RuntimeError("Mixed final session lost scoring or standings settings")
+          results.append({
+              "kind": "mixed_scored",
+              "title": mixed_setup["title"],
+              "session_key": mixed_final.get("session_key"),
+              "creation_operation_key": mixed_final.get("creation_operation_key"),
+              "final_status": mixed_final.get("status"),
+              "final_version": mixed_final.get("version"),
+              "unrated": mixed_final.get("unrated"),
+          })
+
+          unscored_setup = {
+              "generator_kind": "round_robin",
+              "play_format": "doubles",
+              "title": f"PCS PROD SMOKE UNSCORED {run_id}",
+              "participant_names": [f"Unscored Smoke {index} {run_id}" for index in range(1, 5)],
+              "participant_player_ids": {},
+              "total_rounds": 1,
+              "court_count": 1,
+              "doubles_court_count": 0,
+              "singles_court_count": 0,
+              "standings_sort": "wins",
+              "scoring_mode": "unscored",
+          }
+          unscored_preview_payload = call(
+              "POST", f"/clubs/{club}/play-generators/preview", unscored_setup
+          )
+          unscored_preview = dict(unscored_preview_payload.get("preview") or {})
+          if unscored_preview.get("scoringMode") != "unscored":
+              raise RuntimeError("Unscored preview did not preserve scoring mode")
+          unscored_create = call(
+              "POST",
+              f"/clubs/{club}/play-generators/sessions",
+              {
+                  **unscored_setup,
+                  "preview_fingerprint": unscored_preview.get("previewFingerprint"),
+                  "idempotency_key": f"prod-rr-smoke-{run_id}-unscored-create",
+              },
+          )
+          unscored_token = str(unscored_create.get("edit_token") or "")
+          unscored_session = dict(unscored_create.get("session") or {})
+          if not unscored_token or not unscored_session.get("session_key"):
+              raise RuntimeError("Unscored session creation returned no organizer credentials")
+          print(f"::add-mask::{unscored_token}")
+          unscored_event = dict(unscored_session.get("event") or {})
+          unscored_round = int(unscored_session.get("current_round_number") or unscored_event.get("currentRoundNumber") or 1)
+          unscored_played = call(
+              "POST",
+              f"/clubs/{club}/play-generators/sessions/{unscored_session['session_key']}/rounds/{unscored_round}/played",
+              {
+                  "edit_token": unscored_token,
+                  "expected_version": int(unscored_session.get("version") or 1),
+                  "idempotency_key": f"prod-rr-smoke-{run_id}-unscored-played",
+              },
+          )
+          unscored_final = dict(unscored_played.get("session") or {})
+          if str(unscored_final.get("status") or "") != "completed":
+              raise RuntimeError("Unscored Round Played action did not complete the session")
+          final_unscored_event = dict(unscored_final.get("event") or {})
+          if final_unscored_event.get("scoringMode") != "unscored":
+              raise RuntimeError("Unscored final session lost scoring mode")
+          if unscored_final.get("unrated") is not True:
+              raise RuntimeError("Unscored public session is not explicitly unrated")
+          results.append({
+              "kind": "unscored",
+              "title": unscored_setup["title"],
+              "session_key": unscored_final.get("session_key"),
+              "creation_operation_key": unscored_final.get("creation_operation_key"),
+              "final_status": unscored_final.get("status"),
+              "final_version": unscored_final.get("version"),
+              "unrated": unscored_final.get("unrated"),
+          })
+
+          evidence = {
+              "run_id": run_id,
+              "candidate_sha": os.environ["EXPECTED_CANDIDATE_SHA"],
+              "api_base_url": base,
+              "results": results,
+          }
+          evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True), encoding="utf-8")
+          print(json.dumps(evidence, indent=2, sort_keys=True))
+
+      - name: Upload smoke evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-round-robin-smoke-${{ github.run_id }}
+          path: ${{ runner.temp }}/production-round-robin-smoke.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Mark smoke successful
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status-success.json"
+          import json, os
+          print(json.dumps({
+              "state": "success",
+              "context": os.environ["STATUS_CONTEXT"],
+              "description": "Mixed scored and unscored production Round-Robin lifecycles passed",
+              "target_url": (
+                  f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+                  f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+              ),
+          }))
+          PY
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-success.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            > /dev/null
+
+      - name: Mark smoke failed
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status-failure.json"
+          import json, os
+          print(json.dumps({
+              "state": "failure",
+              "context": os.environ["STATUS_CONTEXT"],
+              "description": "Production Round-Robin lifecycle smoke failed",
+              "target_url": (
+                  f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+                  f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+              ),
+          }))
+          PY
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-failure.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            > /dev/null
