@@ -1,2 +1,2 @@
-trigger=2026-08-03-production-tournament-migrations-v2
+trigger=2026-08-03-production-tournament-migrations-v3
 activation_sha=94dae143c89cfc44282879308531b1baad94b51b
