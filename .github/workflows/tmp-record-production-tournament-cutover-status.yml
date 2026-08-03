@@ -1,0 +1,202 @@
+name: Temporary record production tournament cutover status
+
+on:
+  workflow_run:
+    workflows: [Temporary production tournament cutover v7]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+      SOURCE_RUN_URL: ${{ github.event.workflow_run.html_url }}
+      PRODUCTION_BRANCH: rollback-feb8
+      STATUS_BRANCH: ops/production-tournament-status
+      WEB_URL: https://pickleballclubsandwich.com
+      FLY_TOKEN_1: ${{ secrets.FLY_API_TOKEN }}
+      FLY_TOKEN_2: ${{ secrets.FLY_API_TOKEN_PROD }}
+      FLY_TOKEN_3: ${{ secrets.FLY_PROD_API_TOKEN }}
+      FLY_TOKEN_4: ${{ secrets.FLY_ACCESS_TOKEN }}
+      FLY_TOKEN_5: ${{ secrets.FLY_API_TOKEN_PRODUCTION }}
+      FLY_TOKEN_6: ${{ secrets.FLY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rollback-feb8
+          fetch-depth: 0
+
+      - name: Resolve deployed evidence
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/status"
+          echo "$SOURCE_CONCLUSION" > "$RUNNER_TEMP/status/source-conclusion"
+          git fetch --tags origin
+          marker_sha=""
+          if git rev-parse -q --verify refs/tags/production-tournaments-live-20260803 >/dev/null; then
+            marker_sha="$(git rev-parse refs/tags/production-tournaments-live-20260803)"
+          fi
+          production_sha="$(git rev-parse origin/$PRODUCTION_BRANCH)"
+          printf '%s' "$marker_sha" > "$RUNNER_TEMP/status/marker-sha"
+          printf '%s' "$production_sha" > "$RUNNER_TEMP/status/production-sha"
+
+          web_code="$(curl -L -sS -o "$RUNNER_TEMP/status/tournaments.html" -w '%{http_code}' "$WEB_URL/clubs/tres-palapas/tournaments" || true)"
+          printf '%s' "$web_code" > "$RUNNER_TEMP/status/web-code"
+
+          fly="${FLY_TOKEN_1:-}"; [ -n "$fly" ] || fly="${FLY_TOKEN_2:-}"; [ -n "$fly" ] || fly="${FLY_TOKEN_3:-}"; [ -n "$fly" ] || fly="${FLY_TOKEN_4:-}"; [ -n "$fly" ] || fly="${FLY_TOKEN_5:-}"; [ -n "$fly" ] || fly="${FLY_TOKEN_6:-}"
+          if [ -n "$fly" ]; then
+            echo "FLY_API_TOKEN=$fly" >> "$GITHUB_ENV"
+            echo "FLY_AVAILABLE=true" >> "$GITHUB_ENV"
+          else
+            echo "FLY_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install Fly CLI
+        if: env.FLY_AVAILABLE == 'true'
+        run: |
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+
+      - name: Verify production API and database from the deployed runtime
+        if: env.FLY_AVAILABLE == 'true'
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.fly/bin:$PATH"
+          flyctl apps list --json > "$RUNNER_TEMP/status/apps.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          raw=json.loads(Path(os.environ['RUNNER_TEMP'],'status/apps.json').read_text() or '[]')
+          rows=raw if isinstance(raw,list) else raw.get('apps',[])
+          names=[]
+          for row in rows:
+              name=row.get('Name') or row.get('name') or row.get('ID') or row.get('id')
+              if name: names.append(str(name))
+          preferred=[n for n in names if n=='juprleagues-api']
+          candidates=preferred or [n for n in names if 'jupr' in n.lower() and 'staging' not in n.lower()]
+          if not candidates:
+              raise SystemExit('Production Fly application was not found')
+          with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as fh:
+              fh.write(f'FLY_APP={candidates[0]}\n')
+          PY
+          curl -fsS "https://$FLY_APP.fly.dev/health" > "$RUNNER_TEMP/status/api-health.json"
+          curl -fsS "https://$FLY_APP.fly.dev/openapi.json" > "$RUNNER_TEMP/status/openapi.json"
+          flyctl ssh console --app "$FLY_APP" --command "python - <<'PY'
+import json, os, ssl, urllib.request
+from jupr_app.services.production_tournament_guard import production_tournament_writes_enabled
+from jupr_app.services.admin_tournament_ops_service import build_admin_tournament_ops_runtime_status
+from jupr_app.services.public_tournament_commerce_service import tournament_commerce_runtime_status
+key=os.getenv('SUPABASE_SERVICE_ROLE_KEY','').strip()
+url=os.getenv('SUPABASE_URL','https://dnoockbwfenunhcibwfn.supabase.co').rstrip('/')
+def rpc(name):
+    request=urllib.request.Request(f'{url}/rest/v1/rpc/{name}',data=b'{}',method='POST',headers={'apikey':key,'Authorization':f'Bearer {key}','Content-Type':'application/json','Accept':'application/json'})
+    with urllib.request.urlopen(request,context=ssl.create_default_context(),timeout=60) as response:
+        return json.load(response)
+result={
+  'production_gate':production_tournament_writes_enabled(),
+  'ops':build_admin_tournament_ops_runtime_status(),
+  'commerce':tournament_commerce_runtime_status(),
+  'database_snapshot':rpc('jupr_tournament_cutover_snapshot'),
+  'schema_readiness':rpc('jupr_tournament_schema_readiness'),
+}
+print(json.dumps(result,sort_keys=True))
+PY" > "$RUNNER_TEMP/status/runtime-evidence.json"
+
+      - name: Build normalized status record
+        if: always()
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+          import json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          root=Path(os.environ['RUNNER_TEMP'])/'status'
+          def read_text(name,default=''):
+              path=root/name
+              return path.read_text(encoding='utf-8',errors='replace').strip() if path.exists() else default
+          def read_json(name):
+              path=root/name
+              if not path.exists(): return None
+              text=path.read_text(encoding='utf-8',errors='replace').strip()
+              try:
+                  start=text.find('{')
+                  return json.loads(text[start:] if start>=0 else text)
+              except Exception:
+                  return {'raw':text[:10000]}
+
+          source=read_text('source-conclusion','unknown')
+          marker=read_text('marker-sha')
+          production=read_text('production-sha')
+          web_code=read_text('web-code')
+          runtime=read_json('runtime-evidence.json') or {}
+          openapi=read_json('openapi.json') or {}
+          paths=(openapi or {}).get('paths') or {}
+          registration_posts=[p for p,v in paths.items() if 'registration' in p.lower() and isinstance(v,dict) and 'post' in v]
+          admin_mutations=[p for p,v in paths.items() if '/admin/' in p and 'tournament' in p.lower() and isinstance(v,dict) and any(method in v for method in ('post','put','patch','delete'))]
+          schema=runtime.get('schema_readiness') or {}
+          snapshot=runtime.get('database_snapshot') or {}
+          counts=snapshot.get('counts') or {}
+          expected={'tournaments':7,'settings':2,'days':10,'event_options':40,'registrations':7,'selections':14,'draws':0,'teams':30,'games':119,'podium':15,'matches':2239,'players':545}
+          counts_exact=all(int(counts.get(key,-1))==value for key,value in expected.items())
+          operational=bool(
+              source=='success'
+              and marker
+              and marker==production
+              and web_code in {'200','301','302','307','308'}
+              and runtime.get('production_gate') is True
+              and (runtime.get('ops') or {}).get('official_publish_enabled') is True
+              and (runtime.get('commerce') or {}).get('public_registration_write_ready') is True
+              and (runtime.get('commerce') or {}).get('offline_payment_only') is True
+              and not (schema.get('missing_tables') or [])
+              and registration_posts
+              and admin_mutations
+              and counts_exact
+          )
+          record={
+              'state':'operational' if operational else 'not_operational',
+              'recorded_at':datetime.now(timezone.utc).isoformat(),
+              'source_workflow':{'id':os.environ.get('SOURCE_RUN_ID'),'url':os.environ.get('SOURCE_RUN_URL'),'conclusion':source},
+              'activation_sha':marker or None,
+              'production_sha':production or None,
+              'web_http_status':web_code or None,
+              'runtime':runtime,
+              'openapi':{'tournament_path_count':sum(1 for p in paths if 'tournament' in p.lower()),'public_registration_post_paths':registration_posts,'admin_mutation_path_count':len(admin_mutations)},
+              'production_data':{'counts':counts,'expected_counts':expected,'counts_exact':counts_exact,'hashes':snapshot.get('hashes')},
+              'safeguards':{'payments':'offline','email_mode':'dry_run','live_email':False},
+          }
+          Path(os.environ['RUNNER_TEMP'],'production-tournament-status.json').write_text(json.dumps(record,indent=2,sort_keys=True)+'\n',encoding='utf-8')
+          print(json.dumps(record,indent=2,sort_keys=True))
+          if not operational:
+              raise SystemExit('Independent verification did not establish an operational production cutover')
+          PY
+
+      - name: Publish independent operational record
+        if: success()
+        run: |
+          set -euo pipefail
+          git checkout --orphan production-tournament-status-work
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p evidence
+          cp "$RUNNER_TEMP/production-tournament-status.json" evidence/production-tournament-status.json
+          git add evidence/production-tournament-status.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Record verified production tournament cutover"
+          git push --force origin HEAD:"refs/heads/$STATUS_BRANCH"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-tournament-status-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/production-tournament-status.json
+            ${{ runner.temp }}/status
+          if-no-files-found: warn
+          retention-days: 30
