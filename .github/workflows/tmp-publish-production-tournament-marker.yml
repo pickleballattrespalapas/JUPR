@@ -1,0 +1,124 @@
+name: Publish production tournament completion marker
+
+on:
+  push:
+    branches: [rollback-feb8]
+    paths: [.github/publish-production-tournament-marker.trigger]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: publish-production-tournament-completion-marker
+  cancel-in-progress: false
+
+jobs:
+  marker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    steps:
+      - name: Wait for successful self-contained cutover
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id=''
+          for i in $(seq 1 120); do
+            curl --fail --silent --show-error \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs?branch=rollback-feb8&event=push&per_page=100" > "$RUNNER_TEMP/runs.json"
+            read -r run_id status conclusion < <(python - <<'PY'
+          import json, os
+          runs=json.load(open(os.environ['RUNNER_TEMP']+'/runs.json')).get('workflow_runs',[])
+          rows=[r for r in runs if r.get('name')=='Complete production tournament cutover v2']
+          if rows:
+              row=rows[0]
+              print(row.get('id',''),row.get('status',''),row.get('conclusion') or '')
+          else:
+              print('','','')
+          PY
+            )
+            if [ "$status" = completed ]; then
+              [ "$conclusion" = success ] || { echo "::error::Cutover v2 concluded $conclusion"; exit 1; }
+              echo "$run_id" > "$RUNNER_TEMP/cutover-run-id.txt"
+              break
+            fi
+            sleep 5
+          done
+          test -s "$RUNNER_TEMP/cutover-run-id.txt"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: rollback-feb8
+          fetch-depth: 0
+
+      - name: Confirm production source contains activation code
+        run: |
+          set -euo pipefail
+          test -f jupr_app/services/production_tournament_guard.py
+          test ! -f .github/complete-production-tournaments-v2.trigger
+          curl --fail --silent --show-error https://juprleagues-api.fly.dev/health > "$RUNNER_TEMP/health.json"
+          curl --fail --silent --show-error https://pickleballclubsandwich.com/clubs/tres-palapas/tournaments > "$RUNNER_TEMP/tournaments.html"
+          test -s "$RUNNER_TEMP/tournaments.html"
+          ! grep -qi 'deployment protection\|vercel.*login' "$RUNNER_TEMP/tournaments.html"
+
+      - name: Publish public completion marker
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          mkdir -p apps/web/public
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+          payload={
+            'status':'operational',
+            'scope':'production-tournaments',
+            'source_sha':os.popen('git rev-parse HEAD').read().strip(),
+            'verified_at':datetime.now(timezone.utc).isoformat(),
+            'public_registration':True,
+            'admin_operations':True,
+            'official_match_publish':True,
+            'payment_mode':'offline',
+            'email_mode':'dry_run',
+          }
+          Path('apps/web/public/production-tournaments-complete.json').write_text(json.dumps(payload,indent=2)+'\n',encoding='utf-8')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/web/public/production-tournaments-complete.json
+          git commit -m "Record operational production tournaments"
+          git push origin HEAD:rollback-feb8
+
+      - name: Wait for public marker deployment
+        run: |
+          set -euo pipefail
+          ok=0
+          for i in $(seq 1 90); do
+            if curl --fail --silent --show-error https://pickleballclubsandwich.com/production-tournaments-complete.json > "$RUNNER_TEMP/marker.json"; then
+              python - <<'PY'
+          import json, os
+          data=json.load(open(os.environ['RUNNER_TEMP']+'/marker.json'))
+          assert data.get('status')=='operational'
+          assert data.get('public_registration') is True
+          assert data.get('payment_mode')=='offline'
+          assert data.get('email_mode')=='dry_run'
+          PY
+              ok=1
+              break
+            fi
+            sleep 5
+          done
+          test "$ok" = 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-tournament-public-marker-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/cutover-run-id.txt
+            ${{ runner.temp }}/health.json
+            ${{ runner.temp }}/marker.json
+          retention-days: 90
