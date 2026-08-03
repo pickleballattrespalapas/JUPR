@@ -1,6 +1,6 @@
 # Round-Robin Generator manual acceptance checklist
 
-Use the exact staging candidate and deployment named in the acceptance handoff.
+Use the exact staging candidate and deployment named in the acceptance handoff. Begin manual testing only after that handoff confirms the focused domain/API/component checks, full Next.js production build, exact Vercel identity, and exact Fly identity.
 
 ## PRR-12 — Scored flow
 
