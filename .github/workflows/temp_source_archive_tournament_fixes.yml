@@ -23,7 +23,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tar --exclude=.git --exclude=source.tar.gz -czf source.tar.gz .
+          tar --exclude=.git -czf /tmp/source.tar.gz .
+          mv /tmp/source.tar.gz source.tar.gz
           echo "Archived $(git rev-parse HEAD)"
 
       - name: Upload source archive
