@@ -1,0 +1,36 @@
+{
+  "status": "failed",
+  "scope": "production-tournaments",
+  "captured_at": "2026-08-03T19:07:30.829002+00:00",
+  "workflows": [
+    {
+      "id": 30843761843,
+      "name": "Build final production tournament activation v2",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "4ea3b0ccf42c15cb44d56aef8cb3e5d113c84638",
+      "created_at": "2026-08-03T18:59:40Z",
+      "updated_at": "2026-08-03T18:59:57Z",
+      "html_url": "https://github.com/pickleballattrespalapas/JUPR/actions/runs/30843761843",
+      "found": true,
+      "jobs": [
+        {
+          "id": 91786875373,
+          "name": "build",
+          "status": "completed",
+          "conclusion": "failure",
+          "failed_steps": [
+            "Preserve activation inputs"
+          ],
+          "current_steps": []
+        }
+      ]
+    },
+    {
+      "name": "Deploy operational production tournaments v2",
+      "found": false,
+      "status": "not_found",
+      "conclusion": null
+    }
+  ]
+}
