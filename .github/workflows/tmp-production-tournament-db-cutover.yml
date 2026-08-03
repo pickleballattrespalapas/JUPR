@@ -1,0 +1,209 @@
+name: Temporary production tournament database cutover
+
+on:
+  push:
+    branches: [rollback-feb8]
+    paths: [.github/production-tournament-db.trigger]
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: production-tournament-database-cutover
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    env:
+      EXPECTED_PROJECT_REF: dnoockbwfenunhcibwfn
+      EXPECTED_SOURCE_SHA: 1bcb4ccc26875190aae1ace9ff4640f941f5a7ba
+      EXECUTOR_TOKEN: pcs-tournament-cutover-20260803-9f0a6f4d
+      STATUS_CONTEXT: production-tournament-database-cutover
+      SUPABASE_URL: ${{ secrets.SUPABASE_PROD_URL || secrets.PROD_SUPABASE_URL || secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_PROD_SERVICE_ROLE_KEY || secrets.PROD_SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Mark database cutover pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          print(json.dumps({
+            "state": "pending",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Applying reviewed tournament database contract",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Apply exact reviewed tournament migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_URL:-}"
+          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}"
+          case "$SUPABASE_URL" in
+            *"$EXPECTED_PROJECT_REF"*) ;;
+            *) echo "::error::Production Supabase URL does not match the approved project."; exit 1 ;;
+          esac
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          import re
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          root = Path.cwd()
+          contract = json.loads((root / "config/production_migration_contract.json").read_text(encoding="utf-8"))
+          required = list(contract.get("required_ledger_names") or [])
+          schema_only = set(contract.get("schema_contract_only_repository_migrations") or [])
+          approved_pattern = re.compile(r"(tournament|partner|four_player)", re.I)
+
+          canonical: dict[str, list[tuple[str, Path]]] = {}
+          for path in sorted((root / "supabase/migrations").glob("*.sql")):
+              match = re.fullmatch(r"(?P<version>\d{8}(?:\d{6})?)_(?P<name>[A-Za-z0-9][A-Za-z0-9_]*)\.sql", path.name)
+              if match:
+                  canonical.setdefault(match.group("name"), []).append((match.group("version"), path))
+
+          selected: list[tuple[str, str, Path]] = []
+          errors: list[str] = []
+          for name in required:
+              if name in schema_only or not approved_pattern.search(name):
+                  continue
+              candidates = canonical.get(name) or []
+              if len(candidates) != 1:
+                  errors.append(f"{name}: expected one canonical migration, found {len(candidates)}")
+                  continue
+              version, path = candidates[0]
+              selected.append((version, name, path))
+          selected.sort(key=lambda row: (row[0], row[1]))
+          if errors:
+              raise SystemExit("; ".join(errors))
+          if not selected:
+              raise SystemExit("No reviewed tournament migrations were selected.")
+
+          base_url = os.environ["SUPABASE_URL"].rstrip("/")
+          service_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+          endpoint = f"{base_url}/rest/v1/rpc/jupr_apply_reviewed_migration"
+          report: list[dict[str, object]] = []
+
+          for version, name, path in selected:
+              sql = path.read_text(encoding="utf-8")
+              screened = "\n".join(line.split("--", 1)[0] for line in sql.splitlines())
+              if re.search(r"\b(drop\s+table|drop\s+schema|truncate)\b", screened, re.I):
+                  raise SystemExit(f"Hard-destructive SQL refused: {path}")
+              digest = hashlib.sha256(sql.encode("utf-8")).hexdigest()
+              payload = json.dumps({
+                  "p_token": os.environ["EXECUTOR_TOKEN"],
+                  "p_version": version,
+                  "p_name": name,
+                  "p_sha256": digest,
+                  "p_sql": sql,
+              }).encode("utf-8")
+              request = urllib.request.Request(
+                  endpoint,
+                  data=payload,
+                  method="POST",
+                  headers={
+                      "apikey": service_key,
+                      "Authorization": f"Bearer {service_key}",
+                      "Content-Type": "application/json",
+                      "Accept": "application/json",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=120) as response:
+                      body = response.read().decode("utf-8")
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode("utf-8", errors="replace")
+                  raise SystemExit(f"{path.name} failed with HTTP {exc.code}: {detail}") from exc
+              result = json.loads(body)
+              if isinstance(result, list) and len(result) == 1:
+                  result = result[0]
+              report.append({
+                  "version": version,
+                  "name": name,
+                  "path": str(path),
+                  "sha256": digest,
+                  "result": result,
+              })
+              print(f"{version}_{name}: {result}")
+
+          output = Path(os.environ["RUNNER_TEMP"]) / "production-tournament-database-cutover.json"
+          output.write_text(json.dumps({
+              "source_sha": os.environ["EXPECTED_SOURCE_SHA"],
+              "project_ref": os.environ["EXPECTED_PROJECT_REF"],
+              "selected_count": len(selected),
+              "migrations": report,
+          }, indent=2, sort_keys=True), encoding="utf-8")
+          PY
+
+      - name: Upload database cutover evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-tournament-database-cutover-${{ github.run_id }}
+          path: ${{ runner.temp }}/production-tournament-database-cutover.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Mark database cutover successful
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status-success.json"
+          import json, os
+          print(json.dumps({
+            "state": "success",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Reviewed tournament database contract applied",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-success.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Mark database cutover failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status-failure.json"
+          import json, os
+          print(json.dumps({
+            "state": "failure",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Tournament database cutover failed closed",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-failure.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
