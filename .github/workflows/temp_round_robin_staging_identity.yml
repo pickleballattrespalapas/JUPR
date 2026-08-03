@@ -135,7 +135,9 @@ jobs:
               health.get("controlled_write_flags") == expected_write_flags("open"),
               "Controlled write flags do not match the permanent open wave.",
           )
-          expect(str(health.get("email_mode") or "").lower() == "dry_run", "Staging email_mode is not dry_run.")
+          prerequisites = health.get("write_prerequisites") if isinstance(health.get("write_prerequisites"), dict) else {}
+          email_mode = str(health.get("email_mode") or prerequisites.get("email_mode") or "").lower()
+          expect(email_mode == "dry_run", "Staging email_mode is not dry_run.")
 
           feature_flags = health.get("feature_flags") if isinstance(health.get("feature_flags"), dict) else {}
           expect(
@@ -176,7 +178,7 @@ jobs:
               f"- Fly image: `{fly_image}`\n"
               f"- Supabase: `{health.get('supabase_project_ref')}`\n"
               f"- write_wave: `{write_wave}`\n"
-              f"- email_mode: `{health.get('email_mode')}`\n"
+              f"- email_mode: `{email_mode}`\n"
               "- Production override: disabled\n"
               "- Admin/public Round Played contracts: present\n",
               encoding="utf-8",
