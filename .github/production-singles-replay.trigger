@@ -1,0 +1,2 @@
+trigger=2026-08-03-production-singles-replay-v1
+source_sha=94dae143c89cfc44282879308531b1baad94b51b
