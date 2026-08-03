@@ -1,0 +1,249 @@
+name: Temporary apply production tournament migrations
+
+on:
+  push:
+    branches:
+      - rollback-feb8
+    paths:
+      - .github/production-tournament-migrations.trigger
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: production-tournament-migrations
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    env:
+      FLY_APP_NAME: juprleagues-api
+      STATUS_CONTEXT: production-tournament-migrations
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rollback-feb8
+          persist-credentials: false
+
+      - name: Mark migrations pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          print(json.dumps({
+            "state": "pending",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Applying reviewed tournament-only production migrations",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Set up pinned flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: "0.4.49"
+
+      - name: Build remote migration runner
+        run: |
+          cat > "$RUNNER_TEMP/apply_tournament_migrations.py" <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          import re
+          import time
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          MIGRATION_ROOT = Path("/app/supabase/migrations")
+          REQUIRED_LOGICAL_NAMES = [
+              "selection_update_transaction_guards",
+              "selection_relationship_update_lock_scope",
+              "public_registration_edit_transaction",
+              "public_partner_pairing_lifecycle",
+              "tournament_admin_operations",
+              "tournament_operations_guard_surface",
+              "tournament_live_operations",
+              "tournament_commerce",
+              "combined_rating_team_tournaments",
+              "tournament_setup_basics_metadata",
+              "tournament_setup_policies_multiday",
+          ]
+
+          supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+          service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+          if not supabase_url or not service_key:
+              raise SystemExit("Production Supabase server credentials are unavailable inside the Fly app.")
+
+          selected: list[tuple[Path, str]] = []
+          missing: list[str] = []
+          for logical_name in REQUIRED_LOGICAL_NAMES:
+              matches = sorted(MIGRATION_ROOT.glob(f"*_{logical_name}.sql"))
+              if not matches:
+                  missing.append(logical_name)
+                  continue
+              selected.extend((path, logical_name) for path in matches)
+
+          if missing:
+              raise SystemExit("Missing reviewed migration files: " + ", ".join(missing))
+
+          seen_paths: set[Path] = set()
+          unique_selected: list[tuple[Path, str]] = []
+          for path, logical_name in sorted(selected, key=lambda item: item[0].name):
+              if path in seen_paths:
+                  continue
+              seen_paths.add(path)
+              unique_selected.append((path, logical_name))
+
+          preflight: list[dict[str, object]] = []
+          for path, logical_name in unique_selected:
+              sql = path.read_text(encoding="utf-8")
+              transaction_lines = [
+                  line.strip()
+                  for line in sql.splitlines()
+                  if re.fullmatch(r"\s*(begin|commit|rollback)\s*;\s*", line, flags=re.I)
+              ]
+              if transaction_lines:
+                  raise SystemExit(
+                      f"{path.name} contains explicit transaction control incompatible with the temporary executor: {transaction_lines}"
+                  )
+              preflight.append({
+                  "file": path.name,
+                  "logical_name": logical_name,
+                  "bytes": len(sql.encode("utf-8")),
+                  "sha256": hashlib.sha256(sql.encode("utf-8")).hexdigest(),
+              })
+
+          print(json.dumps({"migration_preflight": preflight}, indent=2), flush=True)
+
+          rpc_url = f"{supabase_url}/rest/v1/rpc/jupr_admin_apply_sql"
+
+          def execute_sql(sql: str) -> dict[str, object]:
+              payload = json.dumps({"p_sql": sql}).encode("utf-8")
+              request = urllib.request.Request(
+                  rpc_url,
+                  data=payload,
+                  method="POST",
+                  headers={
+                      "apikey": service_key,
+                      "Authorization": f"Bearer {service_key}",
+                      "Content-Type": "application/json",
+                      "Accept": "application/json",
+                  },
+              )
+              last_error: Exception | None = None
+              for attempt in range(1, 7):
+                  try:
+                      with urllib.request.urlopen(request, timeout=120) as response:
+                          raw = response.read().decode("utf-8")
+                          return json.loads(raw) if raw else {"ok": True}
+                  except urllib.error.HTTPError as exc:
+                      body = exc.read().decode("utf-8", errors="replace")
+                      last_error = RuntimeError(f"HTTP {exc.code}: {body}")
+                      if exc.code in {404, 503} and attempt < 6:
+                          time.sleep(3 * attempt)
+                          continue
+                      raise last_error
+                  except Exception as exc:
+                      last_error = exc
+                      if attempt < 6:
+                          time.sleep(3 * attempt)
+                          continue
+                      raise
+              raise RuntimeError(f"Temporary SQL executor failed: {last_error}")
+
+          execute_sql("select 1;")
+
+          applied: list[dict[str, object]] = []
+          for path, logical_name in unique_selected:
+              sql = path.read_text(encoding="utf-8")
+              digest = hashlib.sha256(sql.encode("utf-8")).hexdigest()
+              print(f"Applying {path.name} ({len(sql.encode('utf-8'))} bytes, {digest})", flush=True)
+              result = execute_sql(sql)
+
+              version = path.name.split("_", 1)[0]
+              quote = lambda value: "'" + value.replace("'", "''") + "'"
+              ledger_sql = f"""
+              insert into supabase_migrations.schema_migrations
+                (version, statements, name, created_by, idempotency_key, rollback)
+              select
+                {quote(version)}, null, {quote(logical_name)},
+                'chatgpt-production-tournament-activation', {quote(digest)}, null
+              where not exists (
+                select 1 from supabase_migrations.schema_migrations
+                where version = {quote(version)}
+              );
+              """
+              execute_sql(ledger_sql)
+              applied.append({"file": path.name, "result": result, "sha256": digest})
+
+          execute_sql("notify pgrst, 'reload schema';")
+          print(json.dumps({"applied_migrations": applied}, indent=2), flush=True)
+          PY
+          base64 -w0 "$RUNNER_TEMP/apply_tournament_migrations.py" > "$RUNNER_TEMP/apply_tournament_migrations.b64"
+
+      - name: Apply reviewed migrations through the production service credential
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_SSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          SCRIPT_B64="$(cat "$RUNNER_TEMP/apply_tournament_migrations.b64")"
+          flyctl ssh console \
+            --quiet \
+            --app "$FLY_APP_NAME" \
+            --command "echo '$SCRIPT_B64' | base64 -d | python -"
+
+      - name: Mark migrations successful
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status-success.json"
+          import json, os
+          print(json.dumps({
+            "state": "success",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Tournament-only production migrations applied",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-success.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Mark migrations failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status-failure.json"
+          import json, os
+          print(json.dumps({
+            "state": "failure",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Tournament-only production migration failed",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-failure.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
