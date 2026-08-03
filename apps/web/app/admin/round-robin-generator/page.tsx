@@ -35,7 +35,7 @@ export default async function RoundRobinGeneratorPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Round-Robin Generator</h1>
       <p style={{ color: "#334155", maxWidth: "900px" }}>
-        Build singles or doubles schedules, preview every planned matchup and bye, print the schedule, then run one round at a time.
+        Build singles, doubles, or mixed doubles-and-singles schedules; preview every planned matchup and bye, print the schedule, then run one round at a time.
       </p>
       <GeneratorWorkspace
         generatorKind="round_robin"

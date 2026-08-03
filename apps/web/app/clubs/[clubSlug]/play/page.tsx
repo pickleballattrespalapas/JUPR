@@ -26,7 +26,7 @@ export default function PublicPlayHub({ params }: Props) {
         <Link href={`${base}/round-robin-generator`} style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Round-Robin Generator</h2>
           <p style={{ color: "#475569" }}>
-            Singles or doubles. Preview every planned round and bye, export the schedule, then score one round at a time.
+            Singles, doubles, or a balanced mix of both. Preview every planned round and bye, export the schedule, then run one round at a time.
           </p>
           <strong>Open Round-Robin Generator →</strong>
         </Link>

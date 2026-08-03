@@ -21,6 +21,39 @@ from uuid import uuid4
 
 STANDINGS_SORTS = {"wins", "points", "differential"}
 SCORING_MODES = {"scored", "unscored"}
+PLAY_FORMATS = {"singles", "doubles", "doubles_singles"}
+
+
+def normalize_play_format(value: Any) -> str:
+    play_format = str(value or "doubles").strip().lower().replace("-", "_").replace("+", "_")
+    aliases = {
+        "mixed": "doubles_singles",
+        "mixed_doubles_singles": "doubles_singles",
+        "doubles_singles_mix": "doubles_singles",
+        "singles_doubles": "doubles_singles",
+        "singles_doubles_mix": "doubles_singles",
+    }
+    play_format = aliases.get(play_format, play_format)
+    return play_format if play_format in PLAY_FORMATS else "doubles"
+
+
+def generator_match_play_format(match: dict[str, Any], default_format: str = "doubles") -> str:
+    """Return the actual singles/doubles format for one scheduled match.
+
+    New mixed-format sessions persist ``playFormat`` on every match. Side sizes
+    keep legacy sessions and imported payloads safe when that field is absent.
+    """
+    explicit = normalize_play_format(match.get("playFormat"))
+    if explicit in {"singles", "doubles"} and str(match.get("playFormat") or "").strip():
+        return explicit
+    side_a = [str(value) for value in match.get("sideA") or match.get("teamA") or []]
+    side_b = [str(value) for value in match.get("sideB") or match.get("teamB") or []]
+    if len(side_a) == len(side_b) == 1:
+        return "singles"
+    if len(side_a) == len(side_b) == 2:
+        return "doubles"
+    fallback = normalize_play_format(default_format)
+    return fallback if fallback in {"singles", "doubles"} else "doubles"
 
 
 def normalize_scoring_mode(value: Any) -> str:
@@ -92,8 +125,12 @@ def _blank_history(event: dict[str, Any]) -> dict[str, Any]:
     return {
         "games": {pid: 0 for pid in ids},
         "byes": {pid: 0 for pid in ids},
+        "singles_games": {pid: 0 for pid in ids},
+        "doubles_games": {pid: 0 for pid in ids},
         "partners": defaultdict(int),
         "opponents": defaultdict(int),
+        "singles_opponents": defaultdict(int),
+        "doubles_opponents": defaultdict(int),
         "exact_matches": defaultdict(int),
     }
 
@@ -108,12 +145,17 @@ def _round_matches(round_row: dict[str, Any]) -> list[dict[str, Any]]:
 def _apply_match_history(history: dict[str, Any], match: dict[str, Any], play_format: str) -> None:
     side_a = [str(x) for x in match.get("sideA") or match.get("teamA") or []]
     side_b = [str(x) for x in match.get("sideB") or match.get("teamB") or []]
+    actual_format = generator_match_play_format(match, play_format)
     for pid in side_a + side_b:
         history["games"][pid] = int(history["games"].get(pid, 0)) + 1
-    if play_format == "singles":
+        history[f"{actual_format}_games"][pid] = int(
+            history[f"{actual_format}_games"].get(pid, 0)
+        ) + 1
+    if actual_format == "singles":
         if len(side_a) == 1 and len(side_b) == 1:
             key = _pair_key(side_a[0], side_b[0])
             history["opponents"][key] += 1
+            history["singles_opponents"][key] += 1
             history["exact_matches"][key] += 1
         return
     if len(side_a) == 2:
@@ -122,13 +164,15 @@ def _apply_match_history(history: dict[str, Any], match: dict[str, Any], play_fo
         history["partners"][_pair_key(side_b[0], side_b[1])] += 1
     for left in side_a:
         for right in side_b:
-            history["opponents"][_pair_key(left, right)] += 1
+            key = _pair_key(left, right)
+            history["opponents"][key] += 1
+            history["doubles_opponents"][key] += 1
     if len(side_a) == 2 and len(side_b) == 2:
         history["exact_matches"][_exact_match_key(side_a, side_b)] += 1
 
 def history_before_round(event: dict[str, Any], round_number: int, *, include_preview: bool = False) -> dict[str, Any]:
     history = _blank_history(event)
-    play_format = str(event.get("playFormat") or "doubles")
+    play_format = normalize_play_format(event.get("playFormat"))
     for round_row in event.get("rounds") or []:
         number = int(round_row.get("number") or 0)
         if number >= round_number:
@@ -231,6 +275,8 @@ def _singles_round(
     history: dict[str, Any],
     roster_pos: dict[str, int],
     round_number: int,
+    court_offset: int = 0,
+    seed_salt: Any = 0,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     match_count = min(len(active_ids) // 2, max(1, int(court_count or 0)) if court_count else len(active_ids) // 2)
     slots = match_count * 2
@@ -241,15 +287,21 @@ def _singles_round(
         slots,
         history,
         roster_pos,
-        seed=_stable_seed("singles-subsets", round_number, *active_ids),
+        seed=_stable_seed("singles-subsets", seed_salt, round_number, *active_ids),
     )
     best_matches: list[tuple[str, str]] | None = None
     best_byes: list[str] = []
     best_cost = float("inf")
     for playing, byes in candidate_sets:
         def cost(a: str, b: str) -> float:
-            repeats = int(history["opponents"].get(_pair_key(a, b), 0))
-            return repeats * 10000.0 + abs(roster_pos.get(a, 0) - roster_pos.get(b, 0)) * -0.001
+            key = _pair_key(a, b)
+            singles_repeats = int(history["singles_opponents"].get(key, 0))
+            all_repeats = int(history["opponents"].get(key, 0))
+            return (
+                singles_repeats * 10000.0
+                + all_repeats * 100.0
+                + abs(roster_pos.get(a, 0) - roster_pos.get(b, 0)) * -0.001
+            )
         matching, cost_value = _find_matching_backtrack(tuple(playing), cost, max_nodes=60000)
         if matching is None:
             continue
@@ -268,14 +320,19 @@ def _singles_round(
         best_byes = [pid for pid in active_ids if pid not in set(playing)]
         best_matches = list(zip(playing[::2], playing[1::2]))
     warnings = []
-    repeated = sum(1 for a, b in best_matches if history["opponents"].get(_pair_key(a, b), 0))
+    repeated = sum(
+        1
+        for a, b in best_matches
+        if history["singles_opponents"].get(_pair_key(a, b), 0)
+    )
     if repeated:
         warnings.append(f"{repeated} singles matchup repeat(s) were unavoidable.")
     matches = [
         {
-            "id": f"r{round_number}-c{court_number}",
+            "id": f"r{round_number}-c{court_number + court_offset}",
             "round": int(round_number),
-            "court": int(court_number),
+            "court": int(court_number + court_offset),
+            "playFormat": "singles",
             "sideA": [a],
             "sideB": [b],
             "teamA": [a],
@@ -295,6 +352,8 @@ def _doubles_round(
     history: dict[str, Any],
     roster_pos: dict[str, int],
     round_number: int,
+    court_offset: int = 0,
+    seed_salt: Any = 0,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     match_count = min(len(active_ids) // 4, max(1, int(court_count or 0)) if court_count else len(active_ids) // 4)
     slots = match_count * 4
@@ -305,7 +364,7 @@ def _doubles_round(
         slots,
         history,
         roster_pos,
-        seed=_stable_seed("doubles-subsets", round_number, *active_ids),
+        seed=_stable_seed("doubles-subsets", seed_salt, round_number, *active_ids),
         attempts=16,
     )
     best = None
@@ -314,7 +373,7 @@ def _doubles_round(
     for set_index,(playing,byes) in enumerate(candidate_sets):
         attempts=max(48,len(playing)*8)
         for attempt in range(attempts):
-            rng=random.Random(_stable_seed("doubles",round_number,set_index,attempt,*playing))
+            rng=random.Random(_stable_seed("doubles",seed_salt,round_number,set_index,attempt,*playing))
             remaining=playing[:]; rng.shuffle(remaining)
             teams=[]; partner_cost=0.0
             while remaining:
@@ -335,8 +394,9 @@ def _doubles_round(
                 choices=[]
                 for idx,tb in enumerate(team_queue):
                     exact=int(history["exact_matches"].get(_exact_match_key(list(ta),list(tb)),0))
-                    opp=sum(int(history["opponents"].get(_pair_key(x,y),0)) for x in ta for y in tb)
-                    value=exact*200000.0+opp*200.0+rng.random()*0.0001
+                    doubles_opp=sum(int(history["doubles_opponents"].get(_pair_key(x,y),0)) for x in ta for y in tb)
+                    all_opp=sum(int(history["opponents"].get(_pair_key(x,y),0)) for x in ta for y in tb)
+                    value=exact*200000.0+doubles_opp*1000.0+all_opp*100.0+rng.random()*0.0001
                     choices.append((value,idx,tb))
                 value,idx,tb=min(choices)
                 team_queue.pop(idx)
@@ -355,12 +415,377 @@ def _doubles_round(
     if partner_repeats: warnings.append(f"{partner_repeats} repeated partner pairing(s) were unavoidable.")
     if exact_repeats: warnings.append(f"{exact_repeats} repeated exact matchup(s) were unavoidable.")
     matches=[{
-        "id":f"r{round_number}-c{court}",
-        "round":round_number,"court":court,
+        "id":f"r{round_number}-c{court + court_offset}",
+        "round":round_number,"court":court + court_offset,"playFormat":"doubles",
         "sideA":list(ta),"sideB":list(tb),"teamA":list(ta),"teamB":list(tb),
         "scoreA":None,"scoreB":None,"status":"scheduled"
     } for court,(ta,tb) in enumerate(best,1)]
     return matches,best_byes,warnings
+
+
+def _count_spread(
+    history: dict[str, Any],
+    key: str,
+    active_ids: list[str],
+    increment_ids: set[str],
+) -> tuple[int, int, int]:
+    values = [
+        int(history[key].get(pid, 0)) + int(pid in increment_ids)
+        for pid in active_ids
+    ]
+    if not values:
+        return (0, 0, 0)
+    return (max(values) - min(values), sum(value * value for value in values), max(values))
+
+
+def _candidate_singles_groups(
+    playing: list[str],
+    singles_slots: int,
+    history: dict[str, Any],
+    roster_pos: dict[str, int],
+    *,
+    seed: int,
+    attempts: int = 14,
+) -> list[list[str]]:
+    if singles_slots <= 0:
+        return [[]]
+    if singles_slots >= len(playing):
+        return [sorted(playing, key=lambda pid: roster_pos.get(pid, 9999))]
+
+    def role_priority(pid: str) -> tuple[Any, ...]:
+        return (
+            int(history["singles_games"].get(pid, 0)),
+            -int(history["doubles_games"].get(pid, 0)),
+            int(history["games"].get(pid, 0)),
+            int(roster_pos.get(pid, 9999)),
+            str(pid),
+        )
+
+    ordered = sorted(playing, key=role_priority)
+    seen: set[tuple[str, ...]] = set()
+    groups: list[list[str]] = []
+
+    def add(values: list[str]) -> None:
+        group = sorted(values[:singles_slots], key=lambda pid: roster_pos.get(pid, 9999))
+        key = tuple(sorted(group))
+        if len(group) == singles_slots and key not in seen:
+            seen.add(key)
+            groups.append(group)
+
+    add(ordered)
+
+    baseline = ordered[:singles_slots]
+    outside = ordered[singles_slots:]
+    # Single swaps provide relationship diversity without sacrificing the role
+    # debt ordering that keeps singles and doubles counts balanced.
+    for outgoing in reversed(baseline):
+        for incoming in outside:
+            add([pid for pid in baseline if pid != outgoing] + [incoming])
+            if len(groups) >= attempts:
+                return groups
+
+    rng = random.Random(seed)
+    maximum_groups = min(attempts, math.comb(len(playing), singles_slots))
+    for _ in range(maximum_groups * 6):
+        if len(groups) >= maximum_groups:
+            break
+        ranked = sorted(
+            playing,
+            key=lambda pid: (
+                int(history["singles_games"].get(pid, 0)),
+                -int(history["doubles_games"].get(pid, 0)),
+                rng.random(),
+                int(roster_pos.get(pid, 9999)),
+            ),
+        )
+        add(ranked)
+    return groups
+
+
+def _greedy_singles_metrics(
+    player_ids: list[str],
+    history: dict[str, Any],
+    roster_pos: dict[str, int],
+) -> tuple[int, int, int]:
+    remaining = list(player_ids)
+    repeated_pairs = 0
+    singles_repeat_sum = 0
+    all_repeat_sum = 0
+    while remaining:
+        chosen = min(
+            remaining,
+            key=lambda pid: (
+                sum(
+                    1
+                    for other in remaining
+                    if other != pid
+                    and int(history["singles_opponents"].get(_pair_key(pid, other), 0)) == 0
+                ),
+                int(roster_pos.get(pid, 9999)),
+                str(pid),
+            ),
+        )
+        remaining.remove(chosen)
+        other = min(
+            remaining,
+            key=lambda pid: (
+                int(history["singles_opponents"].get(_pair_key(chosen, pid), 0)),
+                int(history["opponents"].get(_pair_key(chosen, pid), 0)),
+                int(roster_pos.get(pid, 9999)),
+                str(pid),
+            ),
+        )
+        remaining.remove(other)
+        key = _pair_key(chosen, other)
+        singles_repeats = int(history["singles_opponents"].get(key, 0))
+        repeated_pairs += int(singles_repeats > 0)
+        singles_repeat_sum += singles_repeats
+        all_repeat_sum += int(history["opponents"].get(key, 0))
+    return repeated_pairs, singles_repeat_sum, all_repeat_sum
+
+
+def _greedy_doubles_metrics(
+    player_ids: list[str],
+    history: dict[str, Any],
+    roster_pos: dict[str, int],
+) -> tuple[int, int, int, int, int, int]:
+    remaining = list(player_ids)
+    teams: list[tuple[str, str]] = []
+    repeated_partners = 0
+    partner_repeat_sum = 0
+    while remaining:
+        chosen = min(
+            remaining,
+            key=lambda pid: (
+                sum(
+                    1
+                    for other in remaining
+                    if other != pid
+                    and int(history["partners"].get(_pair_key(pid, other), 0)) == 0
+                ),
+                int(roster_pos.get(pid, 9999)),
+                str(pid),
+            ),
+        )
+        remaining.remove(chosen)
+        other = min(
+            remaining,
+            key=lambda pid: (
+                int(history["partners"].get(_pair_key(chosen, pid), 0)),
+                int(roster_pos.get(pid, 9999)),
+                str(pid),
+            ),
+        )
+        remaining.remove(other)
+        key = _pair_key(chosen, other)
+        repeats = int(history["partners"].get(key, 0))
+        repeated_partners += int(repeats > 0)
+        partner_repeat_sum += repeats
+        teams.append(tuple(sorted((chosen, other))))
+
+    repeated_exact = 0
+    exact_repeat_sum = 0
+    doubles_opponent_sum = 0
+    all_opponent_sum = 0
+    while teams:
+        team_a = teams.pop(0)
+        idx, team_b = min(
+            enumerate(teams),
+            key=lambda item: (
+                int(history["exact_matches"].get(_exact_match_key(list(team_a), list(item[1])), 0)),
+                sum(
+                    int(history["doubles_opponents"].get(_pair_key(left, right), 0))
+                    for left in team_a
+                    for right in item[1]
+                ),
+                sum(
+                    int(history["opponents"].get(_pair_key(left, right), 0))
+                    for left in team_a
+                    for right in item[1]
+                ),
+                item[1],
+            ),
+        )
+        teams.pop(idx)
+        exact = int(history["exact_matches"].get(_exact_match_key(list(team_a), list(team_b)), 0))
+        repeated_exact += int(exact > 0)
+        exact_repeat_sum += exact
+        doubles_opponent_sum += sum(
+            int(history["doubles_opponents"].get(_pair_key(left, right), 0))
+            for left in team_a
+            for right in team_b
+        )
+        all_opponent_sum += sum(
+            int(history["opponents"].get(_pair_key(left, right), 0))
+            for left in team_a
+            for right in team_b
+        )
+    return (
+        repeated_partners,
+        partner_repeat_sum,
+        repeated_exact,
+        exact_repeat_sum,
+        doubles_opponent_sum,
+        all_opponent_sum,
+    )
+
+
+def _effective_mixed_court_counts(
+    active_count: int,
+    desired_doubles: int,
+    desired_singles: int,
+) -> tuple[int, int]:
+    candidates: list[tuple[int, int]] = []
+    for doubles_count in range(max(0, desired_doubles) + 1):
+        for singles_count in range(max(0, desired_singles) + 1):
+            if doubles_count == 0 and singles_count == 0:
+                continue
+            slots = doubles_count * 4 + singles_count * 2
+            if slots <= active_count:
+                candidates.append((doubles_count, singles_count))
+    if not candidates:
+        return (0, 0)
+    both = [value for value in candidates if value[0] > 0 and value[1] > 0]
+    eligible = both if active_count >= 6 and both else candidates
+    return max(
+        eligible,
+        key=lambda value: (
+            value[0] * 4 + value[1] * 2,
+            -abs(desired_doubles - value[0]) - abs(desired_singles - value[1]),
+            int(value[0] > 0 and value[1] > 0),
+            value[0] + value[1],
+            value[0],
+        ),
+    )
+
+
+def _mixed_round(
+    *,
+    active_ids: list[str],
+    doubles_court_count: int,
+    singles_court_count: int,
+    history: dict[str, Any],
+    roster_pos: dict[str, int],
+    round_number: int,
+    seed_salt: Any = 0,
+) -> tuple[list[dict[str, Any]], list[str], list[str], dict[str, int]]:
+    desired_doubles = max(0, int(doubles_court_count or 0))
+    desired_singles = max(0, int(singles_court_count or 0))
+    actual_doubles, actual_singles = _effective_mixed_court_counts(
+        len(active_ids), desired_doubles, desired_singles
+    )
+    slots = actual_doubles * 4 + actual_singles * 2
+    warnings: list[str] = []
+    if (actual_doubles, actual_singles) != (desired_doubles, desired_singles):
+        warnings.append(
+            "The active roster supports "
+            f"{actual_doubles} doubles and {actual_singles} singles court(s) this round; "
+            f"the configured mix is {desired_doubles} doubles and {desired_singles} singles."
+        )
+    if actual_doubles == 0 or actual_singles == 0:
+        warnings.append(
+            "Both formats could not run this round because the active roster is too small for the configured mix."
+        )
+    if slots < 2:
+        return [], list(active_ids), [*warnings, "At least two active players are required."], {
+            "doubles": actual_doubles,
+            "singles": actual_singles,
+        }
+
+    candidate_sets = _candidate_playing_sets(
+        active_ids,
+        slots,
+        history,
+        roster_pos,
+        seed=_stable_seed("mixed-playing", seed_salt, round_number, *active_ids),
+        attempts=10,
+    )
+    singles_slots = actual_singles * 2
+    best: tuple[list[str], list[str], list[str]] | None = None
+    best_score: tuple[Any, ...] | None = None
+    for set_index, (playing, byes) in enumerate(candidate_sets):
+        role_groups = _candidate_singles_groups(
+            playing,
+            singles_slots,
+            history,
+            roster_pos,
+            seed=_stable_seed("mixed-roles", seed_salt, round_number, set_index, *playing),
+        )
+        for singles_ids in role_groups:
+            singles_set = set(singles_ids)
+            doubles_ids = [pid for pid in playing if pid not in singles_set]
+            doubles_set = set(doubles_ids)
+            playing_set = set(playing)
+            bye_set = set(byes)
+            game_spread = _count_spread(history, "games", active_ids, playing_set)
+            bye_spread = _count_spread(history, "byes", active_ids, bye_set)
+            singles_spread = _count_spread(history, "singles_games", active_ids, singles_set)
+            doubles_spread = _count_spread(history, "doubles_games", active_ids, doubles_set)
+            singles_metrics = _greedy_singles_metrics(singles_ids, history, roster_pos)
+            doubles_metrics = _greedy_doubles_metrics(doubles_ids, history, roster_pos)
+            score = (
+                game_spread[0],
+                bye_spread[0],
+                singles_spread[0],
+                doubles_spread[0],
+                game_spread[1],
+                bye_spread[1],
+                singles_spread[1],
+                doubles_spread[1],
+                singles_metrics[0],
+                doubles_metrics[0],
+                doubles_metrics[2],
+                singles_metrics[1],
+                doubles_metrics[1],
+                doubles_metrics[3],
+                doubles_metrics[4],
+                singles_metrics[2] + doubles_metrics[5],
+                tuple(sorted(singles_ids)),
+                tuple(sorted(byes)),
+            )
+            if best_score is None or score < best_score:
+                best_score = score
+                best = (singles_ids, doubles_ids, byes)
+
+    if best is None:
+        playing = sorted(active_ids, key=lambda pid: _selection_priority(pid, history, roster_pos))[:slots]
+        singles_ids = playing[:singles_slots]
+        doubles_ids = playing[singles_slots:]
+        byes = [pid for pid in active_ids if pid not in set(playing)]
+    else:
+        singles_ids, doubles_ids, byes = best
+
+    doubles_matches: list[dict[str, Any]] = []
+    singles_matches: list[dict[str, Any]] = []
+    if actual_doubles:
+        doubles_matches, _doubles_byes, doubles_warnings = _doubles_round(
+            active_ids=doubles_ids,
+            court_count=actual_doubles,
+            history=history,
+            roster_pos=roster_pos,
+            round_number=round_number,
+            seed_salt=seed_salt,
+        )
+        warnings.extend(doubles_warnings)
+    if actual_singles:
+        singles_matches, _singles_byes, singles_warnings = _singles_round(
+            active_ids=singles_ids,
+            court_count=actual_singles,
+            history=history,
+            roster_pos=roster_pos,
+            round_number=round_number,
+            court_offset=actual_doubles,
+            seed_salt=seed_salt,
+        )
+        warnings.extend(singles_warnings)
+    matches = sorted(
+        [*doubles_matches, *singles_matches],
+        key=lambda match: (int(match.get("court") or 0), str(match.get("id") or "")),
+    )
+    return matches, sorted(byes, key=lambda pid: roster_pos.get(pid, 9999)), warnings, {
+        "doubles": actual_doubles,
+        "singles": actual_singles,
+    }
 
 def _update_history_for_generated_round(history: dict[str, Any], round_row: dict[str, Any], play_format: str) -> None:
     for pid in round_row.get("byeParticipantIds") or []:
@@ -378,7 +803,7 @@ def _generate_round_robin_round(
         str(row["id"]): int(row.get("roster_order") or 0)
         for row in event.get("participants") or []
     }
-    play_format = str(event.get("playFormat") or "doubles")
+    play_format = normalize_play_format(event.get("playFormat"))
     if play_format == "singles":
         matches, byes, warnings = _singles_round(
             active_ids=active_ids,
@@ -386,6 +811,17 @@ def _generate_round_robin_round(
             history=history,
             roster_pos=roster_pos,
             round_number=round_number,
+        )
+        format_counts = {"doubles": 0, "singles": len(matches)}
+    elif play_format == "doubles_singles":
+        matches, byes, warnings, format_counts = _mixed_round(
+            active_ids=active_ids,
+            doubles_court_count=int(event.get("doublesCourtCount") or 0),
+            singles_court_count=int(event.get("singlesCourtCount") or 0),
+            history=history,
+            roster_pos=roster_pos,
+            round_number=round_number,
+            seed_salt=event.get("mixedScheduleSeed") or 0,
         )
     else:
         matches, byes, warnings = _doubles_round(
@@ -395,12 +831,14 @@ def _generate_round_robin_round(
             roster_pos=roster_pos,
             round_number=round_number,
         )
+        format_counts = {"doubles": len(matches), "singles": 0}
     return {
         "number": int(round_number),
         "status": "preview",
         "matches": matches,
         "byeParticipantIds": [str(pid) for pid in byes],
         "warnings": warnings,
+        "formatCounts": format_counts,
         "savedAt": None,
         "skippedAt": None,
     }
@@ -469,6 +907,7 @@ def _circle_singles_matches(ids: list[str], *, round_number: int, court_number: 
                 "id": f"r{round_number}-c{court_number}-m{slot}",
                 "round": int(round_number),
                 "court": int(court_number),
+                "playFormat": "singles",
                 "miniRound": int(mini),
                 "sideA": [a],
                 "sideB": [b],
@@ -565,6 +1004,95 @@ def _create_ladder_round(event: dict[str, Any], round_number: int, ordered_ids: 
         "skippedAt": None,
     }
 
+
+def _mixed_schedule_score(event: dict[str, Any], history: dict[str, Any]) -> tuple[Any, ...]:
+    participant_ids = [str(row.get("id")) for row in event.get("participants") or [] if row.get("id")]
+
+    def spread(key: str) -> tuple[int, int]:
+        values = [int(history[key].get(pid, 0)) for pid in participant_ids]
+        return (
+            (max(values) - min(values)) if values else 0,
+            sum(value * value for value in values),
+        )
+
+    partner_excess = sum(max(0, int(value) - 1) for value in history["partners"].values())
+    singles_excess = sum(max(0, int(value) - 1) for value in history["singles_opponents"].values())
+    exact_excess = sum(max(0, int(value) - 1) for value in history["exact_matches"].values())
+    doubles_opponent_excess = sum(
+        max(0, int(value) - 1) for value in history["doubles_opponents"].values()
+    )
+    all_opponent_excess = sum(max(0, int(value) - 1) for value in history["opponents"].values())
+    games = spread("games")
+    byes = spread("byes")
+    singles = spread("singles_games")
+    doubles = spread("doubles_games")
+    return (
+        games[0],
+        byes[0],
+        singles[0],
+        doubles[0],
+        partner_excess + singles_excess,
+        partner_excess,
+        singles_excess,
+        exact_excess,
+        doubles_opponent_excess,
+        all_opponent_excess,
+        games[1],
+        byes[1],
+        singles[1],
+        doubles[1],
+    )
+
+
+def _generate_round_robin_schedule(event: dict[str, Any]) -> list[dict[str, Any]]:
+    play_format = normalize_play_format(event.get("playFormat"))
+    if play_format != "doubles_singles":
+        history = _blank_history(event)
+        rounds: list[dict[str, Any]] = []
+        for round_number in range(1, int(event.get("totalRounds") or 1) + 1):
+            round_row = _generate_round_robin_round(event, round_number, history)
+            rounds.append(round_row)
+            _update_history_for_generated_round(history, round_row, play_format)
+        return rounds
+
+    # Mixed schedules have more degrees of freedom than a single-format round
+    # robin. Evaluate several deterministic whole-schedule candidates so an
+    # early locally-good role assignment does not force avoidable repeats late.
+    best_rounds: list[dict[str, Any]] | None = None
+    best_score: tuple[Any, ...] | None = None
+    best_seed = 0
+    participant_count = len(event.get("participants") or [])
+    round_count = int(event.get("totalRounds") or 1)
+    schedule_work = participant_count * round_count
+    candidate_count = (
+        12
+        if schedule_work < 500
+        else 6
+        if schedule_work < 1000
+        else 2
+        if schedule_work < 1600
+        else 1
+    )
+    for seed in range(candidate_count):
+        candidate_event = copy.deepcopy(event)
+        candidate_event["mixedScheduleSeed"] = seed
+        history = _blank_history(candidate_event)
+        rounds = []
+        for round_number in range(1, int(candidate_event.get("totalRounds") or 1) + 1):
+            round_row = _generate_round_robin_round(candidate_event, round_number, history)
+            rounds.append(round_row)
+            _update_history_for_generated_round(history, round_row, play_format)
+        score = (*_mixed_schedule_score(candidate_event, history), seed)
+        if best_score is None or score < best_score:
+            best_score = score
+            best_rounds = rounds
+            best_seed = seed
+            if score[:10] == (0, 0, 0, 0, 0, 0, 0, 0, 0, 0):
+                break
+    event["mixedScheduleSeed"] = best_seed
+    return best_rounds or []
+
+
 def create_generator_preview(
     *,
     generator_kind: str,
@@ -574,15 +1102,28 @@ def create_generator_preview(
     player_ids: list[int] | None = None,
     total_rounds: int = 3,
     court_count: int = 0,
+    doubles_court_count: int = 0,
+    singles_court_count: int = 0,
     standings_sort: str = "wins",
     scoring_mode: str = "scored",
 ) -> dict[str, Any]:
     kind = str(generator_kind or "").strip().lower().replace("-", "_")
     if kind not in {"round_robin", "ladder"}:
         raise ValueError("generator_kind must be round_robin or ladder")
-    fmt = str(play_format or "").strip().lower()
-    if fmt not in {"singles", "doubles"}:
-        raise ValueError("play_format must be singles or doubles")
+    raw_format = str(play_format or "").strip().lower().replace("-", "_").replace("+", "_")
+    format_aliases = {
+        "mixed": "doubles_singles",
+        "mixed_doubles_singles": "doubles_singles",
+        "doubles_singles_mix": "doubles_singles",
+        "singles_doubles": "doubles_singles",
+        "singles_doubles_mix": "doubles_singles",
+    }
+    raw_format = format_aliases.get(raw_format, raw_format)
+    if raw_format not in PLAY_FORMATS:
+        raise ValueError("play_format must be singles, doubles, or doubles_singles")
+    fmt = raw_format
+    if fmt == "doubles_singles" and kind != "round_robin":
+        raise ValueError("Doubles + Singles Mix is available only for Round-Robin Generator sessions.")
     scoring = normalize_scoring_mode(scoring_mode)
     if kind == "ladder" and scoring != "scored":
         raise ValueError("Ladder Generator requires scored rounds because later rounds depend on results.")
@@ -595,9 +1136,14 @@ def create_generator_preview(
             continue
         seen.add(key)
         unique_names.append(name)
-    minimum = 2 if fmt == "singles" else 4
+    minimum = 2 if fmt == "singles" else 6 if fmt == "doubles_singles" else 4
+    format_label = (
+        "Doubles + Singles Mix"
+        if fmt == "doubles_singles"
+        else fmt.title()
+    )
     if len(unique_names) < minimum:
-        raise ValueError(f"{fmt.title()} requires at least {minimum} players.")
+        raise ValueError(f"{format_label} requires at least {minimum} players.")
     if len(unique_names) > 40:
         raise ValueError("Generators support at most 40 players.")
     ids = [int(x) for x in (player_ids or [])]
@@ -617,8 +1163,25 @@ def create_generator_preview(
         if ids:
             row["player_id"] = ids[idx-1]
         participants.append(row)
+    mixed_doubles = max(0, min(int(doubles_court_count or 0), 20))
+    mixed_singles = max(0, min(int(singles_court_count or 0), 20))
+    if fmt == "doubles_singles":
+        if mixed_doubles < 1 or mixed_singles < 1:
+            raise ValueError("Choose at least one doubles court and one singles court.")
+        if mixed_doubles + mixed_singles > 20:
+            raise ValueError("The combined doubles and singles court count cannot exceed 20.")
+        required_players = mixed_doubles * 4 + mixed_singles * 2
+        if required_players > len(unique_names):
+            raise ValueError(
+                f"This court mix requires {required_players} players, but the roster has {len(unique_names)}."
+            )
+        resolved_court_count = mixed_doubles + mixed_singles
+    else:
+        mixed_doubles = 0
+        mixed_singles = 0
+        resolved_court_count = max(0, min(int(court_count or 0), 20))
     event = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "sourceEventUid": f"generator-{uuid4().hex}",
         "name": _clean_name(title) or ("Round-Robin Generator" if kind == "round_robin" else "Ladder Generator"),
         "type": "round_robin" if kind == "round_robin" else "league",
@@ -629,7 +1192,9 @@ def create_generator_preview(
         "status": "preview",
         "participants": participants,
         "totalRounds": max(1, min(int(total_rounds or 1), 50)),
-        "courtCount": max(0, min(int(court_count or 0), 20)),
+        "courtCount": resolved_court_count,
+        "doublesCourtCount": mixed_doubles,
+        "singlesCourtCount": mixed_singles,
         "currentRoundNumber": 1,
         "rounds": [],
         "rosterRevisions": [],
@@ -637,11 +1202,7 @@ def create_generator_preview(
         "createdAt": _now_iso(),
     }
     if kind == "round_robin":
-        history = _blank_history(event)
-        for round_number in range(1, event["totalRounds"] + 1):
-            round_row = _generate_round_robin_round(event, round_number, history)
-            event["rounds"].append(round_row)
-            _update_history_for_generated_round(history, round_row, fmt)
+        event["rounds"] = _generate_round_robin_schedule(event)
     else:
         ordered_ids = active_participant_ids(event, 1)
         event["rounds"] = [_create_ladder_round(event, 1, ordered_ids)]
@@ -654,6 +1215,8 @@ def create_generator_preview(
                 "ids": ids,
                 "rounds": event["totalRounds"],
                 "courts": event["courtCount"],
+                "doubles_courts": event["doublesCourtCount"],
+                "singles_courts": event["singlesCourtCount"],
                 "standings_sort": event["standingsSort"],
                 "scoring_mode": event["scoringMode"],
                 "schedule": event["rounds"],
@@ -1113,6 +1676,10 @@ def schedule_export_rows(event: dict[str, Any]) -> list[dict[str, Any]]:
             rows.append({
                 "round": int(round_row.get("number") or 0),
                 "court": int(match.get("court") or 0),
+                "play_format": generator_match_play_format(
+                    match,
+                    str(event.get("playFormat") or "doubles"),
+                ),
                 "mini_round": int(match.get("miniRound") or 0) or None,
                 "side_a": side_a,
                 "score_a": "",
@@ -1125,6 +1692,7 @@ def schedule_export_rows(event: dict[str, Any]) -> list[dict[str, Any]]:
             rows.append({
                 "round": int(round_row.get("number") or 0),
                 "court": None,
+                "play_format": None,
                 "mini_round": None,
                 "side_a": "",
                 "score_a": "",

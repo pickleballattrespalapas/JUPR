@@ -35,7 +35,7 @@ from jupr_app.services.public_live_operation_service import (
 
 PUBLIC_GENERATOR_MODE = "public_play_generator"
 GENERATOR_KINDS = {"round_robin", "ladder"}
-PLAY_FORMATS = {"singles", "doubles"}
+PLAY_FORMATS = {"singles", "doubles", "doubles_singles"}
 
 
 class PublicPlayGeneratorError(ValueError):
@@ -81,9 +81,15 @@ def _normalize_kind(value: Any) -> str:
 
 
 def _normalize_format(value: Any) -> str:
-    play_format = str(value or "").strip().lower()
+    play_format = str(value or "").strip().lower().replace("-", "_").replace("+", "_")
+    play_format = {
+        "mixed": "doubles_singles",
+        "mixed_doubles_singles": "doubles_singles",
+        "doubles_singles_mix": "doubles_singles",
+        "singles_doubles": "doubles_singles",
+    }.get(play_format, play_format)
     if play_format not in PLAY_FORMATS:
-        raise PublicPlayGeneratorError("Choose Singles or Doubles.")
+        raise PublicPlayGeneratorError("Choose Singles, Doubles, or Doubles + Singles Mix.")
     return play_format
 
 
@@ -211,6 +217,8 @@ def public_play_generator_session_payload(row: dict[str, Any]) -> dict[str, Any]
         "play_format": str(event.get("playFormat") or state.get("play_format") or ""),
         "current_round_number": int(event.get("currentRoundNumber") or 1) if event else None,
         "total_rounds": int(event.get("totalRounds") or 0) if event else None,
+        "doubles_court_count": int(event.get("doublesCourtCount") or 0) if event else 0,
+        "singles_court_count": int(event.get("singlesCourtCount") or 0) if event else 0,
         "event": event,
         "schedule_rows": schedule_export_rows(event) if event else [],
         "scoring_mode": str(event.get("scoringMode") or "scored") if event else "scored",
@@ -266,6 +274,8 @@ def preview_public_play_generator(
     participant_player_ids: dict[str, int] | None,
     total_rounds: int,
     court_count: int,
+    doubles_court_count: int = 0,
+    singles_court_count: int = 0,
     standings_sort: str = "wins",
     scoring_mode: str = "scored",
 ) -> dict[str, Any]:
@@ -287,6 +297,8 @@ def preview_public_play_generator(
             player_ids=ids,
             total_rounds=max(1, min(int(total_rounds or 1), 50)),
             court_count=max(0, min(int(court_count or 0), 20)),
+            doubles_court_count=max(0, min(int(doubles_court_count or 0), 20)),
+            singles_court_count=max(0, min(int(singles_court_count or 0), 20)),
             standings_sort=standings_sort,
             scoring_mode=scoring_mode,
         )
@@ -321,6 +333,8 @@ def create_public_play_generator_session(
     participant_player_ids: dict[str, int] | None,
     total_rounds: int,
     court_count: int,
+    doubles_court_count: int = 0,
+    singles_court_count: int = 0,
     preview_fingerprint: str | None,
     idempotency_key: str,
     requester_hash: str,
@@ -338,6 +352,8 @@ def create_public_play_generator_session(
         participant_player_ids=participant_player_ids,
         total_rounds=total_rounds,
         court_count=court_count,
+        doubles_court_count=doubles_court_count,
+        singles_court_count=singles_court_count,
         standings_sort=standings_sort,
         scoring_mode=scoring_mode,
     )
@@ -352,6 +368,8 @@ def create_public_play_generator_session(
         "participant_player_ids": participant_player_ids or {},
         "total_rounds": int(preview.get("totalRounds") or 1),
         "court_sizes": [int(preview.get("courtCount") or 0)],
+        "doubles_court_count": int(preview.get("doublesCourtCount") or 0),
+        "singles_court_count": int(preview.get("singlesCourtCount") or 0),
         "standings_sort": str(preview.get("standingsSort") or "wins"),
         "scoring_mode": str(preview.get("scoringMode") or "scored"),
         "live_mode": "quick",

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import GeneratorRosterSetup, { normalizeRosterName, recommendedGeneratorSetup, rosterNamesFromText } from "@/components/GeneratorRosterSetup";
+import GeneratorRosterSetup, { normalizeRosterName, recommendedGeneratorSetup, recommendedMixedCourtSetup, rosterNamesFromText } from "@/components/GeneratorRosterSetup";
 import {
   clearPlayGeneratorDraft,
   closePreparedPdfWindow,
@@ -14,7 +14,7 @@ import {
 } from "@/lib/playGeneratorDraft";
 
 type GeneratorKind = "round_robin" | "ladder";
-type PlayFormat = "singles" | "doubles";
+type PlayFormat = "singles" | "doubles" | "doubles_singles";
 type StandingsSort = "wins" | "points" | "differential";
 type ScoringMode = "scored" | "unscored";
 
@@ -36,6 +36,7 @@ type MatchRow = {
   teamB?: string[];
   scoreA?: number | null;
   scoreB?: number | null;
+  playFormat?: "singles" | "doubles";
 };
 
 type RoundRow = {
@@ -49,6 +50,7 @@ type RoundRow = {
   }>;
   byeParticipantIds?: string[];
   warnings?: string[];
+  formatCounts?: { doubles?: number; singles?: number };
 };
 
 type PreviewEvent = {
@@ -59,6 +61,8 @@ type PreviewEvent = {
   scoringMode?: ScoringMode;
   totalRounds: number;
   courtCount: number;
+  doublesCourtCount: number;
+  singlesCourtCount: number;
   previewFingerprint: string;
   participants: Participant[];
   rounds: RoundRow[];
@@ -80,6 +84,8 @@ type GeneratorSession = {
   scoring_mode?: ScoringMode;
   current_round_number?: number | null;
   total_rounds?: number | null;
+  doubles_court_count?: number;
+  singles_court_count?: number;
   updated_at?: string | null;
 };
 
@@ -154,6 +160,20 @@ function generatorTitle(kind: GeneratorKind): string {
   return kind === "round_robin" ? "Round-Robin Generator" : "Ladder Generator";
 }
 
+function playFormatLabel(playFormat: PlayFormat | string): string {
+  if (playFormat === "singles") return "Singles";
+  if (playFormat === "doubles_singles") return "Doubles + Singles Mix";
+  return "Doubles";
+}
+
+function matchFormatLabel(match: MatchRow, eventFormat: PlayFormat): string {
+  if (match.playFormat === "singles" || match.playFormat === "doubles") {
+    return playFormatLabel(match.playFormat);
+  }
+  const sideSize = (match.sideA || match.teamA || []).length;
+  return playFormatLabel(sideSize === 1 ? "singles" : eventFormat === "doubles_singles" ? "doubles" : eventFormat);
+}
+
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
 }
@@ -222,6 +242,9 @@ export default function GeneratorWorkspace({
   const [standingsSort, setStandingsSort] = useState<StandingsSort>("wins");
   const [scoringMode, setScoringMode] = useState<ScoringMode>("scored");
   const [targetCount, setTargetCount] = useState(8);
+  const initialMixedSetup = recommendedMixedCourtSetup(8);
+  const [doublesCourtCount, setDoublesCourtCount] = useState(initialMixedSetup.doublesCourtCount);
+  const [singlesCourtCount, setSinglesCourtCount] = useState(initialMixedSetup.singlesCourtCount);
   const [participantText, setParticipantText] = useState("");
   const [linkedPlayerIds, setLinkedPlayerIds] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<PreviewEvent | null>(null);
@@ -240,10 +263,15 @@ export default function GeneratorWorkspace({
     [participantText]
   );
   const automaticSetup = useMemo(
-    () => recommendedGeneratorSetup(generatorKind, playFormat, targetCount),
-    [generatorKind, playFormat, targetCount]
+    () => recommendedGeneratorSetup(generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount),
+    [generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount]
   );
   const rosterReady = participantNames.length === targetCount;
+  const mixedSetupValid = playFormat !== "doubles_singles" || (
+    doublesCourtCount >= 1 &&
+    singlesCourtCount >= 1 &&
+    doublesCourtCount * 4 + singlesCourtCount * 2 <= targetCount
+  );
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("Missing API base URL.");
@@ -282,6 +310,9 @@ export default function GeneratorWorkspace({
       setStandingsSort(stored.standingsSort || "wins");
       setScoringMode(generatorKind === "round_robin" ? stored.scoringMode || "scored" : "scored");
       setTargetCount(stored.targetCount);
+      const mixedSetup = recommendedMixedCourtSetup(stored.targetCount);
+      setDoublesCourtCount(stored.doublesCourtCount || mixedSetup.doublesCourtCount);
+      setSinglesCourtCount(stored.singlesCourtCount || mixedSetup.singlesCourtCount);
       setParticipantText(stored.participantText);
       setLinkedPlayerIds(stored.linkedPlayerIds);
       setPreview(stored.preview);
@@ -300,6 +331,8 @@ export default function GeneratorWorkspace({
       standingsSort,
       scoringMode,
       targetCount,
+      doublesCourtCount,
+      singlesCourtCount,
       participantText,
       linkedPlayerIds,
       preview
@@ -312,6 +345,8 @@ export default function GeneratorWorkspace({
     standingsSort,
     scoringMode,
     targetCount,
+    doublesCourtCount,
+    singlesCourtCount,
     participantText,
     linkedPlayerIds,
     preview
@@ -322,14 +357,17 @@ export default function GeneratorWorkspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [generatorKind, status?.enabled]);
 
-  function invalidatePreview(): void {
+  const invalidatePreview = useCallback((): void => {
     setPreview(null);
     setMessage(null);
-  }
+  }, []);
 
   function requestBody(): Record<string, unknown> {
     if (!rosterReady) {
       throw new Error(`Add exactly ${targetCount} unique players before previewing.`);
+    }
+    if (!mixedSetupValid) {
+      throw new Error("Choose a doubles and singles court mix that fits the selected player count.");
     }
     const participantPlayerIds = Object.fromEntries(
       participantNames.flatMap((name) => {
@@ -346,7 +384,9 @@ export default function GeneratorWorkspace({
       participant_names: participantNames,
       participant_player_ids: participantPlayerIds,
       total_rounds: automaticSetup.totalRounds,
-      court_count: automaticSetup.courtCount
+      court_count: automaticSetup.courtCount,
+      doubles_court_count: automaticSetup.doublesCourtCount,
+      singles_court_count: automaticSetup.singlesCourtCount
     };
   }
 
@@ -408,7 +448,7 @@ export default function GeneratorWorkspace({
     if (!preview) return;
     const participants = participantMap(preview);
     const rows = [
-      ["Round", "Court", "Mini round", "Side A", "Score A", "Score B", "Side B", "Byes"]
+      ["Round", "Format", "Court", "Mini round", "Side A", "Score A", "Score B", "Side B", "Byes"]
     ];
     for (const round of preview.rounds) {
       const byes = (round.byeParticipantIds || [])
@@ -416,11 +456,12 @@ export default function GeneratorWorkspace({
         .join(" / ");
       const matches = flattenMatches(round);
       if (!matches.length) {
-        rows.push([String(round.number), "", "", "", "", "", "", byes]);
+        rows.push([String(round.number), "", "", "", "", "", "", "", byes]);
       }
       for (const match of matches) {
         rows.push([
           String(round.number),
+          matchFormatLabel(match, preview.playFormat),
           String(match.court || ""),
           String(match.miniRound || ""),
           sideLabel(match.sideA || match.teamA, participants),
@@ -452,7 +493,7 @@ export default function GeneratorWorkspace({
         const court = match.court ? `C${match.court}` : "";
         const mini = match.miniRound ? `.${match.miniRound}` : "";
         lines.push(
-          `${court}${mini} ${sideLabel(match.sideA || match.teamA, participants)}  ___ - ___  ${sideLabel(
+          `${matchFormatLabel(match, preview.playFormat)} ${court}${mini} ${sideLabel(match.sideA || match.teamA, participants)}  ___ - ___  ${sideLabel(
             match.sideB || match.teamB,
             participants
           )}`.trim()
@@ -474,7 +515,7 @@ export default function GeneratorWorkspace({
 
     doc.setFont("helvetica", "bold");
     doc.setFontSize(13);
-    doc.text(`${preview.name} - ${playFormat === "singles" ? "Singles" : "Doubles"}`, margin, margin + 11);
+    doc.text(`${preview.name} - ${playFormatLabel(preview.playFormat)}`, margin, margin + 11);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7);
     doc.text(
@@ -557,14 +598,23 @@ export default function GeneratorWorkspace({
               value={playFormat}
               onChange={(event) => {
                 const nextFormat = event.target.value as PlayFormat;
+                const nextCount = Math.max(targetCount, nextFormat === "singles" ? 2 : nextFormat === "doubles_singles" ? 6 : 4);
                 setPlayFormat(nextFormat);
-                setTargetCount((current) => Math.max(current, nextFormat === "singles" ? 2 : 4));
+                setTargetCount(nextCount);
+                if (nextFormat === "doubles_singles") {
+                  const mixedSetup = recommendedMixedCourtSetup(nextCount);
+                  setDoublesCourtCount(mixedSetup.doublesCourtCount);
+                  setSinglesCourtCount(mixedSetup.singlesCourtCount);
+                }
                 invalidatePreview();
               }}
               style={inputStyle}
             >
               <option value="doubles">Doubles</option>
               <option value="singles">Singles</option>
+              {generatorKind === "round_robin" ? (
+                <option value="doubles_singles">Doubles + Singles Mix</option>
+              ) : null}
             </select>
           </label>
           {generatorKind === "round_robin" ? (
@@ -620,7 +670,11 @@ export default function GeneratorWorkspace({
           targetCount={targetCount}
           participantText={participantText}
           linkedPlayerIds={linkedPlayerIds}
+          doublesCourtCount={doublesCourtCount}
+          singlesCourtCount={singlesCourtCount}
           onTargetCountChange={setTargetCount}
+          onDoublesCourtCountChange={setDoublesCourtCount}
+          onSinglesCourtCountChange={setSinglesCourtCount}
           onParticipantTextChange={setParticipantText}
           onLinkedPlayerIdsChange={setLinkedPlayerIds}
           onInvalidate={invalidatePreview}
@@ -629,7 +683,7 @@ export default function GeneratorWorkspace({
           <button
             type="button"
             onClick={() => void generatePreview()}
-            disabled={busy || !rosterReady}
+            disabled={busy || !rosterReady || !mixedSetupValid}
             style={primaryButton}
           >
             {busy ? "Generating…" : "Preview matchups"}
@@ -675,22 +729,34 @@ export default function GeneratorWorkspace({
 
           <div style={{ display: "grid", gap: "0.85rem" }}>
             {preview.rounds.map((round) => {
+              const roundMatches = flattenMatches(round);
               const byes = (round.byeParticipantIds || [])
                 .map((id) => previewParticipants.get(id)?.name || id)
                 .join(", ");
+              const doublesGames = round.formatCounts?.doubles ?? roundMatches.filter(
+                (match) => matchFormatLabel(match, preview.playFormat) === "Doubles"
+              ).length;
+              const singlesGames = round.formatCounts?.singles ?? roundMatches.filter(
+                (match) => matchFormatLabel(match, preview.playFormat) === "Singles"
+              ).length;
               return (
                 <section
                   key={round.number}
                   style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.85rem" }}
                 >
                   <h3 style={{ marginTop: 0 }}>Round {round.number}</h3>
+                  {preview.playFormat === "doubles_singles" ? (
+                    <p style={{ margin: "-0.25rem 0 0.65rem", color: "#475569" }}>
+                      {doublesGames} doubles game{doublesGames === 1 ? "" : "s"} · {singlesGames} singles game{singlesGames === 1 ? "" : "s"}
+                    </p>
+                  ) : null}
                   <div style={{ display: "grid", gap: "0.45rem" }}>
-                    {flattenMatches(round).map((match) => (
+                    {roundMatches.map((match) => (
                       <div
                         key={match.id}
                         style={{
                           display: "grid",
-                          gridTemplateColumns: "4.5rem minmax(0, 1fr) auto minmax(0, 1fr)",
+                          gridTemplateColumns: "7.5rem minmax(0, 1fr) auto minmax(0, 1fr)",
                           gap: "0.6rem",
                           alignItems: "center",
                           padding: "0.45rem",
@@ -699,7 +765,7 @@ export default function GeneratorWorkspace({
                         }}
                       >
                         <span style={{ color: "#64748b" }}>
-                          Court {match.court || "—"}
+                          {matchFormatLabel(match, preview.playFormat)} · Court {match.court || "—"}
                           {match.miniRound ? `.${match.miniRound}` : ""}
                         </span>
                         <strong>{sideLabel(match.sideA || match.teamA, previewParticipants)}</strong>
@@ -744,7 +810,7 @@ export default function GeneratorWorkspace({
                   <div>
                     <strong>{session.title}</strong>
                     <p style={{ margin: "0.25rem 0 0", color: "#475569" }}>
-                      {session.play_format} · Round {session.current_round_number || 1} of {session.total_rounds || "?"}
+                      {playFormatLabel(session.play_format)} · Round {session.current_round_number || 1} of {session.total_rounds || "?"}
                       {" · "}{session.status}
                     </p>
                   </div>

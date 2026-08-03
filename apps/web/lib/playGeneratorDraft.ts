@@ -1,10 +1,12 @@
 export type StoredPlayGeneratorDraft<TPreview> = {
-  version: 1;
+  version: 2;
   title: string;
-  playFormat: "singles" | "doubles";
+  playFormat: "singles" | "doubles" | "doubles_singles";
   standingsSort?: "wins" | "points" | "differential";
   scoringMode?: "scored" | "unscored";
   targetCount: number;
+  doublesCourtCount?: number;
+  singlesCourtCount?: number;
   participantText: string;
   linkedPlayerIds: Record<string, number>;
   preview: TPreview | null;
@@ -20,11 +22,11 @@ export function readPlayGeneratorDraft<TPreview>(
   try {
     const raw = window.sessionStorage.getItem(storageKey);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<StoredPlayGeneratorDraft<TPreview>>;
+    const parsed = JSON.parse(raw) as Partial<StoredPlayGeneratorDraft<TPreview>> & { version?: number };
     if (
-      parsed.version !== 1 ||
+      ![1, 2].includes(Number(parsed.version)) ||
       typeof parsed.title !== "string" ||
-      !["singles", "doubles"].includes(String(parsed.playFormat)) ||
+      !["singles", "doubles", "doubles_singles"].includes(String(parsed.playFormat)) ||
       !Number.isFinite(Number(parsed.targetCount)) ||
       typeof parsed.participantText !== "string" ||
       !parsed.linkedPlayerIds ||
@@ -33,7 +35,16 @@ export function readPlayGeneratorDraft<TPreview>(
       window.sessionStorage.removeItem(storageKey);
       return null;
     }
-    return parsed as StoredPlayGeneratorDraft<TPreview>;
+    return {
+      ...(parsed as StoredPlayGeneratorDraft<TPreview>),
+      version: 2,
+      doublesCourtCount: Number.isFinite(Number(parsed.doublesCourtCount))
+        ? Math.max(0, Number(parsed.doublesCourtCount))
+        : undefined,
+      singlesCourtCount: Number.isFinite(Number(parsed.singlesCourtCount))
+        ? Math.max(0, Number(parsed.singlesCourtCount))
+        : undefined
+    };
   } catch {
     return null;
   }
@@ -47,7 +58,7 @@ export function writePlayGeneratorDraft<TPreview>(
   try {
     const payload: StoredPlayGeneratorDraft<TPreview> = {
       ...input,
-      version: 1,
+      version: 2,
       savedAt: new Date().toISOString()
     };
     window.sessionStorage.setItem(storageKey, JSON.stringify(payload));

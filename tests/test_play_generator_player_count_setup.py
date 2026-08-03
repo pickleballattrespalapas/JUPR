@@ -35,9 +35,13 @@ def test_generator_setup_has_deterministic_auto_shape_rules() -> None:
     assert "count % 2 === 0 ? count - 1 : count" in component
     assert "const uniquePartnerPairs = (count * (count - 1)) / 2" in component
     assert "const partnerPairsPerRound = courtCount * 2" in component
-    assert "courtCount: ladderCourtCount(count, playFormat)" in component
+    assert "const courtCount = ladderCourtCount(count, playFormat)" in component
     assert "totalRounds: 4" in component
     assert "Math.min(50" in component
+    assert "recommendedMixedCourtSetup" in component
+    assert "mixedRoundCount" in component
+    assert "Doubles courts" in component
+    assert "Singles courts" in component
 
 
 def test_admin_preserves_official_links_only_for_complete_linked_roster() -> None:
