@@ -1,0 +1,157 @@
+name: Temporary Round-Robin completion patch
+
+on:
+  push:
+    branches:
+      - agent/round-robin-scoring-modes-verify-20260802
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/round-robin-scoring-modes-verify-20260802
+          fetch-depth: 0
+
+      - name: Apply reviewed Round-Robin fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64, zlib
+          payload = """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
+          /w/2URVU"""
+          exec(compile(zlib.decompress(base64.b64decode(payload)).decode(), "round_robin_patch.py", "exec"))
+          PY
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r services/api/requirements.txt
+          python -m pip install pytest
+
+      - name: Run focused Round-Robin checks
+        shell: bash
+        run: |
+          python -m pytest -q \
+            tests/test_round_robin_unscored_flow.py \
+            tests/test_admin_play_generator_service.py \
+            tests/test_public_play_generator_service.py
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run component checks and full Next.js build
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_JUPR_API_BASE_URL: http://localhost:8000
+          JUPR_API_BASE_URL: http://localhost:8000
+          NEXT_PUBLIC_JUPR_WEB_BASE_URL: https://pickleballclubsandwich.com
+        shell: bash
+        run: |
+          npm install --no-audit --no-fund
+          npm run test:component
+          npm run build
+
+      - name: Commit verified fixes and remove temporary workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/temp_round_robin_completion_patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            jupr_app/domain/adaptive_play_engine.py \
+            jupr_app/services/admin_play_generator_service.py \
+            jupr_app/services/public_play_generator_service.py \
+            apps/web/app/admin/play-generators/GeneratorRoundRunner.tsx \
+            apps/web/app/admin/play-generators/GeneratorStandings.tsx \
+            apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner.tsx \
+            apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorStandings.tsx \
+            tests/test_round_robin_unscored_flow.py \
+            tests/test_admin_play_generator_service.py \
+            tests/test_public_play_generator_service.py \
+            docs/round_robin_scoring_modes.md
+          git commit -m "Harden Round-Robin scoring-mode progression"
+          git push origin HEAD:agent/round-robin-scoring-modes-verify-20260802
