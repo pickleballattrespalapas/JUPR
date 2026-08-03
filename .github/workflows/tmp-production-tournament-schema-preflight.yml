@@ -1,0 +1,255 @@
+name: Temporary production tournament schema preflight
+
+on:
+  push:
+    branches:
+      - agent/preflight-production-tournament-schema-20260803
+    paths:
+      - .github/production-tournament-schema-preflight.trigger
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: production-tournament-schema-preflight
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      EXPECTED_PROJECT_REF: dnoockbwfenunhcibwfn
+      STATUS_CONTEXT: production-tournament-schema-preflight
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_PROD_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/preflight-production-tournament-schema-20260803
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Mark preflight pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          print(json.dumps({
+            "state": "pending",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Comparing reviewed migrations with production schema",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Validate production target and build exact migration plan
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DATABASE_URL:-}"
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+
+          root = Path.cwd()
+          out = Path(os.environ["RUNNER_TEMP"])
+          expected_ref = os.environ["EXPECTED_PROJECT_REF"]
+          db_url = os.environ["SUPABASE_DATABASE_URL"]
+          parsed = urlsplit(db_url)
+          host = (parsed.hostname or "").lower()
+          username = unquote(parsed.username or "").lower()
+          identity_ok = (
+              expected_ref in host
+              or username == f"postgres.{expected_ref}"
+              or host == f"db.{expected_ref}.supabase.co"
+          )
+          if not identity_ok:
+              raise SystemExit("Production database URL does not match the approved Supabase project.")
+
+          contract = json.loads(
+              (root / "config/production_migration_contract.json").read_text(encoding="utf-8")
+          )
+          required = list(contract.get("required_ledger_names") or [])
+          schema_only = set(contract.get("schema_contract_only_repository_migrations") or [])
+          migrations: dict[str, list[tuple[str, Path]]] = {}
+          for path in sorted((root / "supabase/migrations").glob("*.sql")):
+              match = re.fullmatch(r"(?P<version>\d{8}(?:\d{6})?)_(?P<name>[A-Za-z0-9][A-Za-z0-9_]*)\.sql", path.name)
+              if not match:
+                  continue
+              migrations.setdefault(match.group("name"), []).append((match.group("version"), path))
+
+          ledger_raw = subprocess.check_output(
+              [
+                  "psql", db_url, "--no-psqlrc", "--tuples-only", "--no-align",
+                  "--set=ON_ERROR_STOP=1",
+                  "--command=select version || E'\\t' || coalesce(name, '') from supabase_migrations.schema_migrations order by version",
+              ],
+              text=True,
+          )
+          ledger = []
+          for line in ledger_raw.splitlines():
+              if not line.strip():
+                  continue
+              version, _, name = line.partition("\t")
+              ledger.append({"version": version.strip(), "name": name.strip()})
+          ledger_names = {row["name"] for row in ledger if row["name"]}
+
+          errors: list[str] = []
+          selected: list[dict[str, object]] = []
+          for name in required:
+              if name in ledger_names or name in schema_only:
+                  continue
+              candidates = migrations.get(name) or []
+              if len(candidates) != 1:
+                  errors.append(f"{name}: expected one repository migration, found {len(candidates)}")
+                  continue
+              version, path = candidates[0]
+              sql = path.read_text(encoding="utf-8")
+              risks = {
+                  "drop_table": bool(re.search(r"\bdrop\s+table\b", sql, re.I)),
+                  "drop_schema": bool(re.search(r"\bdrop\s+schema\b", sql, re.I)),
+                  "truncate": bool(re.search(r"\btruncate\b", sql, re.I)),
+                  "delete_from": len(re.findall(r"\bdelete\s+from\b", sql, re.I)),
+                  "drop_column": len(re.findall(r"\bdrop\s+column\b", sql, re.I)),
+              }
+              selected.append({
+                  "version": version,
+                  "name": name,
+                  "path": str(path.relative_to(root)),
+                  "bytes": len(sql.encode("utf-8")),
+                  "risks": risks,
+              })
+          selected.sort(key=lambda row: str(row["version"]))
+
+          hard_risks = [
+              row for row in selected
+              if row["risks"]["drop_table"]
+              or row["risks"]["drop_schema"]
+              or row["risks"]["truncate"]
+          ]
+          if hard_risks:
+              errors.append(
+                  "Hard-destructive SQL detected in: "
+                  + ", ".join(str(row["path"]) for row in hard_risks)
+              )
+
+          baseline_sql = r'''
+          with watched as (
+            select unnest(array[
+              'tournaments','tournament_registration_settings','tournament_registration_days',
+              'tournament_event_options','tournament_registrations',
+              'tournament_registration_selections','tournament_event_draws',
+              'tournament_teams','tournament_games','tournament_podium',
+              'matches','players','player_badges'
+            ]) as table_name
+          )
+          select jsonb_build_object(
+            'tables', coalesce(jsonb_agg(jsonb_build_object(
+              'name', w.table_name,
+              'exists', to_regclass('public.' || w.table_name) is not null,
+              'columns', (select count(*) from information_schema.columns c where c.table_schema='public' and c.table_name=w.table_name),
+              'estimated_rows', coalesce((select s.n_live_tup from pg_stat_user_tables s where s.schemaname='public' and s.relname=w.table_name),0)
+            ) order by w.table_name), '[]'::jsonb),
+            'ledger_count', (select count(*) from supabase_migrations.schema_migrations)
+          )::text
+          from watched w;
+          '''
+          baseline = subprocess.check_output(
+              [
+                  "psql", db_url, "--no-psqlrc", "--tuples-only", "--no-align",
+                  "--set=ON_ERROR_STOP=1", f"--command={baseline_sql}",
+              ],
+              text=True,
+          ).strip()
+
+          plan = {
+              "expected_project_ref": expected_ref,
+              "contract_profile": contract.get("profile"),
+              "remote_ledger": ledger,
+              "legacy_additional_ledger_names": sorted(ledger_names - set(required)),
+              "required_count": len(required),
+              "already_satisfied_count": sum(1 for name in required if name in ledger_names),
+              "schema_contract_only": sorted(schema_only),
+              "selected_count": len(selected),
+              "selected": selected,
+              "errors": errors,
+              "baseline": json.loads(baseline),
+          }
+          (out / "production-tournament-migration-plan.json").write_text(
+              json.dumps(plan, indent=2, sort_keys=True), encoding="utf-8"
+          )
+          print(json.dumps({
+              "selected_count": len(selected),
+              "selected": [f"{row['version']}_{row['name']}" for row in selected],
+              "legacy_additional_ledger_names": plan["legacy_additional_ledger_names"],
+              "errors": errors,
+          }, indent=2))
+          if errors:
+              raise SystemExit("Production tournament migration preflight failed.")
+          PY
+
+      - name: Upload preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-tournament-schema-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/production-tournament-migration-plan.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Mark preflight successful
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status-success.json"
+          import json, os
+          print(json.dumps({
+            "state": "success",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Reviewed production tournament migration plan is safe",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-success.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Mark preflight failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status-failure.json"
+          import json, os
+          print(json.dumps({
+            "state": "failure",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Production tournament schema preflight failed",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-failure.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
