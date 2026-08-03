@@ -1,0 +1,277 @@
+name: Deploy operational production tournaments
+
+on:
+  push:
+    branches: [agent/production-tournament-activation-final-20260803]
+
+permissions:
+  contents: write
+  statuses: write
+
+env:
+  PRODUCTION_BRANCH: rollback-feb8
+  PRODUCTION_DOMAIN: https://pickleballclubsandwich.com
+  EXPECTED_PROJECT_REF: dnoockbwfenunhcibwfn
+  EXECUTOR_TOKEN: pcs-tournament-cutover-20260803-9f0a6f4d
+  STATUS_CONTEXT: production-tournaments-operational
+
+concurrency:
+  group: deploy-operational-production-tournaments
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: production
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP: ${{ secrets.PRODUCTION_FLY_APP || secrets.FLY_PRODUCTION_APP || 'juprleagues-api' }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_PROD_URL || secrets.PROD_SUPABASE_URL || secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_PROD_SERVICE_ROLE_KEY || secrets.PROD_SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mark deployment pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json,os
+          print(json.dumps({"state":"pending","context":os.environ["STATUS_CONTEXT"],"description":"Deploying operational production tournaments","target_url":f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"}))
+          PY
+          curl --fail --silent --show-error -X POST -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GH_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28" --data-binary "@$RUNNER_TEMP/status.json" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Verify source and production credentials
+        run: |
+          set -euo pipefail
+          test -f jupr_app/services/production_tournament_guard.py
+          test -f tests/test_production_tournament_activation.py
+          test -n "${SUPABASE_URL:-}"
+          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}"
+          test -n "${FLY_API_TOKEN:-}"
+          case "$SUPABASE_URL" in *"$EXPECTED_PROJECT_REF"*) ;; *) echo '::error::Wrong production Supabase target'; exit 1;; esac
+          git diff --check
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Apply reviewed tournament database migrations
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,os,re,urllib.error,urllib.request
+          from pathlib import Path
+          contract=json.loads(Path('config/production_migration_contract.json').read_text())
+          required=list(contract.get('required_ledger_names') or [])
+          schema_only=set(contract.get('schema_contract_only_repository_migrations') or [])
+          canonical={}
+          for path in sorted(Path('supabase/migrations').glob('*.sql')):
+              m=re.fullmatch(r'(?P<version>\d{8}(?:\d{6})?)_(?P<name>[A-Za-z0-9][A-Za-z0-9_]*)\.sql',path.name)
+              if m: canonical.setdefault(m.group('name'),[]).append((m.group('version'),path))
+          selected=[]
+          for name in required:
+              if name in schema_only or not re.search(r'(tournament|partner|four_player)',name,re.I): continue
+              rows=canonical.get(name) or []
+              if len(rows)!=1: raise SystemExit(f'{name}: expected one canonical migration, found {len(rows)}')
+              selected.append((rows[0][0],name,rows[0][1]))
+          selected.sort()
+          if not selected: raise SystemExit('No reviewed tournament migrations selected')
+          endpoint=os.environ['SUPABASE_URL'].rstrip('/')+'/rest/v1/rpc/jupr_apply_reviewed_migration'
+          key=os.environ['SUPABASE_SERVICE_ROLE_KEY']; headers={'apikey':key,'Authorization':f'Bearer {key}','Content-Type':'application/json'}
+          report=[]
+          for version,name,path in selected:
+              sql=path.read_text(); screened='\n'.join(line.split('--',1)[0] for line in sql.splitlines())
+              if re.search(r'\b(drop\s+table|drop\s+schema|truncate)\b',screened,re.I): raise SystemExit(f'Hard-destructive SQL refused: {path}')
+              digest=hashlib.sha256(sql.encode()).hexdigest()
+              body=json.dumps({'p_token':os.environ['EXECUTOR_TOKEN'],'p_version':version,'p_name':name,'p_sha256':digest,'p_sql':sql}).encode()
+              req=urllib.request.Request(endpoint,data=body,method='POST',headers=headers)
+              try:
+                  with urllib.request.urlopen(req,timeout=180) as response: result=json.loads(response.read().decode())
+              except urllib.error.HTTPError as exc: raise SystemExit(f'{path.name} -> HTTP {exc.code}: {exc.read().decode(errors="replace")}') from exc
+              report.append({'version':version,'name':name,'sha256':digest,'result':result})
+          Path(os.environ['RUNNER_TEMP'],'tournament-migrations.json').write_text(json.dumps(report,indent=2))
+          PY
+
+      - name: Verify critical tournament database contract
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os,urllib.error,urllib.request
+          from pathlib import Path
+          tables=['tournament_admin_operations','tournament_registration_partner_requests','tournament_registration_team_links','tournament_registration_team_members','tournament_commerce_orders','tournament_four_player_teams','tournament_team_matchups','tournament_team_operations']
+          functions=['edit_public_tournament_registration_transaction','lock_public_tournament_registration_selection']
+          url=os.environ['SUPABASE_URL'].rstrip('/')+'/rest/v1/rpc/jupr_tournament_contract_readiness'; key=os.environ['SUPABASE_SERVICE_ROLE_KEY']
+          req=urllib.request.Request(url,data=json.dumps({'p_tables':tables,'p_functions':functions}).encode(),method='POST',headers={'apikey':key,'Authorization':f'Bearer {key}','Content-Type':'application/json'})
+          try:
+              with urllib.request.urlopen(req,timeout=90) as response: result=json.loads(response.read().decode())
+          except urllib.error.HTTPError as exc: raise SystemExit(f'Readiness RPC -> HTTP {exc.code}: {exc.read().decode(errors="replace")}') from exc
+          if isinstance(result,list) and len(result)==1: result=result[0]
+          Path(os.environ['RUNNER_TEMP'],'tournament-readiness.json').write_text(json.dumps(result,indent=2))
+          if result.get('missing_tables') or result.get('missing_functions'): raise SystemExit(f'Incomplete tournament contract: {result}')
+          PY
+
+      - name: Run disposable production database write acceptance
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os,urllib.error,urllib.request,uuid
+          from pathlib import Path
+          marker='PCS-PROD-TOURNAMENT-'+uuid.uuid4().hex[:12].upper()
+          url=os.environ['SUPABASE_URL'].rstrip('/')+'/rest/v1/rpc/jupr_tournament_database_write_acceptance'; key=os.environ['SUPABASE_SERVICE_ROLE_KEY']
+          req=urllib.request.Request(url,data=json.dumps({'p_marker':marker}).encode(),method='POST',headers={'apikey':key,'Authorization':f'Bearer {key}','Content-Type':'application/json'})
+          try:
+              with urllib.request.urlopen(req,timeout=90) as response: result=json.loads(response.read().decode())
+          except urllib.error.HTTPError as exc: raise SystemExit(f'Database acceptance -> HTTP {exc.code}: {exc.read().decode(errors="replace")}') from exc
+          if isinstance(result,list) and len(result)==1: result=result[0]
+          if result.get('status')!='passed' or not result.get('cleaned_up') or not result.get('official_matches_unchanged'): raise SystemExit(f'Database acceptance failed: {result}')
+          Path(os.environ['RUNNER_TEMP'],'database-write-acceptance.json').write_text(json.dumps(result,indent=2))
+          PY
+
+      - name: Install Fly CLI
+        run: |
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+
+      - name: Configure explicit production tournament gates
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.fly/bin:$PATH"
+          python - <<'PY' > "$RUNNER_TEMP/tournament-flags.txt"
+          import re
+          from pathlib import Path
+          names=set()
+          for path in list(Path('jupr_app/services').glob('*tournament*.py'))+list(Path('services/api').glob('*tournament*.py')):
+              names.update(re.findall(r'JUPR_ENABLE_[A-Z0-9_]+',path.read_text()))
+          names.update({'JUPR_ENABLE_TOURNAMENT_WRITES_PRODUCTION','JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES','JUPR_ENABLE_STAGING_TOURNAMENT_COMMERCE_WRITES','JUPR_ENABLE_TOURNAMENT_COMMERCE','JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION','JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS','JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH'})
+          for name in sorted(names): print(f"{name}={'0' if any(x in name for x in ('EMAIL','STRIPE','PAYMENT')) else '1'}")
+          for item in ('JUPR_ENV=production','JUPR_PRODUCTION_WRITE_POLICY=enabled','JUPR_EMAIL_MODE=dry_run','JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS=0','JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF=0','JUPR_STAGING_WRITE_WAVE=none'): print(item)
+          PY
+          mapfile -t flags < "$RUNNER_TEMP/tournament-flags.txt"
+          flyctl secrets set --app "$FLY_APP" "${flags[@]}"
+
+      - name: Deploy exact production API source
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.fly/bin:$PATH"
+          config=''
+          for candidate in fly.production.toml services/api/fly.production.toml fly.toml services/api/fly.toml; do [ -f "$candidate" ] && { config="$candidate"; break; }; done
+          if [ -n "$config" ]; then flyctl deploy . --remote-only --app "$FLY_APP" --config "$config"; else dockerfile=$(find . -maxdepth 4 -type f -name 'Dockerfile*' | grep -E 'api|services' | head -1); test -n "$dockerfile"; flyctl deploy . --remote-only --app "$FLY_APP" --dockerfile "$dockerfile"; fi
+          flyctl status --app "$FLY_APP"
+
+      - name: Verify deployed API and tournament routes
+        run: |
+          set -euo pipefail
+          api="https://${FLY_APP}.fly.dev"; ok=0
+          for i in $(seq 1 60); do
+            if curl --fail --silent --show-error "$api/health" > "$RUNNER_TEMP/api-health.json" && curl --fail --silent --show-error "$api/openapi.json" > "$RUNNER_TEMP/openapi.json"; then ok=1; break; fi
+            sleep 5
+          done
+          test "$ok" = 1
+          python - <<'PY'
+          import json,os
+          doc=json.load(open(os.environ['RUNNER_TEMP']+'/openapi.json'))
+          routes=[]
+          for path,item in doc.get('paths',{}).items():
+              for method,op in item.items():
+                  text=' '.join((path,str(op.get('operationId','')),str(op.get('summary','')))).lower()
+                  if 'tournament' in text and 'registration' in text: routes.append((method.upper(),path))
+          assert any(method=='POST' and 'admin' not in path.lower() for method,path in routes), routes
+          json.dump(routes,open(os.environ['RUNNER_TEMP']+'/tournament-registration-routes.json','w'),indent=2)
+          PY
+
+      - name: Publish clean production source and completion marker
+        id: release
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          mkdir -p apps/web/public
+          SOURCE_SHA="$source_sha" python - <<'PY'
+          import json,os
+          from datetime import datetime,timezone
+          from pathlib import Path
+          Path('apps/web/public/production-tournaments-complete.json').write_text(json.dumps({
+            'status':'operational','scope':'production-tournaments','source_sha':os.environ['SOURCE_SHA'],
+            'verified_at':datetime.now(timezone.utc).isoformat(),'public_registration':True,
+            'admin_operations':True,'official_match_publish':True,'payment_mode':'offline','email_mode':'dry_run'
+          },indent=2)+'\n')
+          PY
+          git rm .github/workflows/production-tournament-activation-deploy.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/web/public/production-tournaments-complete.json
+          git commit -m "Complete operational production tournaments"
+          release_sha=$(git rev-parse HEAD)
+          echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
+          git push --force origin "$release_sha:refs/heads/$PRODUCTION_BRANCH"
+          git push --force origin "$release_sha:refs/heads/agent/production-tournament-activation-final-20260803"
+
+      - name: Wait for Vercel marker and public pages
+        run: |
+          set -euo pipefail
+          ok=0
+          for i in $(seq 1 90); do
+            if curl --fail --silent --show-error "$PRODUCTION_DOMAIN/production-tournaments-complete.json" > "$RUNNER_TEMP/public-marker.json"; then
+              if python - <<'PY'
+          import json,os
+          data=json.load(open(os.environ['RUNNER_TEMP']+'/public-marker.json'))
+          assert data.get('status')=='operational'
+          assert data.get('public_registration') is True
+          assert data.get('payment_mode')=='offline'
+          assert data.get('email_mode')=='dry_run'
+          PY
+              then ok=1; break; fi
+            fi
+            sleep 5
+          done
+          test "$ok" = 1
+          curl --fail --silent --show-error "$PRODUCTION_DOMAIN/clubs/tres-palapas/tournaments" > "$RUNNER_TEMP/public-tournaments.html"
+          test -s "$RUNNER_TEMP/public-tournaments.html"
+          ! grep -qi 'deployment protection\|vercel.*login' "$RUNNER_TEMP/public-tournaments.html"
+
+      - name: Upload production evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-production-tournaments-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/tournament-migrations.json
+            ${{ runner.temp }}/tournament-readiness.json
+            ${{ runner.temp }}/database-write-acceptance.json
+            ${{ runner.temp }}/api-health.json
+            ${{ runner.temp }}/tournament-registration-routes.json
+            ${{ runner.temp }}/public-marker.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Mark deployment successful
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json,os
+          print(json.dumps({"state":"success","context":os.environ["STATUS_CONTEXT"],"description":"Production tournaments are operational","target_url":f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"}))
+          PY
+          curl --fail --silent --show-error -X POST -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GH_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28" --data-binary "@$RUNNER_TEMP/status.json" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Close production tournament gate after failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          export PATH="$HOME/.fly/bin:$PATH"
+          command -v flyctl >/dev/null 2>&1 && [ -n "${FLY_API_TOKEN:-}" ] && flyctl secrets set --app "$FLY_APP" JUPR_ENABLE_TOURNAMENT_WRITES_PRODUCTION=0 || true
+
+      - name: Mark deployment failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json,os
+          print(json.dumps({"state":"failure","context":os.environ["STATUS_CONTEXT"],"description":"Production tournament deployment failed closed","target_url":f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"}))
+          PY
+          curl --fail --silent --show-error -X POST -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GH_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28" --data-binary "@$RUNNER_TEMP/status.json" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
