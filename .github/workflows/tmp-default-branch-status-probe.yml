@@ -1,0 +1,44 @@
+name: Default branch production status probe
+
+on:
+  push:
+    paths: [.github/default-branch-status-probe.trigger]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_PROD_URL || secrets.PROD_SUPABASE_URL || secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_PROD_SERVICE_ROLE_KEY || secrets.PROD_SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - name: Upload execution probe
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_URL:-}"
+          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}"
+          python - <<'PY'
+          import json, os, urllib.error, urllib.request
+          from datetime import datetime, timezone
+          payload=json.dumps({
+            'status':'executed',
+            'workflow':'Default branch production status probe',
+            'repository':os.environ['GITHUB_REPOSITORY'],
+            'ref':os.environ['GITHUB_REF'],
+            'sha':os.environ['GITHUB_SHA'],
+            'updated_at':datetime.now(timezone.utc).isoformat(),
+          },indent=2).encode()
+          url=os.environ['SUPABASE_URL'].rstrip('/')+'/storage/v1/object/pcs-public-deployment-status/default-branch-probe.json'
+          key=os.environ['SUPABASE_SERVICE_ROLE_KEY']
+          request=urllib.request.Request(url,data=payload,method='POST',headers={
+            'apikey':key,'Authorization':f'Bearer {key}','Content-Type':'application/json','x-upsert':'true'
+          })
+          try:
+            with urllib.request.urlopen(request,timeout=60) as response: response.read()
+          except urllib.error.HTTPError as exc:
+            raise SystemExit(f'Probe upload failed: HTTP {exc.code}: {exc.read().decode(errors="replace")}') from exc
+          PY
