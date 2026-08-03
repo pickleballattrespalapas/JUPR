@@ -91,8 +91,8 @@ jobs:
             tests/test_api_contract_admin_tournament_game_generation.py \
             tests/test_api_contract_admin_tournament_game_scoring.py \
             tests/test_api_contract_admin_tournament_playoff_generation.py \
-            tests/test_api_contract_admin_tournament_official_publish.py \
-            tests/test_api_contract_admin_tournament_team_competition.py \
+            tests/test_api_contract_admin_tournament_match_publish.py \
+            tests/test_api_contract_admin_tournament_team_editor.py \
             tests/test_public_tournament_team_setup_recovery.py \
             tests/test_tournament_pairing_lifecycle_email.py
 
