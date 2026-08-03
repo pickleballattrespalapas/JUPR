@@ -1,0 +1,179 @@
+name: Temporary apply production tournament activation
+
+on:
+  push:
+    branches:
+      - rollback-feb8
+    paths:
+      - .github/production-tournament-activation.trigger
+
+permissions:
+  contents: write
+  statuses: write
+
+concurrency:
+  group: production-tournament-activation-builder
+  cancel-in-progress: false
+
+jobs:
+  patch-test-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BASE_SHA: 1bcb4ccc26875190aae1ace9ff4640f941f5a7ba
+      TARGET_BRANCH: agent/production-tournament-activation-v3
+      STATUS_CONTEXT: production-tournament-activation-build
+      PATCH_SHA256: d2c565f206b0a205c402845e4865d09017897b0e55c9069218ea71c07542ec6c
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mark build pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          print(json.dumps({
+            "state": "pending",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Testing explicit production tournament authorization",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Decode and apply exact reviewed patch
+        run: |
+          set -euo pipefail
+          base64 -d .github/production-tournament-activation.patch.gz.b64 \
+            | gzip -d > "$RUNNER_TEMP/production-tournament-activation.patch"
+          echo "$PATCH_SHA256  $RUNNER_TEMP/production-tournament-activation.patch" | sha256sum -c -
+          git checkout --detach "$BASE_SHA"
+          git apply --check "$RUNNER_TEMP/production-tournament-activation.patch"
+          git apply "$RUNNER_TEMP/production-tournament-activation.patch"
+          git diff --check
+          python -m compileall -q jupr_app/services services/api scripts tests
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install API test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r services/api/requirements.txt
+
+      - name: Run production tournament activation contracts
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_production_tournament_activation.py \
+            tests/test_tournament_admin_guarded_operations.py \
+            tests/test_tournament_team_runtime_security.py \
+            tests/test_public_tournament_commerce_service.py \
+            tests/test_admin_tournament_live_runner.py \
+            tests/test_api_contract_admin_tournament_guarded.py \
+            tests/test_api_contract_admin_tournament_setup.py \
+            tests/test_api_contract_tournament_registration.py \
+            tests/test_api_contract_tournament_registration_edit.py \
+            tests/test_api_contract_tournament_partner_flow.py \
+            tests/test_api_contract_admin_tournament_game_generation.py \
+            tests/test_api_contract_admin_tournament_game_scoring.py \
+            tests/test_api_contract_admin_tournament_playoff_generation.py \
+            tests/test_api_contract_admin_tournament_official_publish.py \
+            tests/test_api_contract_admin_tournament_team_competition.py \
+            tests/test_public_tournament_team_setup_recovery.py \
+            tests/test_tournament_pairing_lifecycle_email.py
+
+      - name: Run API contract suite
+        run: python -m pytest -q tests/test_api_contract_*.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Build production web application
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Commit exact tested source to activation branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            config/production_migration_contract.json \
+            jupr_app/services/production_tournament_guard.py \
+            jupr_app/services/admin_tournament_guarded_operation.py \
+            jupr_app/services/admin_tournament_live_service.py \
+            jupr_app/services/admin_tournament_ops_service.py \
+            jupr_app/services/admin_tournament_team_competition_service.py \
+            jupr_app/services/public_tournament_commerce_service.py \
+            jupr_app/services/public_tournament_team_service.py \
+            scripts/deployment_verifier.py \
+            services/api/public_tournament_pairing_routes.py \
+            services/api/public_tournament_registration_routes.py \
+            services/api/public_tournament_team_routes.py \
+            tests/test_production_tournament_activation.py \
+            tests/test_admin_tournament_live_runner.py \
+            tests/test_public_tournament_commerce_service.py \
+            tests/test_tournament_admin_guarded_operations.py \
+            tests/test_tournament_team_runtime_security.py
+          git commit -m "Authorize reviewed tournament workflows in production"
+          git push --force-with-lease="refs/heads/$TARGET_BRANCH:$BASE_SHA" \
+            origin HEAD:"refs/heads/$TARGET_BRANCH"
+
+      - name: Mark build successful
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status-success.json"
+          import json, os
+          print(json.dumps({
+            "state": "success",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Tournament activation code and web build passed",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-success.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+
+      - name: Mark build failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > "$RUNNER_TEMP/status-failure.json"
+          import json, os
+          print(json.dumps({
+            "state": "failure",
+            "context": os.environ["STATUS_CONTEXT"],
+            "description": "Tournament activation code or tests failed",
+            "target_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+          }))
+          PY
+          curl --fail --silent --show-error -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary "@$RUNNER_TEMP/status-failure.json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
