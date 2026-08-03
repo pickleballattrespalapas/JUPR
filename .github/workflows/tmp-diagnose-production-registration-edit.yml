@@ -24,6 +24,14 @@ jobs:
       FLY_APP_NAME: juprleagues-api
       FLY_ORIGIN: https://juprleagues-api.fly.dev
       STATUS_CONTEXT: production-registration-edit-diagnostic
+      GH_SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      GH_SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      GH_SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      GH_SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      GH_SMTP_FROM_EMAIL: ${{ secrets.SMTP_FROM_EMAIL }}
+      GH_SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+      GH_SMTP_REPLY_TO: ${{ secrets.SMTP_REPLY_TO }}
+      GH_SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,16 +56,12 @@ jobs:
           from pathlib import Path
 
           raw = json.loads(Path(os.environ["RUNNER_TEMP"] + "/secrets.json").read_text())
-          if isinstance(raw, dict):
-              entries = raw.get("secrets") or raw.get("data") or []
-          else:
-              entries = raw
-          names = set()
-          for entry in entries or []:
-              if isinstance(entry, dict):
-                  name = entry.get("Name") or entry.get("name")
-                  if name:
-                      names.add(str(name))
+          entries = (raw.get("secrets") or raw.get("data") or []) if isinstance(raw, dict) else raw
+          names = {
+              str(entry.get("Name") or entry.get("name"))
+              for entry in (entries or [])
+              if isinstance(entry, dict) and (entry.get("Name") or entry.get("name"))
+          }
           required_smtp = {
               "SMTP_HOST",
               "SMTP_PORT",
@@ -65,15 +69,26 @@ jobs:
               "SMTP_PASSWORD",
               "SMTP_FROM_EMAIL",
           }
-          optional_smtp = {"SMTP_FROM_NAME", "SMTP_REPLY_TO", "SMTP_USE_TLS"}
+          gh_map = {
+              "SMTP_HOST": os.getenv("GH_SMTP_HOST", ""),
+              "SMTP_PORT": os.getenv("GH_SMTP_PORT", ""),
+              "SMTP_USERNAME": os.getenv("GH_SMTP_USERNAME", ""),
+              "SMTP_PASSWORD": os.getenv("GH_SMTP_PASSWORD", ""),
+              "SMTP_FROM_EMAIL": os.getenv("GH_SMTP_FROM_EMAIL", ""),
+              "SMTP_FROM_NAME": os.getenv("GH_SMTP_FROM_NAME", ""),
+              "SMTP_REPLY_TO": os.getenv("GH_SMTP_REPLY_TO", ""),
+              "SMTP_USE_TLS": os.getenv("GH_SMTP_USE_TLS", ""),
+          }
+          gh_present = {name for name, value in gh_map.items() if str(value or "").strip()}
           health = json.loads(Path(os.environ["RUNNER_TEMP"] + "/health.json").read_text())
           result = {
-              "signing_secret_configured": "JUPR_REGISTRATION_EDIT_SECRET" in names,
-              "confirmation_secret_configured": "JUPR_REGISTRATION_CONFIRMATION_SECRET" in names,
-              "smtp_required_ready": required_smtp <= names,
-              "missing_smtp_required": sorted(required_smtp - names),
-              "smtp_optional_present": sorted(optional_smtp & names),
-              "email_mode": health.get("email_mode"),
+              "signing_secret_configured_on_fly": "JUPR_REGISTRATION_EDIT_SECRET" in names,
+              "confirmation_secret_configured_on_fly": "JUPR_REGISTRATION_CONFIRMATION_SECRET" in names,
+              "fly_smtp_required_ready": required_smtp <= names,
+              "fly_missing_smtp_required": sorted(required_smtp - names),
+              "github_smtp_required_ready": required_smtp <= gh_present,
+              "github_missing_smtp_required": sorted(required_smtp - gh_present),
+              "github_optional_smtp_present": sorted(gh_present - required_smtp),
               "environment": health.get("environment"),
               "production_write_policy": health.get("production_business_write_policy"),
               "candidate_sha": health.get("git_commit_sha"),
