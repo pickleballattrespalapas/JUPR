@@ -12,6 +12,7 @@ jobs:
   verify-staging:
     runs-on: ubuntu-latest
     env:
+      PYTHONPATH: ${{ github.workspace }}
       CANDIDATE_SHA: ff0d3dd35b76a24f66e3496a33e09fd8fc8149a9
       FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
       FLY_OPENAPI_URL: https://juprleagues-api-staging.fly.dev/openapi.json
@@ -37,6 +38,11 @@ jobs:
           test "$HEAD_SHA" = "$CANDIDATE_SHA"
           test "$REMOTE_SHA" = "$CANDIDATE_SHA"
           echo "Canonical staging source: $HEAD_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Attest Fly identity, runtime posture, and deployed API contracts
         shell: python
@@ -106,111 +112,64 @@ jobs:
           expect(health.get("ok") is True, "Fly health did not report ok=true.")
           expect(health.get("service") == "jupr-api", "Unexpected Fly service identity.")
           expect(health.get("environment") == "staging", "Fly environment is not staging.")
-          expect(
-              str(health.get("git_commit_sha") or "").lower() == candidate,
-              "Fly runtime SHA does not match the candidate.",
-          )
-          expect(
-              str(health.get("image_build_git_sha") or "").lower() == candidate,
-              "Fly image SHA does not match the candidate.",
-          )
-          expect(
-              health.get("fly_app_name") == expected_app,
-              "Fly app identity is not juprleagues-api-staging.",
-          )
+          expect(str(health.get("git_commit_sha") or "").lower() == candidate, "Fly runtime SHA does not match the candidate.")
+          expect(str(health.get("image_build_git_sha") or "").lower() == candidate, "Fly image SHA does not match the candidate.")
+          expect(health.get("fly_app_name") == expected_app, "Fly app identity is not staging.")
+
           fly_image = str(health.get("fly_image_ref") or "")
           expect(
-              bool(
-                  re.fullmatch(
-                      r"registry\.fly\.io/juprleagues-api-staging(?::deployment-[A-Za-z0-9]{8,128}|@sha256:[a-f0-9]{32,128})",
-                      fly_image,
-                  )
-              ),
+              bool(re.fullmatch(
+                  r"registry\.fly\.io/juprleagues-api-staging(?::deployment-[A-Za-z0-9]{8,128}|@sha256:[a-f0-9]{32,128})",
+                  fly_image,
+              )),
               "Fly image reference is not canonical for the staging app.",
           )
-          expect(
-              health.get("web_origin") == expected_web,
-              "Fly is not configured for the canonical staging web origin.",
-          )
-          expect(
-              health.get("supabase_project_ref") == expected_supabase,
-              "Fly is not connected to the staging Supabase project.",
-          )
-          expect(
-              health.get("jwt_verification_project_ref") == expected_supabase,
-              "JWT verification does not use the staging Supabase project.",
-          )
+          expect(health.get("web_origin") == expected_web, "Fly web origin is not canonical staging.")
+          expect(health.get("supabase_project_ref") == expected_supabase, "Fly is not connected to staging Supabase.")
+          expect(health.get("jwt_verification_project_ref") == expected_supabase, "JWT verification is not using staging Supabase.")
 
-          write_wave = str(
-              health.get("staging_write_wave")
-              or health.get("write_wave")
-              or ""
-          ).lower()
+          write_wave = str(health.get("staging_write_wave") or health.get("write_wave") or "").lower()
           expect(write_wave == "open", "Staging write_wave is not open.")
-          expect(
-              health.get("business_data_write_wave_active") is True,
-              "Staging business writes are not reported active.",
-          )
+          expect(health.get("business_data_write_wave_active") is True, "Staging business writes are not active.")
           expect(
               health.get("controlled_write_flags") == expected_write_flags("open"),
-              "Controlled staging write flags do not match the permanent open wave.",
+              "Controlled write flags do not match the permanent open wave.",
           )
-          expect(
-              str(health.get("email_mode") or "").lower() == "dry_run",
-              "Staging email_mode is not dry_run.",
-          )
+          expect(str(health.get("email_mode") or "").lower() == "dry_run", "Staging email_mode is not dry_run.")
 
-          feature_flags = health.get("feature_flags")
-          if isinstance(feature_flags, dict):
-              expect(
-                  feature_flags.get("JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION")
-                  in {None, False},
-                  "The public-live production override is enabled.",
-              )
+          feature_flags = health.get("feature_flags") if isinstance(health.get("feature_flags"), dict) else {}
           expect(
-              health.get("public_live_production_override_enabled") in {None, False},
-              "A production public-live override is enabled.",
+              feature_flags.get("JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION") in {None, False},
+              "The public-live production override is enabled.",
           )
+          expect(health.get("public_live_production_override_enabled") in {None, False}, "A production override is enabled.")
           expect(
-              str(health.get("production_business_write_policy") or "").lower()
-              not in {"enabled", "write", "writable"},
+              str(health.get("production_business_write_policy") or "").lower() not in {"enabled", "write", "writable"},
               "Production business-write policy is enabled.",
           )
-          expect(
-              forbidden_supabase not in json.dumps(health, sort_keys=True),
-              "Production Supabase identity appeared in staging health.",
-          )
+          health_text = json.dumps(health, sort_keys=True)
+          expect(forbidden_supabase not in health_text, "Production Supabase identity appeared in staging health.")
 
           openapi = get_json(openapi_url)
           paths = openapi.get("paths") if isinstance(openapi.get("paths"), dict) else {}
-          admin_played = (
-              "/admin/clubs/{club_id}/play-generators/sessions/{session_key}"
-              "/rounds/{round_number}/played"
-          )
-          public_played = (
-              "/clubs/{club_slug}/play-generators/sessions/{session_key}"
-              "/rounds/{round_number}/played"
-          )
+          admin_played = "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/played"
+          public_played = "/clubs/{club_slug}/play-generators/sessions/{session_key}/rounds/{round_number}/played"
           expect(admin_played in paths, "Deployed admin Round Played API is missing.")
           expect(public_played in paths, "Deployed public Round Played API is missing.")
           openapi_text = json.dumps(openapi, sort_keys=True)
           expect('"scoring_mode"' in openapi_text, "Deployed OpenAPI lacks scoring_mode.")
           expect(forbidden_supabase not in openapi_text, "Production Supabase identity appeared in OpenAPI.")
 
-          Path("fly-health.json").write_text(
-              json.dumps(health, indent=2, sort_keys=True), encoding="utf-8"
-          )
-          Path("fly-openapi.json").write_text(
-              json.dumps(openapi, indent=2, sort_keys=True), encoding="utf-8"
-          )
+          Path("fly-health.json").write_text(json.dumps(health, indent=2, sort_keys=True), encoding="utf-8")
+          Path("fly-openapi.json").write_text(json.dumps(openapi, indent=2, sort_keys=True), encoding="utf-8")
+          print(json.dumps(health, indent=2, sort_keys=True))
 
           if errors:
               for error in errors:
                   print(f"::error title=Staging identity rejected::{error}")
               raise SystemExit(1)
 
-          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
-          summary.write_text(
+          Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text(
               "# Round-Robin staging identity\n\n"
               f"- Candidate: `{candidate}`\n"
               f"- Fly app: `{health.get('fly_app_name')}`\n"
@@ -222,12 +181,6 @@ jobs:
               "- Admin/public Round Played contracts: present\n",
               encoding="utf-8",
           )
-          print(json.dumps(health, indent=2, sort_keys=True))
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
 
       - name: Install focused test dependencies
         run: |
