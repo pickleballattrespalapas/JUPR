@@ -1,0 +1,2 @@
+trigger=2026-08-03-production-tournament-database-cutover-v1
+source=1bcb4ccc26875190aae1ace9ff4640f941f5a7ba
