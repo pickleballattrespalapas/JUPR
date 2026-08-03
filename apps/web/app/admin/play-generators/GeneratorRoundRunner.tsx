@@ -441,28 +441,16 @@ export default function GeneratorRoundRunner({
           })
         }
       );
-      if (!playedPayload.session) throw new Error("Round marked played without a refreshed session.");
+      if (!playedPayload.session) {
+        throw new Error("Round marked played without a refreshed session.");
+      }
       applySession(playedPayload.session);
-      const advancedPayload = await requestJson<MutationResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(
-          sessionKey
-        )}/advance`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            expected_version: playedPayload.session.version,
-            idempotency_key: operationKey("advance-after-played")
-          })
-        }
-      );
-      if (!advancedPayload.session) throw new Error("Round advanced without a refreshed session.");
-      applySession(advancedPayload.session);
-      if (advancedPayload.session.status === "completed") {
+      if (playedPayload.session.status === "completed") {
         setMessage("Session completed.");
         router.refresh();
         return;
       }
-      const nextRound = advancedPayload.session.current_round_number || roundNumber + 1;
+      const nextRound = playedPayload.session.current_round_number || roundNumber + 1;
       router.push(roundPath(generatorKind, sessionKey, nextRound));
       router.refresh();
     } catch (error) {
@@ -471,6 +459,7 @@ export default function GeneratorRoundRunner({
       setBusy(false);
     }
   }
+
 
   async function skipRound(): Promise<void> {
     if (!session || !round) return;
@@ -671,6 +660,13 @@ export default function GeneratorRoundRunner({
           {event.totalRounds} · {scoredSession ? "Scored" : "Unscored"} · {round.status}
         </p>
       </article>
+
+      {session.status === "completed" ? (
+        <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
+          <h2 style={{ marginTop: 0 }}>Session complete</h2>
+          <p style={{ marginBottom: 0, color: "#166534" }}>All scheduled rounds are complete. Review the saved session history below.</p>
+        </article>
+      ) : null}
 
       <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
@@ -1029,31 +1025,33 @@ export default function GeneratorRoundRunner({
         </article>
       ) : null}
 
-      <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Official results</h2>
-        <p style={{ color: "#475569" }}>
-          Publication requires an official player ID for every player in each saved match. Singles sessions
-          publish to singles ratings; doubles sessions publish to doubles ratings.
-        </p>
-        <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", alignItems: "end" }}>
-          <label>
-            Match date optional
-            <br />
-            <input
-              value={publishDate}
-              onChange={(event_) => setPublishDate(event_.target.value)}
-              placeholder="Defaults to publish time"
-              style={inputStyle}
-            />
-          </label>
-          <button type="button" onClick={() => void publishMatches()} disabled={busy} style={secondaryButton}>
-            Publish official matches
-          </button>
-        </div>
-        <p style={{ color: "#64748b" }}>
-          Published: {session.official_publish?.published_match_ids?.length || 0} match(es)
-        </p>
-      </article>
+      {scoredSession ? (
+        <article style={cardStyle}>
+          <h2 style={{ marginTop: 0 }}>Official results</h2>
+          <p style={{ color: "#475569" }}>
+            Publication requires an official player ID for every player in each saved match. Singles sessions
+            publish to singles ratings; doubles sessions publish to doubles ratings.
+          </p>
+          <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", alignItems: "end" }}>
+            <label>
+              Match date optional
+              <br />
+              <input
+                value={publishDate}
+                onChange={(event_) => setPublishDate(event_.target.value)}
+                placeholder="Defaults to publish time"
+                style={inputStyle}
+              />
+            </label>
+            <button type="button" onClick={() => void publishMatches()} disabled={busy} style={secondaryButton}>
+              Publish official matches
+            </button>
+          </div>
+          <p style={{ color: "#64748b" }}>
+            Published: {session.official_publish?.published_match_ids?.length || 0} match(es)
+          </p>
+        </article>
+      ) : null}
 
       {message ? (
         <p

@@ -12,6 +12,7 @@ from jupr_app.domain.adaptive_play_engine import (
     create_generator_preview,
     generator_event_standings,
     mark_generator_round_played,
+    normalize_scoring_mode,
     mutate_generator_roster,
     save_generator_round,
     schedule_export_rows,
@@ -552,11 +553,14 @@ def mark_play_generator_round_played(
         _event_from_state(_state(before)),
         round_number=int(round_number),
     )
+    event = advance_generator_event(event)
+    row_status = "completed" if str(event.get("status") or "") == "completed" else None
     updated = _persist_event(
         supabase,
         before=before,
         event=event,
         expected_version=expected_version,
+        status=row_status,
     )
     session = _session_payload(updated)
     _audit(
@@ -861,6 +865,10 @@ def publish_play_generator_matches(
         raise ValueError("This generator session changed. Reload it before publishing.")
     state = _state(before)
     event = _event_from_state(state)
+    if normalize_scoring_mode(event.get("scoringMode")) != "scored":
+        raise ValueError(
+            "Official publishing is unavailable for unscored Round-Robin sessions."
+        )
     official = _as_dict(state.get("official_publish"))
     published_ids = {
         str(value)

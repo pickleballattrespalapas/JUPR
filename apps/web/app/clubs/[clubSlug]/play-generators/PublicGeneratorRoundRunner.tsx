@@ -452,29 +452,16 @@ export default function GeneratorRoundRunner({
           })
         }
       );
-      if (!playedPayload.session) throw new Error("Round marked played without a refreshed session.");
+      if (!playedPayload.session) {
+        throw new Error("Round marked played without a refreshed session.");
+      }
       applySession(playedPayload.session);
-      const advancedPayload = await requestJson<MutationResponse>(
-        `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(
-          sessionKey
-        )}/advance`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            edit_token: editToken,
-            expected_version: Number(playedPayload.session.version),
-            idempotency_key: operationKey("advance-after-played")
-          })
-        }
-      );
-      if (!advancedPayload.session) throw new Error("Round advanced without a refreshed session.");
-      applySession(advancedPayload.session);
-      if (advancedPayload.session.status === "completed") {
+      if (playedPayload.session.status === "completed") {
         setMessage("Session completed.");
         router.refresh();
         return;
       }
-      const nextRound = advancedPayload.session.current_round_number || roundNumber + 1;
+      const nextRound = playedPayload.session.current_round_number || roundNumber + 1;
       router.push(roundPath(generatorKind, clubId, sessionKey, nextRound));
       router.refresh();
     } catch (error) {
@@ -483,6 +470,7 @@ export default function GeneratorRoundRunner({
       setBusy(false);
     }
   }
+
 
   async function skipRound(): Promise<void> {
     if (!session || !round) return;
@@ -686,6 +674,13 @@ export default function GeneratorRoundRunner({
         </p>
         {!editToken ? <p style={{ color: "#64748b" }}>View-only link. The private organizer link enables scores and roster changes.</p> : null}
       </article>
+
+      {session.status === "completed" ? (
+        <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
+          <h2 style={{ marginTop: 0 }}>Session complete</h2>
+          <p style={{ marginBottom: 0, color: "#166534" }}>All scheduled rounds are complete. This public session remains unrated.</p>
+        </article>
+      ) : null}
 
       <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>

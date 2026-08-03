@@ -742,7 +742,10 @@ def mark_generator_round_played(event: dict[str, Any], *, round_number: int) -> 
     if normalize_scoring_mode(next_event.get("scoringMode")) != "unscored":
         raise ValueError("Scored Round-Robins must save scores or skip the round.")
     row = _get_round(next_event, round_number)
-    if str(row.get("status")) not in {"active", "preview"}:
+    round_status = str(row.get("status"))
+    if round_status == "played":
+        return next_event
+    if round_status not in {"active", "preview"}:
         raise ValueError("Only an active round can be marked played.")
     if _round_has_any_scores(row):
         raise ValueError("Clear entered scores before marking this round played.")

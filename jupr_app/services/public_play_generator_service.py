@@ -755,6 +755,17 @@ def mark_public_play_generator_round_played(
     idempotency_key: str,
     requester_hash: str,
 ) -> dict[str, Any]:
+    def mutate(event: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        next_event = mark_generator_round_played(
+            event,
+            round_number=int(round_number),
+        )
+        next_event = advance_generator_event(next_event)
+        if str(next_event.get("status") or "") == "completed":
+            now = _now_iso()
+            return next_event, {"status": "completed", "completed_at": now}
+        return next_event, {}
+
     return _run_mutation(
         supabase,
         club_id=club_id,
@@ -765,10 +776,7 @@ def mark_public_play_generator_round_played(
         requester_hash=requester_hash,
         action="played",
         request_payload={"round_number": int(round_number)},
-        mutate=lambda event: (
-            mark_generator_round_played(event, round_number=int(round_number)),
-            {},
-        ),
+        mutate=mutate,
     )
 
 

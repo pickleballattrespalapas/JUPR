@@ -132,6 +132,14 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
         {visibleRounds.map((row) => <Link key={row.number} href={`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${row.number}`} style={linkButton}>Round {row.number}</Link>)}
       </nav>
       <PlayGeneratorStandingsTable rows={session.standings || []} sortMode={sortMode} />
+      {session.status === "completed" ? (
+        <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
+          <h2 style={{ marginTop: 0 }}>Session complete</h2>
+          <p style={{ marginBottom: 0, color: "#166534" }}>
+            The final cumulative standings are preserved above.
+          </p>
+        </article>
+      ) : null}
       {canContinue ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>{currentRound >= totalRounds ? "Finish the session" : `Continue to Round ${currentRound + 1}`}</h2>
