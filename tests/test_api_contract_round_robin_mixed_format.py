@@ -278,6 +278,7 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
             self.storage = storage
             self.table_name = table_name
             self.filters = []
+            self.in_filters = []
             self.limit_count = None
             self.insert_payload = None
             self.update_payload = None
@@ -287,6 +288,10 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
 
         def eq(self, key, value):
             self.filters.append((key, value))
+            return self
+
+        def in_(self, key, values):
+            self.in_filters.append((key, {str(value) for value in values}))
             return self
 
         def limit(self, value):
@@ -302,7 +307,13 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
             return self
 
         def _matches(self, row):
-            return all(str(row.get(key)) == str(value) for key, value in self.filters)
+            return (
+                all(str(row.get(key)) == str(value) for key, value in self.filters)
+                and all(
+                    str(row.get(key)) in values
+                    for key, values in self.in_filters
+                )
+            )
 
         def execute(self):
             rows = self.storage.setdefault(self.table_name, [])
@@ -323,7 +334,14 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
         def __init__(self):
             self.storage = {
                 "live_sessions": [],
-                "players": [],
+                "players": [
+                    {
+                        "club_id": "club",
+                        "id": player_id,
+                        "name": f"Player {index}",
+                    }
+                    for index, player_id in enumerate(range(101, 109), start=1)
+                ],
                 "admin_activity_log": [],
             }
 
