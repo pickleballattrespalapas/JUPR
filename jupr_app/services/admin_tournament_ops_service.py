@@ -9,6 +9,7 @@ from jupr_app.domain.tournament_team_canonical_publish import (
     classify_team_child_publish_state,
 )
 from jupr_app.services.admin_player_updates_service import is_auto_player_updates_enabled
+from jupr_app.services.production_tournament_guard import production_tournament_writes_enabled, require_production_tournament_writes
 from jupr_app.services.admin_tournament_guarded_operation import tournament_admin_guarded_runtime_enabled
 from jupr_app.services.admin_tournament_service import (
     TOURNAMENT_SELECT,
@@ -241,40 +242,33 @@ def get_admin_tournament_ops_state_fingerprint(
 
 
 def require_admin_tournament_official_publish_runtime() -> None:
-    """Apply the extra rating/email gates used only by official publishing."""
-
     environment = os.getenv("JUPR_ENV", "").strip().lower()
     if environment == "production":
-        raise PermissionError(
-            "Tournament official publishing is staging-only until manual parity acceptance is complete."
-        )
-    if environment != "staging":
+        require_production_tournament_writes()
+    elif environment != "staging":
         return
     if not _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH"):
-        raise PermissionError(
-            "Tournament official publishing is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH only for the approved staging exercise."
-        )
+        raise PermissionError("Tournament official publishing is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH only with the approved tournament write gate.")
     if is_auto_player_updates_enabled():
         if not _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF"):
-            raise PermissionError(
-                "Automatic tournament player-update email handoff is disabled. Open its separate staging gate before official publish."
-            )
-        if get_email_mode() not in {"dry_run", "staging_redirect"}:
-            raise PermissionError(
-                "Tournament staging publish requires JUPR_EMAIL_MODE=dry_run or staging_redirect; live delivery is refused."
-            )
+            raise PermissionError("Automatic tournament player-update email handoff is disabled.")
+        allowed_modes = {"dry_run"} if environment == "production" else {"dry_run", "staging_redirect"}
+        if get_email_mode() not in allowed_modes:
+            raise PermissionError("Tournament official publishing requires a non-live email mode.")
 
 
 def build_admin_tournament_ops_runtime_status() -> dict[str, Any]:
     environment = os.getenv("JUPR_ENV", "").strip().lower() or "local"
+    hosted = environment == "staging" or production_tournament_writes_enabled()
     return {
         "environment": environment,
         "operations_mutations_enabled": tournament_admin_guarded_runtime_enabled("operations"),
-        "official_publish_enabled": environment == "staging" and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH"),
-        "email_handoff_enabled": environment == "staging" and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF"),
+        "official_publish_enabled": hosted and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH"),
+        "email_handoff_enabled": hosted and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF"),
         "auto_player_updates_enabled": is_auto_player_updates_enabled(),
         "email_mode": get_email_mode(),
-        "staging_only": True,
+        "staging_only": False,
+        "production_authorized": production_tournament_writes_enabled(),
     }
 
 

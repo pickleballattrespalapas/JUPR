@@ -14,6 +14,7 @@ from jupr_app.domain.tournament_commerce import (
     stable_fingerprint,
 )
 from jupr_app.services.staging_write_guard import staging_write_wave_allows
+from jupr_app.services.production_tournament_guard import production_tournament_writes_enabled, require_production_tournament_writes
 
 
 FEATURE_FLAG = "JUPR_ENABLE_TOURNAMENT_COMMERCE"
@@ -53,61 +54,33 @@ def is_tournament_commerce_enabled() -> bool:
 def tournament_commerce_runtime_status() -> dict[str, Any]:
     environment = os.getenv("JUPR_ENV", "").strip().lower() or "local"
     wave = os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip() or "none"
+    production_authorized = production_tournament_writes_enabled()
+    mutation_enabled = _truthy(MUTATION_FLAG)
+    service_role_ready = bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip())
     return {
-        "enabled": is_tournament_commerce_enabled(),
-        "environment": environment,
-        "staging_only": True,
-        "service_role_ready": bool(
-            os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-        ),
-        "mutation_flag": {
-            "name": MUTATION_FLAG,
-            "enabled": _truthy(MUTATION_FLAG),
-        },
-        "write_wave": wave,
-        "admin_write_ready": (
-            environment == "staging"
-            and staging_write_wave_allows(ADMIN_WRITE_WAVE)
-            and _truthy(MUTATION_FLAG)
-        ),
-        "public_registration_write_ready": (
-            environment == "staging"
-            and staging_write_wave_allows(PUBLIC_WRITE_WAVE)
-            and _truthy(MUTATION_FLAG)
-        ),
+        "enabled": is_tournament_commerce_enabled(), "environment": environment, "staging_only": False,
+        "production_authorized": production_authorized, "service_role_ready": service_role_ready,
+        "mutation_flag": {"name": MUTATION_FLAG, "enabled": mutation_enabled}, "write_wave": wave,
+        "admin_write_ready": mutation_enabled and service_role_ready and (production_authorized or (environment == "staging" and staging_write_wave_allows(ADMIN_WRITE_WAVE))),
+        "public_registration_write_ready": mutation_enabled and service_role_ready and (production_authorized or (environment == "staging" and staging_write_wave_allows(PUBLIC_WRITE_WAVE))),
         "offline_payment_only": True,
     }
 
 
 def require_tournament_commerce_mutation_runtime(*, actor_type: str) -> None:
-    """Refuse production and require the exact isolated staging write wave."""
-
     environment = os.getenv("JUPR_ENV", "").strip().lower()
     if environment == "production":
-        raise PermissionError(
-            "Tournament commerce mutations are staging-only until manual "
-            "acceptance is complete."
-        )
-    if environment != "staging":
+        require_production_tournament_writes()
+        if not _truthy(MUTATION_FLAG):
+            raise PermissionError(f"Production tournament commerce writes require {MUTATION_FLAG}=1.")
+    elif environment == "staging":
+        expected_wave = PUBLIC_WRITE_WAVE if str(actor_type).upper() == "PUBLIC_REGISTRANT" else ADMIN_WRITE_WAVE
+        if not staging_write_wave_allows(expected_wave) or not _truthy(MUTATION_FLAG):
+            raise PermissionError("Tournament commerce writes are disabled.")
+    else:
         return
-    expected_wave = (
-        PUBLIC_WRITE_WAVE
-        if str(actor_type).upper() == "PUBLIC_REGISTRANT"
-        else ADMIN_WRITE_WAVE
-    )
-    if (
-        not staging_write_wave_allows(expected_wave)
-        or not _truthy(MUTATION_FLAG)
-    ):
-        raise PermissionError(
-            "Tournament commerce writes are disabled. Use permanent-open staging "
-            f"or the approved {expected_wave} wave."
-        )
     if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
-        raise TournamentCommerceUnavailableError(
-            "Tournament commerce staging writes require the server-only "
-            "Supabase service credential."
-        )
+        raise TournamentCommerceUnavailableError("Tournament commerce hosted writes require the server-only Supabase service credential.")
 
 
 def _clean_text(value: Any, *, limit: int = 500) -> str:

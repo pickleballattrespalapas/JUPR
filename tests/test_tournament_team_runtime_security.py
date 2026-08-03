@@ -191,7 +191,7 @@ def test_public_team_writes_refuse_production(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION", "1")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only")
 
-    with pytest.raises(PermissionError, match="staging-only"):
+    with pytest.raises(PermissionError, match="production write policy"):
         require_public_team_tournament_mutation_runtime()
 
 
@@ -200,7 +200,7 @@ def test_admin_team_service_writes_refuse_production(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION", "1")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only")
 
-    with pytest.raises(PermissionError, match="staging-only"):
+    with pytest.raises(PermissionError, match="production write policy"):
         require_admin_team_tournament_runtime()
 
 
@@ -293,7 +293,7 @@ def test_public_team_writes_allow_public_intake_or_permanent_open(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES", "1")
     monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "tournament-registration")
 
-    with pytest.raises(PermissionError, match="public-intake-auth"):
+    with pytest.raises(PermissionError, match="Four-player team writes are disabled"):
         require_public_team_tournament_mutation_runtime()
 
     monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "public-intake-auth")

@@ -33,6 +33,7 @@ from jupr_app.domain.tournament_team_canonical_publish import (
 from jupr_app.services.admin_tournament_service import (
     is_admin_tournament_admin_enabled,
 )
+from jupr_app.services.production_tournament_guard import require_production_tournament_writes
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
 TEAM_TABLES = (
@@ -73,10 +74,7 @@ def require_admin_team_tournament_runtime() -> None:
     if not is_admin_team_tournament_enabled():
         raise PermissionError("Team tournament management is disabled.")
     if os.getenv("JUPR_ENV", "").strip().lower() == "production":
-        raise PermissionError(
-            "Team tournament writes are staging-only until manual acceptance "
-            "is complete."
-        )
+        require_production_tournament_writes()
     if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
         raise PermissionError("Team tournament management requires the server database credential.")
 

@@ -110,7 +110,7 @@ def test_staging_runtime_requires_surface_flag_and_server_only_service_role(monk
     require_tournament_admin_mutation_runtime("registration")
 
     monkeypatch.setenv("JUPR_ENV", "production")
-    with pytest.raises(PermissionError, match="staging-only"):
+    with pytest.raises(PermissionError, match="production write policy"):
         require_tournament_admin_mutation_runtime("registration")
 
 

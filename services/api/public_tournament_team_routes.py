@@ -21,6 +21,7 @@ from jupr_app.services.public_tournament_team_service import (
 from jupr_app.services.admin_tournament_team_competition_service import (
     is_admin_team_tournament_enabled,
 )
+from jupr_app.services.production_tournament_guard import require_production_tournament_writes
 from services.api.staging_write_guard import require_public_intake_or_403
 
 
@@ -136,6 +137,10 @@ def install_public_tournament_team_routes(
     ) -> dict[str, Any]:
         _require_team_feature()
         require_public_intake_or_403()
+        try:
+            require_production_tournament_writes()
+        except (PermissionError, RuntimeError) as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         _require_team_mutation_runtime()
         _honeypot(payload.website)
         try:
@@ -230,6 +235,10 @@ def install_public_tournament_team_routes(
     ) -> dict[str, Any]:
         _require_team_feature()
         require_public_intake_or_403()
+        try:
+            require_production_tournament_writes()
+        except (PermissionError, RuntimeError) as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         _require_team_mutation_runtime()
         _honeypot(payload.website)
         if not public_team_tournament_runtime_ready():

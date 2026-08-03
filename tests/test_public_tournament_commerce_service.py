@@ -124,7 +124,7 @@ def test_named_commerce_waves_remain_distinct_and_open_allows_both(
 
     monkeypatch.setenv("JUPR_ENV", "production")
     monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "public-intake-auth")
-    with pytest.raises(PermissionError, match="staging-only"):
+    with pytest.raises(PermissionError, match="production write policy"):
         service.require_tournament_commerce_mutation_runtime(
             actor_type="PUBLIC_REGISTRANT"
         )
@@ -133,14 +133,14 @@ def test_named_commerce_waves_remain_distinct_and_open_allows_both(
     service.require_tournament_commerce_mutation_runtime(
         actor_type="PUBLIC_REGISTRANT"
     )
-    with pytest.raises(PermissionError, match="tournament-commerce-admin"):
+    with pytest.raises(PermissionError, match="Tournament commerce writes are disabled"):
         service.require_tournament_commerce_mutation_runtime(actor_type="ADMIN")
 
     monkeypatch.setenv(
         "JUPR_STAGING_WRITE_WAVE", "tournament-commerce-admin"
     )
     service.require_tournament_commerce_mutation_runtime(actor_type="ADMIN")
-    with pytest.raises(PermissionError, match="public-intake-auth"):
+    with pytest.raises(PermissionError, match="Tournament commerce writes are disabled"):
         service.require_tournament_commerce_mutation_runtime(
             actor_type="PUBLIC_REGISTRANT"
         )

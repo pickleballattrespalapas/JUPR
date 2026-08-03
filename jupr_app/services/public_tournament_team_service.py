@@ -24,6 +24,7 @@ from jupr_app.services.admin_tournament_team_competition_service import (
     is_admin_team_tournament_enabled,
 )
 from jupr_app.services.staging_write_guard import staging_write_wave_allows
+from jupr_app.services.production_tournament_guard import require_production_tournament_writes
 
 PUBLIC_TEAM_WRITE_WAVE = "public-intake-auth"
 PUBLIC_INTAKE_WRITE_FLAG = "JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES"
@@ -31,31 +32,20 @@ TRUTHY = {"1", "true", "yes", "y", "on"}
 
 
 def require_public_team_tournament_mutation_runtime() -> None:
-    """Refuse production and require the isolated public-registration wave."""
-
     if not is_admin_team_tournament_enabled():
         raise PermissionError("Four-player team registration is disabled.")
     environment = os.getenv("JUPR_ENV", "").strip().lower()
     if environment == "production":
-        raise PermissionError(
-            "Four-player team tournament writes are staging-only until manual "
-            "acceptance is complete."
-        )
-    if environment != "staging":
+        require_production_tournament_writes()
+        if os.getenv(PUBLIC_INTAKE_WRITE_FLAG, "").strip().lower() not in TRUTHY:
+            raise PermissionError(f"Production four-player team writes require {PUBLIC_INTAKE_WRITE_FLAG}=1.")
+    elif environment == "staging":
+        if not staging_write_wave_allows(PUBLIC_TEAM_WRITE_WAVE) or os.getenv(PUBLIC_INTAKE_WRITE_FLAG, "").strip().lower() not in TRUTHY:
+            raise PermissionError("Four-player team writes are disabled.")
+    else:
         return
-    if (
-        not staging_write_wave_allows(PUBLIC_TEAM_WRITE_WAVE)
-        or os.getenv(PUBLIC_INTAKE_WRITE_FLAG, "").strip().lower() not in TRUTHY
-    ):
-        raise PermissionError(
-            "Four-player team writes are disabled. Use permanent-open staging "
-            f"or the approved {PUBLIC_TEAM_WRITE_WAVE} wave."
-        )
     if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
-        raise RuntimeError(
-            "Four-player team staging writes require the server-only database "
-            "credential."
-        )
+        raise RuntimeError("Four-player team hosted writes require the server-only database credential.")
 
 
 def _one(

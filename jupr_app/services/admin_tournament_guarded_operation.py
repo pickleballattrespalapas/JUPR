@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.tournament_admin_operations import build_tournament_admin_operation_request
+from jupr_app.services.production_tournament_guard import production_tournament_writes_enabled, require_production_tournament_writes
 
 
 TOURNAMENT_ADMIN_OPERATION_TABLE = "tournament_admin_operations"
@@ -37,16 +38,15 @@ def _truthy_env(name: str) -> bool:
 
 
 def tournament_admin_guarded_runtime_enabled(surface: str) -> bool:
-    """Return whether the durable staging mutation path is active.
-
-    Local/test callers retain the legacy in-memory/fake-friendly path. Every
-    deployed staging mutation must opt into its own surface flag; production is
-    deliberately refused by ``require_tournament_admin_mutation_runtime``.
-    """
-
     environment = os.getenv("JUPR_ENV", "").strip().lower()
     flag = SURFACE_MUTATION_FLAGS.get(str(surface), "")
-    return environment == "staging" and bool(flag) and _truthy_env(flag)
+    if not flag or not _truthy_env(flag):
+        return False
+    if environment == "staging":
+        return True
+    if environment == "production":
+        return production_tournament_writes_enabled()
+    return False
 
 
 def require_tournament_admin_mutation_runtime(surface: str) -> None:
@@ -55,28 +55,26 @@ def require_tournament_admin_mutation_runtime(surface: str) -> None:
     if flag is None:
         raise PermissionError("Unknown Tournament Admin mutation surface.")
     if environment == "production":
-        raise PermissionError(
-            "Tournament Admin mutations are staging-only until manual parity acceptance is complete."
-        )
-    if environment == "staging":
+        require_production_tournament_writes()
+        if not _truthy_env(flag):
+            raise PermissionError(f"Production Tournament Admin mutation is disabled for {surface}. Enable {flag} only with the approved production tournament gate.")
+    elif environment == "staging":
         if not _truthy_env(flag):
             raise PermissionError(f"Tournament Admin mutation is disabled. Enable {flag} only for the approved staging exercise.")
-        if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
-            raise RuntimeError(
-                "Tournament Admin staging mutations require SUPABASE_SERVICE_ROLE_KEY on FastAPI. Never expose this secret to Next or the browser."
-            )
+    else:
+        return
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+        raise RuntimeError("Tournament Admin hosted mutations require SUPABASE_SERVICE_ROLE_KEY on FastAPI. Never expose this secret to Next or the browser.")
 
 
 def tournament_admin_mutation_status() -> dict[str, Any]:
     environment = os.getenv("JUPR_ENV", "").strip().lower() or "local"
     return {
         "environment": environment,
-        "staging_only": True,
+        "staging_only": False,
+        "production_authorized": production_tournament_writes_enabled(),
         "service_role_ready": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()),
-        "surface_flags": {
-            surface: {"name": flag, "enabled": environment == "staging" and _truthy_env(flag)}
-            for surface, flag in SURFACE_MUTATION_FLAGS.items()
-        },
+        "surface_flags": {surface: {"name": flag, "enabled": tournament_admin_guarded_runtime_enabled(surface)} for surface, flag in SURFACE_MUTATION_FLAGS.items()},
     }
 
 

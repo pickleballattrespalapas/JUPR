@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import HTTPException, Query
 from pydantic import BaseModel
 from supabase import Client
+from jupr_app.services.production_tournament_guard import require_production_tournament_writes
 from services.api.staging_write_guard import require_public_intake_or_403
 
 
@@ -71,6 +72,10 @@ def install_public_tournament_pairing_routes(
         payload: PublicTournamentPartnerAcceptPayload,
     ) -> dict[str, Any]:
         require_public_intake_or_403()
+        try:
+            require_production_tournament_writes()
+        except (PermissionError, RuntimeError) as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
@@ -97,6 +102,10 @@ def install_public_tournament_pairing_routes(
         payload: PublicTournamentPartnerAcceptPayload,
     ) -> dict[str, Any]:
         require_public_intake_or_403()
+        try:
+            require_production_tournament_writes()
+        except (PermissionError, RuntimeError) as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
@@ -123,6 +132,10 @@ def install_public_tournament_pairing_routes(
         payload: PublicTournamentPartnerAcceptPayload,
     ) -> dict[str, Any]:
         require_public_intake_or_403()
+        try:
+            require_production_tournament_writes()
+        except (PermissionError, RuntimeError) as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
@@ -148,6 +161,10 @@ def install_public_tournament_pairing_routes(
         payload: PublicTournamentPairingInterestPayload,
     ) -> dict[str, Any]:
         require_public_intake_or_403()
+        try:
+            require_production_tournament_writes()
+        except (PermissionError, RuntimeError) as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
