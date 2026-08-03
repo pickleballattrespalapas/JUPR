@@ -23,7 +23,7 @@ jobs:
       BASE_SHA: 1bcb4ccc26875190aae1ace9ff4640f941f5a7ba
       TARGET_BRANCH: agent/production-tournament-activation-v3
       STATUS_CONTEXT: production-tournament-activation-build
-      PATCH_SHA256: d2c565f206b0a205c402845e4865d09017897b0e55c9069218ea71c07542ec6c
+      PATCH_SHA256: 49935ed2873f66254c6f769abc35449704df04f8cf1ac0f916aa566659c08fbc
     steps:
       - uses: actions/checkout@v4
         with:
