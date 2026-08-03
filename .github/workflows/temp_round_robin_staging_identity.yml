@@ -1,0 +1,269 @@
+name: Temporary Round-Robin staging identity verifier
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify-staging:
+    runs-on: ubuntu-latest
+    env:
+      CANDIDATE_SHA: ff0d3dd35b76a24f66e3496a33e09fd8fc8149a9
+      FLY_HEALTH_URL: https://juprleagues-api-staging.fly.dev/health
+      FLY_OPENAPI_URL: https://juprleagues-api-staging.fly.dev/openapi.json
+      EXPECTED_FLY_APP: juprleagues-api-staging
+      EXPECTED_WEB_ORIGIN: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      EXPECTED_SUPABASE_REF: sijpxjxvdtrehmqvirfi
+      FORBIDDEN_PRODUCTION_SUPABASE_REF: dnoockbwfenunhcibwfn
+    steps:
+      - name: Check out exact staging candidate
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Confirm canonical staging source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin staging
+          HEAD_SHA="$(git rev-parse HEAD)"
+          REMOTE_SHA="$(git rev-parse origin/staging)"
+          test "$HEAD_SHA" = "$CANDIDATE_SHA"
+          test "$REMOTE_SHA" = "$CANDIDATE_SHA"
+          echo "Canonical staging source: $HEAD_SHA"
+
+      - name: Attest Fly identity, runtime posture, and deployed API contracts
+        shell: python
+        run: |
+          from __future__ import annotations
+
+          import json
+          import os
+          import re
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          from scripts.staging_write_waves import expected_write_flags
+
+          candidate = os.environ["CANDIDATE_SHA"].lower()
+          health_url = os.environ["FLY_HEALTH_URL"]
+          openapi_url = os.environ["FLY_OPENAPI_URL"]
+          expected_app = os.environ["EXPECTED_FLY_APP"]
+          expected_web = os.environ["EXPECTED_WEB_ORIGIN"]
+          expected_supabase = os.environ["EXPECTED_SUPABASE_REF"]
+          forbidden_supabase = os.environ["FORBIDDEN_PRODUCTION_SUPABASE_REF"]
+
+          def get_json(url: str) -> dict:
+              request = urllib.request.Request(
+                  url,
+                  headers={"User-Agent": "jupr-round-robin-staging-verifier/1.0"},
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  if response.status != 200:
+                      raise RuntimeError(f"{url} returned HTTP {response.status}")
+                  payload = json.loads(response.read().decode("utf-8"))
+              if not isinstance(payload, dict):
+                  raise RuntimeError(f"{url} did not return a JSON object")
+              return payload
+
+          health = None
+          last_error = None
+          for attempt in range(90):
+              try:
+                  current = get_json(health_url)
+                  image_sha = str(current.get("image_build_git_sha") or "").lower()
+                  runtime_sha = str(current.get("git_commit_sha") or "").lower()
+                  print(
+                      f"Fly identity attempt {attempt + 1}: "
+                      f"image={image_sha or '<missing>'} runtime={runtime_sha or '<missing>'}"
+                  )
+                  if image_sha == candidate and runtime_sha == candidate:
+                      health = current
+                      break
+              except Exception as exc:
+                  last_error = exc
+                  print(f"Fly identity attempt {attempt + 1} failed: {exc}")
+              time.sleep(10)
+
+          if health is None:
+              raise SystemExit(
+                  f"Fly never attested candidate {candidate}. Last error: {last_error}"
+              )
+
+          errors: list[str] = []
+
+          def expect(condition: bool, message: str) -> None:
+              if not condition:
+                  errors.append(message)
+
+          expect(health.get("ok") is True, "Fly health did not report ok=true.")
+          expect(health.get("service") == "jupr-api", "Unexpected Fly service identity.")
+          expect(health.get("environment") == "staging", "Fly environment is not staging.")
+          expect(
+              str(health.get("git_commit_sha") or "").lower() == candidate,
+              "Fly runtime SHA does not match the candidate.",
+          )
+          expect(
+              str(health.get("image_build_git_sha") or "").lower() == candidate,
+              "Fly image SHA does not match the candidate.",
+          )
+          expect(
+              health.get("fly_app_name") == expected_app,
+              "Fly app identity is not juprleagues-api-staging.",
+          )
+          fly_image = str(health.get("fly_image_ref") or "")
+          expect(
+              bool(
+                  re.fullmatch(
+                      r"registry\.fly\.io/juprleagues-api-staging(?::deployment-[A-Za-z0-9]{8,128}|@sha256:[a-f0-9]{32,128})",
+                      fly_image,
+                  )
+              ),
+              "Fly image reference is not canonical for the staging app.",
+          )
+          expect(
+              health.get("web_origin") == expected_web,
+              "Fly is not configured for the canonical staging web origin.",
+          )
+          expect(
+              health.get("supabase_project_ref") == expected_supabase,
+              "Fly is not connected to the staging Supabase project.",
+          )
+          expect(
+              health.get("jwt_verification_project_ref") == expected_supabase,
+              "JWT verification does not use the staging Supabase project.",
+          )
+
+          write_wave = str(
+              health.get("staging_write_wave")
+              or health.get("write_wave")
+              or ""
+          ).lower()
+          expect(write_wave == "open", "Staging write_wave is not open.")
+          expect(
+              health.get("business_data_write_wave_active") is True,
+              "Staging business writes are not reported active.",
+          )
+          expect(
+              health.get("controlled_write_flags") == expected_write_flags("open"),
+              "Controlled staging write flags do not match the permanent open wave.",
+          )
+          expect(
+              str(health.get("email_mode") or "").lower() == "dry_run",
+              "Staging email_mode is not dry_run.",
+          )
+
+          feature_flags = health.get("feature_flags")
+          if isinstance(feature_flags, dict):
+              expect(
+                  feature_flags.get("JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION")
+                  in {None, False},
+                  "The public-live production override is enabled.",
+              )
+          expect(
+              health.get("public_live_production_override_enabled") in {None, False},
+              "A production public-live override is enabled.",
+          )
+          expect(
+              str(health.get("production_business_write_policy") or "").lower()
+              not in {"enabled", "write", "writable"},
+              "Production business-write policy is enabled.",
+          )
+          expect(
+              forbidden_supabase not in json.dumps(health, sort_keys=True),
+              "Production Supabase identity appeared in staging health.",
+          )
+
+          openapi = get_json(openapi_url)
+          paths = openapi.get("paths") if isinstance(openapi.get("paths"), dict) else {}
+          admin_played = (
+              "/admin/clubs/{club_id}/play-generators/sessions/{session_key}"
+              "/rounds/{round_number}/played"
+          )
+          public_played = (
+              "/clubs/{club_slug}/play-generators/sessions/{session_key}"
+              "/rounds/{round_number}/played"
+          )
+          expect(admin_played in paths, "Deployed admin Round Played API is missing.")
+          expect(public_played in paths, "Deployed public Round Played API is missing.")
+          openapi_text = json.dumps(openapi, sort_keys=True)
+          expect('"scoring_mode"' in openapi_text, "Deployed OpenAPI lacks scoring_mode.")
+          expect(forbidden_supabase not in openapi_text, "Production Supabase identity appeared in OpenAPI.")
+
+          Path("fly-health.json").write_text(
+              json.dumps(health, indent=2, sort_keys=True), encoding="utf-8"
+          )
+          Path("fly-openapi.json").write_text(
+              json.dumps(openapi, indent=2, sort_keys=True), encoding="utf-8"
+          )
+
+          if errors:
+              for error in errors:
+                  print(f"::error title=Staging identity rejected::{error}")
+              raise SystemExit(1)
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          summary.write_text(
+              "# Round-Robin staging identity\n\n"
+              f"- Candidate: `{candidate}`\n"
+              f"- Fly app: `{health.get('fly_app_name')}`\n"
+              f"- Fly image: `{fly_image}`\n"
+              f"- Supabase: `{health.get('supabase_project_ref')}`\n"
+              f"- write_wave: `{write_wave}`\n"
+              f"- email_mode: `{health.get('email_mode')}`\n"
+              "- Production override: disabled\n"
+              "- Admin/public Round Played contracts: present\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(health, indent=2, sort_keys=True))
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r services/api/requirements.txt
+          python -m pip install pytest
+
+      - name: Reconfirm Round-Robin and Match Uploader compatibility
+        run: |
+          python -m pytest -q \
+            tests/test_round_robin_unscored_flow.py \
+            tests/test_api_contract_admin_match_uploader.py \
+            tests/test_admin_match_uploader_service.py \
+            tests/test_match_player_flow_surfaces.py
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Reconfirm Match Uploader component contract
+        working-directory: apps/web
+        run: |
+          npm ci --no-audit --no-fund
+          node tests/match-uploader-layout.cjs
+
+      - name: Upload verifier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: round-robin-staging-identity-${{ github.run_id }}
+          path: |
+            fly-health.json
+            fly-openapi.json
+          if-no-files-found: ignore
+          retention-days: 7
