@@ -1,0 +1,79 @@
+name: Temporary Verify Tournament Staging 7fe27e
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.event.pull_request.head.ref == 'agent/verify-tournament-staging-7fe27e'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Verify exact Fly staging candidate and tournament contracts
+        shell: bash
+        env:
+          EXPECTED_SHA: 7fe27ef2b5d1d13c79717ce5ffe87eb4ca85e9b1
+        run: |
+          set -euo pipefail
+          base_url="https://juprleagues-api-staging.fly.dev"
+          matched=0
+          for attempt in $(seq 1 60); do
+            echo "Candidate check $attempt/60"
+            if curl --fail --silent --show-error --max-time 20 "$base_url/health" -o /tmp/health.json; then
+              cat /tmp/health.json
+              if python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          health = json.loads(Path('/tmp/health.json').read_text())
+          expected_sha = os.environ['EXPECTED_SHA']
+          checks = {
+              'ok': health.get('ok') is True,
+              'environment': health.get('environment') == 'staging',
+              'git_commit_sha': health.get('git_commit_sha') == expected_sha,
+              'image_build_git_sha': health.get('image_build_git_sha') == expected_sha,
+              'fly_app_name': health.get('fly_app_name') == 'juprleagues-api-staging',
+              'supabase_project_ref': health.get('supabase_project_ref') == 'sijpxjxvdtrehmqvirfi',
+              'staging_write_wave': health.get('staging_write_wave') == 'open',
+              'write_wave': health.get('write_wave') == 'open',
+              'business_data_write_wave_active': health.get('business_data_write_wave_active') is True,
+              'public_live_production_override_enabled': health.get('public_live_production_override_enabled') is False,
+          }
+          failed = [name for name, passed in checks.items() if not passed]
+          if failed:
+              print('Candidate not ready:', ', '.join(failed))
+              raise SystemExit(1)
+          print('Exact Fly staging candidate verified.')
+          PY
+              then
+                matched=1
+                break
+              fi
+            fi
+            sleep 15
+          done
+          test "$matched" = "1"
+
+          curl --fail --silent --show-error --max-time 30 "$base_url/openapi.json" -o /tmp/openapi.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          spec = json.loads(Path('/tmp/openapi.json').read_text())
+          paths = spec.get('paths', {})
+          expected = {
+              '/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}/partner': 'put',
+              '/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/orders/{registration_id}': 'put',
+              '/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/orders/{registration_id}/quote': 'post',
+          }
+          missing = [f'{method.upper()} {path}' for path, method in expected.items() if method not in paths.get(path, {})]
+          if missing:
+              raise SystemExit('Missing deployed tournament routes: ' + ', '.join(missing))
+          print('Tournament partner, order-edit, and quote routes verified in deployed OpenAPI.')
+          PY
