@@ -5,6 +5,8 @@ import SelectedTournamentPanelScope from "../SelectedTournamentPanelScope";
 import TournamentPhaseNav from "@/components/TournamentPhaseNav";
 import RegistrationManagementPanel from "./RegistrationManagementPanel";
 
+export const dynamic = "force-dynamic";
+
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
 function first(value: string | string[] | undefined): string {
