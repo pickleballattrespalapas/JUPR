@@ -1,0 +1,40 @@
+name: Temporary Export Tournament Domain Source
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    if: github.event.pull_request.head.ref == 'agent/tournament-domain-rebuild-20260804'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create exact source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > SOURCE_SHA.txt
+          tar \
+            --exclude=.git \
+            --exclude=node_modules \
+            --exclude=.next \
+            -czf /tmp/JUPR-tournament-domain-source.tar.gz .
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: JUPR-tournament-domain-source
+          path: /tmp/JUPR-tournament-domain-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
