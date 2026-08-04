@@ -328,6 +328,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/bulk"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/{registration_id}"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}"),
+        ("PUT", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}/partner"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/rating-verifications"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/rating-reviews"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/rating-reviews/close"),
@@ -372,8 +373,10 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     "tournament-commerce-admin": (
         ("POST", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/catalog/preview"),
         ("PUT", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/catalog"),
+        ("PUT", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/orders/{registration_id}"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/orders/{registration_id}/payment"),
         ("POST", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/orders/{registration_id}/cancel"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/orders/{registration_id}/quote"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/fulfillment/{fulfillment_id}"),
     ),
 }
