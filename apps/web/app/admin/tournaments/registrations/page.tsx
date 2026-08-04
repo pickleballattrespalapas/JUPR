@@ -32,9 +32,9 @@ export default async function AdminTournamentRegistrationManagementPage({ search
       {error ? <p role="alert" style={{ color: "#b91c1c" }}>Tournament reports are unavailable. {error}</p> : null}
       {data ? (
         <SelectedTournamentPanelScope tournamentId={tournamentId} tournamentName={tournamentName || null}>
-          <Suspense fallback={<p style={{ color: "#64748b" }}>Loading tournament reports...</p>}>
-  <RegistrationManagementPanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={data} />
-</Suspense>
+          <Suspense fallback={<p aria-live="polite" style={{ color: "#64748b" }}>Loading registration reports...</p>}>
+            <RegistrationManagementPanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={data} />
+          </Suspense>
         </SelectedTournamentPanelScope>
       ) : null}
     </section>
