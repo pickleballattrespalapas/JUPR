@@ -81,16 +81,26 @@ def test_add_division_uses_dialog_instead_of_appending_hidden_row() -> None:
     dialog = read("app/admin/tournaments/setup/TournamentSetupDivisionDialog.tsx")
     division_card = read("app/admin/tournaments/setup/TournamentSetupDivisionCard.tsx")
     assert "TournamentSetupDivisionDialog" in panel
-    assert 'onClick={() => setDivisionDialogOpen(true)}' in panel
+    assert 'onClick={() => setDivisionDialogKey(null)}' in panel
+    assert 'mode={divisionDialogKey === null ? "add" : "edit"}' in panel
+    assert 'onEdit={() => setDivisionDialogKey(row.key)}' in panel
     assert 'role="dialog"' in dialog
-    assert 'Add division' in dialog
+    assert '? "Add division"' in dialog
+    assert '`Edit ${cleanString(draft.division_name ?? draft.label) || "division"}`' in dialog
+    assert 'dialogMode === "add" ? "Add division" : "Save division"' in dialog
     assert 'onConfirm(draft)' in dialog
-    assert 'scrollIntoView' in panel
-    assert 'confirmationText=""' in division_card
+    assert 'setDivisionDialogKey(undefined)' in panel
+    assert 'onClick={onEdit}' in division_card
+    assert '>Edit<' not in division_card  # JSX includes line breaks around the label.
+    assert 'Edit' in division_card
+    assert '<input' not in division_card
+    assert '<select' not in division_card
 
 
 def test_event_and_division_schedules_support_multiple_days() -> None:
     builder = read("app/admin/tournament-setup/tournamentSetupBuilder.ts")
+    event_dialog = read("app/admin/tournaments/setup/TournamentSetupEventFamilyDialog.tsx")
+    division_dialog = read("app/admin/tournaments/setup/TournamentSetupDivisionDialog.tsx")
     event_card = read("app/admin/tournaments/setup/TournamentSetupEventFamilyCard.tsx")
     division_card = read("app/admin/tournaments/setup/TournamentSetupDivisionCard.tsx")
     service = (ROOT / "jupr_app/services/admin_tournament_setup_service.py").read_text()
@@ -99,9 +109,11 @@ def test_event_and_division_schedules_support_multiple_days() -> None:
     assert "eventDayReferences" in builder
     assert "setEventDayReferences" in builder
     assert "scheduled_day_ids" in builder
-    assert "Select every day on which this event may be played" in event_card
-    assert "Use every day selected for the parent event" in division_card
-    assert "Choose specific event days" in division_card
+    assert "Select every day on which this event may be played" in event_dialog
+    assert "Use every day selected for the parent event" in division_dialog
+    assert "Choose specific event days" in division_dialog
+    assert "No tournament days" in event_card
+    assert "No tournament days" in division_card
     assert '"scheduled_day_ids"' in service
     assert '"scheduled_day_ids"' in repo
     assert "scheduled_day_ids jsonb" in migration

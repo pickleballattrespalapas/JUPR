@@ -54,6 +54,7 @@ from jupr_app.services.admin_tournament_service import (
     build_admin_tournament_registration_import_handoff,
     build_admin_tournament_status,
     get_admin_tournament_detail,
+    replace_admin_tournament_selection_partner,
     is_admin_tournament_admin_enabled,
     list_admin_tournaments,
     update_admin_tournament_registration,
@@ -251,6 +252,14 @@ class AdminTournamentSelectionUpdateRequest(BaseModel):
     partner_note: str | None = None
     confirmation_text: str = ""
     source: str = "next_tournament_admin_selection_update"
+
+
+class AdminTournamentSelectionPartnerRequest(BaseModel):
+    partner_selection_id: str | None = None
+    unpaired_mode: str = Field(default="NEEDS_PARTNER", pattern=r"^(NONE|NEEDS_PARTNER)$")
+    expected_updated_at: str
+    confirmation_text: str = ""
+    source: str = "next_tournament_registration_detail"
 
 
 class AdminTournamentUpdateRequest(BaseModel):
@@ -1401,6 +1410,93 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 expected_state=expected_updated_at,
                 current_state=lambda: next((str(row.get("updated_at") or "") for row in get_admin_tournament_detail(supabase, club_id=str(club_id), tournament_id=str(tournament_id)).get("selections") or [] if str(row.get("id") or "") == str(selection_id)), ""),
                 payload=patch,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=source,
+                preflight=preflight,
+                mutate=mutate,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+
+    @app.put("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}/partner")
+    def put_admin_tournament_selection_partner(
+        club_id: str,
+        tournament_id: str,
+        selection_id: str,
+        payload: AdminTournamentSelectionPartnerRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        body = _dump_model(payload)
+        source = str(body.pop("source", payload.source))
+        confirmation_text = str(body.pop("confirmation_text", payload.confirmation_text))
+        expected_updated_at = str(body.pop("expected_updated_at", payload.expected_updated_at))
+        partner_selection_id = body.pop("partner_selection_id", payload.partner_selection_id)
+        unpaired_mode = str(body.pop("unpaired_mode", payload.unpaired_mode) or "NEEDS_PARTNER").upper()
+        try:
+            _require_confirmation(confirmation_text, "SAVE PARTNER")
+            preflight = lambda: replace_admin_tournament_selection_partner(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                selection_id=str(selection_id),
+                partner_selection_id=str(partner_selection_id) if partner_selection_id else None,
+                unpaired_mode=unpaired_mode,
+                expected_updated_at=expected_updated_at,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=confirmation_text,
+                source=source,
+                dry_run=True,
+            )
+            mutate = lambda: replace_admin_tournament_selection_partner(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                selection_id=str(selection_id),
+                partner_selection_id=str(partner_selection_id) if partner_selection_id else None,
+                unpaired_mode=unpaired_mode,
+                expected_updated_at=expected_updated_at,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=confirmation_text,
+                source=source,
+            )
+            return _guarded_admin_mutation(
+                supabase,
+                club_id=str(club_id),
+                surface="registration",
+                action="tournament_registration_partner_update",
+                entity_type="tournament_registration_selection",
+                entity_id=str(selection_id),
+                lock_scope=str(tournament_id),
+                expected_state=expected_updated_at,
+                current_state=lambda: next(
+                    (
+                        str(row.get("updated_at") or "")
+                        for row in get_admin_tournament_detail(
+                            supabase,
+                            club_id=str(club_id),
+                            tournament_id=str(tournament_id),
+                        ).get("selections") or []
+                        if str(row.get("id") or "") == str(selection_id)
+                    ),
+                    "",
+                ),
+                payload={
+                    "partner_selection_id": partner_selection_id,
+                    "unpaired_mode": unpaired_mode,
+                },
                 actor_email=actor_email,
                 actor_role=actor_role,
                 source=source,

@@ -3,10 +3,6 @@
 import { useId } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import {
-  COMPETITION_FORMATS,
-  GENDER_RESTRICTIONS,
-  PARTICIPANT_TYPES,
-  SCORING_OPTIONS,
   cleanString,
   dayLabel,
   dayReference,
@@ -14,11 +10,7 @@ import {
   eventFamilyName,
   numberInputValue,
   recordBoolean,
-  setEventDayReferences,
-  setRecordNumber,
-  setRecordString,
   type BuilderRow,
-  type SetupRecord,
   type ValidationIssue
 } from "../../tournament-setup/tournamentSetupBuilder";
 import styles from "../../tournament-setup/TournamentSetupBuilder.module.css";
@@ -26,13 +18,11 @@ import styles from "../../tournament-setup/TournamentSetupBuilder.module.css";
 type Props = {
   row: BuilderRow;
   position: number;
-  total: number;
   days: BuilderRow[];
   disabled: boolean;
   issues: ValidationIssue[];
   divisionCount: number;
-  onChange: (value: SetupRecord) => void;
-  onMove: (direction: -1 | 1) => void;
+  onEdit: () => void;
   onRemove: () => void;
 };
 
@@ -44,297 +34,70 @@ function optionLabel(value: string): string {
     .join(" ");
 }
 
-function optionsWithCurrent(options: readonly string[], current: string): string[] {
-  return current && !options.includes(current) ? [current, ...options] : [...options];
-}
-
 export default function TournamentSetupEventFamilyCard({
   row,
   position,
-  total,
   days,
   disabled,
   issues,
   divisionCount,
-  onChange,
-  onMove,
+  onEdit,
   onRemove
 }: Props) {
   const issueId = useId();
   const value = row.value;
   const name = eventFamilyName(value);
-  const currentDays = eventDayReferences(value);
+  const dayNames = new Map(days.map((day) => [dayReference(day.value), dayLabel(day.value) || dayReference(day.value)]));
+  const selectedDays = eventDayReferences(value).map((day) => dayNames.get(day) || day);
   const participantType = cleanString(value.participant_type) || "GENDER_DOUBLES";
-  const gender = cleanString(value.gender_restriction) || "ANY";
-  const drawFormat = cleanString(value.default_format) || "ROUND_ROBIN_PLUS_PLAYOFF";
-  const scoring = cleanString(value.default_scoring) || "GAME_TO_15";
-  const dayOptions = days.map((day) => ({
-    value: dayReference(day.value),
-    label: dayLabel(day.value) || dayReference(day.value),
-    enabled: recordBoolean(day.value.enabled, true)
-  }));
-
-  function updateParticipantType(nextType: string) {
-    const next = setRecordString(value, ["participant_type"], nextType);
-    if (nextType === "SINGLES") {
-      next.default_partner_board = false;
-      next.gender_restriction = gender === "MIXED" ? "ANY" : gender;
-    }
-    onChange(next);
-  }
+  const gender = participantType === "MIXED_DOUBLES" ? "MIXED" : cleanString(value.gender_restriction) || "ANY";
 
   return (
-    <fieldset
-      className={styles.rowCard}
-      aria-describedby={issues.length ? issueId : undefined}
-    >
-      <legend className={styles.legend}>
-        Event {position + 1}: {name || "Untitled event"}
-      </legend>
-
-      <div className={styles.rowActions}>
-        <button
-          type="button"
-          className={styles.smallButton}
-          disabled={disabled || position === 0}
-          onClick={() => onMove(-1)}
-        >
-          Move up
-        </button>
-        <button
-          type="button"
-          className={styles.smallButton}
-          disabled={disabled || position === total - 1}
-          onClick={() => onMove(1)}
-        >
-          Move down
-        </button>
-        <ConfirmAction
-          triggerLabel="Remove event"
-          title={`Remove ${name || `event ${position + 1}`}?`}
-          description={
-            divisionCount
-              ? `This event still has ${divisionCount} division${divisionCount === 1 ? "" : "s"}. Reassign or remove those divisions first.`
-              : "This removes the event from the setup draft. Published tournament data does not change until final review."
-          }
-          confirmLabel="Yes, remove event"
-          cancelLabel="No, keep event"
-          confirmationText=""
-          tone="danger"
-          disabled={disabled || divisionCount > 0}
-          onConfirm={onRemove}
-        />
-      </div>
-
-      <div className={styles.grid}>
-        <label className={`${styles.label} ${styles.wide}`}>
-          Event name
-          <input
-            className={styles.input}
-            value={name}
-            disabled={disabled}
-            placeholder="Gender Doubles"
-            onChange={(event) =>
-              onChange(
-                setRecordString(
-                  value,
-                  ["event_family", "event_family_label"],
-                  event.target.value
-                )
-              )
-            }
-          />
-        </label>
-
-        <fieldset className={`${styles.wide} ${styles.rowCard}`} style={{ padding: "0.75rem" }}>
-          <legend style={{ fontWeight: 800 }}>Tournament days</legend>
-          <p style={{ margin: "0 0 0.55rem", color: "#64748b" }}>
-            Select every day on which this event may be played. A division may use all of these days or a selected subset.
+    <article className={styles.rowCard} aria-describedby={issues.length ? issueId : undefined}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div>
+          <h3 style={{ margin: 0 }}>Event {position + 1}: {name || "Untitled event"}</h3>
+          <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
+            {selectedDays.join(", ") || "No tournament days"}
           </p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.45rem" }}>
-            {dayOptions.map((option) => (
-              <label key={option.value} className={styles.checkbox}>
-                <input
-                  type="checkbox"
-                  checked={currentDays.includes(option.value)}
-                  disabled={disabled || !option.enabled}
-                  onChange={(event) => {
-                    const next = event.target.checked
-                      ? [...currentDays, option.value]
-                      : currentDays.filter((value) => value !== option.value);
-                    onChange(setEventDayReferences(value, next));
-                  }}
-                />
-                {option.label}{option.enabled ? "" : " (disabled)"}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
-        <label className={styles.label}>
-          Participant type
-          <select
-            className={styles.select}
-            value={participantType}
-            disabled={disabled}
-            onChange={(event) => updateParticipantType(event.target.value)}
-          >
-            {optionsWithCurrent(PARTICIPANT_TYPES, participantType).map((option) => (
-              <option key={option} value={option}>
-                {optionLabel(option)}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className={styles.label}>
-          Gender
-          <select
-            className={styles.select}
-            value={gender}
-            disabled={disabled}
-            onChange={(event) =>
-              onChange(
-                setRecordString(
-                  value,
-                  ["gender_restriction"],
-                  event.target.value
-                )
-              )
+        </div>
+        <div className={styles.rowActions}>
+          <button type="button" className={styles.smallButton} disabled={disabled} onClick={onEdit}>
+            Edit
+          </button>
+          <ConfirmAction
+            triggerLabel="Remove event"
+            title={`Remove ${name || `event ${position + 1}`}?`}
+            description={
+              divisionCount
+                ? `This event still has ${divisionCount} division${divisionCount === 1 ? "" : "s"}. Reassign or remove those divisions first.`
+                : "This removes the event from the unpublished setup draft. Published tournament data remains unchanged until final review and publication."
             }
-          >
-            {optionsWithCurrent(GENDER_RESTRICTIONS, gender).map((option) => (
-              <option key={option} value={option}>
-                {optionLabel(option)}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className={styles.label}>
-          Default draw format
-          <select
-            className={styles.select}
-            value={drawFormat}
-            disabled={disabled}
-            onChange={(event) =>
-              onChange(
-                setRecordString(value, ["default_format"], event.target.value)
-              )
-            }
-          >
-            {optionsWithCurrent(COMPETITION_FORMATS, drawFormat).map((option) => (
-              <option key={option} value={option}>
-                {optionLabel(option)}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className={styles.label}>
-          Default scoring
-          <select
-            className={styles.select}
-            value={scoring}
-            disabled={disabled}
-            onChange={(event) =>
-              onChange(
-                setRecordString(value, ["default_scoring"], event.target.value)
-              )
-            }
-          >
-            {optionsWithCurrent(SCORING_OPTIONS, scoring).map((option) => (
-              <option key={option} value={option}>
-                {optionLabel(option)}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className={styles.label}>
-          Default capacity
-          <input
-            className={styles.input}
-            type="number"
-            min="1"
-            step="1"
-            value={numberInputValue(value.default_capacity_teams)}
-            disabled={disabled}
-            onChange={(event) =>
-              onChange(
-                setRecordNumber(value, "default_capacity_teams", event.target.value)
-              )
-            }
+            confirmLabel="Yes, remove event"
+            cancelLabel="No, keep event"
+            confirmationText=""
+            tone="danger"
+            disabled={disabled || divisionCount > 0}
+            onConfirm={onRemove}
           />
-        </label>
-
-        <label className={styles.label}>
-          Default entry fee (USD)
-          <input
-            className={styles.input}
-            type="number"
-            inputMode="decimal"
-            min="0"
-            step="0.01"
-            value={numberInputValue(value.default_price_usd)}
-            disabled={disabled}
-            onChange={(event) =>
-              onChange(
-                setRecordNumber(value, "default_price_usd", event.target.value)
-              )
-            }
-          />
-        </label>
-
-        <label className={styles.checkbox}>
-          <input
-            type="checkbox"
-            checked={recordBoolean(value.default_waitlist, true)}
-            disabled={disabled}
-            onChange={(event) =>
-              onChange({ ...value, default_waitlist: event.target.checked })
-            }
-          />
-          Waitlist enabled by default
-        </label>
-
-        <label className={styles.checkbox}>
-          <input
-            type="checkbox"
-            checked={recordBoolean(value.default_partner_board, true)}
-            disabled={disabled || participantType === "SINGLES"}
-            onChange={(event) =>
-              onChange({ ...value, default_partner_board: event.target.checked })
-            }
-          />
-          Partner Board enabled by default
-        </label>
+        </div>
       </div>
-
-      <article
-        style={{
-          marginTop: "0.85rem",
-          padding: "0.75rem",
-          borderRadius: "10px",
-          background: "#f8fafc",
-          color: "#334155"
-        }}
-      >
-        <strong>{divisionCount} division{divisionCount === 1 ? "" : "s"}</strong>
-        <br />
-        <small>
-          These defaults apply when a new division is created. Existing divisions
-          remain editable in Step 3.
-        </small>
-      </article>
-
+      <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.7rem", margin: "0.9rem 0 0" }}>
+        <div><dt style={{ fontWeight: 800 }}>Participant type</dt><dd style={{ margin: 0 }}>{optionLabel(participantType)}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Gender</dt><dd style={{ margin: 0 }}>{optionLabel(gender)}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Default draw</dt><dd style={{ margin: 0 }}>{optionLabel(cleanString(value.default_format) || "ROUND_ROBIN_PLUS_PLAYOFF")}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Default scoring</dt><dd style={{ margin: 0 }}>{optionLabel(cleanString(value.default_scoring) || "GAME_TO_15")}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Capacity</dt><dd style={{ margin: 0 }}>{numberInputValue(value.default_capacity_teams) || "—"}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Entry fee</dt><dd style={{ margin: 0 }}>${Number(value.default_price_usd || 0).toFixed(2)}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Waitlist</dt><dd style={{ margin: 0 }}>{recordBoolean(value.default_waitlist, true) ? "Enabled" : "Disabled"}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Partner Board</dt><dd style={{ margin: 0 }}>{participantType !== "SINGLES" && recordBoolean(value.default_partner_board, true) ? "Enabled" : "Disabled"}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Divisions</dt><dd style={{ margin: 0 }}>{divisionCount}</dd></div>
+      </dl>
       {issues.length ? (
         <ul id={issueId} className={styles.issues}>
-          {issues.map((issue) => (
-            <li key={`${issue.path}-${issue.message}`}>{issue.message}</li>
-          ))}
+          {issues.map((issue) => <li key={`${issue.path}-${issue.message}`}>{issue.message}</li>)}
         </ul>
       ) : null}
-    </fieldset>
+    </article>
   );
 }

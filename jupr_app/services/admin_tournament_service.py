@@ -16,6 +16,7 @@ from jupr_app.domain.tournament_registration_repo import (
     update_admin_registration_selection,
 )
 from jupr_app.domain.tournament_admin_operations import stable_tournament_admin_fingerprint
+from jupr_app.domain.tournament_partner_service import admin_replace_partner_link
 from jupr_app.services.public_tournament_registration_service import (
     build_tournament_registration_player_profile,
     validate_and_clean_tournament_selection,
@@ -47,7 +48,7 @@ EVENT_OPTION_SELECT = (
     "event_format_default,scoring_default,skill_mode,age_mode,status,enabled,waitlist_enabled,"
     "partner_board_enabled,sort_order"
 )
-DAY_SELECT = "id,tournament_id,label,event_date,enabled,sort_order,created_at"
+DAY_SELECT = "id,tournament_id,label,event_date,enabled,sort_order,court_count,court_labels,court_open_time,court_close_time,court_notes,created_at"
 CONFIRM_REGISTRATION_UPDATE = "SAVE REGISTRATION"
 CONFIRM_SELECTION_UPDATE = "SAVE SELECTION"
 CONFIRM_TOURNAMENT_UPDATE = "SAVE TOURNAMENT"
@@ -200,7 +201,12 @@ def _event_family_key(event: dict[str, Any]) -> tuple[str, str]:
     return day_id, family
 
 
-def _selection_payload(row: dict[str, Any], *, event_options: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def _selection_payload(
+    row: dict[str, Any],
+    *,
+    event_options: list[dict[str, Any]] | None = None,
+    partner: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     event_options_by_id = _event_option_map(event_options or [])
     event_option_id = _clean_text(row.get("event_option_id"), limit=120)
     event_option = event_options_by_id.get(event_option_id, {})
@@ -216,9 +222,67 @@ def _selection_payload(row: dict[str, Any], *, event_options: list[dict[str, Any
         "partner_phone": _clean_text(row.get("partner_phone"), limit=80),
         "partner_note": _clean_text(row.get("partner_note"), limit=500),
         "show_on_partner_board": _safe_bool(row.get("show_on_partner_board"), default=False),
+        "partner_team_link_id": (partner or {}).get("team_link_id"),
+        "partner_team_status": (partner or {}).get("team_status"),
+        "partner_selection_id": (partner or {}).get("selection_id"),
+        "partner_registration_id": (partner or {}).get("registration_id"),
+        "partner_display_name": (partner or {}).get("display_name"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
+
+
+def _partner_relationships_for_tournament(
+    supabase: Any,
+    *,
+    tournament_id: str,
+    selections: list[dict[str, Any]],
+    registrations: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    try:
+        links = _query_rows(
+            supabase.table("tournament_registration_team_links")
+            .select("id,tournament_id,event_option_id,selection1_id,selection2_id,status,updated_at")
+            .eq("tournament_id", str(tournament_id))
+        )
+    except Exception:
+        return {}
+    selection_by_id = {
+        _clean_text(row.get("id"), limit=120): row
+        for row in selections
+        if _clean_text(row.get("id"), limit=120)
+    }
+    registration_by_id = {
+        _clean_text(row.get("id"), limit=120): row
+        for row in registrations
+        if _clean_text(row.get("id"), limit=120)
+    }
+    result: dict[str, dict[str, Any]] = {}
+    for link in links:
+        status = _clean_text(link.get("status"), limit=40).upper()
+        if status not in {"CONFIRMED", "ADMIN_CONFIRMED"}:
+            continue
+        left_id = _clean_text(link.get("selection1_id"), limit=120)
+        right_id = _clean_text(link.get("selection2_id"), limit=120)
+        for selection_id, partner_selection_id in (
+            (left_id, right_id),
+            (right_id, left_id),
+        ):
+            partner_selection = selection_by_id.get(partner_selection_id) or {}
+            partner_registration_id = _clean_text(
+                partner_selection.get("registration_id"), limit=120
+            )
+            partner_registration = registration_by_id.get(partner_registration_id) or {}
+            result[selection_id] = {
+                "team_link_id": _clean_text(link.get("id"), limit=120),
+                "team_status": status,
+                "selection_id": partner_selection_id or None,
+                "registration_id": partner_registration_id or None,
+                "display_name": _display_name(partner_registration)
+                if partner_registration
+                else None,
+            }
+    return result
 
 
 def _summary_counts(registrations: list[dict[str, Any]], selections: list[dict[str, Any]]) -> dict[str, Any]:
@@ -476,7 +540,20 @@ def get_admin_tournament_detail(supabase: Any, *, club_id: str, tournament_id: s
         if registration_id:
             selections_by_registration[registration_id] = selections_by_registration.get(registration_id, 0) + 1
     registrations = [_registration_payload(row, selection_count=selections_by_registration.get(_clean_text(row.get("id"), limit=120), 0)) for row in registrations_raw]
-    selections = [_selection_payload(row, event_options=event_options) for row in selections_raw]
+    partner_relationships = _partner_relationships_for_tournament(
+        supabase,
+        tournament_id=clean_id,
+        selections=selections_raw,
+        registrations=registrations_raw,
+    )
+    selections = [
+        _selection_payload(
+            row,
+            event_options=event_options,
+            partner=partner_relationships.get(_clean_text(row.get("id"), limit=120)),
+        )
+        for row in selections_raw
+    ]
     state_fingerprint = _admin_detail_state_fingerprint(
         tournament=tournament,
         settings=settings,
@@ -539,6 +616,146 @@ def build_admin_tournament_registration_import_handoff(
         "ops_path": f"/admin/tournaments/ops?tournament_id={str(tournament_id)}",
         "required_ops_confirmation": "IMPORT REGISTRATIONS",
         "integrity_notice": "Tournament Ops rechecks draw scope, confirmed player links, duplicates, and existing games. Registration Admin cannot bypass those draw-integrity guards.",
+    }
+
+
+def replace_admin_tournament_selection_partner(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    selection_id: str,
+    partner_selection_id: str | None,
+    unpaired_mode: str,
+    expected_updated_at: str,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_tournament_registration_detail",
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    if not is_admin_tournament_admin_enabled():
+        raise PermissionError("Next Tournament Admin is disabled.")
+    if str(confirmation_text or "").strip().upper() != "SAVE PARTNER":
+        raise ValueError("Type SAVE PARTNER to confirm the partner assignment.")
+    clean_tournament_id = _clean_text(tournament_id, limit=120)
+    clean_selection_id = _clean_text(selection_id, limit=120)
+    clean_partner_id = _clean_text(partner_selection_id, limit=120) or None
+    expected = _clean_text(expected_updated_at, limit=120)
+    if not expected:
+        raise ValueError("expected_updated_at is required for partner changes.")
+    tournament = _first_row(
+        supabase, "tournaments", TOURNAMENT_SELECT, key="id", value=clean_tournament_id
+    )
+    if not tournament or str(tournament.get("club_id") or "") != str(club_id):
+        raise ValueError("tournament not found")
+    before = _fetch_selection_by_id(
+        supabase, tournament_id=clean_tournament_id, selection_id=clean_selection_id
+    )
+    if before is None:
+        raise ValueError("selection not found")
+    if str(before.get("updated_at") or "") != expected:
+        from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
+
+        raise StaleTournamentAdminStateError(
+            "This event entry changed after it was loaded. Reload before changing its partner."
+        )
+    if registration_is_imported_to_draw(
+        supabase,
+        tournament_id=clean_tournament_id,
+        selection_id=clean_selection_id,
+    ):
+        raise ValueError(
+            "This event entry is already represented in a draw. Correct the team in Tournament Ops."
+        )
+    mode = _clean_text(unpaired_mode, limit=40).upper() or "NEEDS_PARTNER"
+    if mode not in {"NONE", "NEEDS_PARTNER"}:
+        raise ValueError("Unpaired mode must be NONE or NEEDS_PARTNER.")
+    event_option_id = _clean_text(before.get("event_option_id"), limit=120)
+    if clean_partner_id:
+        partner = _fetch_selection_by_id(
+            supabase,
+            tournament_id=clean_tournament_id,
+            selection_id=clean_partner_id,
+        )
+        if partner is None:
+            raise ValueError("partner event entry not found")
+        if _clean_text(partner.get("event_option_id"), limit=120) != event_option_id:
+            raise ValueError("Partners must be registered in the same division.")
+        partner_registration = _fetch_registration_by_id(
+            supabase,
+            tournament_id=clean_tournament_id,
+            registration_id=_clean_text(partner.get("registration_id"), limit=120),
+        )
+        if partner_registration is None:
+            raise ValueError("partner registration not found")
+        if _registration_status(partner_registration).lower() == "cancelled":
+            raise ValueError("A cancelled registration cannot be assigned as a partner.")
+        if registration_is_imported_to_draw(
+            supabase,
+            tournament_id=clean_tournament_id,
+            selection_id=clean_partner_id,
+        ):
+            raise ValueError(
+                "The selected partner is already represented in a draw. Correct the team in Tournament Ops."
+            )
+    if dry_run:
+        return {
+            "ok": True,
+            "mode": "tournament_registration_partner_preflight",
+            "dry_run": True,
+            "write_count": 0,
+            "selection_id": clean_selection_id,
+            "partner_selection_id": clean_partner_id,
+            "unpaired_mode": mode,
+        }
+
+    result = admin_replace_partner_link(
+        supabase,
+        tournament_id=clean_tournament_id,
+        event_option_id=event_option_id,
+        selection_id=clean_selection_id,
+        partner_selection_id=clean_partner_id,
+        unpaired_mode=mode,
+        admin_user_id=actor_email,
+        source="ADMIN_RECONCILIATION",
+    )
+    detail = get_admin_tournament_detail(
+        supabase, club_id=str(club_id), tournament_id=clean_tournament_id
+    )
+    selection = next(
+        (row for row in detail.get("selections") or [] if str(row.get("id") or "") == clean_selection_id),
+        None,
+    )
+    audit_payload = build_activity_payload(
+        club_id=str(club_id),
+        actor_email=str(actor_email or ""),
+        actor_role=str(actor_role or ""),
+        action_type="update_tournament_registration_partner_admin",
+        entity_type="tournament_registration_selection",
+        entity_id=clean_selection_id,
+        before_json={"selection": _selection_payload(before)},
+        after_json={
+            "source_client": "fastapi/nextjs",
+            "source_page": source,
+            "partner_selection_id": clean_partner_id,
+            "unpaired_mode": mode,
+            "result": result,
+            "selection": selection,
+        },
+        source_page=source,
+        flagged_for_review=True,
+    )
+    audit_write = write_admin_activity_log(supabase, audit_payload)
+    warnings = [audit_write.warning] if audit_write.warning else []
+    if not audit_write.ok and is_api_audit_log_required():
+        raise RuntimeError("audit log write required but unavailable")
+    return {
+        "ok": True,
+        "mode": "tournament_registration_partner_update",
+        "selection": selection,
+        "partner_result": result,
+        "warnings": warnings,
     }
 
 

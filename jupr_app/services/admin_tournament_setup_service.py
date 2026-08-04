@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
@@ -9,6 +10,7 @@ from jupr_app.domain.tournament_admin_operations import stable_tournament_admin_
 from jupr_app.domain.tournament_registration_repo import (
     REGISTRATION_STATUS_OPTIONS,
     analyze_registration_publish_impact,
+    clear_builder_draft,
     count_tournament_registrations,
     get_builder_draft,
     get_registration_settings,
@@ -150,12 +152,20 @@ def _event_option_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _day_payload(row: dict[str, Any]) -> dict[str, Any]:
+    court_labels = row.get("court_labels")
+    if not isinstance(court_labels, list):
+        court_labels = []
     return {
         "id": row.get("id"),
         "tournament_id": row.get("tournament_id"),
         "label": row.get("label"),
         "event_date": row.get("event_date") or row.get("date") or row.get("start_date"),
         "date": row.get("event_date") or row.get("date") or row.get("start_date"),
+        "court_count": row.get("court_count"),
+        "court_labels": list(court_labels),
+        "court_open_time": row.get("court_open_time"),
+        "court_close_time": row.get("court_close_time"),
+        "court_notes": row.get("court_notes"),
         "enabled": row.get("enabled"),
         "sort_order": row.get("sort_order"),
     }
@@ -365,6 +375,8 @@ def review_admin_tournament_setup_impact(
     tournament_id: str,
     days: list[dict[str, Any]],
     event_options: list[dict[str, Any]],
+    basics: dict[str, Any] | None = None,
+    settings: dict[str, Any] | None = None,
     expected_state_fingerprint: str,
 ) -> dict[str, Any]:
     """Analyze a draft without writing any table."""
@@ -394,6 +406,8 @@ def review_admin_tournament_setup_impact(
             "state_fingerprint": detail["state_fingerprint"],
             "days": normalized_days,
             "event_options": normalized_events,
+            "basics": dict(basics or {}),
+            "settings": dict(settings or {}),
             "impact": impact,
         }
     )
@@ -478,6 +492,8 @@ def save_admin_tournament_setup_draft(
     days: list[dict[str, Any]],
     event_families: list[dict[str, Any]],
     event_options: list[dict[str, Any]],
+    basics: dict[str, Any] | None = None,
+    settings: dict[str, Any] | None = None,
     saved_step: str | None,
     actor_email: str,
     actor_role: str,
@@ -499,6 +515,8 @@ def save_admin_tournament_setup_draft(
             "day_count": len(days or []),
             "event_family_count": len(event_families or []),
             "event_option_count": len(event_options or []),
+            "basics_saved": bool(basics),
+            "settings_saved": bool(settings),
         }
     draft = save_builder_draft(
         supabase,
@@ -506,6 +524,8 @@ def save_admin_tournament_setup_draft(
         days=list(days or []),
         event_families=list(event_families or []),
         divisions=list(event_options or []),
+        basics=dict(basics or {}),
+        settings=dict(settings or {}),
         saved_step=saved_step,
     )
     warnings = _audit(
@@ -530,6 +550,8 @@ def publish_admin_tournament_setup(
     tournament_id: str,
     days: list[dict[str, Any]],
     event_options: list[dict[str, Any]],
+    basics: dict[str, Any] | None = None,
+    settings: dict[str, Any] | None = None,
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
@@ -559,6 +581,8 @@ def publish_admin_tournament_setup(
                 "state_fingerprint": detail["state_fingerprint"],
                 "days": list(days or []),
                 "event_options": list(event_options or []),
+                "basics": dict(basics or {}),
+                "settings": dict(settings or {}),
                 "impact": impact,
             }
         )
@@ -567,8 +591,50 @@ def publish_admin_tournament_setup(
     if impact.get("blocked"):
         raise ValueError("Publish blocked due to destructive changes: " + " | ".join(str(x) for x in impact.get("blocked") or []))
     if dry_run:
-        return {"ok": True, "mode": "tournament_setup_publish_preflight", "dry_run": True, "write_count": 0, "publish_impact": impact}
+        return {
+            "ok": True,
+            "mode": "tournament_setup_publish_preflight",
+            "dry_run": True,
+            "write_count": 0,
+            "publish_impact": impact,
+            "basics": dict(basics or {}),
+            "settings": dict(settings or {}),
+        }
+
+    clean_basics = dict(basics or {})
+    tournament_patch: dict[str, Any] = {}
+    for source_key, target_key in (("name", "name"), ("start_date", "start_date"), ("end_date", "end_date")):
+        if source_key in clean_basics:
+            tournament_patch[target_key] = clean_basics.get(source_key)
+    if tournament_patch:
+        tournament_patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+        response = (
+            supabase.table("tournaments")
+            .update(tournament_patch)
+            .eq("id", str(tournament_id))
+            .eq("club_id", str(club_id))
+            .execute()
+        )
+        if not _safe_rows(response):
+            raise RuntimeError("Tournament basics were not published.")
+
+    clean_settings = dict(settings or {})
+    for basics_key in ("location_name", "timezone", "sponsors_json"):
+        if basics_key in clean_basics:
+            clean_settings[basics_key] = clean_basics.get(basics_key)
+    # Registration status is deliberately controlled by the separate Open/Close
+    # Registration action on the final review page.
+    clean_settings.pop("registration_status", None)
+    if clean_settings:
+        before_settings = get_registration_settings(
+            supabase, str(tournament_id)
+        )
+        clean_settings["id"] = before_settings.get("id")
+        clean_settings["tournament_id"] = str(tournament_id)
+        upsert_registration_settings(supabase, clean_settings)
+
     result = publish_registration_configuration(supabase, tournament_id=str(tournament_id), days=list(days or []), event_options=list(event_options or []))
+    clear_builder_draft(supabase, str(tournament_id))
     warnings = _audit(
         supabase,
         club_id=str(club_id),
@@ -577,7 +643,13 @@ def publish_admin_tournament_setup(
         action_type="tournament_setup_publish",
         entity_id=str(tournament_id),
         before_json={"impact": impact},
-        after_json={"result": result, "day_count": len(days or []), "event_option_count": len(event_options or [])},
+        after_json={
+            "result": result,
+            "day_count": len(days or []),
+            "event_option_count": len(event_options or []),
+            "basics": dict(basics or {}),
+            "settings": dict(settings or {}),
+        },
         source=source,
     )
     return {

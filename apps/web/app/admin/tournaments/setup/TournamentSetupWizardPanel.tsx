@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import TournamentSetupWizardNav, {
   TOURNAMENT_SETUP_STEPS,
@@ -19,14 +19,13 @@ import {
   configurationPayload,
   dayLabel,
   dayReference,
-  draftSignature,
   eventDayReference,
   eventDayReferences,
   eventDivisionName,
   eventFamilyName,
   eventUsesLabelDayReference,
+  MAX_TOURNAMENT_DAYS,
   issuesForPath,
-  moveBuilderRow,
   newDayRow,
   newEventFamilyRow,
   newEventOptionRow,
@@ -36,13 +35,18 @@ import {
   replaceBuilderRow,
   setEventDayReferences,
   setRecordString,
+  sortDivisionsByEventAndName,
+  sortEventFamiliesByTournamentDay,
+  syncTournamentDays,
   validateSetupConfiguration,
+  withDefaultDayCourts,
   wrapBuilderRows,
   type SetupConfiguration,
   type SetupRecord,
   type ValidationIssue
 } from "../../tournament-setup/tournamentSetupBuilder";
 import TournamentSetupEventFamilyCard from "./TournamentSetupEventFamilyCard";
+import TournamentSetupEventFamilyDialog from "./TournamentSetupEventFamilyDialog";
 import TournamentSetupDivisionCard from "./TournamentSetupDivisionCard";
 import TournamentSetupDivisionDialog from "./TournamentSetupDivisionDialog";
 import TournamentSetupPolicies, { withDefaultTournamentPolicies } from "./TournamentSetupPolicies";
@@ -119,6 +123,7 @@ type Props = {
   tournamentId: string;
   tournamentName: string;
   step: TournamentSetupStep;
+  resolveDivisionId?: string;
 };
 
 const emptyConfiguration: SetupConfiguration = {
@@ -240,6 +245,51 @@ function emptyBasics(name: string): BasicsDraft {
     timezone: "America/Mazatlan",
     sponsors: []
   };
+}
+
+function basicsDraftPayload(basics: BasicsDraft): Record<string, unknown> {
+  return {
+    name: basics.name.trim(),
+    start_date: basics.startDate || null,
+    end_date: basics.endDate || null,
+    location_name: basics.locationName.trim(),
+    timezone: basics.timezone,
+    sponsors_json: basics.sponsors.map((sponsor) => ({
+      id: sponsor.id,
+      name: sponsor.name.trim(),
+      level: sponsor.level.trim(),
+      website: sponsor.website.trim(),
+      notes: sponsor.notes.trim()
+    }))
+  };
+}
+
+function settingsDraftPayload(settings: Record<string, unknown>): Record<string, unknown> {
+  return {
+    registration_slug: safeString(settings.registration_slug).trim(),
+    locale: safeString(settings.locale) || "en",
+    registration_status: safeString(settings.registration_status) || "draft",
+    registration_open_at: settings.registration_open_at || null,
+    registration_close_at: settings.registration_close_at || null,
+    waitlist_enabled: Boolean(settings.waitlist_enabled),
+    partner_board_enabled: Boolean(settings.partner_board_enabled),
+    rules_markdown: safeString(settings.rules_markdown),
+    refund_policy_markdown: safeString(settings.refund_policy_markdown),
+    weather_policy_markdown: safeString(settings.weather_policy_markdown),
+    sponsor_markdown: safeString(settings.sponsor_markdown)
+  };
+}
+
+function fullDraftSignature(
+  basics: BasicsDraft,
+  settings: Record<string, unknown>,
+  configuration: SetupConfiguration
+): string {
+  return JSON.stringify({
+    basics: basicsDraftPayload(basics),
+    settings: settingsDraftPayload(settings),
+    configuration: configurationPayload(configuration)
+  });
 }
 
 function derivedEventFamilies(events: SetupRecord[], days: SetupRecord[]): SetupRecord[] {
@@ -401,7 +451,7 @@ function initialDaysFromTournament(tournament: Record<string, unknown>): SetupRe
   }
   const rows: SetupRecord[] = [];
   const cursor = new Date(startDate);
-  while (cursor <= endDate && rows.length < 14) {
+  while (cursor <= endDate && rows.length < 31) {
     const row = newDayRow(rows.length + 1, `Day ${rows.length + 1}`);
     row.event_date = cursor.toISOString().slice(0, 10);
     rows.push(row);
@@ -418,6 +468,35 @@ function formatImpactItem(value: unknown): string {
     if (row[key] != null && String(row[key]).trim()) return String(row[key]);
   }
   return JSON.stringify(row);
+}
+
+type BlockedImpactDetail = {
+  message: string;
+  entity_type?: string;
+  entity_id?: string;
+  entity_label?: string;
+  step?: TournamentSetupStep;
+};
+
+function blockedImpactDetail(value: unknown): BlockedImpactDetail {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const row = value as Record<string, unknown>;
+    return {
+      message: formatImpactItem(row),
+      entity_type: safeString(row.entity_type),
+      entity_id: safeString(row.entity_id),
+      entity_label: safeString(row.entity_label),
+      step: safeString(row.step) as TournamentSetupStep
+    };
+  }
+  const message = formatImpactItem(value);
+  const labelMatch = message.match(/division '([^']+)'/i);
+  return {
+    message,
+    entity_type: labelMatch ? "division" : "",
+    entity_label: labelMatch?.[1] || "",
+    step: labelMatch ? "divisions" : "review"
+  };
 }
 
 function footerRow(children: ReactNode) {
@@ -443,7 +522,8 @@ export default function TournamentSetupWizardPanel({
   status,
   tournamentId,
   tournamentName,
-  step
+  step,
+  resolveDivisionId = ""
 }: Props) {
   const router = useRouter();
   const { accessToken, loading: sessionLoading } = useAdminSession();
@@ -460,7 +540,12 @@ export default function TournamentSetupWizardPanel({
     useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [divisionDialogOpen, setDivisionDialogOpen] = useState(false);
+  const [eventDialogKey, setEventDialogKey] = useState<string | null | undefined>(undefined);
+  const [divisionDialogKey, setDivisionDialogKey] = useState<string | null | undefined>(undefined);
+  const [publishedBasics, setPublishedBasics] = useState<BasicsDraft>(() => emptyBasics(tournamentName));
+  const [publishedSettings, setPublishedSettings] = useState<Record<string, unknown>>({});
+  const [publishedConfiguration, setPublishedConfiguration] = useState<SetupConfiguration>(emptyConfiguration);
+  const openedResolutionRef = useRef(false);
 
   const detailRequest = useLatestRequestGuard(
     `${accessToken}\u0000${tournamentId}`,
@@ -479,7 +564,12 @@ export default function TournamentSetupWizardPanel({
     setSetupPublishedThisSession(false);
     setBusy(false);
     setMessage(null);
-    setDivisionDialogOpen(false);
+    setEventDialogKey(undefined);
+    setDivisionDialogKey(undefined);
+    setPublishedBasics(emptyBasics(tournamentName));
+    setPublishedSettings({});
+    setPublishedConfiguration(emptyConfiguration);
+    openedResolutionRef.current = false;
   }
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -497,42 +587,114 @@ export default function TournamentSetupWizardPanel({
   }
 
   function hydrate(payload: SetupDetail) {
-  const draft = objectValue(payload.builder_draft);
-  const publishedDays = payload.days || [];
-  const draftDays = listValue(draft.days);
-  const days = draftDays.length
-    ? draftDays
-    : publishedDays.length
-      ? publishedDays
-      : initialDaysFromTournament(payload.tournament);
-  const draftEvents = listValue(
-    Array.isArray(draft.event_options) ? draft.event_options : draft.divisions
-  );
-  const events = draftEvents.length ? draftEvents : payload.event_options || [];
-  const draftFamilies = listValue(draft.event_families);
-  const families = draftFamilies.length
-    ? draftFamilies
-    : derivedEventFamilies(events, days);
-  const loadedSettings = withDefaultTournamentPolicies(payload.settings || {});
+    const draft = objectValue(payload.builder_draft);
+    const publishedSettingsValue = withDefaultTournamentPolicies(payload.settings || {});
+    const publishedBasicsValue: BasicsDraft = {
+      name: safeString(payload.tournament.name) || tournamentName,
+      startDate: dateValue(payload.tournament.start_date),
+      endDate: dateValue(payload.tournament.end_date),
+      locationName: safeString(publishedSettingsValue.location_name),
+      timezone: safeString(publishedSettingsValue.timezone) || "America/Mazatlan",
+      sponsors: normalizeSponsors(publishedSettingsValue.sponsors_json)
+    };
+    const draftBasicsRecord = objectValue(draft.basics);
+    const draftBasicsValue: BasicsDraft = {
+      name: safeString(draftBasicsRecord.name) || publishedBasicsValue.name,
+      startDate: dateValue(draftBasicsRecord.start_date) || publishedBasicsValue.startDate,
+      endDate: dateValue(draftBasicsRecord.end_date) || publishedBasicsValue.endDate,
+      locationName: safeString(draftBasicsRecord.location_name) || publishedBasicsValue.locationName,
+      timezone: safeString(draftBasicsRecord.timezone) || publishedBasicsValue.timezone,
+      sponsors: Array.isArray(draftBasicsRecord.sponsors_json)
+        ? normalizeSponsors(draftBasicsRecord.sponsors_json)
+        : publishedBasicsValue.sponsors
+    };
+    const draftSettingsValue = withDefaultTournamentPolicies({
+      ...publishedSettingsValue,
+      ...objectValue(draft.settings)
+    });
 
-  setDetail(payload);
-  setBasics({
-    name: safeString(payload.tournament.name) || tournamentName,
-    startDate: dateValue(payload.tournament.start_date),
-    endDate: dateValue(payload.tournament.end_date),
-    locationName: safeString(loadedSettings.location_name),
-    timezone: safeString(loadedSettings.timezone) || "America/Mazatlan",
-    sponsors: normalizeSponsors(loadedSettings.sponsors_json)
-  });
-  setSettings(loadedSettings);
-  setConfiguration({
-    days: wrapBuilderRows(days, "day"),
-    eventFamilies: wrapBuilderRows(families, "family"),
-    eventOptions: wrapBuilderRows(events, "event")
-  });
-  setImpactReview(null);
-  setReviewedDraftSignature("");
-}
+    const publishedDays = (payload.days || []).map(withDefaultDayCourts);
+    const rawDraftDays = listValue(draft.days).map(withDefaultDayCourts);
+    const baseDays = rawDraftDays.length
+      ? rawDraftDays
+      : publishedDays.length
+        ? publishedDays
+        : initialDaysFromTournament({
+            start_date: draftBasicsValue.startDate,
+            end_date: draftBasicsValue.endDate
+          });
+    const syncedDays = syncTournamentDays(
+      draftBasicsValue.startDate,
+      draftBasicsValue.endDate,
+      wrapBuilderRows(baseDays, "day")
+    );
+
+    const draftEvents = listValue(
+      Array.isArray(draft.event_options) ? draft.event_options : draft.divisions
+    );
+    const events = draftEvents.length ? draftEvents : payload.event_options || [];
+    const draftFamilies = listValue(draft.event_families);
+    const families = draftFamilies.length
+      ? draftFamilies
+      : derivedEventFamilies(events, syncedDays.map((row) => row.value));
+    const wrappedFamilies = sortEventFamiliesByTournamentDay(
+      wrapBuilderRows(families, "family"),
+      syncedDays
+    );
+    const wrappedEvents = sortDivisionsByEventAndName(
+      wrapBuilderRows(events, "event"),
+      wrappedFamilies,
+      syncedDays
+    );
+
+    const publishedDayRows = wrapBuilderRows(
+      publishedDays.length
+        ? publishedDays
+        : initialDaysFromTournament(payload.tournament).map(withDefaultDayCourts),
+      "published-day"
+    );
+    const publishedFamilyRows = sortEventFamiliesByTournamentDay(
+      wrapBuilderRows(derivedEventFamilies(payload.event_options || [], publishedDayRows.map((row) => row.value)), "published-family"),
+      publishedDayRows
+    );
+    const publishedEventRows = sortDivisionsByEventAndName(
+      wrapBuilderRows(payload.event_options || [], "published-event"),
+      publishedFamilyRows,
+      publishedDayRows
+    );
+
+    setDetail(payload);
+    setBasics(draftBasicsValue);
+    setSettings(draftSettingsValue);
+    setConfiguration({ days: syncedDays, eventFamilies: wrappedFamilies, eventOptions: wrappedEvents });
+    setPublishedBasics(publishedBasicsValue);
+    setPublishedSettings(publishedSettingsValue);
+    setPublishedConfiguration({
+      days: publishedDayRows,
+      eventFamilies: publishedFamilyRows,
+      eventOptions: publishedEventRows
+    });
+    setImpactReview(null);
+    setReviewedDraftSignature("");
+    if (
+      step === "divisions" &&
+      resolveDivisionId &&
+      !openedResolutionRef.current
+    ) {
+      const resolutionRow = wrappedEvents.find(
+        (row) => safeString(row.value.id) === resolveDivisionId
+      );
+      if (resolutionRow) {
+        openedResolutionRef.current = true;
+        setDivisionDialogKey(resolutionRow.key);
+        setMessage(
+          `Opened ${eventDivisionName(
+            resolutionRow.value
+          ) || "the affected division"} to resolve the blocked draft change.`
+        );
+      }
+    }
+  }
 
 async function loadDetail() {
     const generation = detailRequest.begin();
@@ -574,120 +736,230 @@ async function loadDetail() {
     );
   }
 
-  async function saveBasics() {
-  if (!detail) return;
-  if (!basics.name.trim()) {
-    setMessage("Tournament name is required.");
-    return;
-  }
-  if (!basics.startDate || !basics.endDate) {
-    setMessage("Start and end dates are required before continuing.");
-    return;
-  }
-  if (basics.endDate < basics.startDate) {
-    setMessage("Tournament end date cannot be before its start date.");
-    return;
-  }
-  if (!basics.locationName.trim()) {
-    setMessage("Tournament location is required before continuing.");
-    return;
-  }
-  if (!basics.timezone) {
-    setMessage("Tournament timezone is required before continuing.");
-    return;
-  }
-  if (basics.sponsors.some((sponsor) => !sponsor.name.trim())) {
-    setMessage("Every sponsor needs a name or should be removed.");
-    return;
-  }
-  if (!safeString(settings.registration_slug).trim()) {
-    setMessage("Registration link is required before continuing.");
-    return;
-  }
-  if (!safeString(settings.registration_open_at).trim() || !safeString(settings.registration_close_at).trim()) {
-    setMessage("Registration opening and closing dates are required before continuing.");
-    return;
-  }
-  if (!safeString(settings.rules_markdown).trim()) {
-    setMessage("Choose or write registration rules before continuing.");
-    return;
-  }
-  if (!safeString(settings.refund_policy_markdown).trim()) {
-    setMessage("Choose or write a cancellation policy before continuing.");
-    return;
-  }
-  if (!safeString(settings.weather_policy_markdown).trim()) {
-    setMessage("Choose or write a weather policy before continuing.");
-    return;
-  }
-  const expectedUpdatedAt = safeString(detail.tournament.updated_at);
-  if (!expectedUpdatedAt) {
-    setMessage("Reload the tournament before saving its basics.");
-    return;
+  function updateTournamentDate(field: "startDate" | "endDate", value: string) {
+    const nextBasics = { ...basics, [field]: value };
+    setBasics(nextBasics);
+    if (nextBasics.startDate && nextBasics.endDate && nextBasics.endDate >= nextBasics.startDate) {
+      setConfiguration((current) => ({
+        ...current,
+        days: syncTournamentDays(nextBasics.startDate, nextBasics.endDate, current.days)
+      }));
+    }
+    setImpactReview(null);
   }
 
-  const generation = actionRequest.begin();
-  setBusy(true);
-  setMessage(null);
-  try {
-    await requestJson<WriteResponse>(
-      `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(tournamentId)}/settings`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          registration_slug: safeString(settings.registration_slug).trim(),
-          locale: safeString(settings.locale) || "en",
-          registration_status: safeString(settings.registration_status) || "draft",
-          registration_open_at: settings.registration_open_at || null,
-          registration_close_at: settings.registration_close_at || null,
-          waitlist_enabled: Boolean(settings.waitlist_enabled),
-          partner_board_enabled: Boolean(settings.partner_board_enabled),
-          rules_markdown: safeString(settings.rules_markdown),
-          refund_policy_markdown: safeString(settings.refund_policy_markdown),
-          weather_policy_markdown: safeString(settings.weather_policy_markdown),
-          sponsor_markdown: safeString(settings.sponsor_markdown),
-          location_name: basics.locationName.trim(),
-          timezone: basics.timezone,
-          sponsors_json: basics.sponsors.map((sponsor) => ({
-            id: sponsor.id,
-            name: sponsor.name.trim(),
-            level: sponsor.level.trim(),
-            website: sponsor.website.trim(),
-            notes: sponsor.notes.trim()
-          })),
-          expected_state_fingerprint: detail.state_fingerprint,
-          confirmation_text: "SAVE SETUP",
-          source: "next_tournament_setup_wizard_basics_and_policies"
-        })
-      }
-    );
-    if (!actionRequest.isCurrent(generation)) return;
-    await requestJson<WriteResponse>(
-      `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          name: basics.name.trim(),
-          start_date: basics.startDate,
-          end_date: basics.endDate,
-          expected_updated_at: expectedUpdatedAt,
-          confirmation_text: "SAVE TOURNAMENT",
-          source: "next_tournament_setup_wizard_basics"
-        })
-      }
-    );
-    if (!actionRequest.isCurrent(generation)) return;
-    await loadDetail();
-    if (!actionRequest.isCurrent(generation)) return;
-    goTo("schedule");
-  } catch (error) {
-    if (actionRequest.isCurrent(generation)) {
-      setMessage(error instanceof Error ? error.message : "Unable to save tournament basics and policies.");
-    }
-  } finally {
-    if (actionRequest.isCurrent(generation)) setBusy(false);
+  function moveSponsor(index: number, direction: -1 | 1) {
+    setBasics((current) => {
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= current.sponsors.length) return current;
+      const sponsors = [...current.sponsors];
+      const [moved] = sponsors.splice(index, 1);
+      sponsors.splice(nextIndex, 0, moved);
+      return { ...current, sponsors };
+    });
+    setImpactReview(null);
   }
-}
+
+  function saveEventDialog(value: SetupRecord) {
+    setConfiguration((current) => {
+      const existing =
+        typeof eventDialogKey === "string"
+          ? current.eventFamilies.find((row) => row.key === eventDialogKey)
+          : undefined;
+      const previousName = existing ? eventFamilyName(existing.value) : "";
+      const nextName = eventFamilyName(value);
+      const nextDays = eventDayReferences(value);
+      const eventFamilies = sortEventFamiliesByTournamentDay(
+        existing
+          ? replaceBuilderRow(current.eventFamilies, existing.key, value)
+          : appendBuilderRow(current.eventFamilies, "family", value),
+        current.days
+      );
+      const eventOptions = sortDivisionsByEventAndName(
+        current.eventOptions.map((division) => {
+          if (!existing || eventFamilyName(division.value).toLowerCase() !== previousName.toLowerCase()) {
+            return division;
+          }
+          let nextValue: SetupRecord = {
+            ...division.value,
+            event_family_label: nextName,
+            event_family: nextName,
+            participant_type: value.participant_type,
+            event_type: value.participant_type,
+            gender_restriction:
+              safeString(value.participant_type) === "MIXED_DOUBLES"
+                ? "MIXED"
+                : value.gender_restriction
+          };
+          if (safeString(division.value.schedule_mode || "INHERIT_EVENT") !== "CUSTOM") {
+            nextValue = setEventDayReferences(
+              { ...nextValue, schedule_mode: "INHERIT_EVENT" },
+              nextDays
+            );
+          }
+          return { ...division, value: nextValue };
+        }),
+        eventFamilies,
+        current.days
+      );
+      return { ...current, eventFamilies, eventOptions };
+    });
+    setEventDialogKey(undefined);
+    setImpactReview(null);
+    setMessage(`Event ${eventFamilyName(value) || "saved"} saved to the unpublished setup draft.`);
+  }
+
+  function saveDivisionDialog(value: SetupRecord) {
+    setConfiguration((current) => {
+      const existing =
+        typeof divisionDialogKey === "string"
+          ? current.eventOptions.find((row) => row.key === divisionDialogKey)
+          : undefined;
+      const eventOptions = sortDivisionsByEventAndName(
+        existing
+          ? replaceBuilderRow(current.eventOptions, existing.key, value)
+          : appendBuilderRow(current.eventOptions, "event", value),
+        current.eventFamilies,
+        current.days
+      );
+      return { ...current, eventOptions };
+    });
+    setDivisionDialogKey(undefined);
+    setImpactReview(null);
+    setMessage(`Division ${eventDivisionName(value) || "saved"} saved to the unpublished setup draft.`);
+  }
+
+  function keepPublishedValueForBlockedChange(raw: unknown) {
+    const item = blockedImpactDetail(raw);
+    if (item.entity_type === "division" || item.entity_label) {
+      const published = publishedConfiguration.eventOptions.find((row) => {
+        if (item.entity_id && safeString(row.value.id) === item.entity_id) return true;
+        return item.entity_label && eventDivisionName(row.value).toLowerCase() === item.entity_label.toLowerCase();
+      });
+      if (!published) {
+        setMessage("The published division could not be matched. Open Divisions and revert the affected fields manually.");
+        return;
+      }
+      setConfiguration((current) => {
+        const currentRow = current.eventOptions.find((row) => {
+          if (item.entity_id && safeString(row.value.id) === item.entity_id) return true;
+          return item.entity_label && eventDivisionName(row.value).toLowerCase() === item.entity_label.toLowerCase();
+        });
+        if (!currentRow) return current;
+        return {
+          ...current,
+          eventOptions: sortDivisionsByEventAndName(
+            replaceBuilderRow(current.eventOptions, currentRow.key, published.value),
+            current.eventFamilies,
+            current.days
+          )
+        };
+      });
+      setImpactReview(null);
+      setReviewedDraftSignature("");
+      setMessage(`Reverted ${item.entity_label || "the affected division"} to its published value. Save the draft and review impact again.`);
+      return;
+    }
+    setMessage("Open the affected setup step and restore the published value before reviewing again.");
+  }
+
+  async function saveBasics() {
+    if (!detail) return;
+    if (!basics.name.trim()) {
+      setMessage("Tournament name is required.");
+      return;
+    }
+    if (!basics.startDate || !basics.endDate) {
+      setMessage("Start and end dates are required before continuing.");
+      return;
+    }
+    if (basics.endDate < basics.startDate) {
+      setMessage("Tournament end date cannot be before its start date.");
+      return;
+    }
+    const start = new Date(`${basics.startDate}T00:00:00Z`);
+    const end = new Date(`${basics.endDate}T00:00:00Z`);
+    const span = Math.floor((end.valueOf() - start.valueOf()) / 86_400_000) + 1;
+    if (!Number.isFinite(span) || span < 1 || span > MAX_TOURNAMENT_DAYS) {
+      setMessage(
+        `Tournament Setup supports between 1 and ${MAX_TOURNAMENT_DAYS} consecutive tournament days.`
+      );
+      return;
+    }
+    if (!basics.locationName.trim()) {
+      setMessage("Tournament location is required before continuing.");
+      return;
+    }
+    if (!basics.timezone) {
+      setMessage("Tournament timezone is required before continuing.");
+      return;
+    }
+    if (basics.sponsors.some((sponsor) => !sponsor.name.trim())) {
+      setMessage("Every sponsor needs a name or should be removed.");
+      return;
+    }
+    if (!safeString(settings.registration_slug).trim()) {
+      setMessage("Registration link is required before continuing.");
+      return;
+    }
+    if (!safeString(settings.registration_open_at).trim() || !safeString(settings.registration_close_at).trim()) {
+      setMessage("Registration opening and closing dates are required before continuing.");
+      return;
+    }
+    if (!safeString(settings.rules_markdown).trim()) {
+      setMessage("Choose or write registration rules before continuing.");
+      return;
+    }
+    if (!safeString(settings.refund_policy_markdown).trim()) {
+      setMessage("Choose or write a cancellation policy before continuing.");
+      return;
+    }
+    if (!safeString(settings.weather_policy_markdown).trim()) {
+      setMessage("Choose or write a weather policy before continuing.");
+      return;
+    }
+
+    const nextConfiguration: SetupConfiguration = {
+      ...configuration,
+      days: syncTournamentDays(basics.startDate, basics.endDate, configuration.days)
+    };
+    const normalized = configurationWithGlobalStatus(
+      nextConfiguration,
+      settings.registration_status
+    );
+    const draft = configurationPayload(normalized);
+    const generation = actionRequest.begin();
+    setBusy(true);
+    setMessage(null);
+    try {
+      await requestJson<WriteResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(tournamentId)}/draft`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            ...draft,
+            basics: basicsDraftPayload(basics),
+            settings: settingsDraftPayload(settings),
+            saved_step: "basics",
+            expected_state_fingerprint: detail.state_fingerprint,
+            confirmation_text: draftConfirmation
+          })
+        }
+      );
+      if (!actionRequest.isCurrent(generation)) return;
+      setConfiguration(nextConfiguration);
+      await loadDetail();
+      if (!actionRequest.isCurrent(generation)) return;
+      setMessage("Unpublished setup draft saved. Nothing public changed.");
+      goTo("schedule");
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to save tournament basics and policies draft.");
+      }
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
 
 
 async function saveDraftAndContinue(nextStep: TournamentSetupStep) {
@@ -721,6 +993,8 @@ async function saveDraftAndContinue(nextStep: TournamentSetupStep) {
         method: "PUT",
         body: JSON.stringify({
           ...draft,
+          basics: basicsDraftPayload(basics),
+          settings: settingsDraftPayload(settings),
           saved_step: step,
           expected_state_fingerprint: detail.state_fingerprint,
           confirmation_text: draftConfirmation
@@ -767,13 +1041,15 @@ async function reviewImpact() {
           body: JSON.stringify({
             days: draft.days,
             event_options: draft.event_options,
+            basics: basicsDraftPayload(basics),
+            settings: settingsDraftPayload(settings),
             expected_state_fingerprint: detail.state_fingerprint
           })
         }
       );
       if (!actionRequest.isCurrent(generation)) return;
       setImpactReview(payload);
-      setReviewedDraftSignature(draftSignature(configuration));
+      setReviewedDraftSignature(fullDraftSignature(basics, settings, configuration));
       setMessage("Setup review completed. No rows were changed.");
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
@@ -792,7 +1068,7 @@ async function reviewImpact() {
     if (!detail) return;
     if (
       !impactReview ||
-      reviewedDraftSignature !== draftSignature(configuration)
+      reviewedDraftSignature !== fullDraftSignature(basics, settings, configuration)
     ) {
       setMessage("Review the current setup before publishing it.");
       return;
@@ -817,6 +1093,8 @@ async function reviewImpact() {
           body: JSON.stringify({
             days: draft.days,
             event_options: draft.event_options,
+            basics: basicsDraftPayload(basics),
+            settings: settingsDraftPayload(settings),
             expected_state_fingerprint: detail.state_fingerprint,
             reviewed_impact_fingerprint: impactReview.impact_fingerprint,
             confirmation_text: confirmationText
@@ -883,6 +1161,24 @@ async function reviewImpact() {
   const states = detail ? setupState(basics, settings, configuration) : {};
   const definition = stepDefinition(step);
   const issues = validateSetupConfiguration(configuration);
+  const currentDraftSignature = fullDraftSignature(basics, settings, configuration);
+  const publishedSignature = fullDraftSignature(
+    publishedBasics,
+    publishedSettings,
+    publishedConfiguration
+  );
+  const hasUnpublishedChanges = Boolean(detail && currentDraftSignature !== publishedSignature);
+  const publishedSetupState = setupState(
+    publishedBasics,
+    publishedSettings,
+    publishedConfiguration
+  );
+  const publishedSetupReady = publishedSetupState.review === "in-progress";
+  const registrationCanOpen = Boolean(
+    detail &&
+      !hasUnpublishedChanges &&
+      publishedSetupReady
+  );
   const registrationStatus = safeString(settings.registration_status || "draft");
   const settingsConfirmation =
     status?.confirmation_text?.settings || "SAVE SETUP";
@@ -936,8 +1232,9 @@ async function reviewImpact() {
           <h2 style={{ marginTop: 0 }}>1. Tournament basics and policies</h2>
           <p style={{ color: "#475569" }}>
             Set the tournament identity, registration window, public policies,
-            location, timezone, and sponsors. Save and continue moves directly to
-            Schedule and courts without another confirmation.
+            location, timezone, and sponsors. Save draft and continue stores an
+            unpublished draft and moves directly to Schedule and courts. Nothing
+            becomes public until the reviewed setup is published in Step 6.
           </p>
           <div
             style={{
@@ -947,8 +1244,8 @@ async function reviewImpact() {
             }}
           >
             <label><strong>Tournament name</strong><br /><input value={basics.name} onChange={(event) => setBasics((current) => ({ ...current, name: event.target.value }))} disabled={busy} style={inputStyle} /></label>
-            <label><strong>Start date</strong><br /><input type="date" value={basics.startDate} onChange={(event) => setBasics((current) => ({ ...current, startDate: event.target.value }))} disabled={busy} style={inputStyle} /></label>
-            <label><strong>End date</strong><br /><input type="date" min={basics.startDate || undefined} value={basics.endDate} onChange={(event) => setBasics((current) => ({ ...current, endDate: event.target.value }))} disabled={busy} style={inputStyle} /></label>
+            <label><strong>Start date</strong><br /><input type="date" value={basics.startDate} onChange={(event) => updateTournamentDate("startDate", event.target.value)} disabled={busy} style={inputStyle} /></label>
+            <label><strong>End date</strong><br /><input type="date" min={basics.startDate || undefined} value={basics.endDate} onChange={(event) => updateTournamentDate("endDate", event.target.value)} disabled={busy} style={inputStyle} /></label>
             <label><strong>Location or venue</strong><br /><input value={basics.locationName} onChange={(event) => setBasics((current) => ({ ...current, locationName: event.target.value }))} placeholder="Tres Palapas Baja Pickleball Resort" disabled={busy} style={inputStyle} /></label>
             <label><strong>Timezone</strong><br /><select value={basics.timezone} onChange={(event) => setBasics((current) => ({ ...current, timezone: event.target.value }))} disabled={busy} style={inputStyle}>{TIMEZONE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           </div>
@@ -979,7 +1276,11 @@ async function reviewImpact() {
                   <label><strong>Website</strong><br /><input type="url" value={sponsor.website} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, website: event.target.value } : row) }))} placeholder="https://" disabled={busy} style={inputStyle} /></label>
                   <label><strong>Notes</strong><br /><input value={sponsor.notes} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, notes: event.target.value } : row) }))} disabled={busy} style={inputStyle} /></label>
                 </div>
-                <button type="button" style={{ ...ghostButtonStyle, marginTop: "0.65rem", color: "#991b1b", borderColor: "#fecaca" }} disabled={busy} onClick={() => setBasics((current) => ({ ...current, sponsors: current.sponsors.filter((row) => row.id !== sponsor.id) }))}>Remove sponsor {index + 1}</button>
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.65rem" }}>
+                  <button type="button" style={ghostButtonStyle} disabled={busy || index === 0} onClick={() => moveSponsor(index, -1)}>Move up</button>
+                  <button type="button" style={ghostButtonStyle} disabled={busy || index === basics.sponsors.length - 1} onClick={() => moveSponsor(index, 1)}>Move down</button>
+                  <button type="button" style={{ ...ghostButtonStyle, color: "#991b1b", borderColor: "#fecaca" }} disabled={busy} onClick={() => setBasics((current) => ({ ...current, sponsors: current.sponsors.filter((row) => row.id !== sponsor.id) }))}>Remove sponsor {index + 1}</button>
+                </div>
               </article>
             ))}
             {!basics.sponsors.length ? <p style={{ color: "#64748b" }}>No sponsors added yet.</p> : null}
@@ -987,7 +1288,7 @@ async function reviewImpact() {
         </article>
 
         <div>
-          <button type="button" style={buttonStyle} disabled={busy} onClick={() => void saveBasics()}>{busy ? "Saving…" : "Save and continue"}</button>
+          <button type="button" style={buttonStyle} disabled={busy} onClick={() => void saveBasics()}>{busy ? "Saving draft…" : "Save draft and continue"}</button>
         </div>
       </div>
     );
@@ -995,111 +1296,83 @@ async function reviewImpact() {
 
 function renderEvents() {
   const familyIssues = issues.filter((issue) => issue.path.startsWith("families"));
+  const firstDay =
+    configuration.days.find((row) => recordBoolean(row.value.enabled, true))?.value ||
+    configuration.days[0]?.value ||
+    {};
+  const dialogValue =
+    eventDialogKey === null
+      ? setEventDayReferences(
+          newEventFamilyRow(configuration.eventFamilies.length + 1),
+          [dayReference(firstDay)].filter(Boolean)
+        )
+      : typeof eventDialogKey === "string"
+        ? configuration.eventFamilies.find((row) => row.key === eventDialogKey)?.value || {}
+        : {};
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
+      <TournamentSetupEventFamilyDialog
+        open={eventDialogKey !== undefined}
+        mode={eventDialogKey === null ? "add" : "edit"}
+        initialValue={dialogValue}
+        days={configuration.days}
+        onCancel={() => setEventDialogKey(undefined)}
+        onConfirm={saveEventDialog}
+      />
       <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "flex-start", flexWrap: "wrap" }}>
           <div>
             <h2 style={{ marginTop: 0 }}>3. Events</h2>
             <p style={{ color: "#475569", marginBottom: 0 }}>
-              Create event families such as Gender Doubles on Tuesday or Mixed Doubles on Wednesday. Skill and age divisions are created separately in Step 3.
+              Create parent events in a focused dialog. Saved events appear as compact summaries and are sorted automatically by tournament day. Skill and age divisions are created separately in Step 4.
             </p>
           </div>
           <button
             type="button"
             style={buttonStyle}
             disabled={busy || !configuration.days.length}
-            onClick={() =>
-              setConfiguration((current) => {
-                const day =
-                  current.days.find((row) => recordBoolean(row.value.enabled, true))?.value ||
-                  current.days[0]?.value ||
-                  {};
-                return {
-                  ...current,
-                  eventFamilies: appendBuilderRow(
-                    current.eventFamilies,
-                    "family",
-                    {
-                      ...newEventFamilyRow(current.eventFamilies.length + 1),
-                      registration_day_id: dayReference(day)
-                    }
-                  )
-                };
-              })
-            }
+            onClick={() => setEventDialogKey(null)}
           >
             Add event
           </button>
         </div>
       </article>
 
-      {configuration.eventFamilies.map((row, index) => {
+      {sortEventFamiliesByTournamentDay(configuration.eventFamilies, configuration.days).map((row, index) => {
         const family = eventFamilyName(row.value);
         const divisions = configuration.eventOptions.filter(
-          (division) =>
-            eventFamilyName(division.value).toLowerCase() === family.toLowerCase()
+          (division) => eventFamilyName(division.value).toLowerCase() === family.toLowerCase()
         );
+        const originalIndex = configuration.eventFamilies.findIndex((candidate) => candidate.key === row.key);
         return (
           <TournamentSetupEventFamilyCard
             key={row.key}
             row={row}
             position={index}
-            total={configuration.eventFamilies.length}
             days={configuration.days}
             disabled={busy}
-            issues={issuesForPath(issues, `families.${index}`)}
+            issues={issuesForPath(issues, `families.${Math.max(0, originalIndex)}`)}
             divisionCount={divisions.length}
-            onChange={(value) =>
-              setConfiguration((current) => {
-                const previousName = eventFamilyName(row.value);
-                const nextName = eventFamilyName(value);
-                const nextDays = eventDayReferences(value);
-                return {
-                  ...current,
-                  eventFamilies: replaceBuilderRow(current.eventFamilies, row.key, value),
-                  eventOptions: current.eventOptions.map((division) => {
-                    if (
-                      eventFamilyName(division.value).toLowerCase() !==
-                      previousName.toLowerCase()
-                    ) {
-                      return division;
-                    }
-                    let nextValue: SetupRecord = {
-                      ...division.value,
-                      event_family_label: nextName,
-                      event_family: nextName
-                    };
-                    if (safeString(division.value.schedule_mode || "INHERIT_EVENT") !== "CUSTOM") {
-                      nextValue = setEventDayReferences(
-                        { ...nextValue, schedule_mode: "INHERIT_EVENT" },
-                        nextDays
-                      );
-                    }
-                    return { ...division, value: nextValue };
-                  })
-                };
-              })
-            }
-            onMove={(direction) =>
+            onEdit={() => setEventDialogKey(row.key)}
+            onRemove={() => {
               setConfiguration((current) => ({
                 ...current,
-                eventFamilies: moveBuilderRow(
-                  current.eventFamilies,
-                  row.key,
-                  direction
+                eventFamilies: sortEventFamiliesByTournamentDay(
+                  removeBuilderRow(current.eventFamilies, row.key),
+                  current.days
                 )
-              }))
-            }
-            onRemove={() =>
-              setConfiguration((current) => ({
-                ...current,
-                eventFamilies: removeBuilderRow(current.eventFamilies, row.key)
-              }))
-            }
+              }));
+              setImpactReview(null);
+            }}
           />
         );
       })}
+
+      {!configuration.eventFamilies.length ? (
+        <article style={cardStyle}>
+          <p style={{ margin: 0, color: "#64748b" }}>No events yet. Click Add event to open the setup dialog.</p>
+        </article>
+      ) : null}
 
       {familyIssues.length ? (
         <article style={{ ...cardStyle, borderColor: "#fecaca" }}>
@@ -1126,7 +1399,7 @@ function renderEvents() {
             disabled={busy || !configuration.eventFamilies.length || familyIssues.length > 0}
             onClick={() => void saveDraftAndContinue("divisions")}
           >
-            {busy ? "Saving…" : "Save and continue"}
+            {busy ? "Saving draft…" : "Save draft and continue"}
           </button>
         </>
       )}
@@ -1136,27 +1409,27 @@ function renderEvents() {
 
 function renderDivisions() {
   const divisionIssues = issues.filter((issue) => issue.path.startsWith("events"));
+  const dialogValue =
+    divisionDialogKey === null
+      ? divisionForFirstEvent(configuration)
+      : typeof divisionDialogKey === "string"
+        ? configuration.eventOptions.find((row) => row.key === divisionDialogKey)?.value || {}
+        : {};
+  const sortedDivisions = sortDivisionsByEventAndName(
+    configuration.eventOptions,
+    configuration.eventFamilies,
+    configuration.days
+  );
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
       <TournamentSetupDivisionDialog
-        open={divisionDialogOpen}
-        initialValue={divisionForFirstEvent(configuration)}
+        open={divisionDialogKey !== undefined}
+        mode={divisionDialogKey === null ? "add" : "edit"}
+        initialValue={dialogValue}
         eventFamilies={configuration.eventFamilies}
         days={configuration.days}
-        onCancel={() => setDivisionDialogOpen(false)}
-        onConfirm={(value) => {
-          const divisionId = safeString(value.id);
-          setConfiguration((current) => ({
-            ...current,
-            eventOptions: appendBuilderRow(current.eventOptions, "event", value)
-          }));
-          setImpactReview(null);
-          setDivisionDialogOpen(false);
-          setMessage(`Division ${eventDivisionName(value) || "added"} added to the setup list.`);
-          globalThis.setTimeout(() => {
-            document.getElementById(`division-${divisionId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
-          }, 50);
-        }}
+        onCancel={() => setDivisionDialogKey(undefined)}
+        onConfirm={saveDivisionDialog}
       />
 
       <article style={cardStyle}>
@@ -1164,14 +1437,14 @@ function renderDivisions() {
           <div>
             <h2 style={{ marginTop: 0 }}>4. Divisions</h2>
             <p style={{ color: "#475569", marginBottom: 0 }}>
-              Create skill and age divisions inside each event. A division may use every parent-event day or a selected subset.
+              Create skill and age divisions inside each event. Add and Edit open a focused dialog; saved divisions remain compact and read-only. A division may use every parent-event day or a selected subset.
             </p>
           </div>
           <button
             type="button"
             style={buttonStyle}
             disabled={busy || !configuration.eventFamilies.length}
-            onClick={() => setDivisionDialogOpen(true)}
+            onClick={() => setDivisionDialogKey(null)}
           >
             Add division
           </button>
@@ -1183,38 +1456,33 @@ function renderDivisions() {
         ) : null}
       </article>
 
-      {configuration.eventOptions.map((row, index) => (
-        <div key={row.key} id={`division-${safeString(row.value.id)}`}>
-          <TournamentSetupDivisionCard
-            row={row}
-            position={index}
-            total={configuration.eventOptions.length}
-            eventFamilies={configuration.eventFamilies}
-            days={configuration.days}
-            disabled={busy}
-            issues={issuesForPath(issues, `events.${index}`)}
-            onChange={(value) => {
-              setConfiguration((current) => ({
-                ...current,
-                eventOptions: replaceBuilderRow(current.eventOptions, row.key, value)
-              }));
-              setImpactReview(null);
-            }}
-            onMove={(direction) =>
-              setConfiguration((current) => ({
-                ...current,
-                eventOptions: moveBuilderRow(current.eventOptions, row.key, direction)
-              }))
-            }
-            onRemove={() =>
-              setConfiguration((current) => ({
-                ...current,
-                eventOptions: removeBuilderRow(current.eventOptions, row.key)
-              }))
-            }
-          />
-        </div>
-      ))}
+      {sortedDivisions.map((row, index) => {
+        const originalIndex = configuration.eventOptions.findIndex((candidate) => candidate.key === row.key);
+        return (
+          <div key={row.key} id={`division-${safeString(row.value.id)}`}>
+            <TournamentSetupDivisionCard
+              row={row}
+              position={index}
+              eventFamilies={configuration.eventFamilies}
+              days={configuration.days}
+              disabled={busy}
+              issues={issuesForPath(issues, `events.${Math.max(0, originalIndex)}`)}
+              onEdit={() => setDivisionDialogKey(row.key)}
+              onRemove={() => {
+                setConfiguration((current) => ({
+                  ...current,
+                  eventOptions: sortDivisionsByEventAndName(
+                    removeBuilderRow(current.eventOptions, row.key),
+                    current.eventFamilies,
+                    current.days
+                  )
+                }));
+                setImpactReview(null);
+              }}
+            />
+          </div>
+        );
+      })}
 
       {!configuration.eventOptions.length ? (
         <article style={cardStyle}>
@@ -1248,7 +1516,7 @@ function renderDivisions() {
             disabled={busy || !configuration.eventOptions.length || divisionIssues.length > 0}
             onClick={() => void saveDraftAndContinue("pricing")}
           >
-            {busy ? "Saving…" : "Save and continue"}
+            {busy ? "Saving draft…" : "Save draft and continue"}
           </button>
         </>
       )}
@@ -1302,31 +1570,10 @@ function renderDivisions() {
     return (
       <div style={{ display: "grid", gap: "1rem" }}>
         <article style={cardStyle}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "flex-start", flexWrap: "wrap" }}>
-            <div>
-              <h2 style={{ marginTop: 0 }}>2. Schedule and courts</h2>
-              <p style={{ color: "#475569", marginBottom: 0 }}>
-                Create every tournament day before Events and Divisions. Events can span multiple days, and each division can inherit all event days or use a selected subset.
-              </p>
-            </div>
-            <button
-              type="button"
-              style={buttonStyle}
-              disabled={busy}
-              onClick={() =>
-                setConfiguration((current) => ({
-                  ...current,
-                  days: appendBuilderRow(
-                    current.days,
-                    "day",
-                    newDayRow(current.days.length + 1)
-                  )
-                }))
-              }
-            >
-              Add tournament day
-            </button>
-          </div>
+          <h2 style={{ marginTop: 0 }}>2. Schedule and courts</h2>
+          <p style={{ color: "#475569", marginBottom: 0 }}>
+            Tournament days are generated automatically from the start and end dates saved in Step 1. Dates and chronological order are fixed here; edit the day label, available courts, court names, hours, and notes. Return to Step 1 to change the date range.
+          </p>
         </article>
 
         {configuration.days.map((row, index) => (
@@ -1336,6 +1583,7 @@ function renderDivisions() {
             position={index}
             total={configuration.days.length}
             disabled={busy}
+            structureLocked
             issues={issuesForPath(issues, `days.${index}`)}
             onChange={(value) =>
               setConfiguration((current) => {
@@ -1364,32 +1612,6 @@ function renderDivisions() {
                 };
               })
             }
-            onMove={(direction) =>
-              setConfiguration((current) => ({
-                ...current,
-                days: moveBuilderRow(current.days, row.key, direction)
-              }))
-            }
-            onRemove={() => {
-              const references = new Set([
-                dayReference(row.value),
-                dayLabel(row.value)
-              ].filter(Boolean));
-              const attachedEvent = configuration.eventFamilies.find((event) =>
-                eventDayReferences(event.value).some((reference) => references.has(reference))
-              );
-              const attachedDivision = configuration.eventOptions.find((event) =>
-                eventDayReferences(event.value).some((reference) => references.has(reference))
-              );
-              if (attachedEvent || attachedDivision) {
-                setMessage("Remove this day from its events and divisions before deleting it.");
-                return;
-              }
-              setConfiguration((current) => ({
-                ...current,
-                days: removeBuilderRow(current.days, row.key)
-              }));
-            }}
           />
         ))}
 
@@ -1418,7 +1640,7 @@ function renderDivisions() {
               disabled={busy || !configuration.days.length || dayIssues.length > 0}
               onClick={() => void saveDraftAndContinue("events")}
             >
-              {busy ? "Saving…" : "Save and continue"}
+              {busy ? "Saving draft…" : "Save draft and continue"}
             </button>
           </>
         )}
@@ -1429,6 +1651,9 @@ function renderDivisions() {
   function renderReview() {
     const impact = impactReview?.publish_impact || {};
     const blocked = Array.isArray(impact.blocked) ? impact.blocked : [];
+    const blockedDetails = Array.isArray(impact.blocked_details) && impact.blocked_details.length
+      ? impact.blocked_details
+      : blocked;
     const warnings = Array.isArray(impact.warnings) ? impact.warnings : [];
     const basicsReady = states.basics === "complete";
     const scheduleReady = states.schedule === "complete";
@@ -1446,9 +1671,10 @@ function renderDivisions() {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>6. Review and open registration</h2>
           <p style={{ color: "#475569" }}>
-            Review the complete tournament before anything becomes public. The
-            three actions below are deliberate: review changes, publish setup,
-            then open registration.
+            Review the unpublished draft against the currently published tournament.
+            Setup changes saved in Steps 1–4 remain private. Step 5 uses a separate
+            reviewed catalog save. The three actions below are deliberate: review
+            setup changes, publish setup, then open registration.
           </p>
           <div
             style={{
@@ -1458,25 +1684,30 @@ function renderDivisions() {
             }}
           >
             {[
-              ["Tournament basics and policies", basicsReady, `${basics.startDate || "No start"} – ${basics.endDate || "No end"} · registration ${registrationStatus}`],
-              ["Schedule and courts", scheduleReady, `${configuration.days.length} tournament day(s)`],
-              ["Events", eventFamiliesReady, `${configuration.eventFamilies.length} event(s)`],
-              ["Divisions", divisionsReady, `${configuration.eventOptions.length} division(s)`],
-              ["Pricing and extras", true, "Review the saved catalog from Step 5"]
-            ].map(([label, complete, note]) => (
-              <div
-                key={String(label)}
+              { key: "basics" as TournamentSetupStep, label: "Tournament basics and policies", complete: basicsReady, draft: `${basics.startDate || "No start"} – ${basics.endDate || "No end"}`, published: `${publishedBasics.startDate || "No start"} – ${publishedBasics.endDate || "No end"}` },
+              { key: "schedule" as TournamentSetupStep, label: "Schedule and courts", complete: scheduleReady, draft: `${configuration.days.length} day(s) · ${configuration.days.reduce((total, day) => total + Number(day.value.court_count || 0), 0)} daily-court slots`, published: `${publishedConfiguration.days.length} day(s)` },
+              { key: "events" as TournamentSetupStep, label: "Events", complete: eventFamiliesReady, draft: `${configuration.eventFamilies.length} event(s)`, published: `${publishedConfiguration.eventFamilies.length} event(s)` },
+              { key: "divisions" as TournamentSetupStep, label: "Divisions", complete: divisionsReady, draft: `${configuration.eventOptions.length} division(s)`, published: `${publishedConfiguration.eventOptions.length} division(s)` },
+              { key: "pricing" as TournamentSetupStep, label: "Pricing and extras", complete: true, draft: "Saved catalog draft", published: "Published catalog remains active until saved changes are applied" }
+            ].map((item) => (
+              <Link
+                key={item.key}
+                href={tournamentSetupStepHref(item.key, tournamentId, basics.name || tournamentName)}
                 style={{
                   padding: "0.75rem",
-                  border: `1px solid ${complete ? "#bbf7d0" : "#fecaca"}`,
+                  border: `1px solid ${item.complete ? "#bbf7d0" : "#fecaca"}`,
                   borderRadius: "12px",
-                  background: complete ? "#f0fdf4" : "#fef2f2"
+                  background: item.complete ? "#f0fdf4" : "#fef2f2",
+                  color: "#0f172a",
+                  textDecoration: "none"
                 }}
               >
-                <strong>{complete ? "✓" : "!"} {String(label)}</strong>
+                <strong>{item.complete ? "✓" : "!"} {item.label}</strong>
                 <br />
-                <small>{String(note)}</small>
-              </div>
+                <small><strong>Draft:</strong> {item.draft}</small>
+                <br />
+                <small><strong>Published:</strong> {item.published}</small>
+              </Link>
             ))}
           </div>
         </article>
@@ -1520,14 +1751,30 @@ function renderDivisions() {
                   </ul>
                 </>
               ) : null}
-              {blocked.length ? (
+              {blockedDetails.length ? (
                 <>
-                  <strong>Blocked changes</strong>
-                  <ul>
-                    {blocked.map((item, index) => (
-                      <li key={index}>{formatImpactItem(item)}</li>
-                    ))}
-                  </ul>
+                  <strong>Blocked changes — resolve each before publishing</strong>
+                  <div style={{ display: "grid", gap: "0.65rem", marginTop: "0.55rem" }}>
+                    {blockedDetails.map((raw, index) => {
+                      const item = blockedImpactDetail(raw);
+                      const editHref = item.step === "divisions"
+                        ? `${tournamentSetupStepHref("divisions", tournamentId, basics.name || tournamentName)}&resolveDivision=${encodeURIComponent(item.entity_id || "")}`
+                        : tournamentSetupStepHref(item.step || "review", tournamentId, basics.name || tournamentName);
+                      return (
+                        <article key={`${item.message}-${index}`} style={{ padding: "0.75rem", border: "1px solid #fecaca", borderRadius: "12px", background: "#fef2f2" }}>
+                          <p style={{ marginTop: 0 }}>{item.message}</p>
+                          <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap" }}>
+                            <button type="button" style={ghostButtonStyle} onClick={() => keepPublishedValueForBlockedChange(raw)}>
+                              Keep published value
+                            </button>
+                            <Link href={editHref} style={ghostButtonStyle}>
+                              Edit affected draft
+                            </Link>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
                 </>
               ) : null}
             </div>
@@ -1537,18 +1784,19 @@ function renderDivisions() {
         <article style={cardStyle}>
           <h3 style={{ marginTop: 0 }}>B. Publish tournament setup</h3>
           <p style={{ color: "#475569" }}>
-            Publish the reviewed days and events. Existing registrations are
-            protected by the impact review and guarded write.
+            Publish the reviewed tournament identity, policies, schedule/courts,
+            events, and divisions in one guarded operation. Existing registrations
+            are protected by the impact review.
           </p>
           <ConfirmAction
             triggerLabel={busy ? "Publishing…" : "Publish reviewed setup"}
             title="Publish this reviewed tournament setup?"
-            description="Apply the exact reviewed day and event configuration. Registration remains closed until the next action."
+            description="Apply the exact reviewed draft—tournament basics, policies, courts, events, and divisions—to the published tournament. Registration status remains a separate action."
             confirmLabel="Yes, publish setup"
             confirmationText={publishConfirmation}
             disabled={
               !impactReview ||
-              reviewedDraftSignature !== draftSignature(configuration) ||
+              reviewedDraftSignature !== fullDraftSignature(basics, settings, configuration) ||
               blocked.length > 0
             }
             busy={busy}
@@ -1573,15 +1821,17 @@ function renderDivisions() {
               description="Open registration using the saved window, rules, events, prices, and Partner Board settings."
               confirmLabel="Yes, open registration"
               confirmationText={settingsConfirmation}
-              disabled={!setupPublishedThisSession}
+              disabled={!(setupPublishedThisSession || registrationCanOpen)}
               busy={busy}
               onConfirm={openRegistration}
             />
           )}
           {!setupPublishedThisSession &&
+          !registrationCanOpen &&
           registrationStatus.toLowerCase() !== "open" ? (
             <p style={{ color: "#64748b" }}>
-              Publish the reviewed setup above before opening registration.
+              Resolve unpublished changes and publish a complete setup before
+              opening registration.
             </p>
           ) : null}
         </article>
@@ -1615,6 +1865,21 @@ function renderDivisions() {
 
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
+      <article
+        role="status"
+        style={{
+          ...cardStyle,
+          background: hasUnpublishedChanges ? "#fffbeb" : "#f0fdf4",
+          borderColor: hasUnpublishedChanges ? "#fde68a" : "#bbf7d0"
+        }}
+      >
+        <strong>{hasUnpublishedChanges ? "Unpublished setup draft" : "Published setup is current"}</strong>
+        <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
+          {hasUnpublishedChanges
+            ? "Save draft and continue on Steps 1–4 only preserves this private admin draft. Public tournament pages continue using the currently published setup until Publish reviewed setup succeeds in Step 6. The extras catalog in Step 5 has its own separate Review and Save action."
+            : "No unpublished setup changes are waiting. New setup edits remain private until final review and publication; extras catalog changes use their separate reviewed save in Step 5."}
+        </p>
+      </article>
       <TournamentSetupWizardNav
         currentStep={step}
         tournamentId={tournamentId}

@@ -500,6 +500,67 @@ export default function TournamentCommercePanel({
     });
   }
 
+  function setBundleEventChoice(
+    bundleId: string,
+    eventOptionId: string,
+    enabled: boolean
+  ) {
+    updateDraft((next) => {
+      const current = next.bundle_components.filter(
+        (row) =>
+          row.bundle_id === bundleId && row.component_type === "EVENT_CHOICE"
+      );
+      const requiredCount = Math.max(1, Number(current[0]?.quantity || 1));
+      next.bundle_components = next.bundle_components.filter(
+        (row) =>
+          !(
+            row.bundle_id === bundleId &&
+            row.component_type === "EVENT_CHOICE" &&
+            row.event_option_id === eventOptionId
+          )
+      );
+      if (enabled) {
+        next.bundle_components.push({
+          id: crypto.randomUUID(),
+          bundle_id: bundleId,
+          component_type: "EVENT_CHOICE",
+          event_option_id: eventOptionId,
+          item_id: null,
+          variant_id: null,
+          quantity: requiredCount
+        });
+      }
+      const eligibleCount = next.bundle_components.filter(
+        (row) =>
+          row.bundle_id === bundleId && row.component_type === "EVENT_CHOICE"
+      ).length;
+      const clamped = Math.max(1, Math.min(requiredCount, eligibleCount || 1));
+      for (const row of next.bundle_components) {
+        if (
+          row.bundle_id === bundleId &&
+          row.component_type === "EVENT_CHOICE"
+        ) {
+          row.quantity = clamped;
+        }
+      }
+      const bundle = next.bundles.find((row) => row.id === bundleId);
+      if (bundle && eligibleCount) bundle.max_per_registration = 1;
+    });
+  }
+
+  function setBundleEventChoiceCount(bundleId: string, value: number) {
+    updateDraft((next) => {
+      const eligible = next.bundle_components.filter(
+        (row) =>
+          row.bundle_id === bundleId && row.component_type === "EVENT_CHOICE"
+      );
+      const count = Math.max(1, Math.min(Math.floor(value || 1), eligible.length || 1));
+      for (const row of eligible) row.quantity = count;
+      const bundle = next.bundles.find((row) => row.id === bundleId);
+      if (bundle && eligible.length) bundle.max_per_registration = 1;
+    });
+  }
+
   function addPromotion() {
     const item = draft?.items[0];
     const variant = draft?.variants[0];
@@ -560,11 +621,24 @@ export default function TournamentCommercePanel({
       }
     }
     for (const bundle of draft.bundles) {
-      if (
-        bundle.status === "ACTIVE" &&
-        !(componentsByBundle.get(bundle.id) || []).length
-      ) {
+      const components = componentsByBundle.get(bundle.id) || [];
+      if (bundle.status === "ACTIVE" && !components.length) {
         return "An active bundle needs at least one event or extra.";
+      }
+      const choices = components.filter(
+        (component) => component.component_type === "EVENT_CHOICE"
+      );
+      if (choices.length) {
+        const requiredCount = Number(choices[0]?.quantity || 1);
+        if (choices.some((choice) => Number(choice.quantity || 1) !== requiredCount)) {
+          return `${bundle.name}: every flexible event must use the same required-event count.`;
+        }
+        if (requiredCount < 1 || requiredCount > choices.length) {
+          return `${bundle.name}: choose-any count must be between 1 and the number of eligible events.`;
+        }
+        if (bundle.max_per_registration !== 1) {
+          return `${bundle.name}: flexible event bundles are limited to one per registration.`;
+        }
       }
     }
     return null;
@@ -1108,7 +1182,14 @@ export default function TournamentCommercePanel({
                       />
                     </label>
                   ) : null}
-                  <h4>Options</h4>
+                  <h4 style={{ marginBottom: "0.25rem" }}>Options (variants)</h4>
+                  <p style={{ color: "#64748b", margin: "0 0 0.65rem" }}>
+                    Use options when one extra has selectable variants, such as
+                    T-shirt sizes, lodging room types, meal choices, or package
+                    levels. Each option can have its own SKU, price change,
+                    inventory, and status. Leave this section empty when the
+                    extra has no choices.
+                  </p>
                   <div style={{ display: "grid", gap: "0.65rem" }}>
                     {(variantsByItem.get(item.id) || []).map((variant) => (
                       <div
@@ -1261,7 +1342,7 @@ export default function TournamentCommercePanel({
                   {draft.bundles.map((bundle) => (
                     <details key={bundle.id} open={!savedBundleIds.has(bundle.id)} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem" }}>
                       <summary style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
-                        <span><strong>{bundle.name || "Untitled bundle"}</strong><br /><small>{formatCommerceMoney(bundle.price_minor)} · {bundle.status} · {(componentsByBundle.get(bundle.id) || []).length} required parts</small></span>
+                        <span><strong>{bundle.name || "Untitled bundle"}</strong><br /><small>{formatCommerceMoney(bundle.price_minor)} · {bundle.status} · {(componentsByBundle.get(bundle.id) || []).filter((component) => component.component_type !== "EVENT_CHOICE").length} fixed parts · {(componentsByBundle.get(bundle.id) || []).filter((component) => component.component_type === "EVENT_CHOICE").length} eligible registration divisions</small></span>
                         <span style={{ fontWeight: 800 }}>{savedBundleIds.has(bundle.id) ? "Edit" : "New bundle"}</span>
                       </summary>
                       <section style={{ marginTop: "1rem" }}>
@@ -1421,8 +1502,9 @@ export default function TournamentCommercePanel({
                       </label>
                       <h4>Required parts</h4>
                       <ul>
-                        {(componentsByBundle.get(bundle.id) || []).map(
-                          (component) => (
+                        {(componentsByBundle.get(bundle.id) || [])
+                          .filter((component) => component.component_type !== "EVENT_CHOICE")
+                          .map((component) => (
                             <li key={component.id}>
                               <label>
                                 Quantity{" "}
@@ -1471,8 +1553,82 @@ export default function TournamentCommercePanel({
                           )
                         )}
                       </ul>
-                      <label>
-                        Add an event or extra
+                      <section
+                        style={{
+                          marginTop: "1rem",
+                          padding: "0.85rem",
+                          border: "1px solid #bfdbfe",
+                          borderRadius: "12px",
+                          background: "#eff6ff"
+                        }}
+                      >
+                        <h4 style={{ margin: 0 }}>Flexible event choice</h4>
+                        <p style={{ color: "#475569", margin: "0.35rem 0 0.75rem" }}>
+                          Select the eligible registration divisions—the event/division entries a player can choose during registration—then choose how many of them are required. For example, “any 1 of these divisions” or “any 2 of these divisions.” Fixed extras can still be added below.
+                        </p>
+                        {(() => {
+                          const choiceComponents = (componentsByBundle.get(bundle.id) || []).filter(
+                            (component) => component.component_type === "EVENT_CHOICE"
+                          );
+                          const selectedIds = new Set(
+                            choiceComponents.map((component) => String(component.event_option_id || ""))
+                          );
+                          const requiredCount = Math.max(
+                            1,
+                            Math.min(
+                              Number(choiceComponents[0]?.quantity || 1),
+                              choiceComponents.length || 1
+                            )
+                          );
+                          return (
+                            <>
+                              <label style={{ display: "block", maxWidth: "18rem", marginBottom: "0.75rem" }}>
+                                Divisions required from eligible list
+                                <br />
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max={Math.max(1, choiceComponents.length)}
+                                  value={requiredCount}
+                                  disabled={!choiceComponents.length}
+                                  onChange={(event) =>
+                                    setBundleEventChoiceCount(bundle.id, Number(event.target.value))
+                                  }
+                                  style={inputStyle}
+                                />
+                              </label>
+                              <div style={{ display: "grid", gap: "0.45rem" }}>
+                                {draft.event_options.map((event) => {
+                                  const eventId = stringValue(event, "id");
+                                  return (
+                                    <label key={`${bundle.id}-choice-${eventId}`} style={{ display: "flex", gap: "0.55rem", alignItems: "flex-start" }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedIds.has(eventId)}
+                                        onChange={(change) =>
+                                          setBundleEventChoice(bundle.id, eventId, change.target.checked)
+                                        }
+                                      />
+                                      <span>{eventLabels.get(eventId) || "Tournament event"}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                              {choiceComponents.length ? (
+                                <p style={{ color: "#1d4ed8", marginBottom: 0, fontWeight: 700 }}>
+                                  Bundle applies when the registration includes any {requiredCount} of {choiceComponents.length} eligible registration division{choiceComponents.length === 1 ? "" : "s"}.
+                                </p>
+                              ) : (
+                                <p style={{ color: "#64748b", marginBottom: 0 }}>
+                                  No flexible registration-division pool configured. The bundle may still use exact required parts below.
+                                </p>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </section>
+                      <label style={{ display: "block", marginTop: "1rem" }}>
+                        Add an exact required event or extra
                         <br />
                         <select
                           key={`${bundle.id}-${draft.variants.length}-${draft.event_options.length}`}

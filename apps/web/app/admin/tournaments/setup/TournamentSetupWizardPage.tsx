@@ -58,6 +58,7 @@ export default async function TournamentSetupWizardPage({
 }: Props) {
   const tournamentId = first(searchParams?.tournament).trim();
   const tournamentName = first(searchParams?.name).trim();
+  const resolveDivisionId = first(searchParams?.resolveDivision).trim();
   if (!tournamentId) redirect("/admin/tournaments");
 
   const clubId = "tres_palapas";
@@ -79,8 +80,9 @@ export default async function TournamentSetupWizardPage({
       </p>
       <h1 style={{ marginTop: 0 }}>{tournamentName || "Tournament"} setup</h1>
       <p style={{ color: "#334155", maxWidth: "860px" }}>
-        Complete the six setup steps in order. Each save keeps the current
-        tournament context and moves you directly to the next task.
+        Complete the six setup steps in order. Setup saves preserve an
+        unpublished admin draft and move you directly to the next task; public
+        tournament pages change only after final review and publication.
       </p>
       {error ? (
         <p role="alert" style={{ color: "#b91c1c" }}>
@@ -95,6 +97,7 @@ export default async function TournamentSetupWizardPage({
           tournamentId={tournamentId}
           tournamentName={tournamentName || tournamentId}
           step={step}
+          resolveDivisionId={resolveDivisionId}
         />
       ) : null}
     </section>

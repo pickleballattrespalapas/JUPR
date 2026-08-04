@@ -26,7 +26,9 @@ from jupr_app.services.admin_tournament_commerce_service import (
     get_admin_tournament_commerce_detail,
     inspect_admin_tournament_commerce_operation,
     list_admin_tournament_commerce_tournaments,
+    quote_admin_tournament_commerce_order,
     replace_admin_tournament_commerce_catalog,
+    replace_admin_tournament_commerce_order,
     update_admin_tournament_commerce_fulfillment,
     update_admin_tournament_commerce_payment,
 )
@@ -50,6 +52,21 @@ class AdminTournamentCommerceCatalogSaveRequest(BaseModel):
     idempotency_key: str = Field(min_length=36, max_length=80)
     source: str = Field(
         default="next_tournament_commerce_admin", max_length=160
+    )
+
+
+class AdminTournamentCommerceOrderQuoteRequest(BaseModel):
+    item_selections: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
+
+
+class AdminTournamentCommerceOrderReplaceRequest(BaseModel):
+    item_selections: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
+    expected_quote_fingerprint: str = Field(min_length=1, max_length=128)
+    expected_order_updated_at: str | None = Field(default=None, max_length=80)
+    confirmation_text: str = Field(min_length=1, max_length=40)
+    idempotency_key: str = Field(min_length=36, max_length=80)
+    source: str = Field(
+        default="next_tournament_registration_detail", max_length=160
     )
 
 
@@ -292,6 +309,75 @@ def install_admin_tournament_commerce_routes(
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+
+    @app.post(
+        "/admin/clubs/{club_id}/tournaments/commerce/tournaments/"
+        "{tournament_id}/orders/{registration_id}/quote"
+    )
+    def post_tournament_commerce_order_quote(
+        club_id: str,
+        tournament_id: str,
+        registration_id: str,
+        payload: AdminTournamentCommerceOrderQuoteRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_feature()
+        supabase = get_supabase_client()
+        _resolve_role_or_403(
+            supabase=supabase,
+            club_id=club_id,
+            authorization=authorization,
+            source="next_tournament_registration_detail",
+        )
+        try:
+            return quote_admin_tournament_commerce_order(
+                supabase,
+                club_id=club_id,
+                tournament_id=tournament_id,
+                registration_id=registration_id,
+                item_selections=payload.item_selections,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.put(
+        "/admin/clubs/{club_id}/tournaments/commerce/tournaments/"
+        "{tournament_id}/orders/{registration_id}"
+    )
+    def put_tournament_commerce_order(
+        club_id: str,
+        tournament_id: str,
+        registration_id: str,
+        payload: AdminTournamentCommerceOrderReplaceRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_feature()
+        _require_admin_mutation_runtime()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(
+            supabase=supabase,
+            club_id=club_id,
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return replace_admin_tournament_commerce_order(
+                supabase,
+                club_id=club_id,
+                tournament_id=tournament_id,
+                registration_id=registration_id,
+                item_selections=payload.item_selections,
+                expected_quote_fingerprint=payload.expected_quote_fingerprint,
+                expected_order_updated_at=payload.expected_order_updated_at,
+                confirmation_text=payload.confirmation_text,
+                idempotency_key=payload.idempotency_key,
+                actor_email=actor_email,
+                actor_role=actor_role,
                 source=payload.source,
             )
         except Exception as exc:

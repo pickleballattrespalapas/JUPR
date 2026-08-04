@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from jupr_app.domain.admin_activity_log import (
@@ -13,6 +14,7 @@ from jupr_app.domain.admin_activity_log import (
 from jupr_app.domain.tournament_commerce import (
     TournamentCommerceValidationError,
     normalize_tournament_commerce_catalog,
+    quote_tournament_commerce,
     stable_fingerprint,
     tournament_commerce_catalog_payload,
 )
@@ -22,9 +24,12 @@ from jupr_app.services.public_tournament_commerce_service import (
     _batched_rows,
     _canonical_uuid,
     _clean_text,
+    _current_order,
     _execute,
     _load_catalog,
     _paged_rows,
+    _registration_position,
+    _registration_rows,
     _raise_rpc_error,
     _rpc_result,
     is_tournament_commerce_enabled,
@@ -470,6 +475,192 @@ def _admin_order_rpc(
     return result
 
 
+
+def _registration_event_option_ids(
+    supabase: Any,
+    *,
+    tournament_id: str,
+    registration_id: str,
+) -> list[str]:
+    rows = _execute(
+        supabase.table("tournament_registration_selections")
+        .select("event_option_id")
+        .eq("tournament_id", str(tournament_id))
+        .eq("registration_id", str(registration_id)),
+        label="registration event entries",
+    )
+    return sorted(
+        {
+            str(row.get("event_option_id") or "").strip()
+            for row in rows
+            if str(row.get("event_option_id") or "").strip()
+        }
+    )
+
+
+def quote_admin_tournament_commerce_order(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    registration_id: str,
+    item_selections: list[dict[str, Any]],
+) -> dict[str, Any]:
+    current_order = _current_order(
+        supabase,
+        tournament_id=str(tournament_id),
+        registration_id=str(registration_id),
+    )
+    state, raw_catalog = _load_catalog(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=str(tournament_id),
+        exclude_order_id=str((current_order or {}).get("id") or "") or None,
+    )
+    if not state:
+        raise TournamentCommerceUnavailableError(
+            "Tournament extras are not configured."
+        )
+    registrations = _registration_rows(
+        supabase, tournament_id=str(tournament_id)
+    )
+    registration = next(
+        (
+            row
+            for row in registrations
+            if str(row.get("id") or "") == str(registration_id)
+        ),
+        None,
+    )
+    if not registration:
+        raise TournamentCommerceValidationError("Registration was not found.")
+    submitted_at: datetime | None = None
+    if registration.get("submitted_at"):
+        try:
+            submitted_at = datetime.fromisoformat(
+                str(registration["submitted_at"]).replace("Z", "+00:00")
+            )
+        except ValueError:
+            submitted_at = None
+    if submitted_at is None:
+        submitted_at = datetime.now(timezone.utc)
+    promotion_usage = {
+        str(row.get("id")): int(row.get("used_claims") or 0)
+        for row in raw_catalog.get("promotions") or []
+    }
+    event_option_ids = _registration_event_option_ids(
+        supabase,
+        tournament_id=str(tournament_id),
+        registration_id=str(registration_id),
+    )
+    quote = quote_tournament_commerce(
+        raw_catalog,
+        {
+            "event_option_ids": event_option_ids,
+            "item_selections": list(item_selections or []),
+        },
+        registration_submitted_at=submitted_at,
+        registrant_position=_registration_position(
+            registrations, registration_id=str(registration_id)
+        ),
+        promotion_usage=promotion_usage,
+    )
+    return {
+        "ok": True,
+        "mode": "admin_tournament_commerce_order_quote",
+        "quote": quote,
+        "current_order": (
+            {
+                "status": current_order.get("status"),
+                "payment_status": current_order.get("payment_status"),
+                "updated_at": current_order.get("updated_at"),
+                "quote_fingerprint": current_order.get("quote_fingerprint"),
+            }
+            if current_order
+            else None
+        ),
+    }
+
+
+def replace_admin_tournament_commerce_order(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    registration_id: str,
+    item_selections: list[dict[str, Any]],
+    expected_quote_fingerprint: str,
+    expected_order_updated_at: str | None,
+    idempotency_key: str,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str = "SAVE EXTRAS",
+    source: str = "next_tournament_registration_detail",
+) -> dict[str, Any]:
+    if _clean_text(confirmation_text, limit=40).upper() != "SAVE EXTRAS":
+        raise TournamentCommerceValidationError(
+            "Type SAVE EXTRAS to confirm the registrant extras update."
+        )
+    require_tournament_commerce_mutation_runtime(actor_type="ADMIN")
+    current = quote_admin_tournament_commerce_order(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=str(tournament_id),
+        registration_id=str(registration_id),
+        item_selections=list(item_selections or []),
+    )
+    quote = dict(current["quote"])
+    expected_quote = _clean_text(expected_quote_fingerprint, limit=128)
+    if not expected_quote or quote.get("quote_fingerprint") != expected_quote:
+        raise TournamentCommerceConflictError(
+            "Tournament extras or pricing changed. Review the updated total before saving."
+        )
+    current_order = current.get("current_order") or {}
+    if current_order:
+        if (
+            not expected_order_updated_at
+            or str(expected_order_updated_at)
+            != str(current_order.get("updated_at") or "")
+        ):
+            raise TournamentCommerceConflictError(
+                "Tournament extras changed after this registration was loaded. Refresh and review again."
+            )
+    elif expected_order_updated_at:
+        raise TournamentCommerceConflictError(
+            "The registrant extras order no longer matches the loaded state. Refresh and review again."
+        )
+    request_id = _canonical_uuid(idempotency_key, field="idempotency_key")
+    try:
+        response = supabase.rpc(
+            "server_apply_tournament_commerce_order",
+            {
+                "p_club_id": str(club_id),
+                "p_tournament_id": str(tournament_id),
+                "p_registration_id": str(registration_id),
+                "p_expected_order_updated_at": expected_order_updated_at,
+                "p_quote_snapshot": quote,
+                "p_idempotency_key": request_id,
+                "p_request_fingerprint": quote["request_fingerprint"],
+                "p_actor_type": "ADMIN",
+                "p_actor_label": _clean_text(actor_email, limit=160),
+                "p_source": _clean_text(source, limit=160),
+            },
+        ).execute()
+    except Exception as exc:
+        _raise_rpc_error(exc)
+    result = {**_rpc_result(response), "quote": quote}
+    _audit_admin_result(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=str(tournament_id),
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action="order_replace",
+        result=result,
+        source=source,
+    )
+    return result
+
 def cancel_admin_tournament_commerce_order(
     supabase: Any,
     *,
@@ -760,6 +951,8 @@ __all__ = [
     "inspect_admin_tournament_commerce_operation",
     "list_admin_tournament_commerce_tournaments",
     "replace_admin_tournament_commerce_catalog",
+    "quote_admin_tournament_commerce_order",
+    "replace_admin_tournament_commerce_order",
     "update_admin_tournament_commerce_fulfillment",
     "update_admin_tournament_commerce_payment",
 ]
