@@ -1,0 +1,29 @@
+name: Temporary Hash Tournament Fix Final Chunks
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  hash:
+    if: github.event.pull_request.head.ref == 'agent/tournament-fix-batch-20260803'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out pull request branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Hash active chunks
+        shell: bash
+        run: |
+          set -euo pipefail
+          wc -c .github/tournament_fix_final/part*.txt
+          sha256sum .github/tournament_fix_final/part*.txt
+          cat .github/tournament_fix_final/part*.txt | sha256sum
