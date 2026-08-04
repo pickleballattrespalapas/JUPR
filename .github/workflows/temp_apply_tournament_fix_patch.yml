@@ -1,0 +1,46 @@
+name: Temporary Apply Tournament Fix Patch
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/tournament-fix-batch-20260803'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out pull request branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply verified tournament fix patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/tournament_fix_final/part*.txt > /tmp/tournament_fix.b64
+          base64 --decode /tmp/tournament_fix.b64 | gzip --decode > /tmp/tournament_fix.patch
+          echo '5e765ca5bb8ad62fb90ccec0f8673a43011768ee229b522c85123c474afc77fc  /tmp/tournament_fix.patch' | sha256sum --check
+          git apply --index /tmp/tournament_fix.patch
+
+          rm -rf .github/tournament_fix_patch
+          rm -rf .github/tournament_fix_final
+          rm -f .github/workflows/temp_source_archive_tournament_fixes.yml
+          rm -f .github/workflows/temp_assemble_tournament_fix_patch.yml
+          rm -f .github/workflows/temp_apply_tournament_fix_patch.yml
+
+          git add -A
+          git diff --cached --check
+          python -m compileall -q jupr_app services/api
+          test -n "$(git diff --cached --name-only)"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Implement tournament acceptance fix batch'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
