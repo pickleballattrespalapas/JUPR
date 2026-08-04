@@ -21,7 +21,9 @@ export default async function AdminTournamentRegistrationManagementPage({ search
 
   return (
     <section>
-      <TournamentPhaseNav phase="registration" />
+      <Suspense fallback={null}>
+        <TournamentPhaseNav phase="registration" />
+      </Suspense>
       <p style={{ margin: "1rem 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         Tournament Manager
       </p>
