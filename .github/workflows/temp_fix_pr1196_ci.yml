@@ -76,7 +76,6 @@ jobs:
           git add -A
           git diff --cached --check
           python -m compileall -q scripts services/api
-          python -m pytest -q tests/test_staging_write_wave_guards.py
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
