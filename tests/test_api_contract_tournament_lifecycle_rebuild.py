@@ -107,7 +107,9 @@ def test_lifecycle_phase_overviews_and_subnavigation_exist() -> None:
       assert key in setup_nav
 
   assert 'goTo("schedule")' in setup_panel
-  assert "Save and continue" in setup_panel
+  assert "Save draft and continue" in setup_panel
+  assert "private admin draft" in setup_panel
+  assert "Publish reviewed setup" in setup_panel
   assert "Review setup" in setup_panel
   assert "Open registration" in setup_panel
 
