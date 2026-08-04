@@ -71,6 +71,11 @@ export type AdminTournamentSelection = {
   partner_phone?: string | null;
   partner_note?: string | null;
   show_on_partner_board?: boolean | null;
+  partner_team_link_id?: string | null;
+  partner_team_status?: string | null;
+  partner_selection_id?: string | null;
+  partner_registration_id?: string | null;
+  partner_display_name?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 };

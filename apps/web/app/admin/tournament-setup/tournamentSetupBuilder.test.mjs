@@ -31,7 +31,17 @@ const {
 function validConfiguration() {
   return {
     days: wrapBuilderRows([
-      { id: "day-1", label: "Friday", event_date: "2026-11-20", enabled: true, sort_order: 1 }
+      {
+        id: "day-1",
+        label: "Friday",
+        event_date: "2026-11-20",
+        enabled: true,
+        sort_order: 1,
+        court_count: 10,
+        court_labels: Array.from({ length: 10 }, (_, index) => `Court ${index + 1}`),
+        court_open_time: "08:00",
+        court_close_time: "20:00"
+      }
     ], "day"),
     eventFamilies: wrapBuilderRows([
       {

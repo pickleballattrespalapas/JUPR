@@ -109,6 +109,11 @@ REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "id",
         "tournament_id",
         "enabled",
+        "court_count",
+        "court_labels",
+        "court_open_time",
+        "court_close_time",
+        "court_notes",
     ),
     "tournament_event_options": (
         "id",
@@ -562,15 +567,19 @@ def build_builder_draft_payload(
     days: list[dict[str, Any]],
     event_families: list[dict[str, Any]],
     divisions: list[dict[str, Any]],
+    basics: dict[str, Any] | None = None,
+    settings: dict[str, Any] | None = None,
     saved_step: str | None = None,
 ) -> dict[str, Any]:
     payload = {
-        "version": 1,
+        "version": 2,
         "saved_at": _now_iso(),
         "saved_step": str(saved_step or "").strip() or None,
         "days": list(days or []),
         "event_families": list(event_families or []),
         "divisions": list(divisions or []),
+        "basics": dict(basics or {}),
+        "settings": dict(settings or {}),
     }
     return _json_safe_value(payload)
 
@@ -590,18 +599,22 @@ def save_builder_draft(
     days: list[dict[str, Any]],
     event_families: list[dict[str, Any]],
     divisions: list[dict[str, Any]],
+    basics: dict[str, Any] | None = None,
+    settings: dict[str, Any] | None = None,
     saved_step: str | None = None,
 ) -> dict[str, Any]:
     assert_registration_schema_contract(supabase, required_tables=["tournament_registration_settings"])
-    settings = get_registration_settings(supabase, str(tournament_id))
+    current_settings = get_registration_settings(supabase, str(tournament_id))
     payload = build_builder_draft_payload(
         days=days,
         event_families=event_families,
         divisions=divisions,
+        basics=basics,
+        settings=dict(settings or {}),
         saved_step=saved_step,
     )
     update_payload = {
-        "id": str(settings.get("id") or _uid("regset")),
+        "id": str(current_settings.get("id") or _uid("regset")),
         "tournament_id": str(tournament_id),
         "builder_draft_json": payload,
         "builder_draft_updated_at": _now_iso(),
@@ -776,6 +789,11 @@ DAY_CONFIGURATION_WRITE_FIELDS = {
     "sort_order",
     "label",
     "event_date",
+    "court_count",
+    "court_labels",
+    "court_open_time",
+    "court_close_time",
+    "court_notes",
     "enabled",
 }
 EVENT_CONFIGURATION_WRITE_FIELDS = {
@@ -1002,6 +1020,21 @@ def analyze_registration_publish_impact(
     deletes: list[str] = []
     warnings: list[str] = []
     blocked: list[str] = []
+    blocked_details: list[dict[str, Any]] = []
+
+    def block_event(message: str, *, event_id: str, label: str, field: str) -> None:
+        blocked.append(message)
+        blocked_details.append(
+            {
+                "message": message,
+                "entity_type": "division",
+                "entity_id": event_id,
+                "entity_label": label,
+                "field": field,
+                "step": "divisions",
+                "resolution_options": ["KEEP_PUBLISHED_VALUE", "EDIT_DRAFT"],
+            }
+        )
 
     for day in draft_days:
         day_id = str(day.get("id"))
@@ -1029,19 +1062,44 @@ def analyze_registration_publish_impact(
         existing_day_id = str(existing.get("registration_day_id") or "")
         draft_day_id = str(event.get("registration_day_id") or "")
         if has_usage and existing_day_id != draft_day_id:
-            blocked.append(f"Cannot move populated division '{label}' to a different primary day.")
+            block_event(
+                f"Cannot move populated division '{label}' to a different primary day.",
+                event_id=event_id,
+                label=label,
+                field="registration_day_id",
+            )
         existing_schedule = list(existing.get("scheduled_day_ids") or ([existing_day_id] if existing_day_id else []))
         draft_schedule = list(event.get("scheduled_day_ids") or ([draft_day_id] if draft_day_id else []))
         if has_usage and existing_schedule != draft_schedule:
-            blocked.append(f"Cannot change the multi-day schedule for populated division '{label}'.")
+            block_event(
+                f"Cannot change the multi-day schedule for populated division '{label}'.",
+                event_id=event_id,
+                label=label,
+                field="scheduled_day_ids",
+            )
         if has_usage and str(existing.get("event_type") or "") != str(event.get("event_type") or ""):
-            blocked.append(f"Cannot change participant type for populated division '{label}'.")
+            block_event(
+                f"Cannot change participant type for populated division '{label}'.",
+                event_id=event_id,
+                label=label,
+                field="event_type",
+            )
         if has_usage and str(existing.get("gender_restriction") or "") != str(event.get("gender_restriction") or ""):
-            blocked.append(f"Cannot change gender restriction for populated division '{label}'.")
+            block_event(
+                f"Cannot change gender restriction for populated division '{label}'.",
+                event_id=event_id,
+                label=label,
+                field="gender_restriction",
+            )
 
         rule_columns = ["skill_label", "skill_mode", "age_label", "age_mode", "age_rules"]
         if has_usage and any(str(existing.get(column) or "") != str(event.get(column) or "") for column in rule_columns):
-            blocked.append(f"Cannot change skill/age rules for populated division '{label}' in ways that could invalidate registrants.")
+            block_event(
+                f"Cannot change skill/age rules for populated division '{label}' in ways that could invalidate registrants.",
+                event_id=event_id,
+                label=label,
+                field="skill_age_rules",
+            )
 
         existing_capacity = existing.get("capacity_teams")
         next_capacity = event.get("capacity_teams")
@@ -1051,7 +1109,12 @@ def analyze_registration_publish_impact(
                 new_cap = int(next_capacity)
                 if new_cap < old_cap:
                     if new_cap < occupied:
-                        blocked.append(f"Cannot reduce capacity for '{label}' below occupied teams ({occupied}).")
+                        block_event(
+                            f"Cannot reduce capacity for '{label}' below occupied teams ({occupied}).",
+                            event_id=event_id,
+                            label=label,
+                            field="capacity_teams",
+                        )
                     else:
                         warnings.append(f"Capacity for '{label}' is being reduced from {old_cap} to {new_cap} with {occupied} occupied.")
         except Exception:
@@ -1102,6 +1165,7 @@ def analyze_registration_publish_impact(
         "deletes": deletes,
         "warnings": warnings,
         "blocked": blocked,
+        "blocked_details": blocked_details,
         "draft_days": draft_days,
         "draft_event_options": draft_events,
         "published_days": published_days,

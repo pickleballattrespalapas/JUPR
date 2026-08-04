@@ -234,3 +234,76 @@ def test_legacy_free_text_partner_name_alone_cannot_create_confirmed_team():
     assert request["target_selection_id"] is None
     assert storage["tournament_registration_team_links"] == []
     assert storage["tournament_registration_team_members"] == []
+
+
+def test_admin_can_replace_and_then_remove_an_event_partner():
+    storage = _storage()
+    supabase = _FakeSupabase(storage)
+    original = svc.admin_confirm_partner_link(
+        supabase,
+        tournament_id="tour-1",
+        event_option_id="event-wd-35",
+        selection1_id="sel_mary",
+        selection2_id="sel_elizabeth",
+        admin_user_id="admin@example.com",
+    )
+
+    replaced = svc.admin_replace_partner_link(
+        supabase,
+        tournament_id="tour-1",
+        event_option_id="event-wd-35",
+        selection_id="sel_mary",
+        partner_selection_id="sel_alice",
+        admin_user_id="admin@example.com",
+    )
+
+    assert replaced["outcome"] == "paired"
+    assert replaced["partner_selection_id"] == "sel_alice"
+    assert next(row for row in storage["tournament_registration_team_links"] if row["id"] == original["id"])["status"] == "CANCELLED"
+    active_links = [row for row in storage["tournament_registration_team_links"] if row["status"] == "ADMIN_CONFIRMED"]
+    assert len(active_links) == 1
+    assert {active_links[0]["selection1_id"], active_links[0]["selection2_id"]} == {"sel_mary", "sel_alice"}
+    modes = {row["id"]: row.get("partner_mode") for row in storage["tournament_registration_selections"]}
+    assert modes["sel_elizabeth"] == "NEEDS_PARTNER"
+    assert modes["sel_mary"] == "HAS_PARTNER"
+    assert modes["sel_alice"] == "HAS_PARTNER"
+
+    removed = svc.admin_replace_partner_link(
+        supabase,
+        tournament_id="tour-1",
+        event_option_id="event-wd-35",
+        selection_id="sel_mary",
+        partner_selection_id=None,
+        unpaired_mode="NONE",
+        admin_user_id="admin@example.com",
+    )
+
+    assert removed["outcome"] == "unpaired"
+    modes = {row["id"]: row.get("partner_mode") for row in storage["tournament_registration_selections"]}
+    assert modes["sel_mary"] == "NONE"
+    assert modes["sel_alice"] == "NEEDS_PARTNER"
+    assert not [row for row in storage["tournament_registration_team_links"] if row["status"] in {"CONFIRMED", "ADMIN_CONFIRMED"}]
+
+
+def test_admin_partner_assignment_rejects_two_entries_from_same_registration():
+    storage = _storage()
+    storage["tournament_registration_selections"].append(
+        {
+            "id": "sel_mary_second",
+            "tournament_id": "tour-1",
+            "registration_id": "reg_mary",
+            "event_option_id": "event-wd-35",
+            "partner_mode": "NEEDS_PARTNER",
+        }
+    )
+    supabase = _FakeSupabase(storage)
+
+    with pytest.raises(ValueError, match="another entry from itself"):
+        svc.admin_replace_partner_link(
+            supabase,
+            tournament_id="tour-1",
+            event_option_id="event-wd-35",
+            selection_id="sel_mary",
+            partner_selection_id="sel_mary_second",
+            admin_user_id="admin@example.com",
+        )

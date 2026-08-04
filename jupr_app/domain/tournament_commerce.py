@@ -8,6 +8,7 @@ complete immutable snapshots for the database transaction layer.
 from __future__ import annotations
 
 from collections import deque
+from itertools import combinations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -25,10 +26,10 @@ PROMOTION_TYPES = frozenset(
     {"DATE_WINDOW_FREE", "FIRST_N_REGISTRANTS", "FIRST_N_CLAIMS"}
 )
 PROMOTION_TARGET_TYPES = frozenset({"ITEM", "ITEM_VARIANT", "BUNDLE"})
-COMPONENT_TYPES = frozenset({"EVENT_OPTION", "ITEM_VARIANT"})
+COMPONENT_TYPES = frozenset({"EVENT_OPTION", "EVENT_CHOICE", "ITEM_VARIANT"})
 MAX_CART_ITEM_QUANTITY = 20
 MAX_CART_DISTINCT_ITEMS = 50
-MAX_BUNDLE_CANDIDATES = 20
+MAX_BUNDLE_CANDIDATES = 200
 MAX_EVENT_SELECTIONS = 20
 
 
@@ -494,7 +495,7 @@ def normalize_tournament_commerce_catalog(
         event_option_id = _clean_text(row.get("event_option_id"), limit=160) or None
         item_id = _clean_text(row.get("item_id"), limit=160) or None
         variant_id = _clean_text(row.get("variant_id"), limit=160) or None
-        if component_type == "EVENT_OPTION":
+        if component_type in {"EVENT_OPTION", "EVENT_CHOICE"}:
             if not event_option_id or item_id or variant_id:
                 raise TournamentCommerceValidationError(
                     f"{bundle['name']}: event component target is invalid."
@@ -545,12 +546,31 @@ def normalize_tournament_commerce_catalog(
     for row in components:
         components_by_bundle.setdefault(row["bundle_id"], []).append(row)
     for bundle in bundles:
-        if bundle["status"] == "ACTIVE" and not components_by_bundle.get(
-            bundle["id"]
-        ):
+        bundle_components = components_by_bundle.get(bundle["id"], [])
+        if bundle["status"] == "ACTIVE" and not bundle_components:
             raise TournamentCommerceValidationError(
                 f"{bundle['name']}: an active bundle needs at least one component."
             )
+        choice_components = [
+            component
+            for component in bundle_components
+            if component["component_type"] == "EVENT_CHOICE"
+        ]
+        if choice_components:
+            required_counts = {int(component["quantity"]) for component in choice_components}
+            if len(required_counts) != 1:
+                raise TournamentCommerceValidationError(
+                    f"{bundle['name']}: every eligible event must use the same required-event count."
+                )
+            required_count = next(iter(required_counts))
+            if required_count > len(choice_components):
+                raise TournamentCommerceValidationError(
+                    f"{bundle['name']}: choose-at-least count cannot exceed the eligible event pool."
+                )
+            if int(bundle.get("max_per_registration") or 1) != 1:
+                raise TournamentCommerceValidationError(
+                    f"{bundle['name']}: flexible event bundles must have a maximum of one per registration."
+                )
 
     variants_by_item: dict[str, list[dict[str, Any]]] = {}
     for row in variants:
@@ -954,52 +974,80 @@ def _bundle_candidates(
         components_by_bundle.setdefault(
             str(component["bundle_id"]), []
         ).append(component)
+
     candidates: list[_BundleCandidate] = []
     for bundle in normalized["bundles"]:
         if bundle["status"] != "ACTIVE" or not _available_at(bundle, at=at):
             continue
-        component_counts: dict[str, int] = {}
+        fixed_counts: dict[str, int] = {}
+        choice_components: list[Mapping[str, Any]] = []
         for component in components_by_bundle.get(str(bundle["id"]), []):
-            if component["component_type"] == "EVENT_OPTION":
+            component_type = str(component["component_type"])
+            if component_type == "EVENT_CHOICE":
+                choice_components.append(component)
+                continue
+            if component_type == "EVENT_OPTION":
                 key = f"event:{component['event_option_id']}"
             else:
                 key = f"variant:{component['variant_id']}"
-            component_counts[key] = component_counts.get(key, 0) + int(
+            fixed_counts[key] = fixed_counts.get(key, 0) + int(
                 component["quantity"]
             )
-        if not component_counts or any(
-            key not in available_counts or key not in unit_prices
-            for key in component_counts
-        ):
-            continue
-        if any(
-            available_counts.get(key, 0) < quantity
-            for key, quantity in component_counts.items()
-        ):
-            continue
-        regular = sum(
-            int(unit_prices[key]) * quantity
-            for key, quantity in component_counts.items()
-        )
-        price = int(bundle["price_minor"])
-        candidates.append(
-            _BundleCandidate(
-                bundle=dict(bundle),
-                components=tuple(sorted(component_counts.items())),
-                regular_minor=regular,
-                price_minor=price,
-                savings_minor=regular - price,
+
+        component_sets: list[dict[str, int]] = []
+        if choice_components:
+            required_count = int(choice_components[0]["quantity"])
+            eligible_keys = sorted(
+                {
+                    f"event:{component['event_option_id']}"
+                    for component in choice_components
+                    if f"event:{component['event_option_id']}" in available_counts
+                }
             )
-        )
+            for selected in combinations(eligible_keys, required_count):
+                counts = dict(fixed_counts)
+                for key in selected:
+                    counts[key] = counts.get(key, 0) + 1
+                component_sets.append(counts)
+        elif fixed_counts:
+            component_sets.append(fixed_counts)
+
+        for component_counts in component_sets:
+            if not component_counts or any(
+                key not in available_counts or key not in unit_prices
+                for key in component_counts
+            ):
+                continue
+            if any(
+                available_counts.get(key, 0) < quantity
+                for key, quantity in component_counts.items()
+            ):
+                continue
+            regular = sum(
+                int(unit_prices[key]) * quantity
+                for key, quantity in component_counts.items()
+            )
+            price = int(bundle["price_minor"])
+            candidates.append(
+                _BundleCandidate(
+                    bundle=dict(bundle),
+                    components=tuple(sorted(component_counts.items())),
+                    regular_minor=regular,
+                    price_minor=price,
+                    savings_minor=regular - price,
+                )
+            )
+
     if len(candidates) > MAX_BUNDLE_CANDIDATES:
         raise TournamentCommerceValidationError(
-            "This cart matches too many bundles to price safely."
+            "This cart matches too many bundle combinations to price safely."
         )
     return sorted(
         candidates,
         key=lambda candidate: (
             int(candidate.bundle["sort_order"]),
             str(candidate.bundle["id"]),
+            candidate.components,
         ),
     )
 
@@ -1012,11 +1060,29 @@ def _optimize_bundles(
     promotions: list[Mapping[str, Any]],
     promo_remaining: Mapping[str, int | None],
 ) -> tuple[int, ...]:
+    if not candidates:
+        return ()
+
     resource_keys = tuple(sorted(available_counts))
     initial = tuple(int(available_counts[key]) for key in resource_keys)
     positions = {key: index for index, key in enumerate(resource_keys)}
-    choice_savings: list[tuple[int, ...]] = []
-    for candidate in candidates:
+
+    grouped_indices: list[tuple[int, ...]] = []
+    current_bundle = None
+    current: list[int] = []
+    for index, candidate in enumerate(candidates):
+        bundle_id = str(candidate.bundle["id"])
+        if current_bundle is not None and bundle_id != current_bundle:
+            grouped_indices.append(tuple(current))
+            current = []
+        current_bundle = bundle_id
+        current.append(index)
+    if current:
+        grouped_indices.append(tuple(current))
+
+    choice_savings: dict[int, tuple[int, ...]] = {}
+    max_quantities: dict[int, int] = {}
+    for index, candidate in enumerate(candidates):
         max_by_stock = min(
             initial[positions[key]] // quantity
             for key, quantity in candidate.components
@@ -1025,6 +1091,7 @@ def _optimize_bundles(
             max_by_stock,
             int(candidate.bundle.get("max_per_registration") or 1),
         )
+        max_quantities[index] = max_quantity
         savings_by_quantity = []
         for quantity in range(max_quantity + 1):
             promotion_savings = _allocate_promotions(
@@ -1043,7 +1110,7 @@ def _optimize_bundles(
             savings_by_quantity.append(
                 candidate.savings_minor * quantity + promotion_savings
             )
-        choice_savings.append(tuple(savings_by_quantity))
+        choice_savings[index] = tuple(savings_by_quantity)
 
     def better(
         score: int,
@@ -1057,11 +1124,56 @@ def _optimize_bundles(
             return sum(counts) < sum(best_counts)
         return counts > best_counts
 
+    def allocations_for_group(
+        indices: tuple[int, ...], remaining: tuple[int, ...]
+    ) -> Iterable[tuple[tuple[int, ...], tuple[int, ...], int]]:
+        bundle_limit = int(
+            candidates[indices[0]].bundle.get("max_per_registration") or 1
+        )
+
+        def walk(
+            offset: int,
+            quantities: list[int],
+            available: list[int],
+            used: int,
+            score: int,
+        ) -> Iterable[tuple[tuple[int, ...], tuple[int, ...], int]]:
+            if offset >= len(indices):
+                yield tuple(quantities), tuple(available), score
+                return
+            candidate_index = indices[offset]
+            candidate = candidates[candidate_index]
+            component_positions = [
+                (positions[key], needed) for key, needed in candidate.components
+            ]
+            stock_limit = min(
+                available[position] // needed
+                for position, needed in component_positions
+            )
+            quantity_limit = min(
+                max_quantities[candidate_index],
+                stock_limit,
+                bundle_limit - used,
+            )
+            for quantity in range(quantity_limit + 1):
+                next_available = list(available)
+                for position, needed in component_positions:
+                    next_available[position] -= needed * quantity
+                yield from walk(
+                    offset + 1,
+                    quantities + [quantity],
+                    next_available,
+                    used + quantity,
+                    score + choice_savings[candidate_index][quantity],
+                )
+
+        yield from walk(0, [], list(remaining), 0, 0)
+
     @lru_cache(maxsize=50_000)
     def solve(
-        index: int, remaining: tuple[int, ...]
+        group_index: int, remaining: tuple[int, ...]
     ) -> tuple[int, tuple[int, ...]]:
-        if index >= len(candidates):
+        if group_index >= len(grouped_indices):
             remaining_lines = [
                 {
                     **dict(source_lines[key]),
@@ -1076,28 +1188,16 @@ def _optimize_bundles(
                 promo_remaining=promo_remaining,
             )[1]
             return promotion_savings, ()
-        candidate = candidates[index]
-        component_positions = [
-            (positions[key], needed) for key, needed in candidate.components
-        ]
-        max_quantity = min(
-            min(
-                remaining[position] // needed
-                for position, needed in component_positions
-            ),
-            int(candidate.bundle.get("max_per_registration") or 1),
-        )
+
+        indices = grouped_indices[group_index]
         best_score = -10**18
         best_counts: tuple[int, ...] = ()
-        for quantity in range(max_quantity + 1):
-            next_remaining = list(remaining)
-            for position, needed in component_positions:
-                next_remaining[position] -= needed * quantity
-            tail_savings, tail_counts = solve(
-                index + 1, tuple(next_remaining)
-            )
-            score = choice_savings[index][quantity] + tail_savings
-            counts = (quantity,) + tail_counts
+        for group_counts, next_remaining, group_score in allocations_for_group(
+            indices, remaining
+        ):
+            tail_score, tail_counts = solve(group_index + 1, next_remaining)
+            score = group_score + tail_score
+            counts = group_counts + tail_counts
             if not best_counts or better(
                 score, counts, best_score, best_counts
             ):
@@ -1105,8 +1205,7 @@ def _optimize_bundles(
                 best_counts = counts
         return best_score, best_counts
 
-    return solve(0, initial)[1] if candidates else ()
-
+    return solve(0, initial)[1]
 
 def _scaled_components(
     components: Iterable[Mapping[str, Any]], quantity: int
@@ -1487,31 +1586,35 @@ def quote_tournament_commerce(
     list_subtotal = sum(int(row["list_total_minor"]) for row in final_lines)
     total = sum(int(row["final_total_minor"]) for row in final_lines)
 
-    applied_bundles: list[dict[str, Any]] = []
-    for candidate in candidates:
-        matching = [
-            row
-            for row in final_lines
-            if str(row.get("bundle_id")) == str(candidate.bundle["id"])
-        ]
-        quantity = sum(int(row["quantity"]) for row in matching)
-        if quantity <= 0:
+    applied_by_bundle: dict[str, dict[str, Any]] = {}
+    for row in final_lines:
+        bundle_id = str(row.get("bundle_id") or "")
+        if not bundle_id:
             continue
-        regular = candidate.regular_minor * quantity
-        bundle_price = candidate.price_minor * quantity
-        final = sum(int(row["final_total_minor"]) for row in matching)
-        applied_bundles.append(
+        summary = applied_by_bundle.setdefault(
+            bundle_id,
             {
-                "bundle_id": candidate.bundle["id"],
-                "name": candidate.bundle["name"],
-                "quantity": quantity,
-                "regular_minor": regular,
-                "bundle_price_minor": bundle_price,
-                "final_minor": final,
-                "promotion_savings_minor": bundle_price - final,
-                "savings_minor": regular - final,
-            }
+                "bundle_id": bundle_id,
+                "name": row.get("label") or "Bundle",
+                "quantity": 0,
+                "regular_minor": 0,
+                "bundle_price_minor": 0,
+                "final_minor": 0,
+                "promotion_savings_minor": 0,
+                "savings_minor": 0,
+            },
         )
+        quantity = int(row.get("quantity") or 0)
+        regular = int(row.get("list_total_minor") or 0)
+        bundle_price = int(row.get("final_unit_minor") or 0) * quantity
+        final = int(row.get("final_total_minor") or 0)
+        summary["quantity"] += quantity
+        summary["regular_minor"] += regular
+        summary["bundle_price_minor"] += bundle_price
+        summary["final_minor"] += final
+        summary["promotion_savings_minor"] += bundle_price - final
+        summary["savings_minor"] += regular - final
+    applied_bundles = [applied_by_bundle[key] for key in sorted(applied_by_bundle)]
 
     fulfillment: list[dict[str, Any]] = []
     for line in final_lines:

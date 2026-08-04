@@ -37,6 +37,10 @@ export const PARTICIPANT_TYPES = ["SINGLES", "GENDER_DOUBLES", "MIXED_DOUBLES"] 
 export const GENDER_RESTRICTIONS = ["ANY", "MEN", "WOMEN", "MIXED"] as const;
 export const DIVISION_STATUSES = ["draft", "open", "tentative", "confirmed", "closed"] as const;
 export const SKILL_LABEL_OPTIONS = ["Open", "3.0", "3.5", "4.0", "4.5", "5.0", "5.5"] as const;
+export const FACILITY_COURT_LIMIT = 10;
+export const MAX_TOURNAMENT_DAYS = 31;
+export const DEFAULT_COURT_OPEN_TIME = "08:00";
+export const DEFAULT_COURT_CLOSE_TIME = "20:00";
 
 let builderKeySequence = 0;
 
@@ -111,6 +115,56 @@ export function moveBuilderRow(rows: BuilderRow[], key: string, direction: -1 | 
 
 export function appendBuilderRow(rows: BuilderRow[], prefix: string, value: SetupRecord): BuilderRow[] {
   return [...rows, { key: nextBuilderKey(prefix, value, rows.length), value: { ...value } }];
+}
+
+function dayOrderMap(days: BuilderRow[]): Map<string, number> {
+  const result = new Map<string, number>();
+  days.forEach((row, index) => {
+    const id = dayReference(row.value);
+    const label = dayLabel(row.value);
+    if (id) result.set(id, index);
+    if (label) result.set(label, index);
+  });
+  return result;
+}
+
+export function sortEventFamiliesByTournamentDay(
+  rows: BuilderRow[],
+  days: BuilderRow[]
+): BuilderRow[] {
+  const order = dayOrderMap(days);
+  return [...rows]
+    .sort((left, right) => {
+      const leftDays = eventDayReferences(left.value);
+      const rightDays = eventDayReferences(right.value);
+      const leftIndex = Math.min(...leftDays.map((value) => order.get(value) ?? 9999), 9999);
+      const rightIndex = Math.min(...rightDays.map((value) => order.get(value) ?? 9999), 9999);
+      if (leftIndex !== rightIndex) return leftIndex - rightIndex;
+      return eventFamilyName(left.value).localeCompare(eventFamilyName(right.value));
+    })
+    .map((row, index) => ({ ...row, value: { ...row.value, sort_order: index + 1 } }));
+}
+
+export function sortDivisionsByEventAndName(
+  rows: BuilderRow[],
+  eventFamilies: BuilderRow[],
+  days: BuilderRow[]
+): BuilderRow[] {
+  const familyOrder = new Map(
+    sortEventFamiliesByTournamentDay(eventFamilies, days).map((row, index) => [
+      eventFamilyName(row.value).toLowerCase(),
+      index
+    ])
+  );
+  return [...rows]
+    .sort((left, right) => {
+      const leftFamily = eventFamilyName(left.value).toLowerCase();
+      const rightFamily = eventFamilyName(right.value).toLowerCase();
+      const eventDelta = (familyOrder.get(leftFamily) ?? 9999) - (familyOrder.get(rightFamily) ?? 9999);
+      if (eventDelta) return eventDelta;
+      return eventDivisionName(left.value).localeCompare(eventDivisionName(right.value));
+    })
+    .map((row, index) => ({ ...row, value: { ...row.value, sort_order: index + 1 } }));
 }
 
 export function setRecordString(
@@ -367,14 +421,73 @@ export function eventUsesLabelDayReference(row: SetupRecord): boolean {
   return Object.prototype.hasOwnProperty.call(row, "assigned_day");
 }
 
-export function newDayRow(position: number, label = `Day ${position}`): SetupRecord {
+export function defaultCourtLabels(count = FACILITY_COURT_LIMIT): string[] {
+  const safeCount = Math.max(1, Math.min(FACILITY_COURT_LIMIT, Math.trunc(Number(count) || FACILITY_COURT_LIMIT)));
+  return Array.from({ length: safeCount }, (_, index) => `Court ${index + 1}`);
+}
+
+export function dayCourtLabels(row: SetupRecord): string[] {
+  const raw = Array.isArray(row.court_labels) ? row.court_labels : [];
+  return raw.map(cleanString).filter(Boolean);
+}
+
+export function withDefaultDayCourts(row: SetupRecord): SetupRecord {
+  const rawCount = Number(row.court_count);
+  const count = Number.isInteger(rawCount) && rawCount > 0
+    ? Math.min(rawCount, FACILITY_COURT_LIMIT)
+    : FACILITY_COURT_LIMIT;
+  const labels = dayCourtLabels(row);
   return {
+    ...row,
+    court_count: count,
+    court_labels: labels.length === count ? labels : defaultCourtLabels(count),
+    court_open_time: cleanString(row.court_open_time) || DEFAULT_COURT_OPEN_TIME,
+    court_close_time: cleanString(row.court_close_time) || DEFAULT_COURT_CLOSE_TIME,
+    court_notes: cleanString(row.court_notes)
+  };
+}
+
+export function newDayRow(position: number, label = `Day ${position}`): SetupRecord {
+  return withDefaultDayCourts({
     id: newContractId("day"),
     label,
     event_date: "",
     enabled: true,
     sort_order: position
-  };
+  });
+}
+
+export function syncTournamentDays(
+  startDate: string,
+  endDate: string,
+  existingRows: BuilderRow[]
+): BuilderRow[] {
+  if (!startDate || !endDate || endDate < startDate) return existingRows;
+  const byDate = new Map(
+    existingRows.map((row) => [cleanString(row.value.event_date), row] as const)
+  );
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+  if (Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf())) return existingRows;
+  const next: BuilderRow[] = [];
+  const cursor = new Date(start);
+  while (cursor <= end && next.length < MAX_TOURNAMENT_DAYS) {
+    const date = cursor.toISOString().slice(0, 10);
+    const position = next.length + 1;
+    const existing = byDate.get(date);
+    const base = existing?.value || newDayRow(position, `Day ${position}`);
+    next.push({
+      key: existing?.key || nextBuilderKey("day", base, position - 1),
+      value: withDefaultDayCourts({
+        ...base,
+        event_date: date,
+        enabled: true,
+        sort_order: position
+      })
+    });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return next;
 }
 
 export function newEventFamilyRow(
@@ -810,8 +923,35 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
     if (duplicateDayLabels.has(index)) issues.push({ path: `days.${index}.label`, message: "Day labels must be unique." });
     if (duplicateDayIds.has(index)) issues.push({ path: `days.${index}.id`, message: "Day IDs must be unique." });
     const dateValue = cleanString(row.event_date ?? row.date ?? row.start_date);
-    if (dateValue && !isIsoDate(dateValue)) {
+    if (!dateValue) {
+      issues.push({ path: `days.${index}.event_date`, message: "Tournament day date is required." });
+    } else if (!isIsoDate(dateValue)) {
       issues.push({ path: `days.${index}.event_date`, message: "Use a valid date in YYYY-MM-DD format." });
+    }
+    const courtCount = finiteNumber(row.court_count);
+    if (courtCount == null || !Number.isInteger(courtCount) || courtCount < 1 || courtCount > FACILITY_COURT_LIMIT) {
+      issues.push({
+        path: `days.${index}.court_count`,
+        message: `Available courts must be a whole number from 1 to ${FACILITY_COURT_LIMIT}.`
+      });
+    }
+    const labels = dayCourtLabels(row);
+    if (courtCount != null && labels.length !== courtCount) {
+      issues.push({
+        path: `days.${index}.court_labels`,
+        message: "Provide one unique court label for every available court."
+      });
+    }
+    if (new Set(labels.map((label) => label.toLowerCase())).size !== labels.length) {
+      issues.push({ path: `days.${index}.court_labels`, message: "Court labels must be unique." });
+    }
+    const openTime = cleanString(row.court_open_time);
+    const closeTime = cleanString(row.court_close_time);
+    if (!/^\d{2}:\d{2}$/.test(openTime) || !/^\d{2}:\d{2}$/.test(closeTime) || closeTime <= openTime) {
+      issues.push({
+        path: `days.${index}.court_hours`,
+        message: "Court closing time must be later than opening time."
+      });
     }
     if (recordBoolean(row.enabled, true)) {
       if (cleanString(row.id)) enabledDayReferences.add(cleanString(row.id));
@@ -851,6 +991,14 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
     }
     if (duplicateFamilies.has(index)) issues.push({ path: `families.${index}.event_family`, message: "Event names must be unique." });
     if (duplicateFamilyIds.has(index)) issues.push({ path: `families.${index}.id`, message: "Event-family IDs must be unique." });
+    const participantType = cleanString(row.participant_type).toUpperCase();
+    const gender = cleanString(row.gender_restriction).toUpperCase();
+    if (participantType === "MIXED_DOUBLES" && gender !== "MIXED") {
+      issues.push({
+        path: `families.${index}.gender_restriction`,
+        message: "Mixed Doubles automatically uses Mixed gender."
+      });
+    }
     const capacity = finiteNumber(row.default_capacity_teams);
     if (capacity != null && (!Number.isInteger(capacity) || capacity < 1)) {
       issues.push({ path: `families.${index}.default_capacity_teams`, message: "Default capacity must be a whole number of at least 1." });

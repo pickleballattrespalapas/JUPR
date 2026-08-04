@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "profile": "next-fastapi-team-competition-2026-07-28",
-  "repository_migration_content_sha256": "11f637ffeb3c0c2bc12b11bf73c974501fc4f80632a5163778a3b4c8e3c9ca51",
+  "profile": "next-fastapi-tournament-acceptance-2026-08-03",
+  "repository_migration_content_sha256": "1896fb1af557170e48735e39a1605c5f6dd530bc5212279dabebf19adb14a81d",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -59,6 +59,7 @@
     "tournament_operations_guard_surface",
     "tournament_playoff_winner_bonus",
     "tournament_setup_basics_metadata",
+    "tournament_setup_courts_flexible_bundles",
     "tournament_setup_policies_multiday"
   ],
   "schema_contract_only_repository_migrations": [

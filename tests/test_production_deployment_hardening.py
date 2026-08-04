@@ -23,7 +23,7 @@ IMMUTABLE_IMAGE_REF = (
     f"registry.fly.io/{verifier.PRODUCTION_FLY_APP}@{IMAGE_DIGEST}"
 )
 FLY_CONFIG_SHA = "4" * 64
-MIGRATION_PROFILE = "next-fastapi-team-competition-2026-07-28"
+MIGRATION_PROFILE = "next-fastapi-tournament-acceptance-2026-08-03"
 MIGRATION_CONTRACT = verifier.load_migration_contract(
     ROOT / "config/production_migration_contract.json",
     ROOT / "supabase/migrations",
@@ -215,17 +215,17 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 56
+    assert len(versions) == 57
     assert versions[-5:] == (
-        "20260731033000",
         "20260731210000",
         "20261020000000",
         "20261021000000",
         "20261022000000",
+        "20261023000000",
     )
-    assert len(names) == 56
+    assert len(names) == 57
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 56
+    assert len(contract["required_ledger_names"]) == 57
     assert contract["allow_additional_ledger_names"] is False
     assert contract["schema_contract_only_repository_migrations"] == (
         "tournament_registrations_player_id_postgrest_reload",
@@ -349,7 +349,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261022000000"
+    assert migrations[-1] == "20261023000000"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(

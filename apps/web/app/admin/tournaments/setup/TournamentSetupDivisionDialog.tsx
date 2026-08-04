@@ -8,7 +8,6 @@ import {
   dayLabel,
   dayReference,
   eventDayReferences,
-  eventFamilyDefaults,
   eventFamilyName,
   numberInputValue,
   setEventAgeMode,
@@ -21,6 +20,7 @@ import {
 
 type Props = {
   open: boolean;
+  mode?: "add" | "edit";
   initialValue: SetupRecord;
   eventFamilies: BuilderRow[];
   days: BuilderRow[];
@@ -122,6 +122,7 @@ function applyFamily(value: SetupRecord, family: SetupRecord): SetupRecord {
 
 export default function TournamentSetupDivisionDialog({
   open,
+  mode: dialogMode = "add",
   initialValue,
   eventFamilies,
   days,
@@ -138,9 +139,13 @@ export default function TournamentSetupDivisionDialog({
       eventFamilies.find(
         (row) => eventFamilyName(row.value).toLowerCase() === familyName.toLowerCase()
       )?.value || eventFamilies[0]?.value;
-    setDraft(family ? applyFamily(initialValue, family) : initialValue);
+    setDraft(
+      dialogMode === "add" && family
+        ? applyFamily(initialValue, family)
+        : { ...initialValue }
+    );
     setMessage("");
-  }, [open, initialValue, eventFamilies]);
+  }, [open, initialValue, eventFamilies, dialogMode]);
 
   const family = useMemo(() => {
     const name = eventFamilyName(draft);
@@ -166,8 +171,22 @@ export default function TournamentSetupDivisionDialog({
       setMessage("Division name is required.");
       return;
     }
+    if (!cleanString(draft.skill_label)) {
+      setMessage("Skill division is required.");
+      return;
+    }
     if (!selectedDayIds.length) {
       setMessage("Choose at least one tournament day for this division.");
+      return;
+    }
+    const capacity = Number(draft.capacity_teams);
+    if (!Number.isInteger(capacity) || capacity < 1) {
+      setMessage("Capacity must be a whole number of at least 1.");
+      return;
+    }
+    const price = Number(draft.price_usd);
+    if (!Number.isFinite(price) || price < 0) {
+      setMessage("Entry fee cannot be negative.");
       return;
     }
     onConfirm(draft);
@@ -192,7 +211,7 @@ export default function TournamentSetupDivisionDialog({
       <section
         role="dialog"
         aria-modal="true"
-        aria-labelledby="add-division-title"
+        aria-labelledby="division-dialog-title"
         style={{
           width: "min(760px, 100%)",
           maxHeight: "calc(100vh - 2rem)",
@@ -203,12 +222,13 @@ export default function TournamentSetupDivisionDialog({
           boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)"
         }}
       >
-        <h2 id="add-division-title" style={{ marginTop: 0 }}>
-          Add division
+        <h2 id="division-dialog-title" style={{ marginTop: 0 }}>
+          {dialogMode === "add"
+            ? "Add division"
+            : `Edit ${cleanString(draft.division_name ?? draft.label) || "division"}`}
         </h2>
         <p style={{ color: "#475569" }}>
-          Set up the new division here. Confirming adds it to the division list,
-          where every field remains editable before the setup is published.
+          Configure the division here. Saving returns a compact, read-only division card. Published tournament data remains unchanged until final review and publication.
         </p>
 
         <div
@@ -265,7 +285,7 @@ export default function TournamentSetupDivisionDialog({
             <br />
             <input
               list="new-division-skills"
-              value={cleanString(draft.skill_label) || "Open"}
+              value={draft.skill_label == null ? "" : String(draft.skill_label)}
               style={inputStyle}
               onChange={(event) =>
                 setDraft((current) =>
@@ -502,7 +522,7 @@ export default function TournamentSetupDivisionDialog({
               cursor: "pointer"
             }}
           >
-            Add division
+            {dialogMode === "add" ? "Add division" : "Save division"}
           </button>
         </div>
       </section>
