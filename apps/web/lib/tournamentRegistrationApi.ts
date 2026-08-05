@@ -18,6 +18,10 @@ export type PublicTournamentSettings = {
   refund_policy_markdown?: string | null;
   weather_policy_markdown?: string | null;
   sponsor_markdown?: string | null;
+  location_name?: string | null;
+  venue_address?: string | null;
+  venue_directions?: string | null;
+  timezone?: string | null;
 };
 
 export type PublicTournamentChoice = {

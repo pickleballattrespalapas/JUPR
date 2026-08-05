@@ -447,7 +447,7 @@ export function eventDayReference(row: SetupRecord): string {
   return cleanString(row.assigned_day ?? row.registration_day_id);
 }
 
-function cleanStringList(value: unknown): string[] {
+export function cleanStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map(cleanString).filter(Boolean))];
 }
@@ -492,6 +492,10 @@ export function dayCourtLabels(row: SetupRecord): string[] {
   return raw.map(cleanString).filter(Boolean);
 }
 
+export function dayAvailableCourtIds(row: SetupRecord): string[] {
+  return cleanStringList(row.available_court_ids);
+}
+
 export function withDefaultDayCourts(row: SetupRecord): SetupRecord {
   const rawCount = Number(row.court_count);
   const count = Number.isInteger(rawCount) && rawCount > 0
@@ -502,6 +506,7 @@ export function withDefaultDayCourts(row: SetupRecord): SetupRecord {
     ...row,
     court_count: count,
     court_labels: labels,
+    available_court_ids: dayAvailableCourtIds(row),
     court_open_time: cleanString(row.court_open_time) || null,
     court_close_time: cleanString(row.court_close_time) || null,
     court_notes: cleanString(row.court_notes)
@@ -1045,6 +1050,16 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
       });
     }
     const labels = dayCourtLabels(row);
+    const availableCourtIds = dayAvailableCourtIds(row);
+    if (availableCourtIds.length && courtCount != null && availableCourtIds.length !== courtCount) {
+      issues.push({
+        path: `days.${index}.available_court_ids`,
+        message: "Available-court selection must match the available court count."
+      });
+    }
+    if (new Set(availableCourtIds).size !== availableCourtIds.length) {
+      issues.push({ path: `days.${index}.available_court_ids`, message: "Available courts must be unique." });
+    }
     if (courtCount != null && labels.length > courtCount) {
       issues.push({
         path: `days.${index}.court_labels`,

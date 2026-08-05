@@ -215,19 +215,24 @@ export function agePolicySummary(policy: AgePolicy): string {
   }
   if (policy.mode === "SPLIT_AGE") {
     return policy.split_age_threshold
-      ? `Split at age ${policy.split_age_threshold}`
-      : "Split age threshold";
+      ? `Split-age partners · one under ${policy.split_age_threshold} and one ${policy.split_age_threshold}+`
+      : "Split-age partners";
   }
   return `${policy.brackets.length} candidate brackets · minimum ${policy.min_teams_per_age_group} per bracket`;
 }
 
-export function validateAgePolicy(policy: AgePolicy): string[] {
+export function validateAgePolicy(policy: AgePolicy, participantType = ""): string[] {
   const issues: string[] = [];
   if (policy.mode === "FIXED_AGE_BRACKET" && !policy.label.trim() && policy.min_age == null && policy.max_age == null) {
     issues.push("Fixed age bracket needs a label or age range.");
   }
-  if (policy.mode === "SPLIT_AGE" && (!Number.isInteger(policy.split_age_threshold) || Number(policy.split_age_threshold) < 1)) {
-    issues.push("Split age needs a whole-number threshold of at least 1.");
+  if (policy.mode === "SPLIT_AGE") {
+    if (cleanString(participantType).toUpperCase() === "SINGLES") {
+      issues.push("Split-age partners is available only for doubles and team events.");
+    }
+    if (!Number.isInteger(policy.split_age_threshold) || Number(policy.split_age_threshold) < 1) {
+      issues.push("Split-age partners needs a whole-number threshold of at least 1.");
+    }
   }
   if (policy.mode === "AUTO_AGE_SPLIT") {
     if (!Number.isInteger(policy.min_teams_per_age_group) || policy.min_teams_per_age_group < 1) {
@@ -290,7 +295,7 @@ export default function TournamentAgePolicyEditor({
   title?: string;
 }) {
   const isTeamEvent = cleanString(participantType).toUpperCase() !== "SINGLES";
-  const issues = validateAgePolicy(policy);
+  const issues = validateAgePolicy(policy, participantType);
 
   function patch(next: Partial<AgePolicy>) {
     onChange({ ...policy, ...next });
@@ -329,7 +334,7 @@ export default function TournamentAgePolicyEditor({
           >
             <option value="ALL_AGES">All ages</option>
             <option value="FIXED_AGE_BRACKET">Fixed age bracket</option>
-            <option value="SPLIT_AGE">Simple split threshold</option>
+            {isTeamEvent ? <option value="SPLIT_AGE">Split-age partners (one under / one over)</option> : null}
             <option value="AUTO_AGE_SPLIT">Auto age split</option>
           </select>
         </label>
@@ -352,10 +357,10 @@ export default function TournamentAgePolicyEditor({
         ) : null}
 
         {policy.mode === "SPLIT_AGE" ? (
-          <label>
-            <strong>Split threshold</strong><br />
+          <label style={{ gridColumn: "1 / -1" }}>
+            <strong>Split-age threshold</strong><br />
             {numberField(policy.split_age_threshold, (split_age_threshold) => patch({ split_age_threshold }), { min: 1, max: 120, placeholder: "50", disabled })}
-            <small>Creates an under-threshold and threshold-plus proposal.</small>
+            <small>Each team must include one player under the threshold and one player at or above it. Example at 50: ages 49 and 50 qualify; 49 and 49 or 50 and 50 do not. This does not create separate Under 50 and 50+ divisions.</small>
           </label>
         ) : null}
 
@@ -389,7 +394,7 @@ export default function TournamentAgePolicyEditor({
           </>
         ) : null}
 
-        {isTeamEvent && policy.mode !== "ALL_AGES" ? (
+        {isTeamEvent && policy.mode !== "ALL_AGES" && policy.mode !== "SPLIT_AGE" ? (
           <label>
             <strong>Team age rule</strong><br />
             <select

@@ -95,13 +95,27 @@ function applyEventStructure(value: SetupRecord, structure: EventStructure): Set
   };
 }
 
+function applyEventStructureWithAge(value: SetupRecord, structure: EventStructure): SetupRecord {
+  const next = applyEventStructure(value, structure);
+  const policy = readAgePolicy(next, EVENT_AGE_POLICY_FIELDS);
+  if (structure === "SINGLES" && policy.mode === "SPLIT_AGE") {
+    return writeAgePolicy(next, EVENT_AGE_POLICY_FIELDS, {
+      ...policy,
+      mode: "ALL_AGES",
+      label: "All Ages",
+      split_age_threshold: null
+    });
+  }
+  return next;
+}
+
 type Props = {
   open: boolean;
   mode: "add" | "edit";
   initialValue: SetupRecord;
   days: BuilderRow[];
   onCancel: () => void;
-  onConfirm: (value: SetupRecord) => void;
+  onConfirm: (value: SetupRecord) => void | Promise<void>;
 };
 
 export default function TournamentSetupEventFamilyDialog({
@@ -114,12 +128,14 @@ export default function TournamentSetupEventFamilyDialog({
 }: Props) {
   const [draft, setDraft] = useState<SetupRecord>(initialValue);
   const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     const structure = eventStructure(initialValue);
-    setDraft(applyEventStructure({ ...initialValue }, structure));
+    setDraft(applyEventStructureWithAge({ ...initialValue }, structure));
     setMessage("");
+    setSubmitting(false);
   }, [open, initialValue]);
 
   if (!open) return null;
@@ -140,7 +156,7 @@ export default function TournamentSetupEventFamilyDialog({
     enabled: recordBoolean(day.value.enabled, true)
   }));
 
-  function submit() {
+  async function submit() {
     if (!name) {
       setMessage("Event name is required.");
       return;
@@ -159,17 +175,22 @@ export default function TournamentSetupEventFamilyDialog({
       setMessage("Default entry fee cannot be negative.");
       return;
     }
-    const ageIssues = validateAgePolicy(agePolicy);
+    const ageIssues = validateAgePolicy(agePolicy, participantType);
     if (ageIssues.length) {
       setMessage(ageIssues[0]);
       return;
     }
-    onConfirm({
-      ...draft,
-      gender_restriction: gender,
-      default_partner_board:
-        participantType === "SINGLES" ? false : recordBoolean(draft.default_partner_board, true)
-    });
+    setSubmitting(true);
+    try {
+      await onConfirm({
+        ...draft,
+        gender_restriction: gender,
+        default_partner_board:
+          participantType === "SINGLES" ? false : recordBoolean(draft.default_partner_board, true)
+      });
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -235,7 +256,7 @@ export default function TournamentSetupEventFamilyDialog({
               value={structure}
               style={inputStyle}
               onChange={(event) =>
-                setDraft((current) => applyEventStructure(current, event.target.value as EventStructure))
+                setDraft((current) => applyEventStructureWithAge(current, event.target.value as EventStructure))
               }
             >
               <option value="SINGLES">Singles</option>
@@ -400,11 +421,11 @@ export default function TournamentSetupEventFamilyDialog({
         </div>
         {message ? <p role="alert" style={{ color: "#b91c1c" }}>{message}</p> : null}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.65rem", flexWrap: "wrap", marginTop: "1rem" }}>
-          <button type="button" onClick={onCancel} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #64748b", background: "white", color: "#0f172a", fontWeight: 800, cursor: "pointer" }}>
+          <button type="button" disabled={submitting} onClick={onCancel} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #64748b", background: "white", color: "#0f172a", fontWeight: 800, cursor: "pointer" }}>
             Cancel
           </button>
-          <button type="button" onClick={submit} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800, cursor: "pointer" }}>
-            {mode === "add" ? "Add event" : "Save event"}
+          <button type="button" disabled={submitting} onClick={() => void submit()} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800, cursor: "pointer" }}>
+            {submitting ? "Saving…" : mode === "add" ? "Add event" : "Save event"}
           </button>
         </div>
       </section>

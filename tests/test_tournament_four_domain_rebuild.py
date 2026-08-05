@@ -242,13 +242,19 @@ def test_venue_is_centralized_and_event_start_times_remain_outside_venue() -> No
     panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
     builder = read_web("app/admin/tournament-setup/tournamentSetupBuilder.ts")
 
-    assert "Venue information is stored once and applies to every tournament day" in panel
+    venue_model = read_web("app/admin/tournaments/setup/TournamentVenueModel.ts")
+    assert "Store the venue once, maintain a stable court inventory" in panel
+    assert "Venue address" in panel
+    assert "Directions to the venue (optional)" in panel
     assert "Total venue courts" in panel
-    assert "Optional court titles" in panel
+    assert "Venue court inventory" in panel
     assert "Fixed tournament date" in panel
+    assert "Which courts are available?" in panel
     assert "tournament-level court hours" in panel
-    assert "court_open_time: null" in panel
-    assert "court_close_time: null" in panel
+    assert "court_open_time: null" in venue_model
+    assert "court_close_time: null" in venue_model
+    assert "available_court_ids" in venue_model
+    assert "venue_courts_json" in venue_model
     assert "FACILITY_COURT_LIMIT = 100" in builder
     schedule = panel.split("function renderSchedule()", 1)[1].split("function renderReview()", 1)[0]
     assert "Courts open" not in schedule
@@ -299,8 +305,12 @@ def test_review_auto_runs_compares_values_and_guards_forced_changes() -> None:
 
     assert "autoReviewSignatureRef" in panel
     assert "void reviewImpact()" in panel
-    assert "Current published value" in panel
-    assert "Proposed draft value" in panel
+    review_values = read_web("app/admin/tournaments/setup/TournamentReviewValue.tsx")
+    assert "ReviewComparisonDisplay" in panel
+    assert "Current published value" in review_values
+    assert "Proposed draft value" in review_values
+    assert "Technical details" in review_values
+    assert 'scheduled_day_ids: "Tournament days"' in review_values
     assert "Force change with registration resolution" in panel
     assert "Manual registration-resolution queue" in panel
     assert "Open registration editor" in panel
@@ -376,6 +386,52 @@ def test_age_policy_preview_groups_entries_without_writes(monkeypatch) -> None:
     assert all(row["viable"] for row in result["brackets"])
     assert result["unassigned_entries"] == []
     assert storage == before
+
+
+def test_split_age_partner_rule_requires_one_under_and_one_at_or_above() -> None:
+    policy = {
+        "mode": "SPLIT_AGE",
+        "split_age_threshold": 50,
+        "min_teams_per_age_group": 1,
+    }
+    registrations = {
+        "r1": {"id": "r1", "display_name": "Valid Team", "age": 49},
+        "r2": {"id": "r2", "display_name": "Both Under", "age": 49},
+        "r3": {"id": "r3", "display_name": "Both Over", "age": 50},
+    }
+    selections = [
+        {"id": "s1", "registration_id": "r1", "partner_age": 50},
+        {"id": "s2", "registration_id": "r2", "partner_age": 48},
+        {"id": "s3", "registration_id": "r3", "partner_age": 55},
+    ]
+
+    result = build_age_split_preview(
+        policy=policy,
+        registrations=registrations,
+        selections=selections,
+        participant_type="GENDER_DOUBLES",
+    )
+
+    assert result["policy"]["brackets"] == [
+        {
+            "id": "split-age-50",
+            "label": "One under 50 / one 50+",
+            "min_age": None,
+            "max_age": None,
+        }
+    ]
+    assert result["brackets"][0]["count"] == 1
+    assert result["brackets"][0]["entries"][0]["registration_id"] == "r1"
+    assert {row["registration_id"] for row in result["unassigned_entries"]} == {"r2", "r3"}
+    assert all("one player under 50" in row["assignment_issue"] for row in result["unassigned_entries"])
+
+    with pytest.raises(ValueError, match="only for doubles and team events"):
+        build_age_split_preview(
+            policy=policy,
+            registrations=registrations,
+            selections=selections,
+            participant_type="SINGLES",
+        )
 
 
 def test_age_policy_validation_rejects_overlap_and_bad_minimum() -> None:

@@ -25,7 +25,7 @@ from jupr_app.services.public_tournament_registration_service import (
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 TOURNAMENT_SELECT = "id,club_id,name,status,start_date,end_date,event_tags,created_at,updated_at"
 TOURNAMENT_MINIMAL_SELECT = "id,club_id,name,status"
-REGISTRATION_SETTINGS_SELECT = "id,tournament_id,registration_slug,registration_status,registration_open_at,registration_close_at,waitlist_enabled,partner_board_enabled,updated_at"
+REGISTRATION_SETTINGS_SELECT = "id,tournament_id,registration_slug,registration_status,registration_open_at,registration_close_at,waitlist_enabled,partner_board_enabled,location_name,venue_address,venue_directions,venue_courts_json,timezone,updated_at"
 REGISTRATION_SELECT = (
     "id,tournament_id,player_id,first_name,last_name,display_name,email,phone,"
     "dupr_id,doubles_skill,singles_skill,age,age_bracket,gender,"
@@ -48,7 +48,7 @@ EVENT_OPTION_SELECT = (
     "event_format_default,scoring_default,skill_mode,age_mode,status,enabled,waitlist_enabled,"
     "partner_board_enabled,sort_order"
 )
-DAY_SELECT = "id,tournament_id,label,event_date,enabled,sort_order,court_count,court_labels,court_open_time,court_close_time,court_notes,created_at"
+DAY_SELECT = "id,tournament_id,label,event_date,enabled,sort_order,court_count,court_labels,available_court_ids,court_open_time,court_close_time,court_notes,created_at"
 CONFIRM_REGISTRATION_UPDATE = "SAVE REGISTRATION"
 CONFIRM_SELECTION_UPDATE = "SAVE SELECTION"
 CONFIRM_TOURNAMENT_UPDATE = "SAVE TOURNAMENT"

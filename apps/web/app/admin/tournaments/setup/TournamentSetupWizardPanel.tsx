@@ -51,6 +51,7 @@ import {
 } from "../../tournament-setup/tournamentSetupBuilder";
 import TournamentSetupEventFamilyCard from "./TournamentSetupEventFamilyCard";
 import TournamentSetupEventFamilyDialog from "./TournamentSetupEventFamilyDialog";
+import TournamentDivisionPresetDialog from "./TournamentDivisionPresetDialog";
 import TournamentSetupDivisionCard from "./TournamentSetupDivisionCard";
 import TournamentSetupDivisionDialog from "./TournamentSetupDivisionDialog";
 import TournamentSetupPolicies, { withDefaultTournamentPolicies } from "./TournamentSetupPolicies";
@@ -59,6 +60,22 @@ import {
   agePolicySummary,
   readAgePolicy
 } from "./TournamentAgePolicyEditor";
+import {
+  configurationWithVenueInventory,
+  courtDisplayName,
+  dayAvailableCourtIds as venueDayAvailableCourtIds,
+  newVenueCourt,
+  normalizeVenueCourts,
+  settingsWithVenueCourts,
+  venueIssues,
+  withVenueCourtAvailability,
+  type VenueCourt
+} from "./TournamentVenueModel";
+import {
+  ReviewComparisonDisplay,
+  ReviewValueDisplay,
+  humanReviewFieldLabel
+} from "./TournamentReviewValue";
 
 type SetupStatus = {
   enabled: boolean;
@@ -292,6 +309,8 @@ function basicsDraftPayload(basics: BasicsDraft): Record<string, unknown> {
 }
 
 function settingsDraftPayload(settings: Record<string, unknown>): Record<string, unknown> {
+  const courts = normalizeVenueCourts(settings);
+  const normalized = settingsWithVenueCourts(settings, courts);
   return {
     registration_slug: safeString(settings.registration_slug).trim(),
     locale: safeString(settings.locale) || "en",
@@ -304,52 +323,32 @@ function settingsDraftPayload(settings: Record<string, unknown>): Record<string,
     refund_policy_markdown: safeString(settings.refund_policy_markdown),
     weather_policy_markdown: safeString(settings.weather_policy_markdown),
     sponsor_markdown: safeString(settings.sponsor_markdown),
-    venue_court_count: Number(settings.venue_court_count) || 10,
-    venue_court_labels: Array.isArray(settings.venue_court_labels)
-      ? settings.venue_court_labels.map((value) => safeString(value).trim()).filter(Boolean)
-      : [],
+    venue_address: safeString(settings.venue_address),
+    venue_directions: safeString(settings.venue_directions),
+    venue_courts_json: normalized.venue_courts_json,
+    venue_court_count: normalized.venue_court_count,
+    venue_court_labels: normalized.venue_court_labels,
     forced_change_resolutions: objectValue(settings.forced_change_resolutions)
   };
 }
 
+function venueCourts(settings: Record<string, unknown>, configuration?: SetupConfiguration): VenueCourt[] {
+  return normalizeVenueCourts(settings, configuration?.days || []);
+}
+
 function venueCourtCount(settings: Record<string, unknown>, configuration?: SetupConfiguration): number {
-  const configured = Number(settings.venue_court_count);
-  if (Number.isInteger(configured) && configured >= 1 && configured <= 100) return configured;
-  const inherited = Number(configuration?.days[0]?.value.court_count);
-  return Number.isInteger(inherited) && inherited >= 1 && inherited <= 100 ? inherited : 10;
+  return venueCourts(settings, configuration).length;
 }
 
 function venueCourtLabels(settings: Record<string, unknown>, configuration?: SetupConfiguration): string[] {
-  const configured = Array.isArray(settings.venue_court_labels)
-    ? settings.venue_court_labels.map((value) => safeString(value).trim()).filter(Boolean)
-    : [];
-  if (configured.length) return configured;
-  const inherited = Array.isArray(configuration?.days[0]?.value.court_labels)
-    ? (configuration?.days[0]?.value.court_labels as unknown[]).map((value) => safeString(value).trim()).filter(Boolean)
-    : [];
-  return inherited;
+  return venueCourts(settings, configuration).map(courtDisplayName);
 }
 
 function configurationWithVenue(
   configuration: SetupConfiguration,
   settings: Record<string, unknown>
 ): SetupConfiguration {
-  const courtCount = venueCourtCount(settings, configuration);
-  const labels = venueCourtLabels(settings, configuration).slice(0, courtCount);
-  return {
-    ...configuration,
-    days: configuration.days.map((row) => ({
-      ...row,
-      value: {
-        ...row.value,
-        court_count: courtCount,
-        court_labels: labels,
-        court_open_time: null,
-        court_close_time: null,
-        court_notes: ""
-      }
-    }))
-  };
+  return configurationWithVenueInventory(configuration, settings);
 }
 
 function fullDraftSignature(
@@ -523,8 +522,7 @@ function setupState(
   const venueComplete = Boolean(
     basics.locationName.trim() &&
       basics.timezone &&
-      Number.isInteger(venueCourtCount(settings, configuration)) &&
-      venueCourtCount(settings, configuration) >= 1
+      !venueIssues(settings, configuration).length
   );
   const scheduleComplete =
     venueComplete &&
@@ -660,13 +658,7 @@ function blockedImpactDetail(value: unknown): BlockedImpactDetail {
   };
 }
 
-function reviewValue(value: unknown): string {
-  if (value == null || value === "") return "Not set";
-  if (Array.isArray(value)) return value.map((row) => reviewValue(row)).join(", ") || "None";
-  if (typeof value === "object") return JSON.stringify(value);
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  return String(value);
-}
+
 
 function footerRow(children: ReactNode) {
   return (
@@ -710,6 +702,7 @@ export default function TournamentSetupWizardPanel({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [eventDialogKey, setEventDialogKey] = useState<string | null | undefined>(undefined);
+  const [divisionPresetFamilyKey, setDivisionPresetFamilyKey] = useState<string | undefined>(undefined);
   const [divisionDialogKey, setDivisionDialogKey] = useState<string | null | undefined>(undefined);
   const [publishedBasics, setPublishedBasics] = useState<BasicsDraft>(() => emptyBasics(tournamentName));
   const [publishedSettings, setPublishedSettings] = useState<Record<string, unknown>>({});
@@ -738,6 +731,7 @@ export default function TournamentSetupWizardPanel({
     setBusy(false);
     setMessage(null);
     setEventDialogKey(undefined);
+    setDivisionPresetFamilyKey(undefined);
     setDivisionDialogKey(undefined);
     setPublishedBasics(emptyBasics(tournamentName));
     setPublishedSettings({});
@@ -791,28 +785,15 @@ export default function TournamentSetupWizardPanel({
     });
 
     const publishedDays = (payload.days || []).map(withDefaultDayCourts);
-    const publishedVenueCount = Number(publishedSettingsValue.venue_court_count)
-      || Number(publishedDays[0]?.court_count)
-      || 10;
-    const publishedVenueLabels = Array.isArray(publishedSettingsValue.venue_court_labels)
-      ? publishedSettingsValue.venue_court_labels
-      : Array.isArray(publishedDays[0]?.court_labels)
-        ? publishedDays[0]?.court_labels
-        : [];
-    publishedSettingsValue.venue_court_count = publishedVenueCount;
-    publishedSettingsValue.venue_court_labels = publishedVenueLabels;
+    const publishedCourts = normalizeVenueCourts(publishedSettingsValue, publishedDays);
+    Object.assign(publishedSettingsValue, settingsWithVenueCourts(publishedSettingsValue, publishedCourts));
 
     const rawDraftDays = listValue(draft.days).map(withDefaultDayCourts);
-    const draftVenueCount = Number(draftSettingsValue.venue_court_count)
-      || Number(rawDraftDays[0]?.court_count)
-      || publishedVenueCount;
-    const draftVenueLabels = Array.isArray(draftSettingsValue.venue_court_labels)
-      ? draftSettingsValue.venue_court_labels
-      : Array.isArray(rawDraftDays[0]?.court_labels)
-        ? rawDraftDays[0]?.court_labels
-        : publishedVenueLabels;
-    draftSettingsValue.venue_court_count = draftVenueCount;
-    draftSettingsValue.venue_court_labels = draftVenueLabels;
+    const draftCourts = normalizeVenueCourts(
+      draftSettingsValue,
+      rawDraftDays.length ? rawDraftDays : publishedDays
+    );
+    Object.assign(draftSettingsValue, settingsWithVenueCourts(draftSettingsValue, draftCourts));
     const baseDays = rawDraftDays.length
       ? rawDraftDays
       : publishedDays.length
@@ -827,16 +808,7 @@ export default function TournamentSetupWizardPanel({
       wrapBuilderRows(baseDays, "day")
     ).map((row) => ({
       ...row,
-      value: {
-        ...row.value,
-        court_count: draftVenueCount,
-        court_labels: Array.isArray(draftVenueLabels)
-          ? draftVenueLabels.map((value) => safeString(value).trim()).filter(Boolean).slice(0, draftVenueCount)
-          : [],
-        court_open_time: null,
-        court_close_time: null,
-        court_notes: ""
-      }
+      value: withVenueCourtAvailability(row.value, draftCourts)
     }));
 
     const draftEvents = listValue(
@@ -861,16 +833,7 @@ export default function TournamentSetupWizardPanel({
       (publishedDays.length
         ? publishedDays
         : initialDaysFromTournament(payload.tournament).map(withDefaultDayCourts)
-      ).map((row) => ({
-        ...row,
-        court_count: publishedVenueCount,
-        court_labels: Array.isArray(publishedVenueLabels)
-          ? publishedVenueLabels.map((value) => safeString(value).trim()).filter(Boolean).slice(0, publishedVenueCount)
-          : [],
-        court_open_time: null,
-        court_close_time: null,
-        court_notes: ""
-      })),
+      ).map((row) => withVenueCourtAvailability(row, publishedCourts)),
       "published-day"
     );
     const publishedFamilyPayload = listValue(draft.published_event_families);
@@ -1013,6 +976,7 @@ async function loadDetail() {
           method: "POST",
           body: JSON.stringify({
             event_family: family,
+            participant_type: safeString(value.participant_type) || "GENDER_DOUBLES",
             policy: {
               mode: policy.mode,
               label: policy.label,
@@ -1036,90 +1000,204 @@ async function loadDetail() {
     }
   }
 
-  function saveEventDialog(value: SetupRecord) {
-    setConfiguration((current) => {
-      const existing =
-        typeof eventDialogKey === "string"
-          ? current.eventFamilies.find((row) => row.key === eventDialogKey)
-          : undefined;
-      const previousName = existing ? eventFamilyName(existing.value) : "";
-      const nextName = eventFamilyName(value);
-      const nextDays = eventDayReferences(value);
-      const eventFamilies = sortEventFamiliesByTournamentDay(
-        existing
-          ? replaceBuilderRow(current.eventFamilies, existing.key, value)
-          : appendBuilderRow(current.eventFamilies, "family", value),
-        current.days
-      );
-      const eventOptions = sortDivisionsByEventAndName(
-        current.eventOptions.map((division) => {
-          if (!existing || eventFamilyName(division.value).toLowerCase() !== previousName.toLowerCase()) {
-            return division;
-          }
-          const inheritsAge = safeString(division.value.age_policy_source).toUpperCase() !== "OVERRIDE";
-          let nextValue: SetupRecord = {
-            ...division.value,
-            event_family_label: nextName,
-            event_family: nextName,
-            participant_type: value.participant_type,
-            event_type: value.participant_type,
-            gender_restriction:
-              safeString(value.participant_type) === "MIXED_DOUBLES"
-                ? "MIXED"
-                : value.gender_restriction,
-            competition_format: value.competition_format || "STANDARD",
-            team_roster_size: value.team_roster_size ?? 2,
-            team_gender_rule: value.team_gender_rule || "NONE",
-            team_tiebreak_mode: value.team_tiebreak_mode || "SINGLES",
-            team_playoff_format: value.team_playoff_format || "NONE",
-            team_allow_substitutes: recordBoolean(value.team_allow_substitutes, false),
-            event_format_default: value.default_format || division.value.event_format_default,
-            scoring_default: value.default_scoring || division.value.scoring_default,
-            ...(inheritsAge
-              ? {
-                  age_policy_source: "INHERIT_EVENT",
-                  age_mode: eventFamilyAgeMode(value),
-                  age_label: eventFamilyAgeLabel(value),
-                  age_rules: eventFamilyAgeRules(value)
-                }
-              : {})
-          };
-          if (safeString(division.value.schedule_mode || "INHERIT_EVENT") !== "CUSTOM") {
-            nextValue = setEventDayReferences(
-              { ...nextValue, schedule_mode: "INHERIT_EVENT" },
-              nextDays
-            );
-          }
-          return { ...division, value: nextValue };
-        }),
-        eventFamilies,
-        current.days
-      );
-      return { ...current, eventFamilies, eventOptions };
-    });
-    setEventDialogKey(undefined);
-    setImpactReview(null);
-    setMessage(`Event ${eventFamilyName(value) || "saved"} saved to the unpublished setup draft.`);
+  function nextConfigurationForEvent(value: SetupRecord): SetupConfiguration {
+    const existing =
+      typeof eventDialogKey === "string"
+        ? configuration.eventFamilies.find((row) => row.key === eventDialogKey)
+        : undefined;
+    const previousName = existing ? eventFamilyName(existing.value) : "";
+    const nextName = eventFamilyName(value);
+    const nextDays = eventDayReferences(value);
+    const eventFamilies = sortEventFamiliesByTournamentDay(
+      existing
+        ? replaceBuilderRow(configuration.eventFamilies, existing.key, value)
+        : appendBuilderRow(configuration.eventFamilies, "family", value),
+      configuration.days
+    );
+    const eventOptions = sortDivisionsByEventAndName(
+      configuration.eventOptions.map((division) => {
+        if (!existing || eventFamilyName(division.value).toLowerCase() !== previousName.toLowerCase()) {
+          return division;
+        }
+        const inheritsAge = safeString(division.value.age_policy_source).toUpperCase() !== "OVERRIDE";
+        let nextValue: SetupRecord = {
+          ...division.value,
+          event_family_label: nextName,
+          event_family: nextName,
+          participant_type: value.participant_type,
+          event_type: value.participant_type,
+          gender_restriction:
+            safeString(value.participant_type) === "MIXED_DOUBLES"
+              ? "MIXED"
+              : value.gender_restriction,
+          competition_format: value.competition_format || "STANDARD",
+          team_roster_size: value.team_roster_size ?? 2,
+          team_gender_rule: value.team_gender_rule || "NONE",
+          team_tiebreak_mode: value.team_tiebreak_mode || "SINGLES",
+          team_playoff_format: value.team_playoff_format || "NONE",
+          team_allow_substitutes: recordBoolean(value.team_allow_substitutes, false),
+          event_format_default: value.default_format || division.value.event_format_default,
+          scoring_default: value.default_scoring || division.value.scoring_default,
+          ...(inheritsAge
+            ? {
+                age_policy_source: "INHERIT_EVENT",
+                age_mode: eventFamilyAgeMode(value),
+                age_label: eventFamilyAgeLabel(value),
+                age_rules: eventFamilyAgeRules(value)
+              }
+            : {})
+        };
+        if (safeString(division.value.schedule_mode || "INHERIT_EVENT") !== "CUSTOM") {
+          nextValue = setEventDayReferences(
+            { ...nextValue, schedule_mode: "INHERIT_EVENT" },
+            nextDays
+          );
+        }
+        return { ...division, value: nextValue };
+      }),
+      eventFamilies,
+      configuration.days
+    );
+    return { ...configuration, eventFamilies, eventOptions };
   }
 
-  function saveDivisionDialog(value: SetupRecord) {
-    setConfiguration((current) => {
-      const existing =
-        typeof divisionDialogKey === "string"
-          ? current.eventOptions.find((row) => row.key === divisionDialogKey)
-          : undefined;
-      const eventOptions = sortDivisionsByEventAndName(
-        existing
-          ? replaceBuilderRow(current.eventOptions, existing.key, value)
-          : appendBuilderRow(current.eventOptions, "event", value),
-        current.eventFamilies,
-        current.days
+  async function persistConfigurationDraft(
+    nextConfiguration: SetupConfiguration,
+    savedStep: TournamentSetupStep,
+    successMessage: string
+  ): Promise<boolean> {
+    if (!detail) return false;
+    const generation = actionRequest.begin();
+    setBusy(true);
+    setMessage(null);
+    try {
+      const normalized = configurationWithGlobalStatus(
+        configurationWithVenue(nextConfiguration, settings),
+        settings.registration_status
       );
-      return { ...current, eventOptions };
+      const draft = configurationPayload(normalized);
+      await requestJson<WriteResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(tournamentId)}/draft`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            ...draft,
+            basics: basicsDraftPayload(basics),
+            settings: settingsDraftPayload(settings),
+            saved_step: savedStep,
+            expected_state_fingerprint: detail.state_fingerprint,
+            confirmation_text: draftConfirmation
+          })
+        }
+      );
+      if (!actionRequest.isCurrent(generation)) return false;
+      setConfiguration(nextConfiguration);
+      await loadDetail();
+      if (!actionRequest.isCurrent(generation)) return false;
+      setMessage(successMessage);
+      return true;
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to save the unpublished tournament draft.");
+      }
+      return false;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function saveEventDialog(value: SetupRecord) {
+    const nextConfiguration = nextConfigurationForEvent(value);
+    const saved = await persistConfigurationDraft(
+      nextConfiguration,
+      "events",
+      `Event ${eventFamilyName(value) || "saved"} saved to the private admin draft. Nothing public changed.`
+    );
+    if (saved) {
+      setEventDialogKey(undefined);
+      setImpactReview(null);
+    }
+  }
+
+  async function saveDivisionDialog(value: SetupRecord) {
+    const existing =
+      typeof divisionDialogKey === "string"
+        ? configuration.eventOptions.find((row) => row.key === divisionDialogKey)
+        : undefined;
+    const eventOptions = sortDivisionsByEventAndName(
+      existing
+        ? replaceBuilderRow(configuration.eventOptions, existing.key, value)
+        : appendBuilderRow(configuration.eventOptions, "event", value),
+      configuration.eventFamilies,
+      configuration.days
+    );
+    const nextConfiguration = { ...configuration, eventOptions };
+    const saved = await persistConfigurationDraft(
+      nextConfiguration,
+      "divisions",
+      `Division ${eventDivisionName(value) || "saved"} saved to the private admin draft. Nothing public changed.`
+    );
+    if (saved) {
+      setDivisionDialogKey(undefined);
+      setImpactReview(null);
+    }
+  }
+
+
+  async function saveGeneratedDivisions(values: SetupRecord[]) {
+    let rows = configuration.eventOptions;
+    values.forEach((value) => {
+      rows = appendBuilderRow(rows, "event", value);
     });
-    setDivisionDialogKey(undefined);
-    setImpactReview(null);
-    setMessage(`Division ${eventDivisionName(value) || "saved"} saved to the unpublished setup draft.`);
+    const nextConfiguration = {
+      ...configuration,
+      eventOptions: sortDivisionsByEventAndName(
+        rows,
+        configuration.eventFamilies,
+        configuration.days
+      )
+    };
+    const saved = await persistConfigurationDraft(
+      nextConfiguration,
+      "events",
+      `${values.length} division${values.length === 1 ? "" : "s"} generated and saved to the private admin draft. Nothing public changed.`
+    );
+    if (saved) {
+      setDivisionPresetFamilyKey(undefined);
+      setImpactReview(null);
+    }
+  }
+
+  async function removeEventFamily(rowKey: string) {
+    const nextConfiguration = {
+      ...configuration,
+      eventFamilies: sortEventFamiliesByTournamentDay(
+        removeBuilderRow(configuration.eventFamilies, rowKey),
+        configuration.days
+      )
+    };
+    await persistConfigurationDraft(
+      nextConfiguration,
+      "events",
+      "Event removed from the private admin draft. Nothing public changed."
+    );
+  }
+
+
+  async function removeDivision(rowKey: string) {
+    const nextConfiguration = {
+      ...configuration,
+      eventOptions: sortDivisionsByEventAndName(
+        removeBuilderRow(configuration.eventOptions, rowKey),
+        configuration.eventFamilies,
+        configuration.days
+      )
+    };
+    await persistConfigurationDraft(
+      nextConfiguration,
+      "divisions",
+      "Division removed from the private admin draft. Nothing public changed."
+    );
   }
 
   function keepPublishedValueForBlockedChange(raw: unknown) {
@@ -1390,9 +1468,9 @@ async function saveDraftAndContinue(nextStep: TournamentSetupStep) {
       setMessage("Venue timezone is required before continuing.");
       return;
     }
-    const courtCount = venueCourtCount(settings, configuration);
-    if (!Number.isInteger(courtCount) || courtCount < 1 || courtCount > 100) {
-      setMessage("Venue court count must be a whole number from 1 to 100.");
+    const venueValidation = venueIssues(settings, configuration);
+    if (venueValidation.length) {
+      setMessage(venueValidation[0]);
       return;
     }
   }
@@ -1800,6 +1878,13 @@ function renderEvents() {
         onCancel={() => setEventDialogKey(undefined)}
         onConfirm={saveEventDialog}
       />
+      <TournamentDivisionPresetDialog
+        open={divisionPresetFamilyKey !== undefined}
+        family={configuration.eventFamilies.find((row) => row.key === divisionPresetFamilyKey) || null}
+        configuration={configuration}
+        onCancel={() => setDivisionPresetFamilyKey(undefined)}
+        onConfirm={saveGeneratedDivisions}
+      />
       <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "flex-start", flexWrap: "wrap" }}>
           <div>
@@ -1837,16 +1922,8 @@ function renderEvents() {
               issues={issuesForPath(issues, `families.${Math.max(0, originalIndex)}`)}
               divisionCount={divisions.length}
               onEdit={() => setEventDialogKey(row.key)}
-              onRemove={() => {
-                setConfiguration((current) => ({
-                  ...current,
-                  eventFamilies: sortEventFamiliesByTournamentDay(
-                    removeBuilderRow(current.eventFamilies, row.key),
-                    current.days
-                  )
-                }));
-                setImpactReview(null);
-              }}
+              onGenerateDivisions={() => setDivisionPresetFamilyKey(row.key)}
+              onRemove={() => void removeEventFamily(row.key)}
             />
             {policy.mode !== "ALL_AGES" ? (
               <article style={{ ...cardStyle, background: "#f8fafc" }}>
@@ -1881,6 +1958,19 @@ function renderEvents() {
                       <ul>
                         {preview.recommendations.map((recommendation) => <li key={recommendation}>{recommendation}</li>)}
                       </ul>
+                    ) : null}
+                    {preview.unassigned_entries.length ? (
+                      <div style={{ marginTop: "0.65rem", padding: "0.65rem", border: "1px solid #fecaca", borderRadius: "10px", background: "#fef2f2" }}>
+                        <strong>Entries needing manual resolution</strong>
+                        <ul style={{ marginBottom: 0 }}>
+                          {preview.unassigned_entries.map((entry, index) => (
+                            <li key={safeString(entry.selection_id) || safeString(entry.registration_id) || index}>
+                              {safeString(entry.display_name) || `Entry ${index + 1}`}
+                              {safeString(entry.assignment_issue) ? ` — ${safeString(entry.assignment_issue)}` : " — age information is incomplete or outside the proposed policy"}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
                     ) : null}
                   </div>
                 ) : null}
@@ -1919,9 +2009,9 @@ function renderEvents() {
             type="button"
             style={buttonStyle}
             disabled={busy || !configuration.eventFamilies.length || familyIssues.length > 0}
-            onClick={() => void saveDraftAndContinue("divisions")}
+            onClick={() => goTo("divisions")}
           >
-            {busy ? "Saving draft…" : "Save draft and continue to Divisions"}
+            Continue to Divisions
           </button>
         </>
       )}
@@ -1990,17 +2080,7 @@ function renderDivisions() {
               disabled={busy}
               issues={issuesForPath(issues, `events.${Math.max(0, originalIndex)}`)}
               onEdit={() => setDivisionDialogKey(row.key)}
-              onRemove={() => {
-                setConfiguration((current) => ({
-                  ...current,
-                  eventOptions: sortDivisionsByEventAndName(
-                    removeBuilderRow(current.eventOptions, row.key),
-                    current.eventFamilies,
-                    current.days
-                  )
-                }));
-                setImpactReview(null);
-              }}
+              onRemove={() => void removeDivision(row.key)}
             />
           </div>
         );
@@ -2036,9 +2116,9 @@ function renderDivisions() {
             type="button"
             style={buttonStyle}
             disabled={busy || !configuration.eventOptions.length || divisionIssues.length > 0}
-            onClick={() => void saveDraftAndContinue("pricing")}
+            onClick={() => goTo("pricing")}
           >
-            {busy ? "Saving draft…" : "Save draft and continue to Commerce"}
+            Continue to Commerce
           </button>
         </>
       )}
@@ -2155,28 +2235,44 @@ function renderDivisions() {
 
   function renderSchedule() {
     const dayIssues = issues.filter((issue) => issue.path.startsWith("days"));
-    const courtCount = venueCourtCount(settings, configuration);
-    const courtLabels = venueCourtLabels(settings, configuration).slice(0, courtCount);
+    const courts = venueCourts(settings, configuration);
+    const titledCourts = courts.map((court) => court.title.trim()).filter(Boolean);
     const duplicateCourtTitles = new Set(
-      courtLabels
+      titledCourts
         .map((label) => label.toLowerCase())
         .filter((label, index, values) => values.indexOf(label) !== index)
     );
+    const venueValidation = venueIssues(settings, configuration);
+
+    function updateCourts(nextCourts: VenueCourt[]) {
+      const patch = settingsWithVenueCourts({}, nextCourts);
+      updateVenueSettings(patch);
+    }
+
+    function updateDayCourts(rowKey: string, selectedIds: readonly string[]) {
+      setConfiguration((current) => ({
+        ...current,
+        days: current.days.map((row) =>
+          row.key === rowKey
+            ? { ...row, value: withVenueCourtAvailability(row.value, courts, selectedIds) }
+            : row
+        )
+      }));
+      setImpactReview(null);
+    }
+
     return (
       <div style={{ display: "grid", gap: "1rem" }}>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Tournament · Venue and tournament days</h2>
           <p style={{ color: "#475569", marginBottom: 0 }}>
-            Venue information is stored once and applies to every tournament day.
-            Court count is required; court titles are optional. Event and division
-            scheduling controls play start times, so tournament-level court hours
-            are intentionally not collected here.
+            Store the venue once, maintain a stable court inventory, and choose the exact courts available on each tournament day. Event and division scheduling controls play start times, so tournament-level court hours are intentionally not collected here.
           </p>
         </article>
 
         <article style={cardStyle}>
           <h3 style={{ marginTop: 0 }}>Venue</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: "0.75rem" }}>
             <label>
               <strong>Venue name</strong><br />
               <input
@@ -2189,6 +2285,17 @@ function renderDivisions() {
                   setImpactReview(null);
                 }}
               />
+            </label>
+            <label>
+              <strong>Venue address</strong><br />
+              <input
+                value={safeString(settings.venue_address)}
+                placeholder="Street, city, state/province, postal code, country"
+                disabled={busy}
+                style={inputStyle}
+                onChange={(event) => updateVenueSettings({ venue_address: event.target.value })}
+              />
+              <small>Required for public directions and map links.</small>
             </label>
             <label>
               <strong>Timezone</strong><br />
@@ -2204,26 +2311,25 @@ function renderDivisions() {
                 {TIMEZONE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
-            <label>
+            <div>
               <strong>Total venue courts</strong><br />
-              <input
-                type="number"
-                min="1"
-                max="100"
-                step="1"
-                required
-                value={courtCount}
+              <output
+                aria-label="Total venue courts"
+                style={{ ...inputStyle, display: "block", background: "#f8fafc", fontWeight: 800 }}
+              >
+                {courts.length}
+              </output>
+              <small>This read-only count is derived from the court inventory below.</small>
+            </div>
+            <label style={{ gridColumn: "1 / -1" }}>
+              <strong>Directions to the venue (optional)</strong><br />
+              <textarea
+                value={safeString(settings.venue_directions)}
+                placeholder="Parking, gate, building, check-in, or arrival instructions"
                 disabled={busy}
-                style={inputStyle}
-                onChange={(event) => {
-                  const nextCount = Math.max(1, Math.min(100, Math.trunc(Number(event.target.value) || 1)));
-                  updateVenueSettings({
-                    venue_court_count: nextCount,
-                    venue_court_labels: courtLabels.slice(0, nextCount)
-                  });
-                }}
+                style={{ ...inputStyle, minHeight: "84px" }}
+                onChange={(event) => updateVenueSettings({ venue_directions: event.target.value })}
               />
-              <small>This capacity applies to every tournament day.</small>
             </label>
           </div>
         </article>
@@ -2231,97 +2337,167 @@ function renderDivisions() {
         <article style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
             <div>
-              <h3 style={{ margin: 0 }}>Optional court titles</h3>
+              <h3 style={{ margin: 0 }}>Venue court inventory</h3>
               <p style={{ margin: "0.25rem 0 0", color: "#64748b" }}>
-                Name only the courts that need public or operational labels. Unnamed courts remain available by number.
+                Every court has a stable identity. Titles are optional; an untitled court remains available by number. Only Remove court deletes it.
               </p>
             </div>
             <button
               type="button"
               style={ghostButtonStyle}
-              disabled={busy || courtLabels.length >= courtCount}
-              onClick={() => updateVenueSettings({ venue_court_labels: [...courtLabels, `Court ${courtLabels.length + 1}`] })}
+              disabled={busy || courts.length >= 100}
+              onClick={() => updateCourts([...courts, newVenueCourt()])}
             >
-              Add court title
+              Add court
             </button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.65rem", marginTop: "0.75rem" }}>
-            {courtLabels.map((label, index) => (
-              <label key={`venue-court-${index}`}>
-                <strong>Court {index + 1} title</strong><br />
-                <div style={{ display: "flex", gap: "0.4rem" }}>
-                  <input
-                    value={label}
-                    disabled={busy}
-                    style={{ ...inputStyle, borderColor: duplicateCourtTitles.has(label.toLowerCase()) ? "#ef4444" : "#cbd5e1" }}
-                    onChange={(event) => updateVenueSettings({ venue_court_labels: courtLabels.map((row, rowIndex) => rowIndex === index ? event.target.value : row) })}
-                  />
-                  <button
-                    type="button"
-                    disabled={busy}
-                    aria-label={`Remove court ${index + 1} title`}
-                    style={{ ...ghostButtonStyle, padding: "0.45rem 0.65rem", color: "#991b1b" }}
-                    onClick={() => updateVenueSettings({ venue_court_labels: courtLabels.filter((_, rowIndex) => rowIndex !== index) })}
-                  >
-                    Remove
-                  </button>
-                </div>
-              </label>
-            ))}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.65rem", marginTop: "0.75rem" }}>
+            {courts.map((court, index) => {
+              const usedDays = configuration.days.filter((row) => venueDayAvailableCourtIds(row.value, courts).includes(court.id));
+              const duplicate = court.title.trim() && duplicateCourtTitles.has(court.title.trim().toLowerCase());
+              return (
+                <article key={court.id} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.65rem", background: "#f8fafc" }}>
+                  <label>
+                    <strong>Court {index + 1} title (optional)</strong><br />
+                    <input
+                      value={court.title}
+                      placeholder={`Court ${index + 1}`}
+                      disabled={busy}
+                      style={{ ...inputStyle, borderColor: duplicate ? "#ef4444" : "#cbd5e1" }}
+                      onChange={(event) => updateCourts(courts.map((row) => row.id === court.id ? { ...row, title: event.target.value } : row))}
+                    />
+                  </label>
+                  <small style={{ color: "#64748b" }}>Displayed as {courtDisplayName(court, index)} when left blank.</small>
+                  <div style={{ marginTop: "0.55rem" }}>
+                    <ConfirmAction
+                      triggerLabel="Remove court"
+                      title={`Remove ${courtDisplayName(court, index)}?`}
+                      description={usedDays.length
+                        ? `This court is currently available on ${usedDays.length} tournament day${usedDays.length === 1 ? "" : "s"}. Removing it updates those unpublished day selections. Published data remains unchanged until Review.`
+                        : "This removes the court from the unpublished venue inventory. Published data remains unchanged until Review."}
+                      confirmLabel="Yes, remove court"
+                      cancelLabel="No, keep court"
+                      confirmationText=""
+                      tone="danger"
+                      disabled={busy || courts.length <= 1}
+                      onConfirm={() => updateCourts(courts.filter((row) => row.id !== court.id))}
+                    />
+                  </div>
+                </article>
+              );
+            })}
           </div>
-          {!courtLabels.length ? <p style={{ color: "#64748b", marginBottom: 0 }}>No court titles are required.</p> : null}
-          {duplicateCourtTitles.size ? <p role="alert" style={{ color: "#b91c1c" }}>Court titles must be unique.</p> : null}
+          {duplicateCourtTitles.size ? <p role="alert" style={{ color: "#b91c1c" }}>Optional court titles must be unique.</p> : null}
         </article>
 
         <article style={cardStyle}>
           <h3 style={{ marginTop: 0 }}>Tournament days</h3>
           <p style={{ color: "#64748b" }}>
-            Dates are generated automatically from the tournament start and end dates. Dates and chronological order are fixed; only the public day label can be edited here.
+            Dates are generated automatically from the tournament start and end dates. Edit the public day label and choose all venue courts or an exact subset available that day.
           </p>
-          <div style={{ display: "grid", gap: "0.65rem" }}>
-            {configuration.days.map((row, index) => (
-              <article key={row.key} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: "#f8fafc" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "minmax(210px, 2fr) minmax(170px, 1fr)", gap: "0.75rem", alignItems: "end" }}>
-                  <label>
-                    <strong>Day {index + 1} label</strong><br />
-                    <input
-                      value={dayLabel(row.value)}
-                      disabled={busy}
-                      style={inputStyle}
-                      onChange={(event) => {
-                        const previousReferences = new Set([dayReference(row.value), dayLabel(row.value)].filter(Boolean));
-                        const nextValue = setRecordString(row.value, ["label"], event.target.value);
-                        const nextReference = dayReference(nextValue) || dayLabel(nextValue);
-                        const replaceReferences = (record: SetupRecord) => setEventDayReferences(
-                          record,
-                          eventDayReferences(record).map((reference) => previousReferences.has(reference) ? nextReference : reference)
-                        );
-                        setConfiguration((current) => ({
-                          ...current,
-                          days: replaceBuilderRow(current.days, row.key, nextValue),
-                          eventFamilies: current.eventFamilies.map((family) => ({ ...family, value: replaceReferences(family.value) })),
-                          eventOptions: current.eventOptions.map((division) => ({ ...division, value: replaceReferences(division.value) }))
-                        }));
-                        setImpactReview(null);
-                      }}
-                    />
-                  </label>
-                  <label>
-                    <strong>Fixed tournament date</strong><br />
-                    <input value={dateValue(row.value.event_date)} readOnly disabled style={inputStyle} />
-                  </label>
-                </div>
-              </article>
-            ))}
+          <div style={{ display: "grid", gap: "0.75rem" }}>
+            {configuration.days.map((row, index) => {
+              const selectedIds = venueDayAvailableCourtIds(row.value, courts);
+              const allCourts = selectedIds.length === courts.length && courts.every((court) => selectedIds.includes(court.id));
+              return (
+                <article key={row.key} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: "#f8fafc" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+                    <label>
+                      <strong>Day {index + 1} label</strong><br />
+                      <input
+                        value={dayLabel(row.value)}
+                        disabled={busy}
+                        style={inputStyle}
+                        onChange={(event) => {
+                          const previousReferences = new Set([dayReference(row.value), dayLabel(row.value)].filter(Boolean));
+                          const nextValue = setRecordString(row.value, ["label"], event.target.value);
+                          const nextReference = dayReference(nextValue) || dayLabel(nextValue);
+                          const replaceReferences = (record: SetupRecord) => setEventDayReferences(
+                            record,
+                            eventDayReferences(record).map((reference) => previousReferences.has(reference) ? nextReference : reference)
+                          );
+                          setConfiguration((current) => ({
+                            ...current,
+                            days: replaceBuilderRow(current.days, row.key, nextValue),
+                            eventFamilies: current.eventFamilies.map((family) => ({ ...family, value: replaceReferences(family.value) })),
+                            eventOptions: current.eventOptions.map((division) => ({ ...division, value: replaceReferences(division.value) }))
+                          }));
+                          setImpactReview(null);
+                        }}
+                      />
+                    </label>
+                    <label>
+                      <strong>Fixed tournament date</strong><br />
+                      <input value={dateValue(row.value.event_date)} readOnly disabled style={inputStyle} />
+                    </label>
+                    <label>
+                      <strong>Available courts this day</strong><br />
+                      <input
+                        type="number"
+                        min="1"
+                        max={courts.length}
+                        step="1"
+                        value={selectedIds.length}
+                        disabled={busy}
+                        style={inputStyle}
+                        onChange={(event) => {
+                          const requested = Math.max(1, Math.min(courts.length, Math.trunc(Number(event.target.value) || 1)));
+                          const kept = selectedIds.slice(0, requested);
+                          const additions = courts.map((court) => court.id).filter((id) => !kept.includes(id)).slice(0, requested - kept.length);
+                          updateDayCourts(row.key, [...kept, ...additions]);
+                        }}
+                      />
+                      <small>Maximum {courts.length} venue courts.</small>
+                    </label>
+                  </div>
+                  <fieldset style={{ marginTop: "0.75rem", padding: "0.7rem", border: "1px solid #cbd5e1", borderRadius: "10px" }}>
+                    <legend style={{ fontWeight: 800 }}>Which courts are available?</legend>
+                    <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                      <input
+                        type="checkbox"
+                        checked={allCourts}
+                        disabled={busy}
+                        onChange={(event) => updateDayCourts(
+                          row.key,
+                          event.target.checked ? courts.map((court) => court.id) : selectedIds.slice(0, Math.max(1, selectedIds.length - 1))
+                        )}
+                      />
+                      Use all venue courts
+                    </label>
+                    {!allCourts ? (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.4rem", marginTop: "0.55rem" }}>
+                        {courts.map((court, courtIndex) => (
+                          <label key={court.id} style={{ display: "flex", gap: "0.45rem", alignItems: "center" }}>
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.includes(court.id)}
+                              disabled={busy || (selectedIds.length === 1 && selectedIds.includes(court.id))}
+                              onChange={(event) => updateDayCourts(
+                                row.key,
+                                event.target.checked
+                                  ? [...selectedIds, court.id]
+                                  : selectedIds.filter((id) => id !== court.id)
+                              )}
+                            />
+                            {courtDisplayName(court, courtIndex)}
+                          </label>
+                        ))}
+                      </div>
+                    ) : null}
+                  </fieldset>
+                </article>
+              );
+            })}
           </div>
         </article>
 
-        {dayIssues.length || duplicateCourtTitles.size ? (
+        {dayIssues.length || duplicateCourtTitles.size || venueValidation.length ? (
           <article style={{ ...cardStyle, borderColor: "#fecaca" }}>
             <h3 style={{ marginTop: 0 }}>Items to fix before continuing</h3>
             <ul>
+              {venueValidation.map((issue) => <li key={issue}>{issue}</li>)}
               {dayIssues.map((issue) => <li key={`${issue.path}-${issue.message}`}>{issue.message}</li>)}
-              {duplicateCourtTitles.size ? <li>Court titles must be unique.</li> : null}
+              {duplicateCourtTitles.size ? <li>Optional court titles must be unique.</li> : null}
             </ul>
           </article>
         ) : null}
@@ -2332,7 +2508,7 @@ function renderDivisions() {
             <button
               type="button"
               style={buttonStyle}
-              disabled={busy || !configuration.days.length || dayIssues.length > 0 || duplicateCourtTitles.size > 0}
+              disabled={busy || !configuration.days.length || dayIssues.length > 0 || duplicateCourtTitles.size > 0 || venueValidation.length > 0}
               onClick={() => void saveDraftAndContinue("events")}
             >
               {busy ? "Saving draft…" : "Save draft and continue to Competition"}
@@ -2366,38 +2542,69 @@ function renderDivisions() {
 
     const valueChanged = (current: unknown, proposed: unknown) =>
       JSON.stringify(current ?? null) !== JSON.stringify(proposed ?? null);
+    const publishedCourts = venueCourts(publishedSettings, publishedConfiguration);
+    const draftCourts = venueCourts(settings, configuration);
+    const dayComparisonRows = (rows: typeof configuration.days, courts: VenueCourt[]) => rows.map((row) => ({
+      id: dayReference(row.value),
+      label: dayLabel(row.value),
+      event_date: row.value.event_date,
+      available_courts: venueDayAvailableCourtIds(row.value, courts).map((id) => {
+        const index = courts.findIndex((court) => court.id === id);
+        return index >= 0 ? courtDisplayName(courts[index], index) : id;
+      })
+    }));
     const comparisons = [
       { field: "Tournament name", current: publishedBasics.name, proposed: basics.name },
       {
         field: "Tournament dates",
-        current: `${publishedBasics.startDate || "Not set"} – ${publishedBasics.endDate || "Not set"}`,
-        proposed: `${basics.startDate || "Not set"} – ${basics.endDate || "Not set"}`
-      },
-      { field: "Venue", current: publishedBasics.locationName, proposed: basics.locationName },
-      { field: "Timezone", current: publishedBasics.timezone, proposed: basics.timezone },
-      {
-        field: "Venue court count",
-        current: venueCourtCount(publishedSettings, publishedConfiguration),
-        proposed: venueCourtCount(settings, configuration)
+        current: { start_date: publishedBasics.startDate, end_date: publishedBasics.endDate },
+        proposed: { start_date: basics.startDate, end_date: basics.endDate }
       },
       {
-        field: "Optional court titles",
-        current: venueCourtLabels(publishedSettings, publishedConfiguration),
-        proposed: venueCourtLabels(settings, configuration)
+        field: "Venue",
+        current: {
+          name: publishedBasics.locationName,
+          address: publishedSettings.venue_address,
+          directions: publishedSettings.venue_directions,
+          timezone: publishedBasics.timezone
+        },
+        proposed: {
+          name: basics.locationName,
+          address: settings.venue_address,
+          directions: settings.venue_directions,
+          timezone: basics.timezone
+        }
+      },
+      {
+        field: "Venue courts",
+        current: publishedCourts,
+        proposed: draftCourts
+      },
+      {
+        field: "Tournament days",
+        current: dayComparisonRows(publishedConfiguration.days, publishedCourts),
+        proposed: dayComparisonRows(configuration.days, draftCourts)
       },
       {
         field: "Registration window",
-        current: `${safeString(publishedSettings.registration_open_at) || "Not set"} → ${safeString(publishedSettings.registration_close_at) || "Not set"}`,
-        proposed: `${safeString(settings.registration_open_at) || "Not set"} → ${safeString(settings.registration_close_at) || "Not set"}`
+        current: {
+          registration_open_at: publishedSettings.registration_open_at,
+          registration_close_at: publishedSettings.registration_close_at
+        },
+        proposed: {
+          registration_open_at: settings.registration_open_at,
+          registration_close_at: settings.registration_close_at
+        }
       },
       {
         field: "Sponsors",
-        current: publishedBasics.sponsors.map((row) => row.name),
-        proposed: basics.sponsors.map((row) => row.name)
+        current: publishedBasics.sponsors,
+        proposed: basics.sponsors
       },
       {
         field: "Events and policies",
         current: publishedConfiguration.eventFamilies.map((row) => ({
+          id: row.value.id,
           event: eventFamilyName(row.value),
           format: safeString(row.value.competition_format) === "FOUR_PLAYER_TEAM"
             ? "Four-player team"
@@ -2406,6 +2613,7 @@ function renderDivisions() {
           days: eventDayReferences(row.value)
         })),
         proposed: configuration.eventFamilies.map((row) => ({
+          id: row.value.id,
           event: eventFamilyName(row.value),
           format: safeString(row.value.competition_format) === "FOUR_PLAYER_TEAM"
             ? "Four-player team"
@@ -2417,6 +2625,7 @@ function renderDivisions() {
       {
         field: "Divisions",
         current: publishedConfiguration.eventOptions.map((row) => ({
+          id: row.value.id,
           division: eventDivisionName(row.value),
           event: eventFamilyName(row.value),
           skill: row.value.skill_label,
@@ -2424,6 +2633,7 @@ function renderDivisions() {
           fee: row.value.price_usd
         })),
         proposed: configuration.eventOptions.map((row) => ({
+          id: row.value.id,
           division: eventDivisionName(row.value),
           event: eventFamilyName(row.value),
           skill: row.value.skill_label,
@@ -2432,6 +2642,7 @@ function renderDivisions() {
         }))
       }
     ].filter((row) => valueChanged(row.current, row.proposed));
+
 
     const domainCards = [
       {
@@ -2503,12 +2714,12 @@ function renderDivisions() {
 
         <article style={cardStyle}>
           <h3 style={{ marginTop: 0 }}>Tournament preview</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.65rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.65rem" }}>
             <div><strong>Tournament</strong><br />{basics.name || "Untitled tournament"}</div>
-            <div><strong>Dates</strong><br />{basics.startDate || "Not set"} – {basics.endDate || "Not set"}</div>
-            <div><strong>Venue</strong><br />{basics.locationName || "Not set"}</div>
-            <div><strong>Courts</strong><br />{venueCourtCount(settings, configuration)}</div>
-            <div><strong>Registration window</strong><br />{safeString(settings.registration_open_at) || "Not set"}<br />to {safeString(settings.registration_close_at) || "Not set"}</div>
+            <div><strong>Dates</strong><ReviewValueDisplay field="Tournament dates" value={{ start_date: basics.startDate, end_date: basics.endDate }} days={configuration.days} timezone={basics.timezone} technical={false} /></div>
+            <div><strong>Venue</strong><br />{basics.locationName || "Not set"}<br /><small>{safeString(settings.venue_address) || "No address"}</small>{safeString(settings.venue_directions) ? <><br /><small>{safeString(settings.venue_directions)}</small></> : null}</div>
+            <div><strong>Courts</strong><br />{venueCourtCount(settings, configuration)} total</div>
+            <div><strong>Registration window</strong><ReviewValueDisplay field="Registration window" value={{ registration_open_at: settings.registration_open_at, registration_close_at: settings.registration_close_at }} days={configuration.days} timezone={basics.timezone} technical={false} /></div>
           </div>
           <div style={{ display: "grid", gap: "0.75rem", marginTop: "1rem" }}>
             {configuration.eventFamilies.map((family) => {
@@ -2546,10 +2757,13 @@ function renderDivisions() {
               {comparisons.map((comparison) => (
                 <article key={comparison.field} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem" }}>
                   <strong>{comparison.field}</strong>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: "0.65rem", marginTop: "0.45rem" }}>
-                    <div style={{ padding: "0.6rem", borderRadius: "10px", background: "#f8fafc" }}><small>Current published value</small><br />{reviewValue(comparison.current)}</div>
-                    <div style={{ padding: "0.6rem", borderRadius: "10px", background: "#eff6ff" }}><small>Proposed draft value</small><br />{reviewValue(comparison.proposed)}</div>
-                  </div>
+                  <ReviewComparisonDisplay
+                    field={comparison.field}
+                    current={comparison.current}
+                    proposed={comparison.proposed}
+                    days={configuration.days}
+                    timezone={basics.timezone}
+                  />
                 </article>
               ))}
             </div>
@@ -2611,8 +2825,8 @@ function renderDivisions() {
                           <strong>{item.entity_label || "Blocked setup change"}</strong>
                           <p>{item.message}</p>
                           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.65rem" }}>
-                            <div style={{ padding: "0.6rem", borderRadius: "10px", background: "white" }}><small>Current published {item.field || "value"}</small><br />{reviewValue(item.current_value)}</div>
-                            <div style={{ padding: "0.6rem", borderRadius: "10px", background: "#eff6ff" }}><small>Proposed draft {item.field || "value"}</small><br />{reviewValue(item.proposed_value)}</div>
+                            <div style={{ padding: "0.6rem", borderRadius: "10px", background: "white", minWidth: 0, overflowWrap: "anywhere" }}><small>Current published {humanReviewFieldLabel(item.field || "value")}</small><ReviewValueDisplay field={item.field || "value"} value={item.current_value} days={configuration.days} timezone={basics.timezone} /></div>
+                            <div style={{ padding: "0.6rem", borderRadius: "10px", background: "#eff6ff", minWidth: 0, overflowWrap: "anywhere" }}><small>Proposed draft {humanReviewFieldLabel(item.field || "value")}</small><ReviewValueDisplay field={item.field || "value"} value={item.proposed_value} days={configuration.days} timezone={basics.timezone} /></div>
                           </div>
                           <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap", marginTop: "0.7rem" }}>
                             <button type="button" style={ghostButtonStyle} onClick={() => keepPublishedValueForBlockedChange(item)}>
@@ -2650,6 +2864,12 @@ function renderDivisions() {
                                         <div><strong>{registration.display_name || registration.email || registration.registration_id}</strong><br /><small>{registration.email || "No email"} · {registration.registration_status || "Unknown status"}</small></div>
                                         <Link href={editorHref} style={ghostButtonStyle}>Open registration editor</Link>
                                       </div>
+                                      {(row.current_value != null || row.proposed_value != null) ? (
+                                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.55rem", marginTop: "0.6rem" }}>
+                                          <div style={{ padding: "0.55rem", borderRadius: "8px", background: "#f8fafc", minWidth: 0 }}><small>Current registration value</small><ReviewValueDisplay field={item.field || "value"} value={row.current_value} days={configuration.days} timezone={basics.timezone} /></div>
+                                          <div style={{ padding: "0.55rem", borderRadius: "8px", background: "#eff6ff", minWidth: 0 }}><small>Proposed registration value</small><ReviewValueDisplay field={item.field || "value"} value={row.proposed_value} days={configuration.days} timezone={basics.timezone} /></div>
+                                        </div>
+                                      ) : null}
                                       <div style={{ display: "grid", gridTemplateColumns: "minmax(190px, 1fr) minmax(260px, 2fr)", gap: "0.65rem", marginTop: "0.6rem" }}>
                                         <label><strong>Resolution action</strong><br />
                                           <select value={safeString(row.action)} style={inputStyle} onChange={(event) => updateForcedRegistration(item, registration, { action: event.target.value })}>
