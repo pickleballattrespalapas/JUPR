@@ -361,6 +361,7 @@ export default function TournamentDivisionPresetDialog({
   }, [generated, open, selectedFamily, eligibilityMode]);
 
   if (!open || !selectedFamily) return null;
+  const activeFamily = selectedFamily;
 
   function toggleSkill(skill: string) {
     setSkills((current) => current.includes(skill) ? current.filter((value) => value !== skill) : [...current, skill]);
@@ -381,7 +382,7 @@ export default function TournamentDivisionPresetDialog({
       return;
     }
 
-    const familyName = eventFamilyName(selectedFamily.value).toLowerCase();
+    const familyName = eventFamilyName(activeFamily.value).toLowerCase();
     const existingNames = new Set(
       configuration.eventOptions
         .filter((row) => eventFamilyName(row.value).toLowerCase() === familyName)
@@ -432,7 +433,7 @@ export default function TournamentDivisionPresetDialog({
       onMouseDown={(event) => { if (event.target === event.currentTarget && !submitting) onCancel(); }}
     >
       <section role="dialog" aria-modal="true" aria-labelledby="division-preset-title" style={{ width: "min(1120px, 100%)", maxHeight: "calc(100vh - 2rem)", overflowY: "auto", padding: "1.1rem", borderRadius: "16px", background: "white", boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)" }}>
-        <h2 id="division-preset-title" style={{ marginTop: 0 }}>Generate divisions for {eventFamilyName(selectedFamily.value)}</h2>
+        <h2 id="division-preset-title" style={{ marginTop: 0 }}>Generate divisions for {eventFamilyName(activeFamily.value)}</h2>
         <p style={{ color: "#475569" }}>
           Select common eligibility, gender, and age combinations once. The preview updates automatically, existing divisions are detected, and generated rows inherit Event defaults.
         </p>
@@ -487,7 +488,7 @@ export default function TournamentDivisionPresetDialog({
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "0.85rem" }}>
           <fieldset style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.75rem" }}>
             <legend style={{ fontWeight: 800 }}>Gender categories</legend>
-            {genderOptions(selectedFamily.value).map((gender) => (
+            {genderOptions(activeFamily.value).map((gender) => (
               <label key={gender} style={{ display: "flex", gap: "0.5rem", marginTop: "0.35rem" }}>
                 <input type="checkbox" checked={genders.includes(gender)} onChange={() => toggleGender(gender)} />
                 {titleCase(gender)}
