@@ -25,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base64 -d .github/session-fix/tournament-session-improvements.patch.gz.b64 | gzip -d > "$RUNNER_TEMP/session.patch"
+          cat .github/session-fix/chunks/chunk_* | base64 -d | gzip -d > "$RUNNER_TEMP/session.patch"
           test "$(sha256sum "$RUNNER_TEMP/session.patch" | awk '{print $1}')" = "c8bc5bc1c46a24904fedd1d158e0051d20d60d5b2ec2cf44aec68cc69958a684"
           git apply --check "$RUNNER_TEMP/session.patch"
           git apply "$RUNNER_TEMP/session.patch"
