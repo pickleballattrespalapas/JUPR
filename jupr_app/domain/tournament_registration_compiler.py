@@ -5,11 +5,12 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Any
 import math
+import re
 import uuid
 
 
 DoublesTypes = {"GENDER_DOUBLES", "MIXED_DOUBLES", "DOUBLES", "MIXED"}
-CONTROLLED_SKILL_LABELS = {"3.0", "3.5", "4.0", "4.5", "5.0", "5.5"}
+CONTROLLED_SKILL_LABELS = {"2.5", "3.0", "3.5", "4.0", "4.5", "5.0", "5.5"}
 
 
 
@@ -27,13 +28,18 @@ def _parse_skill_anchor(skill_label: str) -> float | None:
     text = str(skill_label or "").strip()
     if not text or text.lower() == "open":
         return None
-    if text not in CONTROLLED_SKILL_LABELS:
+    # Standard presets remain explicit, while numeric custom divisions such as
+    # 3.25, 3.75+, or 4.1 are accepted as organizer-defined half-point bands.
+    match = re.fullmatch(r"(?:skill\s*)?([0-9](?:\.[0-9]{1,2})?)\s*\+?", text, re.IGNORECASE)
+    if not match:
         return None
     try:
-        anchor = float(text)
+        anchor = float(match.group(1))
     except Exception:
         return None
-    return round(math.floor(anchor * 2.0) / 2.0, 2)
+    if anchor < 1.0 or anchor > 7.0:
+        return None
+    return round(anchor, 2)
 
 
 def _next_half_step(value: float) -> float:

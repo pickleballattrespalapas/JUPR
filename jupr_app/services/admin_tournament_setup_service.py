@@ -366,7 +366,14 @@ def get_admin_tournament_setup_detail(supabase: Any, *, club_id: str, tournament
     impact = None
     impact_warning = None
     try:
-        impact = analyze_registration_publish_impact(supabase, tournament_id=str(tournament_id), days=draft_days, event_options=draft_events)
+        impact = analyze_registration_publish_impact(
+            supabase,
+            tournament_id=str(tournament_id),
+            days=draft_days,
+            event_options=draft_events,
+            event_families=list(draft.get("event_families") or []),
+            builder_event_options=list(draft.get("event_options") or draft.get("divisions") or []),
+        )
     except Exception as exc:  # noqa: BLE001 - setup detail should still render
         impact_warning = str(exc)
     return {
@@ -536,7 +543,12 @@ def _forced_resolution_summary(
         for row in resolved_rows:
             action = _clean(row.get("action"), limit=60).upper()
             notes = _clean(row.get("notes"), limit=2000)
-            if not _bool(row.get("resolved")) or action not in FORCED_RESOLUTION_ACTIONS or not notes:
+            note_required = action == "OTHER"
+            if (
+                not _bool(row.get("resolved"))
+                or action not in FORCED_RESOLUTION_ACTIONS
+                or (note_required and not notes)
+            ):
                 invalid_rows.append(_clean(row.get("display_name"), limit=180) or _clean(row.get("registration_id"), limit=120))
         if invalid_rows:
             errors.append(f"{label}: unresolved registration actions remain for {', '.join(invalid_rows[:5])}.")
@@ -586,6 +598,8 @@ def review_admin_tournament_setup_impact(
         tournament_id=str(tournament_id),
         days=normalized_days,
         event_options=normalized_events,
+        event_families=list(event_families or []),
+        builder_event_options=list(builder_event_options or []),
     )
     impact_fingerprint = stable_tournament_admin_fingerprint(
         {
@@ -759,7 +773,14 @@ def publish_admin_tournament_setup(
     if _clean(confirmation_text, limit=80).upper() != CONFIRM_PUBLISH:
         raise ValueError(f"Type {CONFIRM_PUBLISH} to publish tournament setup.")
     _get_tournament_for_club(supabase, club_id=str(club_id), tournament_id=str(tournament_id))
-    impact = analyze_registration_publish_impact(supabase, tournament_id=str(tournament_id), days=list(days or []), event_options=list(event_options or []))
+    impact = analyze_registration_publish_impact(
+        supabase,
+        tournament_id=str(tournament_id),
+        days=list(days or []),
+        event_options=list(event_options or []),
+        event_families=list(event_families or []),
+        builder_event_options=list(builder_event_options or []),
+    )
     if reviewed_impact_fingerprint:
         detail = get_admin_tournament_setup_detail(
             supabase,
