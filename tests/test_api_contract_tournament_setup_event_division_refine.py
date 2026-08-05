@@ -18,8 +18,10 @@ def test_setup_wizard_has_separate_event_and_division_steps() -> None:
     assert "Section ${domainSectionIndex} of ${domainDefinition.steps.length}" in panel
     assert "TournamentSetupEventFamilyCard" in panel
     assert "TournamentSetupDivisionCard" in panel
-    assert 'saveDraftAndContinue("divisions")' in panel
-    assert 'saveDraftAndContinue("pricing")' in panel
+    assert 'goTo("divisions")' in panel
+    assert 'goTo("pricing")' in panel
+    assert "Continue to Divisions" in panel
+    assert "Continue to Commerce" in panel
     assert (WEB / "app/admin/tournaments/setup/divisions/page.tsx").exists()
 
 

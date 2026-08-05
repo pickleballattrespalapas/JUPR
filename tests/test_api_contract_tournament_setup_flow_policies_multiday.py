@@ -19,8 +19,10 @@ def test_guided_setup_order_and_policy_merge() -> None:
     assert "TournamentSetupPolicies" in panel
     assert 'goTo("schedule")' in panel
     assert 'saveDraftAndContinue("events")' in panel
-    assert 'saveDraftAndContinue("divisions")' in panel
-    assert 'saveDraftAndContinue("pricing")' in panel
+    assert 'goTo("divisions")' in panel
+    assert 'goTo("pricing")' in panel
+    assert "Continue to Divisions" in panel
+    assert "Continue to Commerce" in panel
 
 
 def test_lifecycle_overview_and_phase_nav_match_refined_setup_flow() -> None:

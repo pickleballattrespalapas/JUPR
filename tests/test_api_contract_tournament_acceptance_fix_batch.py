@@ -28,22 +28,25 @@ def test_basics_supports_sponsor_reordering_and_draft_publication_clarity() -> N
 def test_tournament_days_are_date_locked_and_include_court_capacity_controls() -> None:
     panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
     builder = read_web("app/admin/tournament-setup/tournamentSetupBuilder.ts")
+    venue_model = read_web("app/admin/tournaments/setup/TournamentVenueModel.ts")
     migration = read_root(
-        "supabase/migrations/20261023000000_tournament_setup_courts_flexible_bundles.sql"
+        "supabase/migrations/20260805043000_tournament_venue_inventory.sql"
     ).lower()
 
     assert "syncTournamentDays" in panel
     assert "Venue and tournament days" in panel
+    assert "Venue address" in panel
     assert "Total venue courts" in panel
-    assert "Optional court titles" in panel
+    assert "Venue court inventory" in panel
     assert "Fixed tournament date" in panel
     assert "readOnly disabled" in panel
+    assert "Which courts are available?" in panel
     assert "tournament-level court hours" in panel
-    assert "court_open_time: null" in panel
-    assert "court_close_time: null" in panel
+    assert "court_open_time: null" in venue_model
+    assert "court_close_time: null" in venue_model
     assert "FACILITY_COURT_LIMIT = 100" in builder
-    assert "court_count" in migration
-    assert "court_labels" in migration
+    assert "venue_courts_json" in migration
+    assert "available_court_ids" in migration
 
 
 def test_events_and_divisions_use_dialog_editors_and_read_only_cards() -> None:

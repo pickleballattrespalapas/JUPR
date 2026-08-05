@@ -31,7 +31,7 @@ type Props = {
   eventFamilies: BuilderRow[];
   days: BuilderRow[];
   onCancel: () => void;
-  onConfirm: (value: SetupRecord) => void;
+  onConfirm: (value: SetupRecord) => void | Promise<void>;
 };
 
 type DivisionEligibilityMode = "STANDARD" | "COMBINED_RATING_CAP";
@@ -120,6 +120,7 @@ export default function TournamentSetupDivisionDialog({
 }: Props) {
   const [draft, setDraft] = useState<SetupRecord>(initialValue);
   const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -134,6 +135,7 @@ export default function TournamentSetupDivisionDialog({
         : { ...initialValue }
     );
     setMessage("");
+    setSubmitting(false);
   }, [open, initialValue, eventFamilies, dialogMode]);
 
   const family = useMemo(() => {
@@ -156,7 +158,7 @@ export default function TournamentSetupDivisionDialog({
 
   if (!open) return null;
 
-  function submit() {
+  async function submit() {
     if (!eventFamilyName(draft)) {
       setMessage("Choose an event before adding the division.");
       return;
@@ -191,13 +193,18 @@ export default function TournamentSetupDivisionDialog({
       }
     }
     if (agePolicySource === "OVERRIDE") {
-      const ageIssues = validateAgePolicy(divisionAgePolicy);
+      const ageIssues = validateAgePolicy(divisionAgePolicy, cleanString(family?.participant_type));
       if (ageIssues.length) {
         setMessage(ageIssues[0]);
         return;
       }
     }
-    onConfirm(draft);
+    setSubmitting(true);
+    try {
+      await onConfirm(draft);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -433,11 +440,11 @@ export default function TournamentSetupDivisionDialog({
         {message ? <p role="alert" style={{ color: "#b91c1c" }}>{message}</p> : null}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.65rem", flexWrap: "wrap", marginTop: "1rem" }}>
-          <button type="button" onClick={onCancel} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #64748b", background: "white", color: "#0f172a", fontWeight: 800, cursor: "pointer" }}>
+          <button type="button" disabled={submitting} onClick={onCancel} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #64748b", background: "white", color: "#0f172a", fontWeight: 800, cursor: "pointer" }}>
             Cancel
           </button>
-          <button type="button" onClick={submit} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800, cursor: "pointer" }}>
-            {dialogMode === "add" ? "Add division" : "Save division"}
+          <button type="button" disabled={submitting} onClick={() => void submit()} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800, cursor: "pointer" }}>
+            {submitting ? "Saving…" : dialogMode === "add" ? "Add division" : "Save division"}
           </button>
         </div>
       </section>

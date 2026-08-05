@@ -101,6 +101,9 @@ REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "builder_draft_json",
         "builder_draft_updated_at",
         "location_name",
+        "venue_address",
+        "venue_directions",
+        "venue_courts_json",
         "timezone",
         "sponsors_json",
         "weather_policy_markdown",
@@ -111,6 +114,7 @@ REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "enabled",
         "court_count",
         "court_labels",
+        "available_court_ids",
         "court_open_time",
         "court_close_time",
         "court_notes",
@@ -525,6 +529,9 @@ def get_registration_settings(supabase, tournament_id: str, *, tournament_name: 
         "weather_policy_markdown": "",
         "sponsor_markdown": "",
         "location_name": "",
+        "venue_address": "",
+        "venue_directions": "",
+        "venue_courts_json": [],
         "timezone": "America/Mazatlan",
         "sponsors_json": [],
     }
@@ -546,6 +553,13 @@ def upsert_registration_settings(supabase, payload: dict[str, Any]) -> dict[str,
         "weather_policy_markdown": str(payload.get("weather_policy_markdown") or ""),
         "sponsor_markdown": str(payload.get("sponsor_markdown") or ""),
         "location_name": str(payload.get("location_name") or "").strip(),
+        "venue_address": str(payload.get("venue_address") or "").strip(),
+        "venue_directions": str(payload.get("venue_directions") or "").strip(),
+        "venue_courts_json": _json_safe_value(
+            payload.get("venue_courts_json")
+            if isinstance(payload.get("venue_courts_json"), list)
+            else []
+        ),
         "timezone": str(payload.get("timezone") or "America/Mazatlan").strip(),
         "sponsors_json": _json_safe_value(
             payload.get("sponsors_json")
@@ -806,6 +820,7 @@ DAY_CONFIGURATION_WRITE_FIELDS = {
     "event_date",
     "court_count",
     "court_labels",
+    "available_court_ids",
     "court_open_time",
     "court_close_time",
     "court_notes",
@@ -903,6 +918,14 @@ def normalize_registration_configuration_payload(
         event_date = raw.get("event_date") or raw.get("date") or raw.get("start_date")
         if event_date not in (None, ""):
             clean["event_date"] = event_date
+        court_labels = raw.get("court_labels") if isinstance(raw.get("court_labels"), list) else []
+        available_court_ids = raw.get("available_court_ids") if isinstance(raw.get("available_court_ids"), list) else []
+        clean["court_labels"] = _json_safe_value(court_labels)
+        clean["available_court_ids"] = _json_safe_value(list(dict.fromkeys(
+            str(value or "").strip() for value in available_court_ids if str(value or "").strip()
+        )))
+        if clean["available_court_ids"]:
+            clean["court_count"] = len(clean["available_court_ids"])
         normalized_days.append(clean)
 
     published_ids_by_identity = {

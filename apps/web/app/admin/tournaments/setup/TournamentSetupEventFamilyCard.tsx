@@ -28,6 +28,7 @@ type Props = {
   issues: ValidationIssue[];
   divisionCount: number;
   onEdit: () => void;
+  onGenerateDivisions: () => void;
   onRemove: () => void;
 };
 
@@ -47,6 +48,7 @@ export default function TournamentSetupEventFamilyCard({
   issues,
   divisionCount,
   onEdit,
+  onGenerateDivisions,
   onRemove
 }: Props) {
   const issueId = useId();
@@ -74,6 +76,9 @@ export default function TournamentSetupEventFamilyCard({
         <div className={styles.rowActions}>
           <button type="button" className={styles.smallButton} disabled={disabled} onClick={onEdit}>
             Edit
+          </button>
+          <button type="button" className={styles.smallButton} disabled={disabled} onClick={onGenerateDivisions}>
+            Generate divisions
           </button>
           <ConfirmAction
             triggerLabel="Remove event"

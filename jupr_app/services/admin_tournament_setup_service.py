@@ -123,6 +123,9 @@ def _settings_payload(row: dict[str, Any]) -> dict[str, Any]:
         "weather_policy_markdown": row.get("weather_policy_markdown"),
         "sponsor_markdown": row.get("sponsor_markdown"),
         "location_name": row.get("location_name"),
+        "venue_address": row.get("venue_address"),
+        "venue_directions": row.get("venue_directions"),
+        "venue_courts_json": list(row.get("venue_courts_json") or []),
         "timezone": row.get("timezone"),
         "sponsors_json": list(row.get("sponsors_json") or []),
         "updated_at": row.get("updated_at"),
@@ -176,6 +179,7 @@ def _day_payload(row: dict[str, Any]) -> dict[str, Any]:
         "date": row.get("event_date") or row.get("date") or row.get("start_date"),
         "court_count": row.get("court_count"),
         "court_labels": list(court_labels),
+        "available_court_ids": list(row.get("available_court_ids") or []),
         "court_open_time": row.get("court_open_time"),
         "court_close_time": row.get("court_close_time"),
         "court_notes": row.get("court_notes"),
@@ -406,6 +410,7 @@ def preview_admin_tournament_age_split(
     club_id: str,
     tournament_id: str,
     event_family: str,
+    participant_type: str | None,
     policy: dict[str, Any],
     event_options: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -427,8 +432,6 @@ def preview_admin_tournament_age_split(
         if _clean(row.get("event_family_label") or row.get("event_family"), limit=180).lower()
         == family.lower()
     ]
-    if not family_events:
-        raise ValueError("The selected event family has no divisions to preview.")
     canonical_event_ids = {
         str(row.get("id") or "").strip()
         for row in list_event_options(supabase, str(tournament_id))
@@ -439,8 +442,10 @@ def preview_admin_tournament_age_split(
         for row in family_events
         if str(row.get("id") or "").strip() in canonical_event_ids
     }
-    participant_type = _clean(
-        family_events[0].get("event_type") or family_events[0].get("participant_type"),
+    resolved_participant_type = _clean(
+        participant_type
+        or (family_events[0].get("event_type") if family_events else None)
+        or (family_events[0].get("participant_type") if family_events else None),
         limit=40,
     ).upper() or "GENDER_DOUBLES"
     registrations = {
@@ -458,7 +463,7 @@ def preview_admin_tournament_age_split(
         policy=normalized_policy,
         registrations=registrations,
         selections=selections,
-        participant_type=participant_type,
+        participant_type=resolved_participant_type,
     )
     return {
         "ok": True,
@@ -635,8 +640,12 @@ def update_admin_tournament_setup_settings(
         "partner_board_enabled",
         "rules_markdown",
         "refund_policy_markdown",
+        "weather_policy_markdown",
         "sponsor_markdown",
         "location_name",
+        "venue_address",
+        "venue_directions",
+        "venue_courts_json",
         "timezone",
         "sponsors_json",
     }

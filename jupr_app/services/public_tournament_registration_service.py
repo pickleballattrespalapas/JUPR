@@ -348,6 +348,10 @@ def _public_settings(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "refund_policy_markdown": _clean_text(row.get("refund_policy_markdown"), limit=4000),
         "weather_policy_markdown": _clean_text(row.get("weather_policy_markdown"), limit=4000),
         "sponsor_markdown": _clean_text(row.get("sponsor_markdown"), limit=4000),
+        "location_name": _clean_text(row.get("location_name"), limit=240),
+        "venue_address": _clean_text(row.get("venue_address"), limit=500),
+        "venue_directions": _clean_text(row.get("venue_directions"), limit=2000),
+        "timezone": _clean_text(row.get("timezone") or "America/Mazatlan", limit=120),
     }
 
 

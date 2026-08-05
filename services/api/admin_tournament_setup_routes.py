@@ -49,6 +49,9 @@ class TournamentSetupSettingsRequest(BaseModel):
     weather_policy_markdown: str | None = None
     sponsor_markdown: str | None = None
     location_name: str | None = None
+    venue_address: str | None = None
+    venue_directions: str | None = None
+    venue_courts_json: list[dict[str, Any]] | None = None
     timezone: str | None = None
     sponsors_json: list[dict[str, Any]] | None = None
     confirmation_text: str = ""
@@ -104,6 +107,7 @@ class TournamentSetupImpactRequest(BaseModel):
 
 class TournamentAgeSplitPreviewRequest(BaseModel):
     event_family: str = Field(min_length=1, max_length=180)
+    participant_type: str | None = Field(default=None, max_length=40)
     policy: dict[str, Any] = Field(default_factory=dict)
     event_options: list[dict[str, Any]] = Field(default_factory=list)
     source: str = "next_tournament_age_split_preview"
@@ -309,6 +313,7 @@ def install_admin_tournament_setup_routes(app, *, get_supabase_client) -> None:
                 club_id=str(club_id),
                 tournament_id=str(tournament_id),
                 event_family=payload.event_family,
+                participant_type=payload.participant_type,
                 policy=payload.policy,
                 event_options=payload.event_options,
             )

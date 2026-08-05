@@ -179,6 +179,35 @@ export default async function TournamentRegistrationPage({
         </article>
       ) : null}
 
+      {tournament && (settings?.location_name || settings?.venue_address || settings?.venue_directions) ? (
+        <article style={{ ...cardStyle, marginBottom: "1rem" }}>
+          <h2 style={{ marginTop: 0 }}>Venue</h2>
+          {settings?.location_name ? <p style={{ marginBottom: "0.35rem", fontWeight: 800 }}>{settings.location_name}</p> : null}
+          {settings?.venue_address ? (
+            <address style={{ fontStyle: "normal", color: "#334155" }}>
+              {settings.venue_address}
+            </address>
+          ) : null}
+          {settings?.venue_address ? (
+            <p style={{ marginBottom: settings?.venue_directions ? "0.75rem" : 0 }}>
+              <a
+                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(settings?.venue_address || "")}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open map
+              </a>
+            </p>
+          ) : null}
+          {settings?.venue_directions ? (
+            <div>
+              <strong>Arrival directions</strong>
+              {markdownish(settings.venue_directions)}
+            </div>
+          ) : null}
+        </article>
+      ) : null}
+
       {tournament && settings?.sponsor_markdown ? (
         <article
           style={{

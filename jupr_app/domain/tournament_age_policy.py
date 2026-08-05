@@ -92,21 +92,15 @@ def normalize_age_policy(policy: Mapping[str, Any] | None) -> dict[str, Any]:
     elif mode == "SPLIT_AGE":
         threshold = optional_number(raw.get("split_age_threshold"))
         if threshold is None or threshold < 1:
-            raise ValueError("Split age threshold must be at least 1.")
+            raise ValueError("Split-age partners threshold must be at least 1.")
         threshold_int = int(threshold)
         brackets = [
             {
-                "id": f"under-{threshold_int}",
-                "label": f"Under {threshold_int}",
+                "id": f"split-age-{threshold_int}",
+                "label": f"One under {threshold_int} / one {threshold_int}+",
                 "min_age": None,
-                "max_age": threshold_int - 1,
-            },
-            {
-                "id": f"{threshold_int}-plus",
-                "label": f"{threshold_int}+",
-                "min_age": threshold_int,
                 "max_age": None,
-            },
+            }
         ]
     else:
         raw_brackets = _mapping_rows(raw.get("brackets"))
@@ -152,6 +146,7 @@ def normalize_age_policy(policy: Mapping[str, Any] | None) -> dict[str, Any]:
     return {
         "mode": mode,
         "label": _clean(raw.get("label"), limit=80),
+        "split_age_threshold": int(optional_number(raw.get("split_age_threshold")) or 0) or None,
         "min_teams_per_age_group": minimum,
         "team_age_rule": team_age_rule,
         "merge_strategy": merge_strategy,
@@ -252,6 +247,10 @@ def build_age_split_preview(
 
     participant = _clean(participant_type, limit=40).upper() or "GENDER_DOUBLES"
     team_event = participant != "SINGLES"
+    split_age_mode = normalized_policy["mode"] == "SPLIT_AGE"
+    if split_age_mode and not team_event:
+        raise ValueError("Split-age partners is available only for doubles and team events.")
+    split_threshold = optional_number(normalized_policy.get("split_age_threshold"))
     preview_brackets = [
         {
             **bracket,
@@ -291,25 +290,48 @@ def build_age_split_preview(
         }
 
         assigned = False
-        for bracket in preview_brackets:
-            if normalized_policy["team_age_rule"] == "BOTH_QUALIFY" and team_event:
-                matches = (
-                    player_age is not None
-                    and partner_age is not None
-                    and age_in_bracket(player_age, bracket)
-                    and age_in_bracket(partner_age, bracket)
+        if split_age_mode:
+            matches = (
+                split_threshold is not None
+                and player_age is not None
+                and partner_age is not None
+                and (
+                    (player_age < split_threshold <= partner_age)
+                    or (partner_age < split_threshold <= player_age)
                 )
-            else:
-                matches = effective_age is not None and age_in_bracket(effective_age, bracket)
+            )
             if matches:
-                bracket["entries"].append(entry)
-                bracket["count"] += 1
+                preview_brackets[0]["entries"].append(entry)
+                preview_brackets[0]["count"] += 1
                 assigned = True
-                break
+            else:
+                entry["assignment_issue"] = (
+                    f"Team must include one player under {int(split_threshold or 0)} "
+                    f"and one player {int(split_threshold or 0)}+."
+                )
+        else:
+            for bracket in preview_brackets:
+                if normalized_policy["team_age_rule"] == "BOTH_QUALIFY" and team_event:
+                    matches = (
+                        player_age is not None
+                        and partner_age is not None
+                        and age_in_bracket(player_age, bracket)
+                        and age_in_bracket(partner_age, bracket)
+                    )
+                else:
+                    matches = effective_age is not None and age_in_bracket(effective_age, bracket)
+                if matches:
+                    bracket["entries"].append(entry)
+                    bracket["count"] += 1
+                    assigned = True
+                    break
         if not assigned:
             unassigned.append(entry)
 
-    minimum = int(normalized_policy["min_teams_per_age_group"])
+    # Split-age partners is a team-composition rule, not an automatic bracket
+    # split. Any qualifying team makes the single preview group viable; the
+    # minimum-per-bracket setting applies only to actual age-bracket modes.
+    minimum = 1 if split_age_mode else int(normalized_policy["min_teams_per_age_group"])
     for bracket in preview_brackets:
         bracket["viable"] = int(bracket["count"]) >= minimum
 
@@ -329,10 +351,16 @@ def build_age_split_preview(
                 f"{bracket['label']} has {bracket['count']} entries, below the minimum of {minimum}."
             )
     if unassigned:
-        recommendations.append(
-            f"Resolve ages for {len(unassigned)} unassigned "
-            f"entr{'y' if len(unassigned) == 1 else 'ies'} before accepting the split."
-        )
+        if split_age_mode:
+            recommendations.append(
+                f"Resolve {len(unassigned)} team entr{'y' if len(unassigned) == 1 else 'ies'} "
+                "that do not meet the one-under / one-over split-age rule before accepting the event setup."
+            )
+        else:
+            recommendations.append(
+                f"Resolve ages for {len(unassigned)} unassigned "
+                f"entr{'y' if len(unassigned) == 1 else 'ies'} before accepting the split."
+            )
 
     return {
         "policy": normalized_policy,
