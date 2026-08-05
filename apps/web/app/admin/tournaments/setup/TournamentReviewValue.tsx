@@ -104,9 +104,22 @@ function skillAgeItems(value: SetupRecord): Array<[string, string]> {
   if (skill) items.push(["Skill", skill]);
   const skillMode = cleanString(value.skill_mode);
   if (skillMode) items.push(["Skill rule", titleCase(skillMode)]);
+  const source = cleanString(value.policy_source);
+  if (source) items.push(["Policy source", source]);
+  const mode = cleanString(value.age_mode ?? ageRules.mode).toUpperCase();
+  const brackets = Array.isArray(ageRules.brackets)
+    ? ageRules.brackets.filter((row): row is SetupRecord => Boolean(row) && typeof row === "object" && !Array.isArray(row))
+    : [];
   const ageLabel = cleanString(value.age_label ?? ageRules.age_label);
-  if (ageLabel) items.push(["Age", ageLabel]);
-  const mode = cleanString(value.age_mode ?? ageRules.mode);
+  if (mode === "AUTO_AGE_SPLIT" && brackets.length) {
+    items.push(["Candidate age brackets", brackets.map((row) => cleanString(row.label)).filter(Boolean).join(", ")]);
+    const minimum = value.min_teams_per_age_group ?? ageRules.min_teams_per_age_group;
+    if (minimum != null && minimum !== "") items.push(["Minimum entries per bracket", String(minimum)]);
+    const merge = cleanString(value.merge_strategy ?? ageRules.merge_strategy);
+    if (merge) items.push(["Underfilled bracket fallback", titleCase(merge)]);
+  } else if (ageLabel) {
+    items.push(["Age", ageLabel]);
+  }
   if (mode) items.push(["Age mode", titleCase(mode)]);
   const threshold = value.split_age_threshold ?? ageRules.split_age_threshold;
   if (threshold != null && threshold !== "") {
@@ -122,6 +135,14 @@ function skillAgeItems(value: SetupRecord): Array<[string, string]> {
     };
     items.push(["Team age", rules[teamRule.toUpperCase()] || titleCase(teamRule)]);
   }
+  const playerAge = value.player_age;
+  const partnerAge = value.partner_age;
+  const effectiveAge = value.effective_age;
+  if (playerAge != null && playerAge !== "") items.push(["Player age", String(playerAge)]);
+  if (partnerAge != null && partnerAge !== "") items.push(["Partner age", String(partnerAge)]);
+  if (effectiveAge != null && effectiveAge !== "") items.push(["Effective team age", String(effectiveAge)]);
+  const assignmentIssue = cleanString(value.assignment_issue);
+  if (assignmentIssue) items.push(["Assignment issue", assignmentIssue]);
   return items;
 }
 

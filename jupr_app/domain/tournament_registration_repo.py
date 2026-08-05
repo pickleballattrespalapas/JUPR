@@ -11,6 +11,7 @@ from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event
 from jupr_app.domain.tournament_public_references import build_public_tournament_reference
 
 from .tournament_registration_compiler import compile_tournament_registration_state, validate_selection_against_skill
+from .tournament_age_policy import build_age_split_preview, normalize_age_policy
 
 REGISTRATION_STATUS_OPTIONS = ["draft", "open", "closed"]
 EVENT_TYPE_OPTIONS = ["SINGLES", "GENDER_DOUBLES", "MIXED_DOUBLES"]
@@ -1027,12 +1028,146 @@ def assert_registration_configuration_row_ownership(
                 )
 
 
+
+
+def _age_rules_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _normalized_event_age_policy(event: dict[str, Any]) -> dict[str, Any]:
+    rules = _age_rules_mapping(event.get("age_rules"))
+    mode = str(event.get("age_mode") or rules.get("mode") or "ALL_AGES").strip().upper()
+    if mode in {"OPEN", "ALL", "ALL AGES", "ALL_AGES"}:
+        mode = "ALL_AGES"
+    policy = {
+        **rules,
+        "mode": mode,
+        "label": str(event.get("age_label") or rules.get("label") or rules.get("age_label") or "").strip(),
+    }
+    return normalize_age_policy(policy)
+
+
+def _policy_source_label(event: dict[str, Any], division_label: str, *, published: bool) -> str:
+    if published:
+        return f"{division_label} published division eligibility"
+    source = str(event.get("age_policy_source") or "").strip().upper()
+    event_name = str(event.get("event_family_label") or event.get("event_family") or "").strip()
+    if source == "OVERRIDE":
+        return f"{division_label} Division override"
+    if source == "INHERIT_EVENT" and event_name:
+        return f"{event_name} Event policy"
+    return f"{division_label} draft division eligibility"
+
+
+def _skill_age_rule_review_value(
+    event: dict[str, Any],
+    *,
+    source_label: str,
+) -> dict[str, Any]:
+    try:
+        policy = _normalized_event_age_policy(event)
+        age_rules = {
+            "mode": policy["mode"],
+            "split_age_threshold": policy.get("split_age_threshold"),
+            "min_teams_per_age_group": policy.get("min_teams_per_age_group"),
+            "team_age_rule": policy.get("team_age_rule"),
+            "merge_strategy": policy.get("merge_strategy"),
+            "brackets": policy.get("brackets") or [],
+        }
+        age_label = ""
+        if policy["mode"] == "ALL_AGES":
+            age_label = "All ages"
+        elif policy["mode"] == "FIXED_AGE_BRACKET":
+            age_label = str(policy.get("label") or (policy.get("brackets") or [{}])[0].get("label") or "Fixed age bracket")
+        elif policy["mode"] == "SPLIT_AGE":
+            age_label = str((policy.get("brackets") or [{}])[0].get("label") or "Split-age partners")
+        return {
+            "skill_label": event.get("skill_label") or "Open",
+            "skill_mode": event.get("skill_mode") or "OPEN",
+            "age_label": age_label,
+            "age_mode": policy["mode"],
+            "age_rules": age_rules,
+            "policy_source": source_label,
+        }
+    except ValueError as exc:
+        return {
+            "skill_label": event.get("skill_label") or "Open",
+            "skill_mode": event.get("skill_mode") or "OPEN",
+            "age_label": event.get("age_label") or "Not set",
+            "age_mode": event.get("age_mode") or "Not set",
+            "age_rules": _age_rules_mapping(event.get("age_rules")),
+            "policy_source": source_label,
+            "assignment_issue": str(exc),
+        }
+
+
+def _registration_skill_age_review_value(
+    event: dict[str, Any],
+    registration: dict[str, Any],
+    selection: dict[str, Any],
+    *,
+    source_label: str,
+) -> dict[str, Any]:
+    base = _skill_age_rule_review_value(event, source_label=source_label)
+    try:
+        policy = _normalized_event_age_policy(event)
+        preview = build_age_split_preview(
+            policy=policy,
+            registrations={str(registration.get("id") or ""): registration},
+            selections=[selection],
+            participant_type=str(event.get("event_type") or event.get("participant_type") or "GENDER_DOUBLES"),
+        )
+        selected_entry: dict[str, Any] | None = None
+        selected_label = ""
+        selection_id = str(selection.get("id") or "").strip()
+        for bracket in preview.get("brackets") or []:
+            for entry in bracket.get("entries") or []:
+                if str(entry.get("selection_id") or "").strip() == selection_id:
+                    selected_entry = dict(entry)
+                    selected_label = str(bracket.get("label") or "").strip()
+                    break
+            if selected_entry is not None:
+                break
+        if selected_entry is None:
+            unassigned = [dict(row) for row in preview.get("unassigned_entries") or [] if isinstance(row, dict)]
+            selected_entry = unassigned[0] if unassigned else {}
+            selected_label = "Needs manual resolution"
+        base.update(
+            {
+                "age_label": selected_label or base.get("age_label") or "Not assigned",
+                "player_age": selected_entry.get("age", registration.get("age")),
+                "partner_age": selected_entry.get("partner_age", selection.get("partner_age")),
+                "effective_age": selected_entry.get("effective_age"),
+                "assignment_issue": selected_entry.get("assignment_issue"),
+            }
+        )
+    except ValueError as exc:
+        base.update(
+            {
+                "age_label": "Needs manual resolution",
+                "player_age": registration.get("age"),
+                "partner_age": selection.get("partner_age"),
+                "assignment_issue": str(exc),
+            }
+        )
+    return base
+
 def analyze_registration_publish_impact(
     supabase,
     *,
     tournament_id: str,
     days: list[dict[str, Any]],
     event_options: list[dict[str, Any]],
+    event_families: list[dict[str, Any]] | None = None,
+    builder_event_options: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     tournament_id = str(tournament_id)
     published_days = list_registration_days(supabase, tournament_id)
@@ -1064,6 +1199,16 @@ def analyze_registration_publish_impact(
 
     published_days_by_id = {str(row.get("id")): row for row in published_days if str(row.get("id") or "").strip()}
     published_events_by_id = {str(row.get("id")): row for row in published_events if str(row.get("id") or "").strip()}
+    builder_events_by_id = {
+        str(row.get("id") or "").strip(): dict(row)
+        for row in (builder_event_options or [])
+        if isinstance(row, dict) and str(row.get("id") or "").strip()
+    }
+    event_families_by_name = {
+        str(row.get("event_family") or row.get("event_family_label") or row.get("label") or "").strip().lower(): dict(row)
+        for row in (event_families or [])
+        if isinstance(row, dict) and str(row.get("event_family") or row.get("event_family_label") or row.get("label") or "").strip()
+    }
 
     draft_days = list(days)
     draft_day_ids = {str(row.get("id")) for row in draft_days}
@@ -1083,6 +1228,11 @@ def analyze_registration_publish_impact(
         *,
         current_value: Any,
         proposed_value: Any,
+        field: str = "",
+        current_event: dict[str, Any] | None = None,
+        proposed_event: dict[str, Any] | None = None,
+        current_source: str = "",
+        proposed_source: str = "",
     ) -> list[dict[str, Any]]:
         affected: list[dict[str, Any]] = []
         for selection in selections_by_event.get(str(event_id), []):
@@ -1098,6 +1248,21 @@ def analyze_registration_publish_impact(
                     )
                     if part
                 )
+            registration_current_value = current_value
+            registration_proposed_value = proposed_value
+            if field == "skill_age_rules" and current_event is not None and proposed_event is not None:
+                registration_current_value = _registration_skill_age_review_value(
+                    current_event,
+                    registration,
+                    selection,
+                    source_label=current_source,
+                )
+                registration_proposed_value = _registration_skill_age_review_value(
+                    proposed_event,
+                    registration,
+                    selection,
+                    source_label=proposed_source,
+                )
             affected.append(
                 {
                     "registration_id": registration_id,
@@ -1112,8 +1277,10 @@ def analyze_registration_publish_impact(
                         or ""
                     ).strip()
                     or None,
-                    "current_value": current_value,
-                    "proposed_value": proposed_value,
+                    "current_value": registration_current_value,
+                    "proposed_value": registration_proposed_value,
+                    "current_source": current_source or None,
+                    "proposed_source": proposed_source or None,
                 }
             )
         return affected
@@ -1127,12 +1294,21 @@ def analyze_registration_publish_impact(
         current_value: Any,
         proposed_value: Any,
         usage: dict[str, int],
+        current_event: dict[str, Any] | None = None,
+        proposed_event: dict[str, Any] | None = None,
+        current_source: str = "",
+        proposed_source: str = "",
     ) -> None:
         block_id = f"division:{event_id}:{field}"
         affected_registrations = affected_registrations_for_event(
             event_id,
             current_value=current_value,
             proposed_value=proposed_value,
+            field=field,
+            current_event=current_event,
+            proposed_event=proposed_event,
+            current_source=current_source,
+            proposed_source=proposed_source,
         )
         operational_usage = {
             key: int(usage.get(key, 0) or 0)
@@ -1153,6 +1329,8 @@ def analyze_registration_publish_impact(
                 "field": field,
                 "current_value": current_value,
                 "proposed_value": proposed_value,
+                "current_source": current_source or None,
+                "proposed_source": proposed_source or None,
                 "step": "divisions",
                 "resolution_options": resolution_options,
                 "forceable": forceable,
@@ -1184,6 +1362,23 @@ def analyze_registration_publish_impact(
         event_id = str(event.get("id"))
         existing = published_events_by_id.get(event_id)
         label = str(event.get("division_name") or event.get("label") or event_id)
+        builder_event = dict(builder_events_by_id.get(event_id) or {})
+        family_name = str(
+            builder_event.get("event_family_label")
+            or builder_event.get("event_family")
+            or event.get("event_family_label")
+            or ""
+        ).strip()
+        family_defaults = dict(event_families_by_name.get(family_name.lower()) or {})
+        proposed_event_for_review = {
+            **event,
+            **builder_event,
+            "event_family_label": family_name or event.get("event_family_label"),
+        }
+        if str(builder_event.get("age_policy_source") or "").strip().upper() != "OVERRIDE" and family_defaults:
+            proposed_event_for_review["age_policy_source"] = "INHERIT_EVENT"
+        current_source = _policy_source_label(existing or {}, label, published=True)
+        proposed_source = _policy_source_label(proposed_event_for_review, label, published=False)
         if existing is None:
             creates.append(f"Division '{label}' will be created.")
             continue
@@ -1244,9 +1439,13 @@ def analyze_registration_publish_impact(
                 event_id=event_id,
                 label=label,
                 field="skill_age_rules",
-                current_value={column: existing.get(column) for column in rule_columns},
-                proposed_value={column: event.get(column) for column in rule_columns},
+                current_value=_skill_age_rule_review_value(existing, source_label=current_source),
+                proposed_value=_skill_age_rule_review_value(proposed_event_for_review, source_label=proposed_source),
                 usage=usage,
+                current_event=existing,
+                proposed_event=proposed_event_for_review,
+                current_source=current_source,
+                proposed_source=proposed_source,
             )
 
         existing_capacity = existing.get("capacity_teams")

@@ -52,6 +52,8 @@ import {
 import TournamentSetupEventFamilyCard from "./TournamentSetupEventFamilyCard";
 import TournamentSetupEventFamilyDialog from "./TournamentSetupEventFamilyDialog";
 import TournamentDivisionPresetDialog from "./TournamentDivisionPresetDialog";
+import TournamentBulkAddCourtsDialog from "./TournamentBulkAddCourtsDialog";
+import TournamentDivisionBulkEditDialog from "./TournamentDivisionBulkEditDialog";
 import TournamentSetupDivisionCard from "./TournamentSetupDivisionCard";
 import TournamentSetupDivisionDialog from "./TournamentSetupDivisionDialog";
 import TournamentSetupPolicies, { withDefaultTournamentPolicies } from "./TournamentSetupPolicies";
@@ -598,6 +600,8 @@ type AffectedRegistration = {
   registration_status?: string;
   current_value?: unknown;
   proposed_value?: unknown;
+  current_source?: string;
+  proposed_source?: string;
 };
 
 type BlockedImpactDetail = {
@@ -609,6 +613,8 @@ type BlockedImpactDetail = {
   field?: string;
   current_value?: unknown;
   proposed_value?: unknown;
+  current_source?: string;
+  proposed_source?: string;
   step?: TournamentSetupStep;
   resolution_options?: string[];
   affected_registrations: AffectedRegistration[];
@@ -626,6 +632,8 @@ function blockedImpactDetail(value: unknown): BlockedImpactDetail {
       field: safeString(row.field),
       current_value: row.current_value,
       proposed_value: row.proposed_value,
+      current_source: safeString(row.current_source),
+      proposed_source: safeString(row.proposed_source),
       step: safeString(row.step) as TournamentSetupStep,
       resolution_options: Array.isArray(row.resolution_options) ? row.resolution_options.map((value) => safeString(value)) : [],
       affected_registrations: Array.isArray(row.affected_registrations)
@@ -640,7 +648,9 @@ function blockedImpactDetail(value: unknown): BlockedImpactDetail {
                 email: safeString(affected.email),
                 registration_status: safeString(affected.registration_status),
                 current_value: affected.current_value,
-                proposed_value: affected.proposed_value
+                proposed_value: affected.proposed_value,
+                current_source: safeString(affected.current_source),
+                proposed_source: safeString(affected.proposed_source)
               };
             })
         : []
@@ -704,6 +714,10 @@ export default function TournamentSetupWizardPanel({
   const [eventDialogKey, setEventDialogKey] = useState<string | null | undefined>(undefined);
   const [divisionPresetFamilyKey, setDivisionPresetFamilyKey] = useState<string | undefined>(undefined);
   const [divisionDialogKey, setDivisionDialogKey] = useState<string | null | undefined>(undefined);
+  const [bulkCourtDialogOpen, setBulkCourtDialogOpen] = useState(false);
+  const [bulkDivisionSelecting, setBulkDivisionSelecting] = useState(false);
+  const [selectedDivisionKeys, setSelectedDivisionKeys] = useState<string[]>([]);
+  const [bulkDivisionDialogOpen, setBulkDivisionDialogOpen] = useState(false);
   const [publishedBasics, setPublishedBasics] = useState<BasicsDraft>(() => emptyBasics(tournamentName));
   const [publishedSettings, setPublishedSettings] = useState<Record<string, unknown>>({});
   const [publishedConfiguration, setPublishedConfiguration] = useState<SetupConfiguration>(emptyConfiguration);
@@ -733,6 +747,10 @@ export default function TournamentSetupWizardPanel({
     setEventDialogKey(undefined);
     setDivisionPresetFamilyKey(undefined);
     setDivisionDialogKey(undefined);
+    setBulkCourtDialogOpen(false);
+    setBulkDivisionSelecting(false);
+    setSelectedDivisionKeys([]);
+    setBulkDivisionDialogOpen(false);
     setPublishedBasics(emptyBasics(tournamentName));
     setPublishedSettings({});
     setPublishedConfiguration(emptyConfiguration);
@@ -1168,6 +1186,32 @@ async function loadDetail() {
     }
   }
 
+  async function saveBulkDivisionEdits(rows: Array<{ key: string; value: SetupRecord }>) {
+    const replacements = new Map(rows.map((row) => [row.key, row.value]));
+    const nextConfiguration = {
+      ...configuration,
+      eventOptions: sortDivisionsByEventAndName(
+        configuration.eventOptions.map((row) => {
+          const value = replacements.get(row.key);
+          return value ? { ...row, value } : row;
+        }),
+        configuration.eventFamilies,
+        configuration.days
+      )
+    };
+    const saved = await persistConfigurationDraft(
+      nextConfiguration,
+      "divisions",
+      `${rows.length} division${rows.length === 1 ? "" : "s"} updated together in the private admin draft. Nothing public changed.`
+    );
+    if (saved) {
+      setBulkDivisionDialogOpen(false);
+      setBulkDivisionSelecting(false);
+      setSelectedDivisionKeys([]);
+      setImpactReview(null);
+    }
+  }
+
   async function removeEventFamily(rowKey: string) {
     const nextConfiguration = {
       ...configuration,
@@ -1336,7 +1380,11 @@ async function loadDetail() {
         next.resolved = false;
       }
       if (Object.prototype.hasOwnProperty.call(patch, "resolved")) {
-        next.resolved = Boolean(patch.resolved) && Boolean(safeString(next.action) && safeString(next.notes));
+        const action = safeString(next.action).toUpperCase();
+        const noteRequired = action === "OTHER";
+        next.resolved = Boolean(patch.resolved)
+          && Boolean(action)
+          && (!noteRequired || Boolean(safeString(next.notes)));
       }
       return next;
     });
@@ -1363,7 +1411,12 @@ async function loadDetail() {
     const rows = Array.isArray(plan.affected_registrations)
       ? (plan.affected_registrations as Array<Record<string, unknown>>)
       : [];
-    return rows.length > 0 && rows.every((row) => Boolean(row.resolved) && safeString(row.action) && safeString(row.notes));
+    return rows.length > 0 && rows.every((row) => {
+      const action = safeString(row.action).toUpperCase();
+      return Boolean(row.resolved)
+        && Boolean(action)
+        && (action !== "OTHER" || Boolean(safeString(row.notes)));
+    });
   }
 
   async function saveBasics() {
@@ -2032,6 +2085,7 @@ function renderDivisions() {
     configuration.eventFamilies,
     configuration.days
   );
+  const selectedDivisions = configuration.eventOptions.filter((row) => selectedDivisionKeys.includes(row.key));
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
       <TournamentSetupDivisionDialog
@@ -2043,6 +2097,15 @@ function renderDivisions() {
         onCancel={() => setDivisionDialogKey(undefined)}
         onConfirm={saveDivisionDialog}
       />
+      <TournamentDivisionBulkEditDialog
+        open={bulkDivisionDialogOpen}
+        divisions={selectedDivisions}
+        eventFamilies={configuration.eventFamilies}
+        days={configuration.days}
+        disabled={busy}
+        onCancel={() => setBulkDivisionDialogOpen(false)}
+        onConfirm={saveBulkDivisionEdits}
+      />
 
       <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -2052,14 +2115,65 @@ function renderDivisions() {
               Build the final competitive groups inside each event. Divisions inherit event structure, age policy, draw, and scoring by default; use explicit overrides only when a specific division needs different rules.
             </p>
           </div>
-          <button
-            type="button"
-            style={buttonStyle}
-            disabled={busy || !configuration.eventFamilies.length}
-            onClick={() => setDivisionDialogKey(null)}
-          >
-            Add division
-          </button>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+            {bulkDivisionSelecting ? (
+              <>
+                <button
+                  type="button"
+                  style={ghostButtonStyle}
+                  disabled={busy}
+                  onClick={() => setSelectedDivisionKeys(
+                    selectedDivisionKeys.length === configuration.eventOptions.length
+                      ? []
+                      : configuration.eventOptions.map((row) => row.key)
+                  )}
+                >
+                  {selectedDivisionKeys.length === configuration.eventOptions.length ? "Clear all" : "Select all"}
+                </button>
+                <button
+                  type="button"
+                  style={buttonStyle}
+                  disabled={busy || !selectedDivisionKeys.length}
+                  onClick={() => setBulkDivisionDialogOpen(true)}
+                >
+                  Edit selected ({selectedDivisionKeys.length})
+                </button>
+                <button
+                  type="button"
+                  style={ghostButtonStyle}
+                  disabled={busy}
+                  onClick={() => {
+                    setBulkDivisionSelecting(false);
+                    setSelectedDivisionKeys([]);
+                  }}
+                >
+                  Cancel bulk edit
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  style={ghostButtonStyle}
+                  disabled={busy || !configuration.eventOptions.length}
+                  onClick={() => {
+                    setBulkDivisionSelecting(true);
+                    setSelectedDivisionKeys([]);
+                  }}
+                >
+                  Bulk edit
+                </button>
+                <button
+                  type="button"
+                  style={buttonStyle}
+                  disabled={busy || !configuration.eventFamilies.length}
+                  onClick={() => setDivisionDialogKey(null)}
+                >
+                  Add division
+                </button>
+              </>
+            )}
+          </div>
         </div>
         {!configuration.eventFamilies.length ? (
           <p role="alert" style={{ color: "#b91c1c" }}>
@@ -2070,14 +2184,34 @@ function renderDivisions() {
 
       {sortedDivisions.map((row, index) => {
         const originalIndex = configuration.eventOptions.findIndex((candidate) => candidate.key === row.key);
+        const selected = selectedDivisionKeys.includes(row.key);
         return (
-          <div key={row.key} id={`division-${safeString(row.value.id)}`}>
+          <div
+            key={row.key}
+            id={`division-${safeString(row.value.id)}`}
+            style={bulkDivisionSelecting ? { border: `2px solid ${selected ? "#2563eb" : "#cbd5e1"}`, borderRadius: "14px", padding: "0.45rem", background: selected ? "#eff6ff" : "transparent" } : undefined}
+          >
+            {bulkDivisionSelecting ? (
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.25rem 0.25rem 0.55rem", fontWeight: 800 }}>
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  disabled={busy}
+                  onChange={(event) => setSelectedDivisionKeys((current) =>
+                    event.target.checked
+                      ? [...current, row.key]
+                      : current.filter((key) => key !== row.key)
+                  )}
+                />
+                Select {eventDivisionName(row.value) || `division ${index + 1}`} for bulk editing
+              </label>
+            ) : null}
             <TournamentSetupDivisionCard
               row={row}
               position={index}
               eventFamilies={configuration.eventFamilies}
               days={configuration.days}
-              disabled={busy}
+              disabled={busy || bulkDivisionSelecting}
               issues={issuesForPath(issues, `events.${Math.max(0, originalIndex)}`)}
               onEdit={() => setDivisionDialogKey(row.key)}
               onRemove={() => void removeDivision(row.key)}
@@ -2263,6 +2397,19 @@ function renderDivisions() {
 
     return (
       <div style={{ display: "grid", gap: "1rem" }}>
+        <TournamentBulkAddCourtsDialog
+          open={bulkCourtDialogOpen}
+          existingCount={courts.length}
+          disabled={busy}
+          onCancel={() => setBulkCourtDialogOpen(false)}
+          onConfirm={(count) => {
+            updateCourts([
+              ...courts,
+              ...Array.from({ length: count }, () => newVenueCourt())
+            ]);
+            setBulkCourtDialogOpen(false);
+          }}
+        />
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Tournament · Venue and tournament days</h2>
           <p style={{ color: "#475569", marginBottom: 0 }}>
@@ -2311,16 +2458,6 @@ function renderDivisions() {
                 {TIMEZONE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
-            <div>
-              <strong>Total venue courts</strong><br />
-              <output
-                aria-label="Total venue courts"
-                style={{ ...inputStyle, display: "block", background: "#f8fafc", fontWeight: 800 }}
-              >
-                {courts.length}
-              </output>
-              <small>This read-only count is derived from the court inventory below.</small>
-            </div>
             <label style={{ gridColumn: "1 / -1" }}>
               <strong>Directions to the venue (optional)</strong><br />
               <textarea
@@ -2337,19 +2474,36 @@ function renderDivisions() {
         <article style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
             <div>
-              <h3 style={{ margin: 0 }}>Venue court inventory</h3>
+              <h3 style={{ margin: 0 }}>Venue court inventory · {courts.length} total</h3>
               <p style={{ margin: "0.25rem 0 0", color: "#64748b" }}>
                 Every court has a stable identity. Titles are optional; an untitled court remains available by number. Only Remove court deletes it.
               </p>
             </div>
-            <button
-              type="button"
-              style={ghostButtonStyle}
-              disabled={busy || courts.length >= 100}
-              onClick={() => updateCourts([...courts, newVenueCourt()])}
-            >
-              Add court
-            </button>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+              <output
+                aria-label="Total venue courts"
+                style={{ padding: "0.55rem 0.75rem", border: "1px solid #cbd5e1", borderRadius: "999px", background: "#f8fafc", fontWeight: 800 }}
+              >
+                Total venue courts: {courts.length}
+              </output>
+              <small style={{ color: "#64748b" }}>This read-only count is derived from the court inventory.</small>
+              <button
+                type="button"
+                style={ghostButtonStyle}
+                disabled={busy || courts.length >= 100}
+                onClick={() => setBulkCourtDialogOpen(true)}
+              >
+                Bulk add courts
+              </button>
+              <button
+                type="button"
+                style={ghostButtonStyle}
+                disabled={busy || courts.length >= 100}
+                onClick={() => updateCourts([...courts, newVenueCourt()])}
+              >
+                Add court
+              </button>
+            </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.65rem", marginTop: "0.75rem" }}>
             {courts.map((court, index) => {
@@ -2825,8 +2979,8 @@ function renderDivisions() {
                           <strong>{item.entity_label || "Blocked setup change"}</strong>
                           <p>{item.message}</p>
                           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.65rem" }}>
-                            <div style={{ padding: "0.6rem", borderRadius: "10px", background: "white", minWidth: 0, overflowWrap: "anywhere" }}><small>Current published {humanReviewFieldLabel(item.field || "value")}</small><ReviewValueDisplay field={item.field || "value"} value={item.current_value} days={configuration.days} timezone={basics.timezone} /></div>
-                            <div style={{ padding: "0.6rem", borderRadius: "10px", background: "#eff6ff", minWidth: 0, overflowWrap: "anywhere" }}><small>Proposed draft {humanReviewFieldLabel(item.field || "value")}</small><ReviewValueDisplay field={item.field || "value"} value={item.proposed_value} days={configuration.days} timezone={basics.timezone} /></div>
+                            <div style={{ padding: "0.6rem", borderRadius: "10px", background: "white", minWidth: 0, overflowWrap: "anywhere" }}><small>Current published {humanReviewFieldLabel(item.field || "value")}{item.current_source ? ` · ${item.current_source}` : ""}</small><ReviewValueDisplay field={item.field || "value"} value={item.current_value} days={configuration.days} timezone={basics.timezone} /></div>
+                            <div style={{ padding: "0.6rem", borderRadius: "10px", background: "#eff6ff", minWidth: 0, overflowWrap: "anywhere" }}><small>Proposed draft {humanReviewFieldLabel(item.field || "value")}{item.proposed_source ? ` · ${item.proposed_source}` : ""}</small><ReviewValueDisplay field={item.field || "value"} value={item.proposed_value} days={configuration.days} timezone={basics.timezone} /></div>
                           </div>
                           <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap", marginTop: "0.7rem" }}>
                             <button type="button" style={ghostButtonStyle} onClick={() => keepPublishedValueForBlockedChange(item)}>
@@ -2845,7 +2999,7 @@ function renderDivisions() {
                             <div style={{ marginTop: "0.8rem", paddingTop: "0.8rem", borderTop: "1px solid #fecaca" }}>
                               <p style={{ marginTop: 0 }}>
                                 <strong>Manual registration-resolution queue</strong><br />
-                                Publication remains blocked until every row has an action and audit note. Complete the actual registration change through the linked editor, then record the resolution here.
+                                Publication remains blocked until every row has a structured action and completion confirmation. Audit notes are optional for standard actions and required only for Other. Complete the actual registration change through the linked editor, then record the resolution here.
                               </p>
                               <div style={{ display: "grid", gap: "0.65rem" }}>
                                 {planRows.map((row) => {
@@ -2854,7 +3008,9 @@ function renderDivisions() {
                                     selection_id: safeString(row.selection_id),
                                     display_name: safeString(row.display_name),
                                     email: safeString(row.email),
-                                    registration_status: safeString(row.registration_status)
+                                    registration_status: safeString(row.registration_status),
+                                    current_source: safeString(row.current_source),
+                                    proposed_source: safeString(row.proposed_source)
                                   };
                                   const editorHref = `/admin/tournaments/registration/registrants/${encodeURIComponent(registration.registration_id)}?${new URLSearchParams({ tournament: tournamentId, name: basics.name || tournamentName }).toString()}`;
                                   const resolved = Boolean(row.resolved);
@@ -2866,8 +3022,8 @@ function renderDivisions() {
                                       </div>
                                       {(row.current_value != null || row.proposed_value != null) ? (
                                         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.55rem", marginTop: "0.6rem" }}>
-                                          <div style={{ padding: "0.55rem", borderRadius: "8px", background: "#f8fafc", minWidth: 0 }}><small>Current registration value</small><ReviewValueDisplay field={item.field || "value"} value={row.current_value} days={configuration.days} timezone={basics.timezone} /></div>
-                                          <div style={{ padding: "0.55rem", borderRadius: "8px", background: "#eff6ff", minWidth: 0 }}><small>Proposed registration value</small><ReviewValueDisplay field={item.field || "value"} value={row.proposed_value} days={configuration.days} timezone={basics.timezone} /></div>
+                                          <div style={{ padding: "0.55rem", borderRadius: "8px", background: "#f8fafc", minWidth: 0 }}><small>Current registration value{safeString(row.current_source) ? ` · ${safeString(row.current_source)}` : ""}</small><ReviewValueDisplay field={item.field || "value"} value={row.current_value} days={configuration.days} timezone={basics.timezone} /></div>
+                                          <div style={{ padding: "0.55rem", borderRadius: "8px", background: "#eff6ff", minWidth: 0 }}><small>Proposed registration value{safeString(row.proposed_source) ? ` · ${safeString(row.proposed_source)}` : ""}</small><ReviewValueDisplay field={item.field || "value"} value={row.proposed_value} days={configuration.days} timezone={basics.timezone} /></div>
                                         </div>
                                       ) : null}
                                       <div style={{ display: "grid", gridTemplateColumns: "minmax(190px, 1fr) minmax(260px, 2fr)", gap: "0.65rem", marginTop: "0.6rem" }}>
@@ -2881,20 +3037,20 @@ function renderDivisions() {
                                             <option value="OTHER">Other manual resolution</option>
                                           </select>
                                         </label>
-                                        <label><strong>Audit note</strong><br />
-                                          <textarea value={safeString(row.notes)} style={{ ...inputStyle, minHeight: "76px" }} placeholder="Describe the actual registration change and why it resolves the conflict." onChange={(event) => updateForcedRegistration(item, registration, { notes: event.target.value })} />
+                                        <label><strong>Audit note {safeString(row.action).toUpperCase() === "OTHER" ? "(required)" : "(optional)"}</strong><br />
+                                          <textarea value={safeString(row.notes)} style={{ ...inputStyle, minHeight: "76px" }} placeholder={safeString(row.action).toUpperCase() === "OTHER" ? "Describe the custom resolution and why it resolves the conflict." : "Optional context beyond the recorded action, actor, timestamp, and before/after values."} onChange={(event) => updateForcedRegistration(item, registration, { notes: event.target.value })} />
                                         </label>
                                       </div>
                                       <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.6rem", fontWeight: 800 }}>
                                         <input
                                           type="checkbox"
                                           checked={resolved}
-                                          disabled={!safeString(row.action) || !safeString(row.notes)}
+                                          disabled={!safeString(row.action) || (safeString(row.action).toUpperCase() === "OTHER" && !safeString(row.notes))}
                                           onChange={(event) => updateForcedRegistration(item, registration, { resolved: event.target.checked })}
                                         />
                                         I completed and verified this registration action
                                       </label>
-                                      <small style={{ color: resolved ? "#166534" : "#92400e", fontWeight: 800 }}>{resolved ? "Resolved for publication" : "Action, audit note, and completion confirmation required"}</small>
+                                      <small style={{ color: resolved ? "#166534" : "#92400e", fontWeight: 800 }}>{resolved ? "Resolved for publication" : safeString(row.action).toUpperCase() === "OTHER" ? "Action, audit note, and completion confirmation required" : "Action and completion confirmation required"}</small>
                                     </article>
                                   );
                                 })}
