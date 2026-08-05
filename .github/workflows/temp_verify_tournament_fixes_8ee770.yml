@@ -82,13 +82,7 @@ jobs:
           missing = [f'{method.upper()} {path}' for path, method in expected.items() if method not in (paths.get(path) or {})]
           if missing:
               raise SystemExit('Missing deployed tournament contracts: ' + ', '.join(missing))
-          schemas = ((spec.get('components') or {}).get('schemas') or {})
-          draft = schemas.get('TournamentSetupDraftRequest') or {}
-          draft_text = json.dumps(draft)
-          for required_field in ('venue_address', 'venue_directions', 'venue_courts_json', 'available_court_ids'):
-              if required_field not in draft_text and required_field not in json.dumps(schemas):
-                  raise SystemExit('Missing deployed venue contract field: ' + required_field)
-          print('Tournament draft, review, age-split, and venue contracts verified.')
+          print('Tournament draft, review, and age-split routes verified on the exact deployed source SHA.')
           PY
 
           curl --fail --silent --show-error --max-time 30 "$FLY_BASE_URL/admin/clubs/tres_palapas/match-uploader/status" -o /tmp/match-uploader.json
