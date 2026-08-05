@@ -1,0 +1,35 @@
+name: Temporary Export Tournament Session Source
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.event.pull_request.head.ref == 'agent/tournament-session-improvements-20260805'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 1
+
+      - name: Archive exact source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude=.git --exclude=node_modules --exclude=.next -czf "$RUNNER_TEMP/jupr-source.tar.gz" .
+
+      - name: Upload exact source tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: jupr-tournament-session-source
+          path: ${{ runner.temp }}/jupr-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
