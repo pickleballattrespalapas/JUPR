@@ -4,7 +4,6 @@ import { useEffect, useState, type CSSProperties } from "react";
 import {
   COMPETITION_FORMATS,
   GENDER_RESTRICTIONS,
-  PARTICIPANT_TYPES,
   SCORING_OPTIONS,
   cleanString,
   dayLabel,
@@ -19,6 +18,12 @@ import {
   type BuilderRow,
   type SetupRecord
 } from "../../tournament-setup/tournamentSetupBuilder";
+import TournamentAgePolicyEditor, {
+  EVENT_AGE_POLICY_FIELDS,
+  readAgePolicy,
+  validateAgePolicy,
+  writeAgePolicy
+} from "./TournamentAgePolicyEditor";
 
 const inputStyle: CSSProperties = {
   width: "100%",
@@ -40,6 +45,54 @@ function optionLabel(value: string): string {
 
 function optionsWithCurrent(options: readonly string[], current: string): string[] {
   return current && !options.includes(current) ? [current, ...options] : [...options];
+}
+
+type EventStructure = "SINGLES" | "GENDER_DOUBLES" | "MIXED_DOUBLES" | "FOUR_PLAYER_TEAM";
+
+function eventStructure(value: SetupRecord): EventStructure {
+  if (cleanString(value.competition_format).toUpperCase() === "FOUR_PLAYER_TEAM") {
+    return "FOUR_PLAYER_TEAM";
+  }
+  const participantType = cleanString(value.participant_type).toUpperCase();
+  if (participantType === "SINGLES") return "SINGLES";
+  if (participantType === "MIXED_DOUBLES") return "MIXED_DOUBLES";
+  return "GENDER_DOUBLES";
+}
+
+function applyEventStructure(value: SetupRecord, structure: EventStructure): SetupRecord {
+  if (structure === "FOUR_PLAYER_TEAM") {
+    return {
+      ...value,
+      participant_type: "MIXED_DOUBLES",
+      gender_restriction: "MIXED",
+      competition_format: "FOUR_PLAYER_TEAM",
+      team_roster_size: 4,
+      team_gender_rule: "TWO_MEN_TWO_WOMEN",
+      team_tiebreak_mode: cleanString(value.team_tiebreak_mode) || "SINGLES",
+      team_playoff_format: cleanString(value.team_playoff_format) || "NONE",
+      team_allow_substitutes: recordBoolean(value.team_allow_substitutes, false),
+      default_partner_board: true
+    };
+  }
+  const participantType = structure;
+  return {
+    ...value,
+    participant_type: participantType,
+    gender_restriction:
+      structure === "MIXED_DOUBLES"
+        ? "MIXED"
+        : cleanString(value.gender_restriction) === "MIXED"
+          ? "ANY"
+          : cleanString(value.gender_restriction) || "ANY",
+    competition_format: "STANDARD",
+    team_roster_size: 2,
+    team_gender_rule: "NONE",
+    team_tiebreak_mode: "SINGLES",
+    team_playoff_format: "NONE",
+    team_allow_substitutes: false,
+    default_partner_board:
+      structure === "SINGLES" ? false : recordBoolean(value.default_partner_board, true)
+  };
 }
 
 type Props = {
@@ -64,14 +117,8 @@ export default function TournamentSetupEventFamilyDialog({
 
   useEffect(() => {
     if (!open) return;
-    const participantType = cleanString(initialValue.participant_type) || "GENDER_DOUBLES";
-    setDraft({
-      ...initialValue,
-      gender_restriction:
-        participantType === "MIXED_DOUBLES"
-          ? "MIXED"
-          : cleanString(initialValue.gender_restriction) || "ANY"
-    });
+    const structure = eventStructure(initialValue);
+    setDraft(applyEventStructure({ ...initialValue }, structure));
     setMessage("");
   }, [open, initialValue]);
 
@@ -79,35 +126,19 @@ export default function TournamentSetupEventFamilyDialog({
 
   const name = eventFamilyName(draft);
   const currentDays = eventDayReferences(draft);
-  const participantType = cleanString(draft.participant_type) || "GENDER_DOUBLES";
-  const gender = participantType === "MIXED_DOUBLES"
+  const structure = eventStructure(draft);
+  const participantType = structure === "FOUR_PLAYER_TEAM" ? "MIXED_DOUBLES" : structure;
+  const gender = structure === "MIXED_DOUBLES" || structure === "FOUR_PLAYER_TEAM"
     ? "MIXED"
     : cleanString(draft.gender_restriction) || "ANY";
   const drawFormat = cleanString(draft.default_format) || "ROUND_ROBIN_PLUS_PLAYOFF";
   const scoring = cleanString(draft.default_scoring) || "GAME_TO_15";
+  const agePolicy = readAgePolicy(draft, EVENT_AGE_POLICY_FIELDS);
   const dayOptions = days.map((day) => ({
     value: dayReference(day.value),
     label: dayLabel(day.value) || dayReference(day.value),
     enabled: recordBoolean(day.value.enabled, true)
   }));
-
-  function updateParticipantType(nextType: string) {
-    setDraft((current) => {
-      const next = setRecordString(current, ["participant_type"], nextType);
-      if (nextType === "MIXED_DOUBLES") {
-        next.gender_restriction = "MIXED";
-        next.default_partner_board = true;
-      } else if (nextType === "SINGLES") {
-        next.default_partner_board = false;
-        if (cleanString(next.gender_restriction) === "MIXED") {
-          next.gender_restriction = "ANY";
-        }
-      } else if (cleanString(next.gender_restriction) === "MIXED") {
-        next.gender_restriction = "ANY";
-      }
-      return next;
-    });
-  }
 
   function submit() {
     if (!name) {
@@ -128,9 +159,14 @@ export default function TournamentSetupEventFamilyDialog({
       setMessage("Default entry fee cannot be negative.");
       return;
     }
+    const ageIssues = validateAgePolicy(agePolicy);
+    if (ageIssues.length) {
+      setMessage(ageIssues[0]);
+      return;
+    }
     onConfirm({
       ...draft,
-      gender_restriction: participantType === "MIXED_DOUBLES" ? "MIXED" : gender,
+      gender_restriction: gender,
       default_partner_board:
         participantType === "SINGLES" ? false : recordBoolean(draft.default_partner_board, true)
     });
@@ -157,7 +193,7 @@ export default function TournamentSetupEventFamilyDialog({
         aria-modal="true"
         aria-labelledby="event-dialog-title"
         style={{
-          width: "min(820px, 100%)",
+          width: "min(920px, 100%)",
           maxHeight: "calc(100vh - 2rem)",
           overflowY: "auto",
           padding: "1.1rem",
@@ -170,7 +206,7 @@ export default function TournamentSetupEventFamilyDialog({
           {mode === "add" ? "Add event" : `Edit ${name || "event"}`}
         </h2>
         <p style={{ color: "#475569" }}>
-          Configure the parent event and its defaults. Saving closes this dialog and returns a compact, read-only event card. Published tournament data remains unchanged until final review and publication.
+          Define the event structure and policy once. Divisions inherit these defaults unless an organizer deliberately overrides them. Saving returns a compact, read-only event card; published data stays unchanged until Review.
         </p>
         <div
           style={{
@@ -192,10 +228,46 @@ export default function TournamentSetupEventFamilyDialog({
               }
             />
           </label>
+
+          <label>
+            <strong>Event format</strong><br />
+            <select
+              value={structure}
+              style={inputStyle}
+              onChange={(event) =>
+                setDraft((current) => applyEventStructure(current, event.target.value as EventStructure))
+              }
+            >
+              <option value="SINGLES">Singles</option>
+              <option value="GENDER_DOUBLES">Gender Doubles</option>
+              <option value="MIXED_DOUBLES">Mixed Doubles</option>
+              <option value="FOUR_PLAYER_TEAM">Four-player team</option>
+            </select>
+          </label>
+
+          <label>
+            <strong>Gender category</strong><br />
+            <select
+              value={gender}
+              style={inputStyle}
+              disabled={structure === "MIXED_DOUBLES" || structure === "FOUR_PLAYER_TEAM"}
+              onChange={(event) =>
+                setDraft((current) => setRecordString(current, ["gender_restriction"], event.target.value))
+              }
+            >
+              {optionsWithCurrent(GENDER_RESTRICTIONS, gender).map((option) => (
+                <option key={option} value={option}>{optionLabel(option)}</option>
+              ))}
+            </select>
+            {structure === "MIXED_DOUBLES" || structure === "FOUR_PLAYER_TEAM" ? (
+              <small>This event format always uses Mixed gender.</small>
+            ) : null}
+          </label>
+
           <fieldset style={{ gridColumn: "1 / -1", padding: "0.8rem", border: "1px solid #cbd5e1", borderRadius: "12px" }}>
             <legend style={{ fontWeight: 800 }}>Tournament days</legend>
             <p style={{ color: "#64748b", marginTop: 0 }}>
-              Select every day on which this event may be played. Events are displayed automatically in tournament-day order.
+              Select every day on which this event may be played. Event cards sort automatically by their earliest selected day.
             </p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.45rem" }}>
               {dayOptions.map((option) => (
@@ -216,30 +288,7 @@ export default function TournamentSetupEventFamilyDialog({
               ))}
             </div>
           </fieldset>
-          <label>
-            <strong>Participant type</strong><br />
-            <select value={participantType} style={inputStyle} onChange={(event) => updateParticipantType(event.target.value)}>
-              {optionsWithCurrent(PARTICIPANT_TYPES, participantType).map((option) => (
-                <option key={option} value={option}>{optionLabel(option)}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <strong>Gender</strong><br />
-            <select
-              value={gender}
-              style={inputStyle}
-              disabled={participantType === "MIXED_DOUBLES"}
-              onChange={(event) =>
-                setDraft((current) => setRecordString(current, ["gender_restriction"], event.target.value))
-              }
-            >
-              {optionsWithCurrent(GENDER_RESTRICTIONS, gender).map((option) => (
-                <option key={option} value={option}>{optionLabel(option)}</option>
-              ))}
-            </select>
-            {participantType === "MIXED_DOUBLES" ? <small>Mixed Doubles always uses Mixed gender.</small> : null}
-          </label>
+
           <label>
             <strong>Default draw format</strong><br />
             <select value={drawFormat} style={inputStyle} onChange={(event) => setDraft((current) => setRecordString(current, ["default_format"], event.target.value))}>
@@ -278,7 +327,59 @@ export default function TournamentSetupEventFamilyDialog({
               style={inputStyle}
               onChange={(event) => setDraft((current) => setRecordNumber(current, "default_price_usd", event.target.value))}
             />
+            <small>Commerce is the consolidated place to review all event and division fees.</small>
           </label>
+
+          {structure === "FOUR_PLAYER_TEAM" ? (
+            <fieldset style={{ gridColumn: "1 / -1", padding: "0.8rem", border: "1px solid #cbd5e1", borderRadius: "12px" }}>
+              <legend style={{ fontWeight: 800 }}>Four-player team rules</legend>
+              <p style={{ color: "#64748b", marginTop: 0 }}>
+                Teams use two men and two women. Configure the competitive tiebreak and optional playoff structure here at the event level.
+              </p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>
+                <label>
+                  <strong>Tiebreak</strong><br />
+                  <select
+                    value={cleanString(draft.team_tiebreak_mode) || "SINGLES"}
+                    style={inputStyle}
+                    onChange={(event) => setDraft((current) => setRecordString(current, ["team_tiebreak_mode"], event.target.value))}
+                  >
+                    <option value="SINGLES">Singles tiebreak</option>
+                    <option value="SKINNY_RELAY">Skinny-singles relay</option>
+                  </select>
+                </label>
+                <label>
+                  <strong>Playoff format</strong><br />
+                  <select
+                    value={cleanString(draft.team_playoff_format) || "NONE"}
+                    style={inputStyle}
+                    onChange={(event) => setDraft((current) => setRecordString(current, ["team_playoff_format"], event.target.value))}
+                  >
+                    <option value="NONE">No playoff</option>
+                    <option value="TOP_2_FINAL">Top 2 final</option>
+                    <option value="TOP_4_SEMIFINALS">Top 4 semifinals</option>
+                    <option value="TOP_4_SEMIFINALS_WITH_BRONZE">Top 4 with bronze match</option>
+                  </select>
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1.65rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={recordBoolean(draft.team_allow_substitutes, false)}
+                    onChange={(event) => setDraft((current) => ({ ...current, team_allow_substitutes: event.target.checked }))}
+                  />
+                  Allow substitutes
+                </label>
+              </div>
+            </fieldset>
+          ) : null}
+
+          <TournamentAgePolicyEditor
+            policy={agePolicy}
+            participantType={participantType}
+            onChange={(policy) => setDraft((current) => writeAgePolicy(current, EVENT_AGE_POLICY_FIELDS, policy))}
+            title="Event age policy"
+          />
+
           <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
             <input
               type="checkbox"

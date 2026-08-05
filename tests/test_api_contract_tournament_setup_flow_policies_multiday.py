@@ -11,11 +11,11 @@ def read(path: str) -> str:
 def test_guided_setup_order_and_policy_merge() -> None:
     nav = read("components/TournamentSetupWizardNav.tsx")
     panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
-    assert 'label: "Tournament basics and policies"' in nav
+    assert 'label: "Tournament"' in nav
     assert 'key: "schedule"' in nav
     assert nav.index('key: "schedule"') < nav.index('key: "events"') < nav.index('key: "divisions"')
     assert '"registration-rules"' not in nav
-    assert "Step {definition.number} of 6" in panel
+    assert "Domain {domainDefinition.number} of 4" in panel
     assert "TournamentSetupPolicies" in panel
     assert 'goTo("schedule")' in panel
     assert 'saveDraftAndContinue("events")' in panel
@@ -26,6 +26,7 @@ def test_guided_setup_order_and_policy_merge() -> None:
 def test_lifecycle_overview_and_phase_nav_match_refined_setup_flow() -> None:
     overview = read("app/admin/tournaments/TournamentLifecycleOverviewPanel.tsx")
     phase_nav = read("components/TournamentPhaseNav.tsx")
+    nav = read("components/TournamentSetupWizardNav.tsx")
     for label in (
         "1. Tournament basics and policies",
         "2. Schedule and courts",
@@ -35,15 +36,12 @@ def test_lifecycle_overview_and_phase_nav_match_refined_setup_flow() -> None:
         "6. Review and open registration",
     ):
         assert label in overview
-    for label in (
-        "1. Basics & policies",
-        "2. Schedule & courts",
-        "3. Events",
-        "4. Divisions",
-        "5. Pricing & extras",
-        "6. Review & open",
-    ):
-        assert label in phase_nav
+    for label in ("Tournament", "Competition", "Commerce", "Review"):
+        assert f'label: "{label}"' in phase_nav
+    assert 'label: "Venue and tournament days"' in nav
+    assert 'label: "Events and event policies"' in nav
+    assert 'label: "Fees, extras, bundles, and giveaways"' in nav
+    assert 'label: "Preview, conflicts, publish, and registration"' in nav
     assert '"registration-rules"' not in phase_nav
     assert overview.index("1. Tournament basics and policies") < overview.index("2. Schedule and courts")
     assert overview.index("2. Schedule and courts") < overview.index("3. Events") < overview.index("4. Divisions")

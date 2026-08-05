@@ -570,13 +570,17 @@ def build_builder_draft_payload(
     basics: dict[str, Any] | None = None,
     settings: dict[str, Any] | None = None,
     saved_step: str | None = None,
+    published_event_families: list[dict[str, Any]] | None = None,
+    published_at: str | None = None,
 ) -> dict[str, Any]:
     payload = {
-        "version": 2,
+        "version": 3,
         "saved_at": _now_iso(),
         "saved_step": str(saved_step or "").strip() or None,
         "days": list(days or []),
         "event_families": list(event_families or []),
+        "published_event_families": list(published_event_families or []),
+        "published_at": str(published_at or "").strip() or None,
         "divisions": list(divisions or []),
         "basics": dict(basics or {}),
         "settings": dict(settings or {}),
@@ -602,9 +606,18 @@ def save_builder_draft(
     basics: dict[str, Any] | None = None,
     settings: dict[str, Any] | None = None,
     saved_step: str | None = None,
+    published_event_families: list[dict[str, Any]] | None = None,
+    published_at: str | None = None,
 ) -> dict[str, Any]:
     assert_registration_schema_contract(supabase, required_tables=["tournament_registration_settings"])
     current_settings = get_registration_settings(supabase, str(tournament_id))
+    existing_draft = current_settings.get("builder_draft_json")
+    if not isinstance(existing_draft, dict):
+        existing_draft = {}
+    if published_event_families is None:
+        published_event_families = list(existing_draft.get("published_event_families") or [])
+    if published_at is None:
+        published_at = str(existing_draft.get("published_at") or "").strip() or None
     payload = build_builder_draft_payload(
         days=days,
         event_families=event_families,
@@ -612,6 +625,8 @@ def save_builder_draft(
         basics=basics,
         settings=dict(settings or {}),
         saved_step=saved_step,
+        published_event_families=published_event_families,
+        published_at=published_at,
     )
     update_payload = {
         "id": str(current_settings.get("id") or _uid("regset")),
@@ -820,6 +835,14 @@ EVENT_CONFIGURATION_WRITE_FIELDS = {
     "skill_mode",
     "age_mode",
     "age_rules",
+    "eligibility_mode",
+    "combined_rating_cap",
+    "competition_format",
+    "team_roster_size",
+    "team_gender_rule",
+    "team_tiebreak_mode",
+    "team_playoff_format",
+    "team_allow_substitutes",
     "waitlist_enabled",
     "partner_board_enabled",
     "status",
@@ -1005,6 +1028,16 @@ def analyze_registration_publish_impact(
     )
     usage_by_event = list_registration_usage_by_event_option(supabase, tournament_id)
     usage_by_day = list_registration_usage_by_day(supabase, tournament_id)
+    registrations_by_id = {
+        str(row.get("id") or ""): row
+        for row in list_registrations(supabase, tournament_id)
+        if str(row.get("id") or "").strip()
+    }
+    selections_by_event: dict[str, list[dict[str, Any]]] = {}
+    for selection in list_registration_selections(supabase, tournament_id):
+        event_option_id = str(selection.get("event_option_id") or "").strip()
+        if event_option_id:
+            selections_by_event.setdefault(event_option_id, []).append(selection)
 
     published_days_by_id = {str(row.get("id")): row for row in published_days if str(row.get("id") or "").strip()}
     published_events_by_id = {str(row.get("id")): row for row in published_events if str(row.get("id") or "").strip()}
@@ -1022,17 +1055,94 @@ def analyze_registration_publish_impact(
     blocked: list[str] = []
     blocked_details: list[dict[str, Any]] = []
 
-    def block_event(message: str, *, event_id: str, label: str, field: str) -> None:
+    def affected_registrations_for_event(
+        event_id: str,
+        *,
+        current_value: Any,
+        proposed_value: Any,
+    ) -> list[dict[str, Any]]:
+        affected: list[dict[str, Any]] = []
+        for selection in selections_by_event.get(str(event_id), []):
+            registration_id = str(selection.get("registration_id") or "").strip()
+            registration = registrations_by_id.get(registration_id, {})
+            display_name = str(registration.get("display_name") or "").strip()
+            if not display_name:
+                display_name = " ".join(
+                    part
+                    for part in (
+                        str(registration.get("first_name") or "").strip(),
+                        str(registration.get("last_name") or "").strip(),
+                    )
+                    if part
+                )
+            affected.append(
+                {
+                    "registration_id": registration_id,
+                    "selection_id": str(selection.get("id") or "").strip() or None,
+                    "display_name": display_name
+                    or str(registration.get("email") or "").strip()
+                    or registration_id,
+                    "email": str(registration.get("email") or "").strip() or None,
+                    "registration_status": str(
+                        registration.get("status")
+                        or registration.get("registration_status")
+                        or ""
+                    ).strip()
+                    or None,
+                    "current_value": current_value,
+                    "proposed_value": proposed_value,
+                }
+            )
+        return affected
+
+    def block_event(
+        message: str,
+        *,
+        event_id: str,
+        label: str,
+        field: str,
+        current_value: Any,
+        proposed_value: Any,
+        usage: dict[str, int],
+    ) -> None:
+        block_id = f"division:{event_id}:{field}"
+        affected_registrations = affected_registrations_for_event(
+            event_id,
+            current_value=current_value,
+            proposed_value=proposed_value,
+        )
+        operational_usage = {
+            key: int(usage.get(key, 0) or 0)
+            for key in ("event_draws", "teams", "games")
+        }
+        forceable = bool(affected_registrations) and not any(operational_usage.values())
+        resolution_options = ["KEEP_PUBLISHED_VALUE", "EDIT_DRAFT"]
+        if forceable:
+            resolution_options.append("FORCE_CHANGE_WITH_RESOLUTION")
         blocked.append(message)
         blocked_details.append(
             {
+                "block_id": block_id,
                 "message": message,
                 "entity_type": "division",
                 "entity_id": event_id,
                 "entity_label": label,
                 "field": field,
+                "current_value": current_value,
+                "proposed_value": proposed_value,
                 "step": "divisions",
-                "resolution_options": ["KEEP_PUBLISHED_VALUE", "EDIT_DRAFT"],
+                "resolution_options": resolution_options,
+                "forceable": forceable,
+                "force_block_reason": None if forceable else (
+                    "Force change is unavailable after draws, teams, or games exist."
+                    if any(operational_usage.values())
+                    else "No affected registration rows are available for a guarded force-change queue."
+                ),
+                "usage": {
+                    "registrations": int(usage.get("registrations", 0) or 0),
+                    **operational_usage,
+                },
+                "affected_registrations": affected_registrations,
             }
         )
 
@@ -1067,6 +1177,9 @@ def analyze_registration_publish_impact(
                 event_id=event_id,
                 label=label,
                 field="registration_day_id",
+                current_value=existing_day_id,
+                proposed_value=draft_day_id,
+                usage=usage,
             )
         existing_schedule = list(existing.get("scheduled_day_ids") or ([existing_day_id] if existing_day_id else []))
         draft_schedule = list(event.get("scheduled_day_ids") or ([draft_day_id] if draft_day_id else []))
@@ -1076,6 +1189,9 @@ def analyze_registration_publish_impact(
                 event_id=event_id,
                 label=label,
                 field="scheduled_day_ids",
+                current_value=existing_schedule,
+                proposed_value=draft_schedule,
+                usage=usage,
             )
         if has_usage and str(existing.get("event_type") or "") != str(event.get("event_type") or ""):
             block_event(
@@ -1083,6 +1199,9 @@ def analyze_registration_publish_impact(
                 event_id=event_id,
                 label=label,
                 field="event_type",
+                current_value=existing.get("event_type"),
+                proposed_value=event.get("event_type"),
+                usage=usage,
             )
         if has_usage and str(existing.get("gender_restriction") or "") != str(event.get("gender_restriction") or ""):
             block_event(
@@ -1090,6 +1209,9 @@ def analyze_registration_publish_impact(
                 event_id=event_id,
                 label=label,
                 field="gender_restriction",
+                current_value=existing.get("gender_restriction"),
+                proposed_value=event.get("gender_restriction"),
+                usage=usage,
             )
 
         rule_columns = ["skill_label", "skill_mode", "age_label", "age_mode", "age_rules"]
@@ -1099,6 +1221,9 @@ def analyze_registration_publish_impact(
                 event_id=event_id,
                 label=label,
                 field="skill_age_rules",
+                current_value={column: existing.get(column) for column in rule_columns},
+                proposed_value={column: event.get(column) for column in rule_columns},
+                usage=usage,
             )
 
         existing_capacity = existing.get("capacity_teams")
@@ -1114,6 +1239,9 @@ def analyze_registration_publish_impact(
                             event_id=event_id,
                             label=label,
                             field="capacity_teams",
+                            current_value=old_cap,
+                            proposed_value=new_cap,
+                            usage=usage,
                         )
                     else:
                         warnings.append(f"Capacity for '{label}' is being reduced from {old_cap} to {new_cap} with {occupied} occupied.")
@@ -1296,6 +1424,7 @@ def publish_registration_configuration(
     tournament_id: str,
     days: list[dict[str, Any]],
     event_options: list[dict[str, Any]],
+    allowed_block_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """
     Publish rules summary:
@@ -1334,8 +1463,49 @@ def publish_registration_configuration(
         days=days,
         event_options=event_options,
     )
-    if impact["blocked"]:
-        raise ValueError("Publish blocked due to destructive changes: " + " | ".join(impact["blocked"]))
+    allowed = {str(value).strip() for value in (allowed_block_ids or set()) if str(value).strip()}
+    blocked_details = [row for row in impact.get("blocked_details", []) if isinstance(row, dict)]
+    details_by_id = {
+        str(row.get("block_id") or "").strip(): row
+        for row in blocked_details
+        if str(row.get("block_id") or "").strip()
+    }
+    unknown_allowed = sorted(allowed.difference(details_by_id))
+    if unknown_allowed:
+        raise ValueError(
+            "Publish review is stale; forced block IDs are no longer present: "
+            + ", ".join(unknown_allowed)
+        )
+    non_forceable = [
+        details_by_id[block_id]
+        for block_id in allowed
+        if "FORCE_CHANGE_WITH_RESOLUTION" not in list(details_by_id[block_id].get("resolution_options") or [])
+    ]
+    if non_forceable:
+        raise ValueError(
+            "Publish blocked because an operational tournament change cannot be forced: "
+            + " | ".join(str(row.get("message") or row.get("block_id")) for row in non_forceable)
+        )
+    allowed_messages = {
+        str(details_by_id[block_id].get("message") or "")
+        for block_id in allowed
+    }
+    remaining_details = [
+        row for block_id, row in details_by_id.items() if block_id not in allowed
+    ]
+    remaining_messages = [
+        str(message)
+        for message in impact.get("blocked", [])
+        if str(message) not in allowed_messages
+    ]
+    if remaining_details or remaining_messages:
+        messages = [
+            str(row.get("message") or row.get("block_id")) for row in remaining_details
+        ] + remaining_messages
+        raise ValueError(
+            "Publish blocked due to destructive changes: "
+            + " | ".join(dict.fromkeys(messages))
+        )
 
     published_days = impact["published_days"]
     published_events = impact["published_event_options"]
@@ -1421,7 +1591,13 @@ def publish_registration_configuration(
     if day_delete_ids:
         supabase.table("tournament_registration_days").delete().eq("tournament_id", str(tournament_id)).in_("id", day_delete_ids).execute()
 
-    return {"mode": "guarded", "blocked": impact["blocked"], "warnings": impact["warnings"], "summary": impact["summary"]}
+    return {
+        "mode": "guarded",
+        "blocked": impact["blocked"],
+        "forced_block_ids": sorted(allowed),
+        "warnings": impact["warnings"],
+        "summary": impact["summary"],
+    }
 
 
 def list_registrations(supabase, tournament_id: str) -> list[dict[str, Any]]:

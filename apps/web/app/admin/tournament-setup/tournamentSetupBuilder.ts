@@ -37,10 +37,10 @@ export const PARTICIPANT_TYPES = ["SINGLES", "GENDER_DOUBLES", "MIXED_DOUBLES"] 
 export const GENDER_RESTRICTIONS = ["ANY", "MEN", "WOMEN", "MIXED"] as const;
 export const DIVISION_STATUSES = ["draft", "open", "tentative", "confirmed", "closed"] as const;
 export const SKILL_LABEL_OPTIONS = ["Open", "3.0", "3.5", "4.0", "4.5", "5.0", "5.5"] as const;
-export const FACILITY_COURT_LIMIT = 10;
+export const FACILITY_COURT_LIMIT = 100;
 export const MAX_TOURNAMENT_DAYS = 31;
-export const DEFAULT_COURT_OPEN_TIME = "08:00";
-export const DEFAULT_COURT_CLOSE_TIME = "20:00";
+export const DEFAULT_COURT_OPEN_TIME = "";
+export const DEFAULT_COURT_CLOSE_TIME = "";
 
 let builderKeySequence = 0;
 
@@ -258,6 +258,67 @@ export function eventAgeMode(row: SetupRecord): string {
     || "ALL_AGES";
 }
 
+export function ageRulesRecord(
+  row: SetupRecord,
+  key = "age_rules"
+): SetupRecord {
+  const raw = row[key];
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return { ...(raw as SetupRecord) };
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return { ...(parsed as SetupRecord) };
+      }
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+export function eventFamilyAgeMode(row: SetupRecord): string {
+  const rules = ageRulesRecord(row, "default_age_rules");
+  return cleanString(row.default_age_mode) || cleanString(rules.mode) || "ALL_AGES";
+}
+
+export function eventFamilyAgeLabel(row: SetupRecord): string {
+  const rules = ageRulesRecord(row, "default_age_rules");
+  return cleanString(row.default_age_label)
+    || cleanString(rules.age_label)
+    || (eventFamilyAgeMode(row) === "ALL_AGES" ? "All Ages" : "");
+}
+
+export function eventFamilyAgeRules(row: SetupRecord): SetupRecord {
+  const rules = ageRulesRecord(row, "default_age_rules");
+  return {
+    ...rules,
+    mode: eventFamilyAgeMode(row),
+    age_label: eventFamilyAgeLabel(row)
+  };
+}
+
+export function eventFamilyHasAgePolicy(row: SetupRecord): boolean {
+  return ["default_age_mode", "default_age_label", "default_age_rules"].some(
+    (key) => Object.prototype.hasOwnProperty.call(row, key)
+  );
+}
+
+export function divisionAgePolicySource(row: SetupRecord): string {
+  const explicit = cleanString(row.age_policy_source).toUpperCase();
+  if (explicit === "OVERRIDE" || explicit === "INHERIT_EVENT") return explicit;
+  const hasExplicitAgePolicy = [
+    "age_mode",
+    "age_label",
+    "age_rules",
+    "min_teams_per_age_group",
+    "split_age_threshold"
+  ].some((key) => Object.prototype.hasOwnProperty.call(row, key));
+  return hasExplicitAgePolicy ? "OVERRIDE" : "INHERIT_EVENT";
+}
+
 function encodeAgeRules(state: AgeRulesState, rules: SetupRecord): unknown {
   return state.preserveObjectShape ? rules : JSON.stringify(rules);
 }
@@ -435,14 +496,14 @@ export function withDefaultDayCourts(row: SetupRecord): SetupRecord {
   const rawCount = Number(row.court_count);
   const count = Number.isInteger(rawCount) && rawCount > 0
     ? Math.min(rawCount, FACILITY_COURT_LIMIT)
-    : FACILITY_COURT_LIMIT;
-  const labels = dayCourtLabels(row);
+    : 10;
+  const labels = dayCourtLabels(row).slice(0, count);
   return {
     ...row,
     court_count: count,
-    court_labels: labels.length === count ? labels : defaultCourtLabels(count),
-    court_open_time: cleanString(row.court_open_time) || DEFAULT_COURT_OPEN_TIME,
-    court_close_time: cleanString(row.court_close_time) || DEFAULT_COURT_CLOSE_TIME,
+    court_labels: labels,
+    court_open_time: cleanString(row.court_open_time) || null,
+    court_close_time: cleanString(row.court_close_time) || null,
     court_notes: cleanString(row.court_notes)
   };
 }
@@ -509,6 +570,15 @@ export function newEventFamilyRow(
     default_capacity_teams: 16,
     default_price_usd: 0,
     default_status: "open",
+    competition_format: "STANDARD",
+    team_roster_size: 2,
+    team_gender_rule: "NONE",
+    team_tiebreak_mode: "SINGLES",
+    team_playoff_format: "NONE",
+    team_allow_substitutes: false,
+    default_age_mode: "ALL_AGES",
+    default_age_label: "All Ages",
+    default_age_rules: { mode: "ALL_AGES", age_label: "All Ages", team_age_rule: "YOUNGER" },
     sort_order: position
   };
 }
@@ -574,8 +644,10 @@ export function newEventOptionRow(configuration: SetupConfiguration): SetupRecor
       event_family: familyName,
       division_name: divisionName,
       skill_label: "Open",
-      age_mode: "ALL_AGES",
-      age_label: "All Ages",
+      age_policy_source: "INHERIT_EVENT",
+      age_mode: eventFamilyAgeMode(defaults || {}),
+      age_label: eventFamilyAgeLabel(defaults || {}),
+      age_rules: eventFamilyAgeRules(defaults || {}),
       assigned_day: dayLabel(primaryDay) || scheduledDayIds[0] || dayLabel(firstDay),
       scheduled_day_ids: scheduledDayIds,
       schedule_mode: "INHERIT_EVENT",
@@ -605,8 +677,10 @@ export function newEventOptionRow(configuration: SetupConfiguration): SetupRecor
     scoring_default: cleanString(defaults?.default_scoring) || "GAME_TO_15",
     skill_label: "Open",
     skill_mode: "OPEN",
-    age_mode: "ALL_AGES",
-    age_label: "All Ages",
+    age_policy_source: "INHERIT_EVENT",
+    age_mode: eventFamilyAgeMode(defaults || {}),
+    age_label: eventFamilyAgeLabel(defaults || {}),
+    age_rules: eventFamilyAgeRules(defaults || {}),
     capacity_teams: Number(defaults?.default_capacity_teams ?? 16),
     price_usd: Number(defaults?.default_price_usd ?? 0),
     waitlist_enabled: recordBoolean(defaults?.default_waitlist, true),
@@ -783,7 +857,18 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
   const eventOptions = draft.event_options.map((row, index) => {
     const usesLegacyShape = eventUsesLegacyBuilderShape(row);
     if (!usesLegacyShape) {
-      const projected = projectCanonicalAgeRuleEdits(row);
+      const defaults = familiesByName.get(normalizedLookupKey(eventFamilyName(row)));
+      const inheritedAge = divisionAgePolicySource(row) === "INHERIT_EVENT";
+      let projected = projectCanonicalAgeRuleEdits(row);
+      if (inheritedAge && defaults && eventFamilyHasAgePolicy(defaults)) {
+        projected = {
+          ...projected,
+          age_mode: eventFamilyAgeMode(defaults),
+          age_label: eventFamilyAgeLabel(defaults),
+          age_rules: eventFamilyAgeRules(defaults)
+        };
+      }
+      delete projected.age_policy_source;
       const scheduledDayIds = eventDayReferences(projected)
         .map((reference) =>
           dayIdsByLabel.get(normalizedLookupKey(reference)) || reference
@@ -833,8 +918,11 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
     ).toUpperCase();
     const divisionName = eventDivisionName(row);
     const skillLabel = cleanString(row.skill_label) || "Open";
-    const ageMode = eventAgeMode(row);
-    const ageLabel = cleanString(row.age_label) || "All Ages";
+    const inheritAge = divisionAgePolicySource(row) === "INHERIT_EVENT";
+    const ageMode = inheritAge ? eventFamilyAgeMode(defaults) : eventAgeMode(row);
+    const ageLabel = inheritAge
+      ? eventFamilyAgeLabel(defaults)
+      : (cleanString(row.age_label) || "All Ages");
     const capacity = finiteNumber(row.capacity_teams)
       ?? finiteNumber(defaults.default_capacity_teams)
       ?? 16;
@@ -864,7 +952,7 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
         || (skillLabel.toLowerCase() === "open" ? "OPEN" : "SKILL_BRACKET"),
       age_label: ageLabel,
       age_mode: ageMode,
-      age_rules: legacyAgeRules(row),
+      age_rules: inheritAge ? eventFamilyAgeRules(defaults) : legacyAgeRules(row),
       partner_required: booleanWithDefault(row, "partner_required", eventType !== "SINGLES"),
       capacity_teams: capacity,
       public_partner_board: booleanWithDefault(
@@ -896,6 +984,27 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
       status: firstCleanString(row.status, "draft").toLowerCase(),
       enabled: booleanWithDefault(row, "enabled", true)
     };
+    const competitionFormat = firstCleanString(
+      defaults.competition_format,
+      row.competition_format
+    ).toUpperCase();
+    if (competitionFormat && competitionFormat !== "STANDARD") {
+      canonical.competition_format = competitionFormat;
+      canonical.team_roster_size = defaults.team_roster_size ?? row.team_roster_size ?? 4;
+      canonical.team_gender_rule = firstCleanString(defaults.team_gender_rule, row.team_gender_rule, "TWO_MEN_TWO_WOMEN");
+      canonical.team_tiebreak_mode = firstCleanString(defaults.team_tiebreak_mode, row.team_tiebreak_mode, "SINGLES");
+      canonical.team_playoff_format = firstCleanString(defaults.team_playoff_format, row.team_playoff_format, "NONE");
+      canonical.team_allow_substitutes = booleanWithDefault(
+        defaults,
+        "team_allow_substitutes",
+        booleanWithDefault(row, "team_allow_substitutes", false)
+      );
+    }
+    const eligibilityMode = firstCleanString(row.eligibility_mode).toUpperCase();
+    if (eligibilityMode && eligibilityMode !== "STANDARD") {
+      canonical.eligibility_mode = eligibilityMode;
+      canonical.combined_rating_cap = row.combined_rating_cap ?? null;
+    }
     for (const key of ["id", "tournament_id"] as const) {
       if (hasValue(row, key)) canonical[key] = row[key];
     }
@@ -936,22 +1045,14 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
       });
     }
     const labels = dayCourtLabels(row);
-    if (courtCount != null && labels.length !== courtCount) {
+    if (courtCount != null && labels.length > courtCount) {
       issues.push({
         path: `days.${index}.court_labels`,
-        message: "Provide one unique court label for every available court."
+        message: "Optional court titles cannot exceed the venue court count."
       });
     }
     if (new Set(labels.map((label) => label.toLowerCase())).size !== labels.length) {
-      issues.push({ path: `days.${index}.court_labels`, message: "Court labels must be unique." });
-    }
-    const openTime = cleanString(row.court_open_time);
-    const closeTime = cleanString(row.court_close_time);
-    if (!/^\d{2}:\d{2}$/.test(openTime) || !/^\d{2}:\d{2}$/.test(closeTime) || closeTime <= openTime) {
-      issues.push({
-        path: `days.${index}.court_hours`,
-        message: "Court closing time must be later than opening time."
-      });
+      issues.push({ path: `days.${index}.court_labels`, message: "Court titles must be unique." });
     }
     if (recordBoolean(row.enabled, true)) {
       if (cleanString(row.id)) enabledDayReferences.add(cleanString(row.id));
@@ -1007,6 +1108,47 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
     if (price != null && price < 0) {
       issues.push({ path: `families.${index}.default_price_usd`, message: "Default price cannot be negative." });
     }
+    const familyAgeMode = eventFamilyAgeMode(row);
+    const familyAgeRules = eventFamilyAgeRules(row);
+    if (familyAgeMode === "AUTO_AGE_SPLIT") {
+      const minimum = finiteNumber(familyAgeRules.min_teams_per_age_group);
+      const brackets = Array.isArray(familyAgeRules.brackets) ? familyAgeRules.brackets : [];
+      if (minimum == null || !Number.isInteger(minimum) || minimum < 1) {
+        issues.push({ path: `families.${index}.default_age_rules.min_teams_per_age_group`, message: "Auto age split needs a whole-number minimum of at least 1 entry per bracket." });
+      }
+      if (brackets.length < 2) {
+        issues.push({ path: `families.${index}.default_age_rules.brackets`, message: "Auto age split needs at least two candidate age brackets." });
+      }
+      let previousMaximum: number | null = null;
+      const labelsSeen = new Set<string>();
+      brackets.forEach((value, bracketIndex) => {
+        const bracket = value && typeof value === "object" && !Array.isArray(value) ? value as SetupRecord : {};
+        const label = cleanString(bracket.label);
+        const minimumAge = finiteNumber(bracket.min_age);
+        const maximumAge = finiteNumber(bracket.max_age);
+        if (!label) issues.push({ path: `families.${index}.default_age_rules.brackets.${bracketIndex}.label`, message: "Every candidate age bracket needs a label." });
+        if (label && labelsSeen.has(label.toLowerCase())) issues.push({ path: `families.${index}.default_age_rules.brackets.${bracketIndex}.label`, message: "Candidate age bracket labels must be unique." });
+        if (label) labelsSeen.add(label.toLowerCase());
+        if (minimumAge != null && maximumAge != null && maximumAge < minimumAge) issues.push({ path: `families.${index}.default_age_rules.brackets.${bracketIndex}`, message: "Age bracket maximum cannot be below its minimum." });
+        if (previousMaximum != null && minimumAge != null && minimumAge <= previousMaximum) issues.push({ path: `families.${index}.default_age_rules.brackets.${bracketIndex}`, message: "Candidate age brackets must be ordered and may not overlap." });
+        if (maximumAge != null) previousMaximum = maximumAge;
+      });
+    }
+    if (familyAgeMode === "SPLIT_AGE") {
+      const threshold = finiteNumber(familyAgeRules.split_age_threshold);
+      if (threshold == null || !Number.isInteger(threshold) || threshold < 1) {
+        issues.push({ path: `families.${index}.default_age_rules.split_age_threshold`, message: "Split age needs a whole-number threshold of at least 1." });
+      }
+    }
+    const competitionFormat = cleanString(row.competition_format).toUpperCase() || "STANDARD";
+    if (competitionFormat === "FOUR_PLAYER_TEAM") {
+      if (participantType !== "MIXED_DOUBLES" || gender !== "MIXED") {
+        issues.push({ path: `families.${index}.competition_format`, message: "Four-player team events use Mixed participant and gender rules." });
+      }
+      if (Number(row.team_roster_size || 0) !== 4) {
+        issues.push({ path: `families.${index}.team_roster_size`, message: "Four-player team events require four roster slots." });
+      }
+    }
   });
 
   if (!events.length) issues.push({ path: "events", message: "Add at least one division." });
@@ -1056,21 +1198,22 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
     if (price == null || price < 0) {
       issues.push({ path: `events.${index}.price_usd`, message: "Price must be zero or greater." });
     }
+    const overridesAgePolicy = divisionAgePolicySource(row) === "OVERRIDE";
     const ageRulesState = readAgeRules(row);
-    if (hasValue(row, "age_rules") && !ageRulesState.valid) {
+    if (overridesAgePolicy && hasValue(row, "age_rules") && !ageRulesState.valid) {
       issues.push({
         path: `events.${index}.age_rules`,
         message: "Age rules must be a valid JSON object."
       });
     }
     const ageMode = eventAgeMode(row);
-    if (ageMode === "AUTO_AGE_SPLIT") {
+    if (overridesAgePolicy && ageMode === "AUTO_AGE_SPLIT") {
       const minimum = finiteNumber(ageRuleValue(row, "min_teams_per_age_group"));
       if (minimum == null || !Number.isInteger(minimum) || minimum < 1) {
         issues.push({ path: `events.${index}.min_teams_per_age_group`, message: "Auto age split needs a whole-number minimum of at least 1 team per age group." });
       }
     }
-    if (ageMode === "SPLIT_AGE") {
+    if (overridesAgePolicy && ageMode === "SPLIT_AGE") {
       const threshold = finiteNumber(ageRuleValue(row, "split_age_threshold"));
       if (threshold == null || !Number.isInteger(threshold) || threshold < 1) {
         issues.push({ path: `events.${index}.split_age_threshold`, message: "Split age needs a whole-number threshold of at least 1." });
