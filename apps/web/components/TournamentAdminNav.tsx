@@ -42,7 +42,7 @@ function selectedItems(
         tournamentId,
         tournamentName
       ),
-      label: "Setup",
+      label: "Tournament Builder",
       match: (pathname) =>
         pathname === "/admin/tournaments/setup" ||
         pathname.startsWith("/admin/tournaments/setup/") ||

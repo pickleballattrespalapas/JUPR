@@ -48,7 +48,7 @@ def test_tournament_navigation_separates_manager_and_lifecycle_context() -> None
     assert 'const hasTournament = Boolean(tournamentId)' in nav
     assert "const tournamentItems = hasTournament" in nav
     assert 'label: "Tournament Home"' in nav
-    assert 'label: "Setup"' in nav
+    assert 'label: "Tournament Builder"' in nav
     assert 'label: "Registration"' in nav
     assert 'label: "Live Operations"' in nav
     assert 'label: "Publish"' in nav

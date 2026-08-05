@@ -6,11 +6,14 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.tournament_age_policy import (
+    build_age_split_preview,
+    normalize_age_policy,
+)
 from jupr_app.domain.tournament_admin_operations import stable_tournament_admin_fingerprint
 from jupr_app.domain.tournament_registration_repo import (
     REGISTRATION_STATUS_OPTIONS,
     analyze_registration_publish_impact,
-    clear_builder_draft,
     count_tournament_registrations,
     get_builder_draft,
     get_registration_settings,
@@ -18,6 +21,8 @@ from jupr_app.domain.tournament_registration_repo import (
     list_event_options,
     list_existing_tournaments,
     list_registration_days,
+    list_registrations,
+    list_registration_selections,
     publish_registration_configuration,
     save_builder_draft,
     upsert_registration_settings,
@@ -141,6 +146,14 @@ def _event_option_payload(row: dict[str, Any]) -> dict[str, Any]:
         "age_label": row.get("age_label"),
         "age_mode": row.get("age_mode"),
         "age_rules": row.get("age_rules"),
+        "eligibility_mode": row.get("eligibility_mode"),
+        "combined_rating_cap": row.get("combined_rating_cap"),
+        "competition_format": row.get("competition_format"),
+        "team_roster_size": row.get("team_roster_size"),
+        "team_gender_rule": row.get("team_gender_rule"),
+        "team_tiebreak_mode": row.get("team_tiebreak_mode"),
+        "team_playoff_format": row.get("team_playoff_format"),
+        "team_allow_substitutes": row.get("team_allow_substitutes"),
         "capacity_teams": row.get("capacity_teams"),
         "price_usd": row.get("price_usd"),
         "waitlist_enabled": row.get("waitlist_enabled"),
@@ -368,6 +381,173 @@ def get_admin_tournament_setup_detail(supabase: Any, *, club_id: str, tournament
     }
 
 
+
+
+FORCED_RESOLUTION_ACTIONS = {
+    "MOVE_REGISTRATION",
+    "CANCEL_REFUND",
+    "CREDIT",
+    "GRANDFATHER",
+    "OTHER",
+}
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    return [dict(row) for row in value if isinstance(row, dict)] if isinstance(value, list) else []
+
+
+def preview_admin_tournament_age_split(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    event_family: str,
+    policy: dict[str, Any],
+    event_options: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Preview an event-level age policy without changing registrations or divisions."""
+
+    _assert_enabled()
+    _get_tournament_for_club(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=str(tournament_id),
+    )
+    family = _clean(event_family, limit=180)
+    if not family:
+        raise ValueError("event_family is required.")
+    normalized_policy = normalize_age_policy(policy)
+    family_events = [
+        dict(row)
+        for row in event_options or []
+        if _clean(row.get("event_family_label") or row.get("event_family"), limit=180).lower()
+        == family.lower()
+    ]
+    if not family_events:
+        raise ValueError("The selected event family has no divisions to preview.")
+    canonical_event_ids = {
+        str(row.get("id") or "").strip()
+        for row in list_event_options(supabase, str(tournament_id))
+        if str(row.get("id") or "").strip()
+    }
+    event_ids = {
+        str(row.get("id") or "").strip()
+        for row in family_events
+        if str(row.get("id") or "").strip() in canonical_event_ids
+    }
+    participant_type = _clean(
+        family_events[0].get("event_type") or family_events[0].get("participant_type"),
+        limit=40,
+    ).upper() or "GENDER_DOUBLES"
+    registrations = {
+        str(row.get("id") or ""): dict(row)
+        for row in list_registrations(supabase, str(tournament_id))
+        if str(row.get("id") or "").strip()
+    }
+    selections = [
+        dict(row)
+        for row in list_registration_selections(supabase, str(tournament_id))
+        if str(row.get("event_option_id") or "").strip() in event_ids
+        and str(row.get("registration_id") or "").strip() in registrations
+    ]
+    preview = build_age_split_preview(
+        policy=normalized_policy,
+        registrations=registrations,
+        selections=selections,
+        participant_type=participant_type,
+    )
+    return {
+        "ok": True,
+        "mode": "tournament_age_split_preview",
+        "dry_run": True,
+        "write_count": 0,
+        "event_family": family,
+        **preview,
+    }
+
+
+def _forced_resolution_summary(
+    impact: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    blocked_details = _list_of_dicts(impact.get("blocked_details"))
+    if not blocked_details:
+        return []
+    plans = _dict(_dict(settings).get("forced_change_resolutions"))
+    summaries: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for detail in blocked_details:
+        block_id = _clean(detail.get("block_id"), limit=240)
+        label = _clean(detail.get("entity_label"), limit=180) or "blocked change"
+        resolution_options = {
+            _clean(value, limit=80).upper()
+            for value in (detail.get("resolution_options") or [])
+        }
+        if "FORCE_CHANGE_WITH_RESOLUTION" not in resolution_options:
+            errors.append(
+                f"{label}: this change cannot be forced after draws, teams, or games exist; keep the published value or edit the draft."
+            )
+            continue
+        required_registration_rows = _list_of_dicts(detail.get("affected_registrations"))
+        if not required_registration_rows:
+            errors.append(f"{label}: no affected registration rows are available for a guarded force-change queue.")
+            continue
+        plan = _dict(plans.get(block_id))
+        if not plan:
+            errors.append(f"{label}: choose Keep published value, edit the draft, or complete a force-change resolution queue.")
+            continue
+        if _clean(plan.get("status"), limit=40).upper() != "RESOLVED":
+            errors.append(f"{label}: the force-change registration queue is not fully resolved.")
+            continue
+        if stable_tournament_admin_fingerprint(plan.get("current_value")) != stable_tournament_admin_fingerprint(detail.get("current_value")):
+            errors.append(f"{label}: the published value changed after the force-change queue was created.")
+            continue
+        if stable_tournament_admin_fingerprint(plan.get("proposed_value")) != stable_tournament_admin_fingerprint(detail.get("proposed_value")):
+            errors.append(f"{label}: the proposed draft changed after the force-change queue was created.")
+            continue
+        required_rows = {
+            (
+                _clean(row.get("registration_id"), limit=120),
+                _clean(row.get("selection_id"), limit=120),
+            )
+            for row in required_registration_rows
+        }
+        resolved_rows = _list_of_dicts(plan.get("affected_registrations"))
+        resolved_keys = {
+            (
+                _clean(row.get("registration_id"), limit=120),
+                _clean(row.get("selection_id"), limit=120),
+            )
+            for row in resolved_rows
+        }
+        if required_rows != resolved_keys:
+            errors.append(f"{label}: affected registrations changed; refresh the review and rebuild the queue.")
+            continue
+        invalid_rows = []
+        for row in resolved_rows:
+            action = _clean(row.get("action"), limit=60).upper()
+            notes = _clean(row.get("notes"), limit=2000)
+            if not _bool(row.get("resolved")) or action not in FORCED_RESOLUTION_ACTIONS or not notes:
+                invalid_rows.append(_clean(row.get("display_name"), limit=180) or _clean(row.get("registration_id"), limit=120))
+        if invalid_rows:
+            errors.append(f"{label}: unresolved registration actions remain for {', '.join(invalid_rows[:5])}.")
+            continue
+        summaries.append({
+            "block_id": block_id,
+            "entity_label": label,
+            "field": detail.get("field"),
+            "affected_registration_count": len(resolved_rows),
+            "resolutions": resolved_rows,
+        })
+    if errors:
+        raise ValueError("Publish remains blocked: " + " | ".join(errors))
+    return summaries
+
+
 def review_admin_tournament_setup_impact(
     supabase: Any,
     *,
@@ -375,6 +555,8 @@ def review_admin_tournament_setup_impact(
     tournament_id: str,
     days: list[dict[str, Any]],
     event_options: list[dict[str, Any]],
+    event_families: list[dict[str, Any]] | None = None,
+    builder_event_options: list[dict[str, Any]] | None = None,
     basics: dict[str, Any] | None = None,
     settings: dict[str, Any] | None = None,
     expected_state_fingerprint: str,
@@ -406,6 +588,8 @@ def review_admin_tournament_setup_impact(
             "state_fingerprint": detail["state_fingerprint"],
             "days": normalized_days,
             "event_options": normalized_events,
+            "event_families": list(event_families or []),
+            "builder_event_options": list(builder_event_options or []),
             "basics": dict(basics or {}),
             "settings": dict(settings or {}),
             "impact": impact,
@@ -550,6 +734,8 @@ def publish_admin_tournament_setup(
     tournament_id: str,
     days: list[dict[str, Any]],
     event_options: list[dict[str, Any]],
+    event_families: list[dict[str, Any]] | None = None,
+    builder_event_options: list[dict[str, Any]] | None = None,
     basics: dict[str, Any] | None = None,
     settings: dict[str, Any] | None = None,
     actor_email: str,
@@ -581,6 +767,8 @@ def publish_admin_tournament_setup(
                 "state_fingerprint": detail["state_fingerprint"],
                 "days": list(days or []),
                 "event_options": list(event_options or []),
+                "event_families": list(event_families or []),
+                "builder_event_options": list(builder_event_options or []),
                 "basics": dict(basics or {}),
                 "settings": dict(settings or {}),
                 "impact": impact,
@@ -588,8 +776,7 @@ def publish_admin_tournament_setup(
         )
         if str(reviewed_impact_fingerprint) != expected_impact_fingerprint:
             raise ValueError("Publish payload does not match the last reviewed impact. Review impact again before publishing.")
-    if impact.get("blocked"):
-        raise ValueError("Publish blocked due to destructive changes: " + " | ".join(str(x) for x in impact.get("blocked") or []))
+    forced_resolution_summary = _forced_resolution_summary(impact, settings)
     if dry_run:
         return {
             "ok": True,
@@ -597,6 +784,9 @@ def publish_admin_tournament_setup(
             "dry_run": True,
             "write_count": 0,
             "publish_impact": impact,
+            "forced_resolution_summary": forced_resolution_summary,
+            "event_families": list(event_families or []),
+            "builder_event_options": list(builder_event_options or []),
             "basics": dict(basics or {}),
             "settings": dict(settings or {}),
         }
@@ -633,8 +823,31 @@ def publish_admin_tournament_setup(
         clean_settings["tournament_id"] = str(tournament_id)
         upsert_registration_settings(supabase, clean_settings)
 
-    result = publish_registration_configuration(supabase, tournament_id=str(tournament_id), days=list(days or []), event_options=list(event_options or []))
-    clear_builder_draft(supabase, str(tournament_id))
+    result = publish_registration_configuration(
+        supabase,
+        tournament_id=str(tournament_id),
+        days=list(days or []),
+        event_options=list(event_options or []),
+        allowed_block_ids={
+            _clean(row.get("block_id"), limit=240)
+            for row in forced_resolution_summary
+            if _clean(row.get("block_id"), limit=240)
+        },
+    )
+    published_draft_settings = dict(settings or {})
+    published_draft_settings.pop("forced_change_resolutions", None)
+    published_builder_draft = save_builder_draft(
+        supabase,
+        tournament_id=str(tournament_id),
+        days=list(days or []),
+        event_families=list(event_families or []),
+        divisions=list(builder_event_options or event_options or []),
+        basics=dict(basics or {}),
+        settings=published_draft_settings,
+        saved_step="review",
+        published_event_families=list(event_families or []),
+        published_at=datetime.now(timezone.utc).isoformat(),
+    )
     warnings = _audit(
         supabase,
         club_id=str(club_id),
@@ -642,13 +855,18 @@ def publish_admin_tournament_setup(
         actor_role=actor_role,
         action_type="tournament_setup_publish",
         entity_id=str(tournament_id),
-        before_json={"impact": impact},
+        before_json={
+            "impact": impact,
+            "forced_resolution_summary": forced_resolution_summary,
+        },
         after_json={
             "result": result,
             "day_count": len(days or []),
             "event_option_count": len(event_options or []),
             "basics": dict(basics or {}),
             "settings": dict(settings or {}),
+            "forced_resolution_summary": forced_resolution_summary,
+            "published_builder_draft": published_builder_draft,
         },
         source=source,
     )
@@ -657,6 +875,8 @@ def publish_admin_tournament_setup(
         "mode": "tournament_setup_publish",
         "publish_result": result,
         "publish_impact": impact,
+        "forced_resolution_summary": forced_resolution_summary,
+        "published_builder_draft": published_builder_draft,
         "days": [_day_payload(row) for row in list_registration_days(supabase, str(tournament_id))],
         "event_options": [_event_option_payload(row) for row in list_event_options(supabase, str(tournament_id))],
         "warnings": [*warnings, *list(result.get("warnings") or [])],

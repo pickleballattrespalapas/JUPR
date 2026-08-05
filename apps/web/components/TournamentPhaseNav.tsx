@@ -30,7 +30,7 @@ function phaseItems(
   if (phase === "setup") {
     return [
       {
-        label: "1. Basics & policies",
+        label: "Tournament",
         href: selectedHref(
           "/admin/tournaments/setup/basics",
           tournamentId,
@@ -38,37 +38,23 @@ function phaseItems(
         ),
         match: (pathname) =>
           pathname === "/admin/tournaments/setup/basics" ||
+          pathname === "/admin/tournaments/setup/schedule" ||
           pathname === "/admin/tournaments/setup/registration-rules"
       },
       {
-        label: "2. Schedule & courts",
-        href: selectedHref(
-          "/admin/tournaments/setup/schedule",
-          tournamentId,
-          tournamentName
-        ),
-        match: (pathname) => pathname === "/admin/tournaments/setup/schedule"
-      },
-      {
-        label: "3. Events",
+        label: "Competition",
         href: selectedHref(
           "/admin/tournaments/setup/events",
           tournamentId,
           tournamentName
         ),
-        match: (pathname) => pathname === "/admin/tournaments/setup/events"
+        match: (pathname) =>
+          pathname === "/admin/tournaments/setup/events" ||
+          pathname === "/admin/tournaments/setup/divisions" ||
+          pathname === "/admin/tournaments/team-competition"
       },
       {
-        label: "4. Divisions",
-        href: selectedHref(
-          "/admin/tournaments/setup/divisions",
-          tournamentId,
-          tournamentName
-        ),
-        match: (pathname) => pathname === "/admin/tournaments/setup/divisions"
-      },
-      {
-        label: "5. Pricing & extras",
+        label: "Commerce",
         href: selectedHref(
           "/admin/tournaments/setup/pricing",
           tournamentId,
@@ -77,7 +63,7 @@ function phaseItems(
         match: (pathname) => pathname === "/admin/tournaments/setup/pricing"
       },
       {
-        label: "6. Review & open",
+        label: "Review",
         href: selectedHref(
           "/admin/tournaments/setup/review",
           tournamentId,

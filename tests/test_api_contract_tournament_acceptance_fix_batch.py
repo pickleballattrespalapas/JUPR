@@ -20,30 +20,30 @@ def test_basics_supports_sponsor_reordering_and_draft_publication_clarity() -> N
     assert "Move up" in panel
     assert "Move down" in panel
     assert "Unpublished setup draft" in panel
-    assert "Public tournament pages continue using the currently published setup" in panel
-    assert "Publish reviewed setup" in panel
+    assert "Public tournament pages continue using the currently published configuration" in panel
+    assert "Review domain publishes the complete tournament" in panel
+    assert "Publish reviewed tournament" in panel
 
 
 def test_tournament_days_are_date_locked_and_include_court_capacity_controls() -> None:
     panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
-    card = read_web("app/admin/tournament-setup/TournamentSetupDayCard.tsx")
     builder = read_web("app/admin/tournament-setup/tournamentSetupBuilder.ts")
     migration = read_root(
         "supabase/migrations/20261023000000_tournament_setup_courts_flexible_bundles.sql"
     ).lower()
 
     assert "syncTournamentDays" in panel
-    assert "structureLocked" in panel
-    assert "readOnly={structureLocked}" in card
-    assert "Available courts" in card
-    assert "Court labels" in card
-    assert "Courts open" in card
-    assert "Courts close" in card
-    assert "FACILITY_COURT_LIMIT = 10" in builder
+    assert "Venue and tournament days" in panel
+    assert "Total venue courts" in panel
+    assert "Optional court titles" in panel
+    assert "Fixed tournament date" in panel
+    assert "readOnly disabled" in panel
+    assert "tournament-level court hours" in panel
+    assert "court_open_time: null" in panel
+    assert "court_close_time: null" in panel
+    assert "FACILITY_COURT_LIMIT = 100" in builder
     assert "court_count" in migration
     assert "court_labels" in migration
-    assert "court_open_time" in migration
-    assert "court_close_time" in migration
 
 
 def test_events_and_divisions_use_dialog_editors_and_read_only_cards() -> None:
@@ -65,10 +65,10 @@ def test_events_and_divisions_use_dialog_editors_and_read_only_cards() -> None:
     assert "TournamentSetupDivisionDialog" in panel
     assert "sortEventFamiliesByTournamentDay" in panel
     assert "sortDivisionsByEventAndName" in panel
-    assert 'disabled={participantType === "MIXED_DOUBLES"}' in event_dialog
-    assert 'next.gender_restriction = "MIXED"' in event_dialog
+    assert 'disabled={structure === "MIXED_DOUBLES" || structure === "FOUR_PLAYER_TEAM"}' in event_dialog
+    assert 'gender_restriction: "MIXED"' in event_dialog
     assert "compact, read-only event card" in event_dialog
-    assert "compact, read-only division card" in division_dialog
+    assert "compact, read-only card" in division_dialog
     assert "skill_label" in division_dialog
     assert "datalist" in division_dialog
     assert "onClick={onEdit}" in event_card

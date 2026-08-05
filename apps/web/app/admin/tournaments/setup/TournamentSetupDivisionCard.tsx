@@ -6,7 +6,6 @@ import {
   cleanString,
   dayLabel,
   dayReference,
-  eventAgeMode,
   eventDayReferences,
   eventDivisionName,
   eventFamilyDefaults,
@@ -17,6 +16,12 @@ import {
   type ValidationIssue
 } from "../../tournament-setup/tournamentSetupBuilder";
 import styles from "../../tournament-setup/TournamentSetupBuilder.module.css";
+import {
+  DIVISION_AGE_POLICY_FIELDS,
+  EVENT_AGE_POLICY_FIELDS,
+  agePolicySummary,
+  readAgePolicy
+} from "./TournamentAgePolicyEditor";
 
 type Props = {
   row: BuilderRow;
@@ -37,13 +42,13 @@ function optionLabel(value: string): string {
     .join(" ");
 }
 
-function divisionFormat(value: Record<string, unknown>): string {
-  if (cleanString(value.competition_format).toUpperCase() === "FOUR_PLAYER_TEAM") return "Four-player team";
+function divisionEligibility(value: Record<string, unknown>): string {
   if (cleanString(value.eligibility_mode).toUpperCase() === "COMBINED_RATING_CAP") {
     return `Combined-rating doubles · cap ${numberInputValue(value.combined_rating_cap) || "not set"}`;
   }
-  return "Standard singles or doubles";
+  return "Standard event eligibility";
 }
+
 
 export default function TournamentSetupDivisionCard({
   row,
@@ -63,9 +68,19 @@ export default function TournamentSetupDivisionCard({
   const dayNames = new Map(days.map((day) => [dayReference(day.value), dayLabel(day.value) || dayReference(day.value)]));
   const selectedDays = eventDayReferences(value).map((day) => dayNames.get(day) || day);
   const participantType = cleanString(value.event_type || value.participant_type || familyDefaults.participant_type) || "GENDER_DOUBLES";
+  const competitionFormat = cleanString(familyDefaults.competition_format || value.competition_format).toUpperCase() || "STANDARD";
+  const eventFormat = competitionFormat === "FOUR_PLAYER_TEAM" ? "Four-player team" : optionLabel(participantType);
   const gender = participantType === "MIXED_DOUBLES"
     ? "MIXED"
     : cleanString(value.gender_restriction || familyDefaults.gender_restriction) || "ANY";
+  const agePolicySource = cleanString(value.age_policy_source).toUpperCase() === "OVERRIDE" ? "OVERRIDE" : "INHERIT_EVENT";
+  const agePolicy = agePolicySource === "OVERRIDE"
+    ? readAgePolicy(value, DIVISION_AGE_POLICY_FIELDS)
+    : readAgePolicy(familyDefaults, EVENT_AGE_POLICY_FIELDS);
+  const drawOverride = cleanString(value.event_format_override || value.division_format);
+  const scoringOverride = cleanString(value.scoring_override || value.division_scoring);
+  const resolvedDraw = drawOverride || cleanString(familyDefaults.default_format) || cleanString(value.event_format_default) || "ROUND_ROBIN_PLUS_PLAYOFF";
+  const resolvedScoring = scoringOverride || cleanString(familyDefaults.default_scoring) || cleanString(value.scoring_default) || "GAME_TO_15";
 
   return (
     <article className={styles.rowCard} aria-describedby={issues.length ? issueId : undefined}>
@@ -94,16 +109,16 @@ export default function TournamentSetupDivisionCard({
       </div>
       <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.7rem", margin: "0.9rem 0 0" }}>
         <div><dt style={{ fontWeight: 800 }}>Skill</dt><dd style={{ margin: 0 }}>{cleanString(value.skill_label) || "Open"}</dd></div>
-        <div><dt style={{ fontWeight: 800 }}>Age</dt><dd style={{ margin: 0 }}>{cleanString(value.age_label) || optionLabel(eventAgeMode(value))}</dd></div>
-        <div><dt style={{ fontWeight: 800 }}>Participant type</dt><dd style={{ margin: 0 }}>{optionLabel(participantType)}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Age policy</dt><dd style={{ margin: 0 }}>{agePolicySummary(agePolicy)}{agePolicySource === "INHERIT_EVENT" ? " (from event)" : " (division override)"}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Event format</dt><dd style={{ margin: 0 }}>{eventFormat}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Gender</dt><dd style={{ margin: 0 }}>{optionLabel(gender)}</dd></div>
-        <div><dt style={{ fontWeight: 800 }}>Division format</dt><dd style={{ margin: 0 }}>{divisionFormat(value)}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Division eligibility</dt><dd style={{ margin: 0 }}>{divisionEligibility(value)}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Capacity</dt><dd style={{ margin: 0 }}>{numberInputValue(value.capacity_teams) || "—"}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Entry fee</dt><dd style={{ margin: 0 }}>${Number(value.price_usd || 0).toFixed(2)}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Waitlist</dt><dd style={{ margin: 0 }}>{recordBoolean(value.waitlist_enabled, true) ? "Enabled" : "Disabled"}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Partner Board</dt><dd style={{ margin: 0 }}>{participantType !== "SINGLES" && recordBoolean(value.partner_board_enabled, true) ? "Enabled" : "Disabled"}</dd></div>
-        <div><dt style={{ fontWeight: 800 }}>Draw override</dt><dd style={{ margin: 0 }}>{cleanString(value.event_format_override || value.division_format) || "Use event default"}</dd></div>
-        <div><dt style={{ fontWeight: 800 }}>Scoring override</dt><dd style={{ margin: 0 }}>{cleanString(value.scoring_override || value.division_scoring) || "Use event default"}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Draw format</dt><dd style={{ margin: 0 }}>{optionLabel(resolvedDraw)}{drawOverride ? " (division override)" : " (from event)"}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Scoring</dt><dd style={{ margin: 0 }}>{optionLabel(resolvedScoring)}{scoringOverride ? " (division override)" : " (from event)"}</dd></div>
       </dl>
       {cleanString(value.division_notes || value.notes) ? (
         <p style={{ marginBottom: 0 }}><strong>Notes:</strong> {cleanString(value.division_notes || value.notes)}</p>

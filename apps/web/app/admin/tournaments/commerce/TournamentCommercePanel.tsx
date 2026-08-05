@@ -419,6 +419,33 @@ export default function TournamentCommercePanel({
     });
   }
 
+  function addVariantPreset(itemId: string, names: string[]) {
+    const item = draft?.items.find((row) => row.id === itemId);
+    updateDraft((next) => {
+      const existing = new Set(
+        next.variants
+          .filter((variant) => variant.item_id === itemId)
+          .map((variant) => variant.name.trim().toLowerCase())
+      );
+      let sortOrder = next.variants.filter((row) => row.item_id === itemId).length;
+      for (const name of names) {
+        if (existing.has(name.toLowerCase())) continue;
+        next.variants.push({
+          id: crypto.randomUUID(),
+          item_id: itemId,
+          name,
+          sku: "",
+          status: "ACTIVE",
+          price_delta_minor: 0,
+          price_minor: item?.base_price_minor || 0,
+          inventory_limit: null,
+          sort_order: sortOrder
+        });
+        sortOrder += 1;
+      }
+    });
+  }
+
   function removeVariant(variantId: string) {
     updateDraft((next) => {
       next.variants = next.variants.filter(
@@ -1305,7 +1332,7 @@ export default function TournamentCommercePanel({
                       </div>
                     ))}
                   </div>
-                  <p>
+                  <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
                     <button
                       type="button"
                       onClick={() => addVariant(item.id)}
@@ -1313,7 +1340,29 @@ export default function TournamentCommercePanel({
                     >
                       Add option
                     </button>
-                  </p>
+                    <button
+                      type="button"
+                      onClick={() => addVariantPreset(item.id, ["XS", "S", "M", "L", "XL", "2XL"])}
+                      style={ghostButtonStyle}
+                    >
+                      Add T-shirt sizes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addVariantPreset(item.id, ["Chicken", "Vegetarian", "Vegan"])}
+                      style={ghostButtonStyle}
+                    >
+                      Add meal choices
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addVariantPreset(item.id, ["Standard", "Poolside", "Premium"])}
+                      style={ghostButtonStyle}
+                    >
+                      Add room choices
+                    </button>
+                  </div>
+                  <small style={{ color: "#64748b" }}>Presets add only missing options and never overwrite existing rows.</small>
                 </div>
                 </details>
               ))}

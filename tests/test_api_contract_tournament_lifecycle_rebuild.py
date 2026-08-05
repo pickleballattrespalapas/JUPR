@@ -14,7 +14,7 @@ def test_top_level_tournament_navigation_uses_four_lifecycle_phases() -> None:
 
     for label in (
         'label: "Tournament Home"',
-        'label: "Setup"',
+        'label: "Tournament Builder"',
         'label: "Registration"',
         'label: "Live Operations"',
         'label: "Publish"',
@@ -86,15 +86,17 @@ def test_lifecycle_phase_overviews_and_subnavigation_exist() -> None:
       assert label in overview
 
   assert 'export type TournamentPhase = "setup" | "registration" | "live" | "publish";' in phase_nav
-  for label in (
-      "1. Basics & policies",
-      "2. Schedule & courts",
-      "3. Events",
-      "4. Divisions",
-      "5. Pricing & extras",
-      "6. Review & open",
+  for label in ("Tournament", "Competition", "Commerce", "Review"):
+      assert f'label: "{label}"' in phase_nav
+
+  for domain, steps in (
+      ('key: "tournament"', 'steps: ["basics", "schedule"]'),
+      ('key: "competition"', 'steps: ["events", "divisions"]'),
+      ('key: "commerce"', 'steps: ["pricing"]'),
+      ('key: "review"', 'steps: ["review"]'),
   ):
-      assert label in phase_nav
+      assert domain in setup_nav
+      assert steps in setup_nav
 
   for key in (
       'key: "basics"',
@@ -109,8 +111,9 @@ def test_lifecycle_phase_overviews_and_subnavigation_exist() -> None:
   assert 'goTo("schedule")' in setup_panel
   assert "Save draft and continue" in setup_panel
   assert "private admin draft" in setup_panel
-  assert "Publish reviewed setup" in setup_panel
-  assert "Review setup" in setup_panel
+  assert "Publish reviewed tournament" in setup_panel
+  assert "Tournament preview" in setup_panel
+  assert "Refresh review" in setup_panel
   assert "Open registration" in setup_panel
 
 

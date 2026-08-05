@@ -76,13 +76,13 @@ export default async function TournamentSetupWizardPage({
           fontSize: "0.78rem"
         }}
       >
-        Tournament Manager / Guided Setup
+        Tournament Manager / Tournament Builder
       </p>
-      <h1 style={{ marginTop: 0 }}>{tournamentName || "Tournament"} setup</h1>
+      <h1 style={{ marginTop: 0 }}>{tournamentName || "Tournament"} builder</h1>
       <p style={{ color: "#334155", maxWidth: "860px" }}>
-        Complete the six setup steps in order. Setup saves preserve an
-        unpublished admin draft and move you directly to the next task; public
-        tournament pages change only after final review and publication.
+        Build the tournament across four logical domains: Tournament, Competition,
+        Commerce, and Review. Draft saves never change public tournament pages;
+        publication remains a separate, guarded action in Review.
       </p>
       {error ? (
         <p role="alert" style={{ color: "#b91c1c" }}>

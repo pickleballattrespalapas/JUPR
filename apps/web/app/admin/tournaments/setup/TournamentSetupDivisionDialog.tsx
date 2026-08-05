@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
-  AGE_MODES,
   SKILL_LABEL_OPTIONS,
   cleanString,
   dayLabel,
@@ -10,13 +9,20 @@ import {
   eventDayReferences,
   eventFamilyName,
   numberInputValue,
-  setEventAgeMode,
   setEventDayReferences,
   setRecordNumber,
   setRecordString,
   type BuilderRow,
   type SetupRecord
 } from "../../tournament-setup/tournamentSetupBuilder";
+import TournamentAgePolicyEditor, {
+  DIVISION_AGE_POLICY_FIELDS,
+  EVENT_AGE_POLICY_FIELDS,
+  agePolicySummary,
+  readAgePolicy,
+  validateAgePolicy,
+  writeAgePolicy
+} from "./TournamentAgePolicyEditor";
 
 type Props = {
   open: boolean;
@@ -28,7 +34,7 @@ type Props = {
   onConfirm: (value: SetupRecord) => void;
 };
 
-type EventMode = "STANDARD" | "COMBINED_RATING_CAP" | "FOUR_PLAYER_TEAM";
+type DivisionEligibilityMode = "STANDARD" | "COMBINED_RATING_CAP";
 
 const inputStyle: CSSProperties = {
   width: "100%",
@@ -40,65 +46,37 @@ const inputStyle: CSSProperties = {
   font: "inherit"
 };
 
-function optionLabel(value: string): string {
-  return value
-    .toLowerCase()
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
+function eligibilityMode(value: SetupRecord): DivisionEligibilityMode {
+  return cleanString(value.eligibility_mode).toUpperCase() === "COMBINED_RATING_CAP"
+    ? "COMBINED_RATING_CAP"
+    : "STANDARD";
 }
 
-function mode(value: SetupRecord): EventMode {
-  if (cleanString(value.competition_format).toUpperCase() === "FOUR_PLAYER_TEAM") {
-    return "FOUR_PLAYER_TEAM";
-  }
-  if (cleanString(value.eligibility_mode).toUpperCase() === "COMBINED_RATING_CAP") {
-    return "COMBINED_RATING_CAP";
-  }
-  return "STANDARD";
-}
-
-function applyMode(value: SetupRecord, nextMode: EventMode): SetupRecord {
+function applyEligibilityMode(
+  value: SetupRecord,
+  nextMode: DivisionEligibilityMode
+): SetupRecord {
   if (nextMode === "COMBINED_RATING_CAP") {
     return {
       ...value,
       eligibility_mode: "COMBINED_RATING_CAP",
       combined_rating_cap:
-        Number(value.combined_rating_cap) > 0 ? Number(value.combined_rating_cap) : 8,
-      competition_format: "STANDARD",
-      team_roster_size: 2,
-      team_gender_rule: "NONE",
-      team_allow_substitutes: false
-    };
-  }
-  if (nextMode === "FOUR_PLAYER_TEAM") {
-    return {
-      ...value,
-      eligibility_mode: "STANDARD",
-      combined_rating_cap: null,
-      competition_format: "FOUR_PLAYER_TEAM",
-      team_roster_size: 4,
-      team_gender_rule: "TWO_MEN_TWO_WOMEN",
-      team_tiebreak_mode: "SINGLES",
-      team_playoff_format: "NONE",
-      team_allow_substitutes: false
+        Number(value.combined_rating_cap) > 0 ? Number(value.combined_rating_cap) : 8
     };
   }
   return {
     ...value,
     eligibility_mode: "STANDARD",
-    combined_rating_cap: null,
-    competition_format: "STANDARD",
-    team_roster_size: 2,
-    team_gender_rule: "NONE",
-    team_allow_substitutes: false
+    combined_rating_cap: null
   };
 }
 
 function applyFamily(value: SetupRecord, family: SetupRecord): SetupRecord {
   const familyName = eventFamilyName(family);
   const schedule = eventDayReferences(family);
-  return setEventDayReferences(
+  const eventAgePolicy = readAgePolicy(family, EVENT_AGE_POLICY_FIELDS);
+  const inheritAge = cleanString(value.age_policy_source).toUpperCase() !== "OVERRIDE";
+  let next = setEventDayReferences(
     {
       ...value,
       event_family_label: familyName,
@@ -107,6 +85,12 @@ function applyFamily(value: SetupRecord, family: SetupRecord): SetupRecord {
       event_type: cleanString(family.participant_type) || value.event_type,
       gender_restriction:
         cleanString(family.gender_restriction) || value.gender_restriction,
+      competition_format: cleanString(family.competition_format) || "STANDARD",
+      team_roster_size: family.team_roster_size ?? value.team_roster_size ?? 2,
+      team_gender_rule: cleanString(family.team_gender_rule) || value.team_gender_rule || "NONE",
+      team_tiebreak_mode: cleanString(family.team_tiebreak_mode) || value.team_tiebreak_mode || "SINGLES",
+      team_playoff_format: cleanString(family.team_playoff_format) || value.team_playoff_format || "NONE",
+      team_allow_substitutes: family.team_allow_substitutes ?? value.team_allow_substitutes ?? false,
       capacity_teams:
         family.default_capacity_teams ?? value.capacity_teams ?? 16,
       price_usd: family.default_price_usd ?? value.price_usd ?? 0,
@@ -114,10 +98,15 @@ function applyFamily(value: SetupRecord, family: SetupRecord): SetupRecord {
         family.default_waitlist ?? value.waitlist_enabled ?? true,
       partner_board_enabled:
         family.default_partner_board ?? value.partner_board_enabled ?? true,
-      schedule_mode: "INHERIT_EVENT"
+      schedule_mode: "INHERIT_EVENT",
+      age_policy_source: inheritAge ? "INHERIT_EVENT" : "OVERRIDE"
     },
     schedule
   );
+  if (inheritAge) {
+    next = writeAgePolicy(next, DIVISION_AGE_POLICY_FIELDS, eventAgePolicy);
+  }
+  return next;
 }
 
 export default function TournamentSetupDivisionDialog({
@@ -141,7 +130,7 @@ export default function TournamentSetupDivisionDialog({
       )?.value || eventFamilies[0]?.value;
     setDraft(
       dialogMode === "add" && family
-        ? applyFamily(initialValue, family)
+        ? applyFamily({ ...initialValue }, family)
         : { ...initialValue }
     );
     setMessage("");
@@ -156,6 +145,11 @@ export default function TournamentSetupDivisionDialog({
   const availableDayIds = eventDayReferences(family || {});
   const selectedDayIds = eventDayReferences(draft);
   const scheduleMode = cleanString(draft.schedule_mode) || "INHERIT_EVENT";
+  const agePolicySource = cleanString(draft.age_policy_source).toUpperCase() === "OVERRIDE"
+    ? "OVERRIDE"
+    : "INHERIT_EVENT";
+  const inheritedAgePolicy = readAgePolicy(family || {}, EVENT_AGE_POLICY_FIELDS);
+  const divisionAgePolicy = readAgePolicy(draft, DIVISION_AGE_POLICY_FIELDS);
   const dayById = new Map(
     days.map((day) => [dayReference(day.value), dayLabel(day.value) || dayReference(day.value)])
   );
@@ -189,6 +183,20 @@ export default function TournamentSetupDivisionDialog({
       setMessage("Entry fee cannot be negative.");
       return;
     }
+    if (eligibilityMode(draft) === "COMBINED_RATING_CAP") {
+      const cap = Number(draft.combined_rating_cap);
+      if (!Number.isFinite(cap) || cap <= 0 || cap > 14) {
+        setMessage("Maximum combined rating must be greater than 0 and no more than 14.");
+        return;
+      }
+    }
+    if (agePolicySource === "OVERRIDE") {
+      const ageIssues = validateAgePolicy(divisionAgePolicy);
+      if (ageIssues.length) {
+        setMessage(ageIssues[0]);
+        return;
+      }
+    }
     onConfirm(draft);
   }
 
@@ -213,7 +221,7 @@ export default function TournamentSetupDivisionDialog({
         aria-modal="true"
         aria-labelledby="division-dialog-title"
         style={{
-          width: "min(760px, 100%)",
+          width: "min(900px, 100%)",
           maxHeight: "calc(100vh - 2rem)",
           overflowY: "auto",
           padding: "1.1rem",
@@ -228,7 +236,7 @@ export default function TournamentSetupDivisionDialog({
             : `Edit ${cleanString(draft.division_name ?? draft.label) || "division"}`}
         </h2>
         <p style={{ color: "#475569" }}>
-          Configure the division here. Saving returns a compact, read-only division card. Published tournament data remains unchanged until final review and publication.
+          Divisions implement the event policy for a specific skill or age group. Saving returns a compact, read-only card; published data remains unchanged until Review.
         </p>
 
         <div
@@ -239,8 +247,7 @@ export default function TournamentSetupDivisionDialog({
           }}
         >
           <label>
-            <strong>Parent event</strong>
-            <br />
+            <strong>Parent event</strong><br />
             <select
               value={eventFamilyName(draft)}
               style={inputStyle}
@@ -254,105 +261,54 @@ export default function TournamentSetupDivisionDialog({
               <option value="">Choose an event</option>
               {eventFamilies.map((row) => {
                 const name = eventFamilyName(row.value);
-                return name ? (
-                  <option key={row.key} value={name}>
-                    {name}
-                  </option>
-                ) : null;
+                return name ? <option key={row.key} value={name}>{name}</option> : null;
               })}
             </select>
           </label>
           <label>
-            <strong>Division name</strong>
-            <br />
+            <strong>Division name</strong><br />
             <input
               value={cleanString(draft.division_name ?? draft.label)}
               placeholder="3.5 · 50+"
               style={inputStyle}
               onChange={(event) =>
                 setDraft((current) =>
-                  setRecordString(
-                    current,
-                    ["division_name", "label"],
-                    event.target.value
-                  )
+                  setRecordString(current, ["division_name", "label"], event.target.value)
                 )
               }
             />
           </label>
           <label>
-            <strong>Skill division</strong>
-            <br />
+            <strong>Skill division</strong><br />
             <input
               list="new-division-skills"
               value={draft.skill_label == null ? "" : String(draft.skill_label)}
               style={inputStyle}
               onChange={(event) =>
-                setDraft((current) =>
-                  setRecordString(current, ["skill_label"], event.target.value)
-                )
+                setDraft((current) => setRecordString(current, ["skill_label"], event.target.value))
               }
             />
             <datalist id="new-division-skills">
-              {SKILL_LABEL_OPTIONS.map((option) => (
-                <option key={option} value={option} />
-              ))}
+              {SKILL_LABEL_OPTIONS.map((option) => <option key={option} value={option} />)}
             </datalist>
           </label>
           <label>
-            <strong>Age format</strong>
-            <br />
+            <strong>Division eligibility</strong><br />
             <select
-              value={cleanString(draft.age_mode) || "ALL_AGES"}
+              value={eligibilityMode(draft)}
               style={inputStyle}
               onChange={(event) =>
-                setDraft((current) => setEventAgeMode(current, event.target.value))
+                setDraft((current) => applyEligibilityMode(current, event.target.value as DivisionEligibilityMode))
               }
             >
-              {AGE_MODES.map((option) => (
-                <option key={option} value={option}>
-                  {optionLabel(option)}
-                </option>
-              ))}
+              <option value="STANDARD">Standard event eligibility</option>
+              <option value="COMBINED_RATING_CAP">Combined-rating doubles cap</option>
             </select>
+            <small>Four-player team is configured at the parent Event level.</small>
           </label>
-          {cleanString(draft.age_mode) === "FIXED_AGE_BRACKET" ? (
+          {eligibilityMode(draft) === "COMBINED_RATING_CAP" ? (
             <label>
-              <strong>Age bracket</strong>
-              <br />
-              <input
-                value={cleanString(draft.age_label)}
-                placeholder="50+"
-                style={inputStyle}
-                onChange={(event) =>
-                  setDraft((current) =>
-                    setRecordString(current, ["age_label"], event.target.value)
-                  )
-                }
-              />
-            </label>
-          ) : null}
-          <label>
-            <strong>Division format</strong>
-            <br />
-            <select
-              value={mode(draft)}
-              style={inputStyle}
-              onChange={(event) =>
-                setDraft((current) =>
-                  applyMode(current, event.target.value as EventMode)
-                )
-              }
-            >
-              <option value="STANDARD">Standard singles or doubles</option>
-              <option value="COMBINED_RATING_CAP">Combined-rating doubles</option>
-              <option value="FOUR_PLAYER_TEAM">Four-player team</option>
-            </select>
-          </label>
-          {mode(draft) === "COMBINED_RATING_CAP" ? (
-            <label>
-              <strong>Maximum combined rating</strong>
-              <br />
+              <strong>Maximum combined rating</strong><br />
               <input
                 type="number"
                 inputMode="decimal"
@@ -361,33 +317,23 @@ export default function TournamentSetupDivisionDialog({
                 step="0.01"
                 value={numberInputValue(draft.combined_rating_cap)}
                 style={inputStyle}
-                onChange={(event) =>
-                  setDraft((current) =>
-                    setRecordNumber(current, "combined_rating_cap", event.target.value)
-                  )
-                }
+                onChange={(event) => setDraft((current) => setRecordNumber(current, "combined_rating_cap", event.target.value))}
               />
             </label>
           ) : null}
           <label>
-            <strong>Capacity</strong>
-            <br />
+            <strong>Capacity</strong><br />
             <input
               type="number"
               min="1"
               step="1"
               value={numberInputValue(draft.capacity_teams)}
               style={inputStyle}
-              onChange={(event) =>
-                setDraft((current) =>
-                  setRecordNumber(current, "capacity_teams", event.target.value)
-                )
-              }
+              onChange={(event) => setDraft((current) => setRecordNumber(current, "capacity_teams", event.target.value))}
             />
           </label>
           <label>
-            <strong>Entry fee (USD)</strong>
-            <br />
+            <strong>Entry fee (USD)</strong><br />
             <input
               type="number"
               inputMode="decimal"
@@ -395,23 +341,47 @@ export default function TournamentSetupDivisionDialog({
               step="0.01"
               value={numberInputValue(draft.price_usd)}
               style={inputStyle}
-              onChange={(event) =>
-                setDraft((current) =>
-                  setRecordNumber(current, "price_usd", event.target.value)
-                )
-              }
+              onChange={(event) => setDraft((current) => setRecordNumber(current, "price_usd", event.target.value))}
             />
+            <small>Commerce is the consolidated place to review all fees.</small>
           </label>
         </div>
 
-        <fieldset
-          style={{
-            marginTop: "1rem",
-            padding: "0.85rem",
-            border: "1px solid #cbd5e1",
-            borderRadius: "12px"
-          }}
-        >
+        <fieldset style={{ marginTop: "1rem", padding: "0.85rem", border: "1px solid #cbd5e1", borderRadius: "12px" }}>
+          <legend style={{ fontWeight: 800 }}>Age policy</legend>
+          <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <input
+              type="radio"
+              name="division-age-policy-source"
+              checked={agePolicySource === "INHERIT_EVENT"}
+              onChange={() =>
+                setDraft((current) => writeAgePolicy({ ...current, age_policy_source: "INHERIT_EVENT" }, DIVISION_AGE_POLICY_FIELDS, inheritedAgePolicy))
+              }
+            />
+            Inherit from parent event — {agePolicySummary(inheritedAgePolicy)}
+          </label>
+          <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.45rem" }}>
+            <input
+              type="radio"
+              name="division-age-policy-source"
+              checked={agePolicySource === "OVERRIDE"}
+              onChange={() => setDraft((current) => ({ ...current, age_policy_source: "OVERRIDE" }))}
+            />
+            Override for this division
+          </label>
+          {agePolicySource === "OVERRIDE" ? (
+            <div style={{ marginTop: "0.75rem" }}>
+              <TournamentAgePolicyEditor
+                policy={divisionAgePolicy}
+                participantType={cleanString(family?.participant_type)}
+                onChange={(policy) => setDraft((current) => writeAgePolicy(current, DIVISION_AGE_POLICY_FIELDS, policy))}
+                title="Division age-policy override"
+              />
+            </div>
+          ) : null}
+        </fieldset>
+
+        <fieldset style={{ marginTop: "1rem", padding: "0.85rem", border: "1px solid #cbd5e1", borderRadius: "12px" }}>
           <legend style={{ fontWeight: 800 }}>Tournament days</legend>
           <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
             <input
@@ -420,46 +390,24 @@ export default function TournamentSetupDivisionDialog({
               checked={scheduleMode === "INHERIT_EVENT"}
               onChange={() =>
                 setDraft((current) =>
-                  setEventDayReferences(
-                    { ...current, schedule_mode: "INHERIT_EVENT" },
-                    availableDayIds
-                  )
+                  setEventDayReferences({ ...current, schedule_mode: "INHERIT_EVENT" }, availableDayIds)
                 )
               }
             />
             Use every day selected for the parent event
           </label>
-          <label
-            style={{
-              display: "flex",
-              gap: "0.5rem",
-              alignItems: "center",
-              marginTop: "0.45rem"
-            }}
-          >
+          <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.45rem" }}>
             <input
               type="radio"
               name="new-division-schedule-mode"
               checked={scheduleMode === "CUSTOM"}
-              onChange={() =>
-                setDraft((current) => ({ ...current, schedule_mode: "CUSTOM" }))
-              }
+              onChange={() => setDraft((current) => ({ ...current, schedule_mode: "CUSTOM" }))}
             />
             Choose specific event days
           </label>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              gap: "0.45rem",
-              marginTop: "0.65rem"
-            }}
-          >
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.45rem", marginTop: "0.65rem" }}>
             {availableDayIds.map((dayId) => (
-              <label
-                key={dayId}
-                style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}
-              >
+              <label key={dayId} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
                 <input
                   type="checkbox"
                   checked={selectedDayIds.includes(dayId)}
@@ -477,51 +425,18 @@ export default function TournamentSetupDivisionDialog({
           </div>
           {!availableDayIds.length ? (
             <p style={{ color: "#b91c1c" }}>
-              The selected event has no tournament days. Return to Events and
-              choose at least one day.
+              The selected event has no tournament days. Return to Events and choose at least one day.
             </p>
           ) : null}
         </fieldset>
 
         {message ? <p role="alert" style={{ color: "#b91c1c" }}>{message}</p> : null}
 
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: "0.65rem",
-            flexWrap: "wrap",
-            marginTop: "1rem"
-          }}
-        >
-          <button
-            type="button"
-            onClick={onCancel}
-            style={{
-              padding: "0.6rem 0.9rem",
-              borderRadius: "999px",
-              border: "1px solid #64748b",
-              background: "white",
-              color: "#0f172a",
-              fontWeight: 800,
-              cursor: "pointer"
-            }}
-          >
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.65rem", flexWrap: "wrap", marginTop: "1rem" }}>
+          <button type="button" onClick={onCancel} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #64748b", background: "white", color: "#0f172a", fontWeight: 800, cursor: "pointer" }}>
             Cancel
           </button>
-          <button
-            type="button"
-            onClick={submit}
-            style={{
-              padding: "0.6rem 0.9rem",
-              borderRadius: "999px",
-              border: "1px solid #0f172a",
-              background: "#0f172a",
-              color: "white",
-              fontWeight: 800,
-              cursor: "pointer"
-            }}
-          >
+          <button type="button" onClick={submit} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800, cursor: "pointer" }}>
             {dialogMode === "add" ? "Add division" : "Save division"}
           </button>
         </div>
