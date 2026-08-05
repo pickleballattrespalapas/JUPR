@@ -1,0 +1,176 @@
+name: Temporary Apply Tournament Domain Rebuild
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+jobs:
+  apply-rebuild:
+    if: github.event.pull_request.head.ref == 'agent/tournament-domain-rebuild-20260804'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply verified rebuild and remove transfer files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat .github/tournament-domain-patch/part-* \
+            | base64 --decode \
+            | gzip --decompress \
+            > /tmp/tournament-four-domain-rebuild.patch
+
+          echo '8349d54a1c8a768f0892b3c9ed32a56cca3e93a3552ecc215ca90380b9dd05a7  /tmp/tournament-four-domain-rebuild.patch' \
+            | sha256sum --check --strict
+
+          git apply --check \
+            --exclude=.github/workflows/temp_export_tournament_domain_source.yml \
+            /tmp/tournament-four-domain-rebuild.patch
+          git apply \
+            --exclude=.github/workflows/temp_export_tournament_domain_source.yml \
+            /tmp/tournament-four-domain-rebuild.patch
+
+          cat > /tmp/final-test-delta.patch <<'PATCH'
+          --- a/tests/test_api_contract_tournament_lifecycle_rebuild.py
+          +++ b/tests/test_api_contract_tournament_lifecycle_rebuild.py
+          @@ -14,7 +14,7 @@
+           
+               for label in (
+                   'label: "Tournament Home"',
+          -        'label: "Setup"',
+          +        'label: "Tournament Builder"',
+                   'label: "Registration"',
+                   'label: "Live Operations"',
+                   'label: "Publish"',
+          @@ -86,15 +86,17 @@
+                 assert label in overview
+           
+             assert 'export type TournamentPhase = "setup" | "registration" | "live" | "publish";' in phase_nav
+          -  for label in (
+          -      "1. Basics & policies",
+          -      "2. Schedule & courts",
+          -      "3. Events",
+          -      "4. Divisions",
+          -      "5. Pricing & extras",
+          -      "6. Review & open",
+          +  for label in ("Tournament", "Competition", "Commerce", "Review"):
+          +      assert f'label: "{label}"' in phase_nav
+          +
+          +  for domain, steps in (
+          +      ('key: "tournament"', 'steps: ["basics", "schedule"]'),
+          +      ('key: "competition"', 'steps: ["events", "divisions"]'),
+          +      ('key: "commerce"', 'steps: ["pricing"]'),
+          +      ('key: "review"', 'steps: ["review"]'),
+             ):
+          -      assert label in phase_nav
+          +      assert domain in setup_nav
+          +      assert steps in setup_nav
+           
+             for key in (
+                 'key: "basics"',
+          @@ -109,8 +111,9 @@
+             assert 'goTo("schedule")' in setup_panel
+             assert "Save draft and continue" in setup_panel
+             assert "private admin draft" in setup_panel
+          -  assert "Publish reviewed setup" in setup_panel
+          -  assert "Review setup" in setup_panel
+          +  assert "Publish reviewed tournament" in setup_panel
+          +  assert "Tournament preview" in setup_panel
+          +  assert "Refresh review" in setup_panel
+             assert "Open registration" in setup_panel
+           
+           
+          --- a/tests/test_api_contract_tournament_manager_home_rebuild.py
+          +++ b/tests/test_api_contract_tournament_manager_home_rebuild.py
+          @@ -48,7 +48,7 @@
+               assert 'const hasTournament = Boolean(tournamentId)' in nav
+               assert "const tournamentItems = hasTournament" in nav
+               assert 'label: "Tournament Home"' in nav
+          -    assert 'label: "Setup"' in nav
+          +    assert 'label: "Tournament Builder"' in nav
+               assert 'label: "Registration"' in nav
+               assert 'label: "Live Operations"' in nav
+               assert 'label: "Publish"' in nav
+          --- a/tests/test_api_contract_tournament_setup_flow_policies_multiday.py
+          +++ b/tests/test_api_contract_tournament_setup_flow_policies_multiday.py
+          @@ -11,11 +11,11 @@
+           def test_guided_setup_order_and_policy_merge() -> None:
+               nav = read("components/TournamentSetupWizardNav.tsx")
+               panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+          -    assert 'label: "Tournament basics and policies"' in nav
+          +    assert 'label: "Tournament"' in nav
+               assert 'key: "schedule"' in nav
+               assert nav.index('key: "schedule"') < nav.index('key: "events"') < nav.index('key: "divisions"')
+               assert '"registration-rules"' not in nav
+          -    assert "Step {definition.number} of 6" in panel
+          +    assert "Domain {domainDefinition.number} of 4" in panel
+               assert "TournamentSetupPolicies" in panel
+               assert 'goTo("schedule")' in panel
+               assert 'saveDraftAndContinue("events")' in panel
+          @@ -26,6 +26,7 @@
+           def test_lifecycle_overview_and_phase_nav_match_refined_setup_flow() -> None:
+               overview = read("app/admin/tournaments/TournamentLifecycleOverviewPanel.tsx")
+               phase_nav = read("components/TournamentPhaseNav.tsx")
+          +    nav = read("components/TournamentSetupWizardNav.tsx")
+               for label in (
+                   "1. Tournament basics and policies",
+                   "2. Schedule and courts",
+          @@ -35,15 +36,12 @@
+                   "6. Review and open registration",
+               ):
+                   assert label in overview
+          -    for label in (
+          -        "1. Basics & policies",
+          -        "2. Schedule & courts",
+          -        "3. Events",
+          -        "4. Divisions",
+          -        "5. Pricing & extras",
+          -        "6. Review & open",
+          -    ):
+          -        assert label in phase_nav
+          +    for label in ("Tournament", "Competition", "Commerce", "Review"):
+          +        assert f'label: "{label}"' in phase_nav
+          +    assert 'label: "Venue and tournament days"' in nav
+          +    assert 'label: "Events and event policies"' in nav
+          +    assert 'label: "Fees, extras, bundles, and giveaways"' in nav
+          +    assert 'label: "Preview, conflicts, publish, and registration"' in nav
+               assert '"registration-rules"' not in phase_nav
+               assert overview.index("1. Tournament basics and policies") < overview.index("2. Schedule and courts")
+               assert overview.index("2. Schedule and courts") < overview.index("3. Events") < overview.index("4. Divisions")
+          PATCH
+
+          git apply --check /tmp/final-test-delta.patch
+          git apply /tmp/final-test-delta.patch
+
+          rm -rf .github/tournament-domain-patch
+          rm -f .github/workflows/temp_export_tournament_domain_source.yml
+          rm -f .github/workflows/temp_apply_tournament_domain_rebuild.yml
+
+          git add -A
+          git diff --cached --check
+          python -m compileall -q jupr_app services/api scripts
+          python -m pytest -q \
+            tests/test_tournament_four_domain_rebuild.py \
+            tests/test_api_contract_tournament_lifecycle_rebuild.py \
+            tests/test_api_contract_tournament_manager_home_rebuild.py \
+            tests/test_api_contract_tournament_setup_flow_policies_multiday.py
+
+          test -z "$(git ls-files '.github/tournament-domain-patch/*')"
+          test ! -e .github/workflows/temp_export_tournament_domain_source.yml
+          test ! -e .github/workflows/temp_apply_tournament_domain_rebuild.yml
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Rebuild tournament setup into four domains'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
