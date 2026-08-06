@@ -1,0 +1,59 @@
+name: Temporary Apply Review Impact Fixes
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/review-impact-fixes-20260805'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply Review impact product patch and clean transfer files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .github/review-impact-transfer/chunk_00
+          cat .github/review-impact-transfer/chunk_* \
+            | base64 --decode \
+            | gzip -dc \
+            > /tmp/review-impact-fixes.patch
+
+          echo 'Applying paths:'
+          grep '^diff --git ' /tmp/review-impact-fixes.patch
+          git apply --check /tmp/review-impact-fixes.patch
+          git apply /tmp/review-impact-fixes.patch
+
+          test ! -f .github/workflows/temp_export_review_impact_source.yml
+          grep -q 'Schedule and communication impacts' apps/web/app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx
+          grep -q 'communication_impacts' jupr_app/domain/tournament_registration_repo.py
+          grep -q 'COMMUNICATION_ACK_ACTIONS' jupr_app/services/admin_tournament_setup_service.py
+          test -f tests/test_tournament_review_communication_ack.py
+
+          rm -rf .github/review-impact-transfer
+          rm -f .github/workflows/temp_apply_review_impact_fixes.yml
+
+          python -m py_compile \
+            jupr_app/domain/tournament_registration_repo.py \
+            jupr_app/services/admin_tournament_setup_service.py \
+            tests/test_tournament_four_domain_rebuild.py \
+            tests/test_tournament_review_communication_ack.py
+
+          git add -A
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Fix tournament Review schedule impact handling'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
