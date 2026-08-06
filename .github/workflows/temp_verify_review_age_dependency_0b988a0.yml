@@ -1,0 +1,103 @@
+name: Temporary Verify Review Age Dependency 0b988a0
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.event.pull_request.head.ref == 'agent/verify-review-age-dependency-0b988a0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Verify exact isolated Fly candidate and staging safety
+        shell: bash
+        env:
+          EXPECTED_SHA: 0b988a0ab3482d841e5a8e68592a887d7cd425b0
+          FLY_BASE_URL: https://juprleagues-api-staging.fly.dev
+        run: |
+          set -euo pipefail
+          matched=0
+          for attempt in $(seq 1 80); do
+            echo "Fly candidate check $attempt/80"
+            if curl --fail --silent --show-error --max-time 20 "$FLY_BASE_URL/health" -o /tmp/health.json; then
+              cat /tmp/health.json
+              if python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          health = json.loads(Path('/tmp/health.json').read_text())
+          expected = os.environ['EXPECTED_SHA']
+          prerequisites = health.get('write_prerequisites') or {}
+          flags = health.get('controlled_write_flags') or {}
+          checks = {
+              'ok': health.get('ok') is True,
+              'environment': health.get('environment') == 'staging',
+              'git_commit_sha': health.get('git_commit_sha') == expected,
+              'image_build_git_sha': health.get('image_build_git_sha') == expected,
+              'fly_app_name': health.get('fly_app_name') == 'juprleagues-api-staging',
+              'supabase_project_ref': health.get('supabase_project_ref') == 'sijpxjxvdtrehmqvirfi',
+              'write_wave': health.get('write_wave') == 'open',
+              'staging_write_wave': health.get('staging_write_wave') == 'open',
+              'business_writes': health.get('business_data_write_wave_active') is True,
+              'email_mode': prerequisites.get('email_mode') == 'dry_run',
+              'live_email_disabled': prerequisites.get('live_player_update_email_enabled') is False,
+              'production_override_disabled': health.get('public_live_production_override_enabled') is False,
+              'tournament_setup_writes': flags.get('JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_SETUP_MUTATIONS') is True,
+              'tournament_registration_writes': flags.get('JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_REGISTRATION_MUTATIONS') is True,
+              'tournament_commerce_writes': flags.get('JUPR_ENABLE_STAGING_TOURNAMENT_COMMERCE_WRITES') is True,
+          }
+          failed = [name for name, passed in checks.items() if not passed]
+          if failed:
+              print('Candidate not ready:', ', '.join(failed))
+              raise SystemExit(1)
+          print('Exact Fly staging identity and safety verified.')
+          PY
+              then
+                matched=1
+                break
+              fi
+            fi
+            sleep 15
+          done
+          test "$matched" = "1"
+
+          curl --fail --silent --show-error --max-time 30 "$FLY_BASE_URL/openapi.json" -o /tmp/openapi.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          spec = json.loads(Path('/tmp/openapi.json').read_text())
+          paths = spec.get('paths') or {}
+          required = {
+              '/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/impact': 'post',
+              '/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/draft': 'put',
+              '/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/publish': 'post',
+          }
+          missing = [f'{method.upper()} {path}' for path, method in required.items() if method not in (paths.get(path) or {})]
+          if missing:
+              raise SystemExit('Missing deployed tournament contracts: ' + ', '.join(missing))
+          print('Tournament impact, draft, and publish routes verified.')
+          PY
+
+          curl --fail --silent --show-error --max-time 30 "$FLY_BASE_URL/admin/clubs/tres_palapas/match-uploader/status" -o /tmp/match-uploader.json
+          cat /tmp/match-uploader.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          status = json.loads(Path('/tmp/match-uploader.json').read_text())
+          if status.get('enabled') is not True:
+              raise SystemExit('Match Uploader is not enabled')
+          singles = status.get('singles_write_enabled', status.get('singles_enabled', status.get('singles')))
+          if singles is not True:
+              raise SystemExit('Singles Match Uploader compatibility is not enabled')
+          if str(status.get('status') or '').lower() in {'guarded_off', 'disabled', 'unavailable'}:
+              raise SystemExit('Match Uploader status is not ready')
+          print('Match Uploader compatibility verified.')
+          PY
