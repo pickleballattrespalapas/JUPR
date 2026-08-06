@@ -1,38 +1,315 @@
-name: Temporary Export Admin Editor and Skill Plus Source
+name: One-shot Tournament Editor and Skill Plus Build
 
 on:
   push:
     branches:
       - agent/complete-admin-registration-and-skill-plus-20260806
-  pull_request:
-    branches:
-      - staging
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export:
-    if: github.event_name == 'push' || github.event.pull_request.head.ref == 'agent/complete-admin-registration-and-skill-plus-20260806'
+  implement:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
-      - name: Check out feature branch
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: agent/complete-admin-registration-and-skill-plus-20260806
-          fetch-depth: 1
+          fetch-depth: 0
 
-      - name: Archive exact feature source
+      - name: Apply implementation
         shell: bash
         run: |
           set -euo pipefail
-          git archive --format=tar.gz --output=/tmp/jupr-admin-editor-skill-plus-source.tar.gz HEAD
+          python - <<'PY'
+          from pathlib import Path
 
-      - name: Upload exact feature source
-        uses: actions/upload-artifact@v4
-        with:
-          name: jupr-admin-editor-skill-plus-source
-          path: /tmp/jupr-admin-editor-skill-plus-source.tar.gz
-          retention-days: 1
-          if-no-files-found: error
+          p=Path('apps/web/app/admin/tournaments/setup/TournamentSetupDivisionDialog.tsx')
+          s=p.read_text()
+          s=s.replace('type DivisionEligibilityMode = "STANDARD" | "COMBINED_RATING_CAP";','type DivisionEligibilityMode = "STANDARD" | "MINIMUM" | "OPEN" | "COMBINED_RATING_CAP";')
+          s=s.replace('''function eligibilityMode(value: SetupRecord): DivisionEligibilityMode {
+            return cleanString(value.eligibility_mode).toUpperCase() === "COMBINED_RATING_CAP"
+              ? "COMBINED_RATING_CAP"
+              : "STANDARD";
+          }''','''function eligibilityMode(value: SetupRecord): DivisionEligibilityMode {
+            const mode = cleanString(value.eligibility_mode).toUpperCase();
+            const skillMode = cleanString(value.skill_mode).toUpperCase();
+            if (mode === "COMBINED_RATING_CAP") return "COMBINED_RATING_CAP";
+            if (["MINIMUM", "MIN", "AT_LEAST"].includes(skillMode)) return "MINIMUM";
+            if (skillMode === "OPEN") return "OPEN";
+            return "STANDARD";
+          }''')
+          s=s.replace('''  if (nextMode === "COMBINED_RATING_CAP") {
+              return {
+                ...value,
+                eligibility_mode: "COMBINED_RATING_CAP",
+                combined_rating_cap:
+                  Number(value.combined_rating_cap) > 0 ? Number(value.combined_rating_cap) : 8
+              };
+            }
+            return {
+              ...value,
+              eligibility_mode: "STANDARD",
+              combined_rating_cap: null
+            };''','''  if (nextMode === "COMBINED_RATING_CAP") {
+              return {
+                ...value,
+                eligibility_mode: "COMBINED_RATING_CAP",
+                skill_mode: "COMBINED_RATING_CAP",
+                combined_rating_cap:
+                  Number(value.combined_rating_cap) > 0 ? Number(value.combined_rating_cap) : 8
+              };
+            }
+            if (nextMode === "MINIMUM") {
+              const label = cleanString(value.skill_label).replace(/\\+$/, "");
+              return {
+                ...value,
+                eligibility_mode: "STANDARD",
+                skill_mode: "MINIMUM",
+                skill_label: label ? `${label}+` : value.skill_label,
+                combined_rating_cap: null
+              };
+            }
+            if (nextMode === "OPEN") {
+              return {
+                ...value,
+                eligibility_mode: "STANDARD",
+                skill_mode: "OPEN",
+                skill_label: "Open",
+                combined_rating_cap: null
+              };
+            }
+            return {
+              ...value,
+              eligibility_mode: "STANDARD",
+              skill_mode: "STANDARD",
+              skill_label: cleanString(value.skill_label).replace(/\\+$/, ""),
+              combined_rating_cap: null
+            };''')
+          s=s.replace('<option value="STANDARD">Standard event eligibility</option>\n              <option value="COMBINED_RATING_CAP">Combined-rating doubles cap</option>','''<option value="STANDARD">Standard skill ceiling</option>
+                        <option value="MINIMUM">Minimum skill / Skill+</option>
+                        <option value="OPEN">Open — no rating limit</option>
+                        <option value="COMBINED_RATING_CAP">Combined-rating doubles cap</option>''')
+          s=s.replace('<small>Four-player team is configured at the parent Event level.</small>','''<small>
+                        Standard divisions allow lower-rated players to play up and block players above the division ceiling. Skill+ requires the selected rating or higher.
+                      </small>''')
+          p.write_text(s)
+
+          p=Path('apps/web/lib/adminTournamentApi.ts')
+          s=p.read_text()
+          s=s.replace('''  player_id?: string | number | null;
+            display_name: string;
+            email?: string | null;
+            phone?: string | null;''','''  player_id?: string | number | null;
+            first_name?: string | null;
+            last_name?: string | null;
+            display_name: string;
+            email?: string | null;
+            phone?: string | null;
+            gender?: string | null;
+            age?: number | null;
+            age_bracket?: string | null;
+            dupr_id?: string | null;
+            doubles_skill?: number | null;
+            singles_skill?: number | null;''')
+          p.write_text(s)
+
+          p=Path('services/api/admin_tournament_routes.py')
+          s=p.read_text()
+          s=s.replace('''class AdminTournamentRegistrationUpdateRequest(BaseModel):
+              registration_status: str | None = None
+              payment_status: str | None = None
+              notes: str | None = None''','''class AdminTournamentRegistrationUpdateRequest(BaseModel):
+              first_name: str | None = None
+              last_name: str | None = None
+              display_name: str | None = None
+              email: str | None = None
+              phone: str | None = None
+              player_id: int | None = None
+              gender: str | None = None
+              age: int | None = None
+              age_bracket: str | None = None
+              dupr_id: str | None = None
+              doubles_skill: float | None = None
+              singles_skill: float | None = None
+              wants_partner_board_contact: bool | None = None
+              registration_status: str | None = None
+              payment_status: str | None = None
+              notes: str | None = None''')
+          p.write_text(s)
+
+          p=Path('jupr_app/services/admin_tournament_service.py')
+          s=p.read_text()
+          s=s.replace('''    update_payload: dict[str, Any] = {}
+              if "registration_status" in patch:
+          ''','''    update_payload: dict[str, Any] = {}
+              direct_fields = {
+                  "first_name": 120,
+                  "last_name": 120,
+                  "display_name": 240,
+                  "email": 320,
+                  "phone": 80,
+                  "gender": 40,
+                  "age_bracket": 80,
+                  "dupr_id": 120,
+              }
+              for field, limit in direct_fields.items():
+                  if field in patch:
+                      update_payload[field] = _clean_text(patch.get(field), limit=limit) or None
+              for field in ("player_id", "age"):
+                  if field in patch:
+                      value = patch.get(field)
+                      update_payload[field] = int(value) if value not in (None, "") else None
+              for field in ("doubles_skill", "singles_skill"):
+                  if field in patch:
+                      value = patch.get(field)
+                      update_payload[field] = float(value) if value not in (None, "") else None
+              if "wants_partner_board_contact" in patch:
+                  update_payload["wants_partner_board_contact"] = bool(patch.get("wants_partner_board_contact"))
+              if "registration_status" in patch:
+          ''')
+          p.write_text(s)
+
+          p=Path('apps/web/app/admin/tournaments/registration/registrants/[registrationId]/TournamentRegistrantEditPanel.tsx')
+          s=p.read_text()
+          s=s.replace('''type RegistrationEdit = {
+            registrationStatus: string;
+            paymentStatus: string;
+            notes: string;
+          };''','''type RegistrationEdit = {
+            firstName: string;
+            lastName: string;
+            displayName: string;
+            email: string;
+            phone: string;
+            playerId: string;
+            gender: string;
+            age: string;
+            ageBracket: string;
+            duprId: string;
+            doublesSkill: string;
+            singlesSkill: string;
+            wantsPartnerBoardContact: boolean;
+            registrationStatus: string;
+            paymentStatus: string;
+            notes: string;
+          };''')
+          s=s.replace('''  return {
+              registrationStatus: row?.registration_status || "confirmed",
+              paymentStatus: row?.payment_status || "unpaid",
+              notes: row?.notes || ""
+            };''','''  return {
+              firstName: row?.first_name || "",
+              lastName: row?.last_name || "",
+              displayName: row?.display_name || "",
+              email: row?.email || "",
+              phone: row?.phone || "",
+              playerId: row?.player_id == null ? "" : String(row.player_id),
+              gender: row?.gender || "",
+              age: row?.age == null ? "" : String(row.age),
+              ageBracket: row?.age_bracket || "",
+              duprId: row?.dupr_id || "",
+              doublesSkill: row?.doubles_skill == null ? "" : String(row.doubles_skill),
+              singlesSkill: row?.singles_skill == null ? "" : String(row.singles_skill),
+              wantsPartnerBoardContact: Boolean(row?.wants_partner_board_contact),
+              registrationStatus: row?.registration_status || "confirmed",
+              paymentStatus: row?.payment_status || "unpaid",
+              notes: row?.notes || ""
+            };''')
+          s=s.replace('''          body: JSON.stringify({
+                    registration_status: registrationDraft.registrationStatus,
+                    payment_status: registrationDraft.paymentStatus,
+                    notes: registrationDraft.notes,''','''          body: JSON.stringify({
+                    first_name: registrationDraft.firstName || null,
+                    last_name: registrationDraft.lastName || null,
+                    display_name: registrationDraft.displayName,
+                    email: registrationDraft.email,
+                    phone: registrationDraft.phone || null,
+                    player_id: registrationDraft.playerId ? Number(registrationDraft.playerId) : null,
+                    gender: registrationDraft.gender || null,
+                    age: registrationDraft.age ? Number(registrationDraft.age) : null,
+                    age_bracket: registrationDraft.ageBracket || null,
+                    dupr_id: registrationDraft.duprId || null,
+                    doubles_skill: registrationDraft.doublesSkill ? Number(registrationDraft.doublesSkill) : null,
+                    singles_skill: registrationDraft.singlesSkill ? Number(registrationDraft.singlesSkill) : null,
+                    wants_partner_board_contact: registrationDraft.wantsPartnerBoardContact,
+                    registration_status: registrationDraft.registrationStatus,
+                    payment_status: registrationDraft.paymentStatus,
+                    notes: registrationDraft.notes,''')
+          marker='''            <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns:
+                            "repeat(auto-fit, minmax(190px, 1fr))",
+                          gap: "0.75rem"
+                        }}
+                      >
+                        <label style={{ minWidth: 0 }}>
+                          <strong>Registration status</strong>'''
+          insert='''            <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+                          gap: "0.75rem",
+                          marginBottom: "0.75rem"
+                        }}
+                      >
+                        {[
+                          ["First name", "firstName", "text"],
+                          ["Last name", "lastName", "text"],
+                          ["Display name", "displayName", "text"],
+                          ["Email", "email", "email"],
+                          ["Phone", "phone", "tel"],
+                          ["Linked player ID", "playerId", "number"],
+                          ["Gender", "gender", "text"],
+                          ["Age", "age", "number"],
+                          ["Age bracket", "ageBracket", "text"],
+                          ["DUPR ID", "duprId", "text"],
+                          ["Doubles skill", "doublesSkill", "number"],
+                          ["Singles skill", "singlesSkill", "number"]
+                        ].map(([label, field, type]) => (
+                          <label key={field} style={{ minWidth: 0 }}>
+                            <strong>{label}</strong><br />
+                            <input
+                              type={type}
+                              step={field.includes("Skill") ? "0.01" : undefined}
+                              value={String(registrationDraft[field as keyof RegistrationEdit] ?? "")}
+                              onChange={(event) => setRegistrationDraft((current) => ({ ...current, [field]: event.target.value }))}
+                              style={inputStyle}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                        <input
+                          type="checkbox"
+                          checked={registrationDraft.wantsPartnerBoardContact}
+                          onChange={(event) => setRegistrationDraft((current) => ({ ...current, wantsPartnerBoardContact: event.target.checked }))}
+                        />
+                        Show contact information on the partner board
+                      </label>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns:
+                            "repeat(auto-fit, minmax(190px, 1fr))",
+                          gap: "0.75rem"
+                        }}
+                      >
+                        <label style={{ minWidth: 0 }}>
+                          <strong>Registration status</strong>'''
+          if marker not in s:
+              raise SystemExit('registration editor marker not found')
+          s=s.replace(marker,insert)
+          s=s.replace("description={`Update ${registration.display_name}'s status, offline payment state, and notes.`}","description={`Update every editable registration detail for ${registration.display_name}.`}")
+          p.write_text(s)
+          PY
+
+          python -m py_compile jupr_app/services/admin_tournament_service.py services/api/admin_tournament_routes.py
+          rm -f .github/workflows/temp_export_admin_editor_skill_plus_source.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Implement Skill+ divisions and expanded registration editing"
+          git push origin HEAD:agent/complete-admin-registration-and-skill-plus-20260806
