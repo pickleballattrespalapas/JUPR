@@ -4,12 +4,16 @@ on:
   push:
     branches:
       - agent/review-age-dependency-fixes-20260806
+  pull_request:
+    branches:
+      - staging
 
 permissions:
   contents: read
 
 jobs:
   export:
+    if: github.event_name == 'push' || github.event.pull_request.head.ref == 'agent/review-age-dependency-fixes-20260806'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
