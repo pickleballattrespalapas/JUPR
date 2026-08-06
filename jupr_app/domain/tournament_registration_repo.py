@@ -1222,6 +1222,8 @@ def analyze_registration_publish_impact(
     warnings: list[str] = []
     blocked: list[str] = []
     blocked_details: list[dict[str, Any]] = []
+    communication_impacts: list[str] = []
+    communication_impact_details: list[dict[str, Any]] = []
 
     def affected_registrations_for_event(
         event_id: str,
@@ -1233,9 +1235,13 @@ def analyze_registration_publish_impact(
         proposed_event: dict[str, Any] | None = None,
         current_source: str = "",
         proposed_source: str = "",
+        selection_ids: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         affected: list[dict[str, Any]] = []
         for selection in selections_by_event.get(str(event_id), []):
+            selection_id = str(selection.get("id") or "").strip()
+            if selection_ids is not None and selection_id not in selection_ids:
+                continue
             registration_id = str(selection.get("registration_id") or "").strip()
             registration = registrations_by_id.get(registration_id, {})
             display_name = str(registration.get("display_name") or "").strip()
@@ -1298,6 +1304,7 @@ def analyze_registration_publish_impact(
         proposed_event: dict[str, Any] | None = None,
         current_source: str = "",
         proposed_source: str = "",
+        selection_ids: set[str] | None = None,
     ) -> None:
         block_id = f"division:{event_id}:{field}"
         affected_registrations = affected_registrations_for_event(
@@ -1309,6 +1316,7 @@ def analyze_registration_publish_impact(
             proposed_event=proposed_event,
             current_source=current_source,
             proposed_source=proposed_source,
+            selection_ids=selection_ids,
         )
         operational_usage = {
             key: int(usage.get(key, 0) or 0)
@@ -1342,6 +1350,58 @@ def analyze_registration_publish_impact(
                 "usage": {
                     "registrations": int(usage.get("registrations", 0) or 0),
                     **operational_usage,
+                },
+                "affected_registrations": affected_registrations,
+            }
+        )
+
+    def communication_event(
+        message: str,
+        *,
+        event_id: str,
+        label: str,
+        field: str,
+        current_value: Any,
+        proposed_value: Any,
+        usage: dict[str, int],
+        current_source: str = "Published division schedule",
+        proposed_source: str = "Draft division schedule",
+    ) -> None:
+        impact_id = f"division:{event_id}:{field}:communication"
+        affected_registrations = affected_registrations_for_event(
+            event_id,
+            current_value=current_value,
+            proposed_value=proposed_value,
+            field=field,
+            current_source=current_source,
+            proposed_source=proposed_source,
+        )
+        communication_impacts.append(message)
+        communication_impact_details.append(
+            {
+                "impact_id": impact_id,
+                "impact_type": "SCHEDULE_COMMUNICATION",
+                "message": message,
+                "entity_type": "division",
+                "entity_id": event_id,
+                "entity_label": label,
+                "field": field,
+                "current_value": current_value,
+                "proposed_value": proposed_value,
+                "current_source": current_source,
+                "proposed_source": proposed_source,
+                "step": "divisions",
+                "resolution_options": [
+                    "KEEP_PUBLISHED_VALUE",
+                    "NOTIFY_AFFECTED",
+                    "ACKNOWLEDGE_NO_NOTICE",
+                ],
+                "requires_acknowledgement": bool(affected_registrations),
+                "usage": {
+                    "registrations": int(usage.get("registrations", 0) or 0),
+                    "event_draws": int(usage.get("event_draws", 0) or 0),
+                    "teams": int(usage.get("teams", 0) or 0),
+                    "games": int(usage.get("games", 0) or 0),
                 },
                 "affected_registrations": affected_registrations,
             }
@@ -1389,28 +1449,63 @@ def analyze_registration_publish_impact(
 
         existing_day_id = str(existing.get("registration_day_id") or "")
         draft_day_id = str(event.get("registration_day_id") or "")
-        if has_usage and existing_day_id != draft_day_id:
-            block_event(
-                f"Cannot move populated division '{label}' to a different primary day.",
-                event_id=event_id,
-                label=label,
-                field="registration_day_id",
-                current_value=existing_day_id,
-                proposed_value=draft_day_id,
-                usage=usage,
-            )
-        existing_schedule = list(existing.get("scheduled_day_ids") or ([existing_day_id] if existing_day_id else []))
-        draft_schedule = list(event.get("scheduled_day_ids") or ([draft_day_id] if draft_day_id else []))
-        if has_usage and existing_schedule != draft_schedule:
-            block_event(
-                f"Cannot change the multi-day schedule for populated division '{label}'.",
-                event_id=event_id,
-                label=label,
-                field="scheduled_day_ids",
-                current_value=existing_schedule,
-                proposed_value=draft_schedule,
-                usage=usage,
-            )
+
+        def normalized_schedule(row: dict[str, Any], primary_day_id: str) -> list[str]:
+            raw = row.get("scheduled_day_ids")
+            values = list(raw) if isinstance(raw, list) else []
+            schedule: list[str] = []
+            for value in ([primary_day_id] if primary_day_id else []) + values:
+                day_id = str(value or "").strip()
+                if day_id and day_id not in schedule:
+                    schedule.append(day_id)
+            return schedule
+
+        existing_schedule = normalized_schedule(existing, existing_day_id)
+        draft_schedule = normalized_schedule(event, draft_day_id)
+        schedule_changed = existing_schedule != draft_schedule
+        if has_usage and schedule_changed:
+            operational_usage = any(int(usage.get(key, 0) or 0) for key in ("event_draws", "teams", "games"))
+            invalid_selection_ids = {
+                str(selection.get("id") or "").strip()
+                for selection in selections_by_event.get(event_id, [])
+                if str(selection.get("id") or "").strip()
+                and str(selection.get("registration_day_id") or "").strip() not in draft_schedule
+            }
+            if operational_usage:
+                block_event(
+                    f"Cannot change the schedule for populated division '{label}' after draws, teams, or games exist.",
+                    event_id=event_id,
+                    label=label,
+                    field="scheduled_day_ids",
+                    current_value=existing_schedule,
+                    proposed_value=draft_schedule,
+                    usage=usage,
+                    current_source="Published division schedule",
+                    proposed_source="Draft division schedule",
+                )
+            elif invalid_selection_ids:
+                block_event(
+                    f"Cannot remove a tournament day selected by existing registrations in division '{label}' without resolving those registrations.",
+                    event_id=event_id,
+                    label=label,
+                    field="scheduled_day_ids",
+                    current_value=existing_schedule,
+                    proposed_value=draft_schedule,
+                    usage=usage,
+                    current_source="Published division schedule",
+                    proposed_source="Draft division schedule",
+                    selection_ids=invalid_selection_ids,
+                )
+            elif occupied:
+                communication_event(
+                    f"Schedule for populated division '{label}' changes, but its registrations remain valid. Acknowledge the communication impact before publishing.",
+                    event_id=event_id,
+                    label=label,
+                    field="scheduled_day_ids",
+                    current_value=existing_schedule,
+                    proposed_value=draft_schedule,
+                    usage=usage,
+                )
         if has_usage and str(existing.get("event_type") or "") != str(event.get("event_type") or ""):
             block_event(
                 f"Cannot change participant type for populated division '{label}'.",
@@ -1508,6 +1603,7 @@ def analyze_registration_publish_impact(
             "deletes": len(deletes),
             "warnings": len(warnings),
             "blocked": len(blocked),
+            "communication_impacts": len(communication_impacts),
         },
         "creates": creates,
         "updates": updates,
@@ -1516,6 +1612,8 @@ def analyze_registration_publish_impact(
         "warnings": warnings,
         "blocked": blocked,
         "blocked_details": blocked_details,
+        "communication_impacts": communication_impacts,
+        "communication_impact_details": communication_impact_details,
         "draft_days": draft_days,
         "draft_event_options": draft_events,
         "published_days": published_days,
