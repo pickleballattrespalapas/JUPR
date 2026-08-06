@@ -1,0 +1,35 @@
+name: Temporary PR 1211 Executor
+
+on:
+  pull_request_target:
+    branches:
+      - staging
+    types:
+      - reopened
+
+permissions:
+  contents: write
+
+jobs:
+  execute:
+    if: github.event.pull_request.number == 1211
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/complete-admin-registration-and-skill-plus-20260806
+          fetch-depth: 0
+      - name: Execute feature implementation script
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          workflow = yaml.safe_load(Path('.github/workflows/temp_export_admin_editor_skill_plus_source.yml').read_text())
+          steps = workflow['jobs']['implement']['steps']
+          script = next(step['run'] for step in steps if step.get('name') == 'Apply implementation')
+          Path('/tmp/pr1211-implement.sh').write_text(script)
+          PY
+          bash /tmp/pr1211-implement.sh
