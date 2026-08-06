@@ -473,9 +473,12 @@ def test_review_reverts_only_blocked_fields_and_requires_explicit_completion() -
     assert 'item.field === "capacity_teams"' in revert_block
     assert "Other draft changes were preserved" in revert_block
     assert "nextValue: SetupRecord = { ...currentRow.value }" in revert_block
+    assert "publishedFamilyName" in revert_block
+    assert "restoredParentRelationship" in revert_block
+    assert "nextValue.event_family_label = publishedFamilyName" in revert_block
     assert "mergedFamilyDays" in revert_block
-    assert "The parent Event also regained" in revert_block
-    assert "replaceBuilderRow(current.eventFamilies" in revert_block
+    assert "restored the published parent Event" in revert_block
+    assert "persistConfigurationDraft(" in revert_block
 
     update_block = panel.split("function updateForcedRegistration", 1)[1].split("function forcedResolutionComplete", 1)[0]
     assert "next.resolved = false" in update_block
@@ -483,6 +486,9 @@ def test_review_reverts_only_blocked_fields_and_requires_explicit_completion() -
     assert 'const noteRequired = action === "OTHER"' in update_block
     assert "I completed and verified this registration action" in panel
     assert "Schedule change — no registration conflict" in panel
+    assert "Age-grouping change — no registration conflict" in panel
+    assert "Required age information before final group assignment" in panel
+    assert "Complete the required age information before acknowledging this impact" in panel
     assert "I completed and verified this communication action" in panel
     assert "communication_change_acknowledgements" in panel
     service = read_root("jupr_app/services/admin_tournament_setup_service.py")
@@ -509,6 +515,151 @@ def test_auto_review_does_not_loop_after_an_error() -> None:
 
     assert "autoReviewSignatureRef.current = """ not in catch_block
     assert "Use Refresh review to try again" in catch_block
+
+
+def test_exhaustive_auto_age_split_is_communication_impact_with_targeted_missing_data() -> None:
+    storage = base_storage()
+    storage["tournament_registrations"] = [
+        {
+            "id": "r1",
+            "tournament_id": "t1",
+            "display_name": "Liam Chen",
+            "email": "liam@example.com",
+            "status": "confirmed",
+            "age": 34,
+        },
+        {
+            "id": "r2",
+            "tournament_id": "t1",
+            "display_name": "Caleb Nguyen",
+            "email": "caleb@example.com",
+            "status": "confirmed",
+            "age": 61,
+        },
+        {
+            "id": "r3",
+            "tournament_id": "t1",
+            "display_name": "Samuel Patel",
+            "email": "samuel@example.com",
+            "status": "confirmed",
+            "age": 44,
+        },
+    ]
+    storage["tournament_registration_selections"] = [
+        {
+            "id": "s1",
+            "tournament_id": "t1",
+            "registration_id": "r1",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_age": 29,
+        },
+        {
+            "id": "s2",
+            "tournament_id": "t1",
+            "registration_id": "r2",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_age": 48,
+        },
+        {
+            "id": "s3",
+            "tournament_id": "t1",
+            "registration_id": "r3",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_age": None,
+        },
+    ]
+    supabase = FakeSupabase(storage)
+    draft_event = {
+        **storage["tournament_event_options"][0],
+        "age_mode": "AUTO_AGE_SPLIT",
+        "age_label": "All Ages",
+        "age_rules": {
+            "mode": "AUTO_AGE_SPLIT",
+            "team_age_rule": "YOUNGER",
+            "merge_strategy": "CLOSEST",
+            "min_teams_per_age_group": 4,
+            "brackets": [
+                {"id": "under-50", "label": "Under 50", "max_age": 49},
+                {"id": "50-64", "label": "50–64", "min_age": 50, "max_age": 64},
+                {"id": "65-plus", "label": "65+", "min_age": 65},
+            ],
+        },
+    }
+
+    impact = analyze_registration_publish_impact(
+        supabase,
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[draft_event],
+    )
+
+    assert not [row for row in impact["blocked_details"] if row["field"] == "skill_age_rules"]
+    assert impact["summary"]["communication_impacts"] == 1
+    detail = impact["communication_impact_details"][0]
+    assert detail["impact_type"] == "AGE_GROUPING_COMMUNICATION"
+    assert detail["requires_data_completion"] is True
+    assert [row["registration_id"] for row in detail["data_completion_registrations"]] == ["r3"]
+    proposed_by_registration = {
+        row["registration_id"]: row["proposed_value"]
+        for row in detail["affected_registrations"]
+    }
+    assert proposed_by_registration["r1"]["age_label"] == "Under 50"
+    assert proposed_by_registration["r1"]["effective_age"] == 29
+    assert proposed_by_registration["r2"]["age_label"] == "Under 50"
+    assert proposed_by_registration["r2"]["effective_age"] == 48
+    assert proposed_by_registration["r3"]["age_label"] == "Needs age information"
+    assert proposed_by_registration["r3"]["assignment_issue_type"] == "MISSING_AGE_DATA"
+
+
+def test_age_policy_that_excludes_an_existing_team_remains_hard_conflict() -> None:
+    storage = base_storage()
+    storage["tournament_registrations"] = [
+        {
+            "id": "r1",
+            "tournament_id": "t1",
+            "display_name": "Under Age Team",
+            "status": "confirmed",
+            "age": 34,
+        }
+    ]
+    storage["tournament_registration_selections"] = [
+        {
+            "id": "s1",
+            "tournament_id": "t1",
+            "registration_id": "r1",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_age": 29,
+        }
+    ]
+    supabase = FakeSupabase(storage)
+    draft_event = {
+        **storage["tournament_event_options"][0],
+        "age_mode": "FIXED_AGE_BRACKET",
+        "age_label": "50–64",
+        "age_rules": {
+            "mode": "FIXED_AGE_BRACKET",
+            "label": "50–64",
+            "min_age": 50,
+            "max_age": 64,
+            "team_age_rule": "YOUNGER",
+        },
+    }
+
+    impact = analyze_registration_publish_impact(
+        supabase,
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[draft_event],
+    )
+
+    detail = next(row for row in impact["blocked_details"] if row["field"] == "skill_age_rules")
+    assert [row["registration_id"] for row in detail["affected_registrations"]] == ["r1"]
+    assert detail["affected_registrations"][0]["proposed_value"]["assignment_issue_type"] == "AGE_NOT_ELIGIBLE"
+    assert impact["communication_impact_details"] == []
 
 
 def test_registration_only_schedule_change_is_communication_impact() -> None:

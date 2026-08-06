@@ -1139,13 +1139,18 @@ def _registration_skill_age_review_value(
         if selected_entry is None:
             unassigned = [dict(row) for row in preview.get("unassigned_entries") or [] if isinstance(row, dict)]
             selected_entry = unassigned[0] if unassigned else {}
-            selected_label = "Needs manual resolution"
+            selected_label = (
+                "Needs age information"
+                if str(selected_entry.get("assignment_issue_type") or "").upper() == "MISSING_AGE_DATA"
+                else "Needs manual resolution"
+            )
         base.update(
             {
                 "age_label": selected_label or base.get("age_label") or "Not assigned",
                 "player_age": selected_entry.get("age", registration.get("age")),
                 "partner_age": selected_entry.get("partner_age", selection.get("partner_age")),
                 "effective_age": selected_entry.get("effective_age"),
+                "assignment_issue_type": selected_entry.get("assignment_issue_type"),
                 "assignment_issue": selected_entry.get("assignment_issue"),
             }
         )
@@ -1159,6 +1164,35 @@ def _registration_skill_age_review_value(
             }
         )
     return base
+
+
+def _stable_review_fingerprint(value: Any) -> str:
+    return json.dumps(_json_safe_value(value), sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _normalized_age_policy_fingerprint(event: dict[str, Any]) -> str:
+    try:
+        return _stable_review_fingerprint(_normalized_event_age_policy(event))
+    except ValueError:
+        return _stable_review_fingerprint(
+            {
+                "age_mode": event.get("age_mode"),
+                "age_label": event.get("age_label"),
+                "age_rules": _age_rules_mapping(event.get("age_rules")),
+            }
+        )
+
+
+def _skill_policy_fingerprint(event: dict[str, Any]) -> str:
+    return _stable_review_fingerprint(
+        {
+            "skill_label": event.get("skill_label"),
+            "skill_mode": event.get("skill_mode"),
+            "eligibility_mode": event.get("eligibility_mode"),
+            "combined_rating_cap": event.get("combined_rating_cap"),
+        }
+    )
+
 
 def analyze_registration_publish_impact(
     supabase,
@@ -1364,8 +1398,13 @@ def analyze_registration_publish_impact(
         current_value: Any,
         proposed_value: Any,
         usage: dict[str, int],
+        impact_type: str = "SCHEDULE_COMMUNICATION",
+        current_event: dict[str, Any] | None = None,
+        proposed_event: dict[str, Any] | None = None,
         current_source: str = "Published division schedule",
         proposed_source: str = "Draft division schedule",
+        selection_ids: set[str] | None = None,
+        data_completion_selection_ids: set[str] | None = None,
     ) -> None:
         impact_id = f"division:{event_id}:{field}:communication"
         affected_registrations = affected_registrations_for_event(
@@ -1373,14 +1412,28 @@ def analyze_registration_publish_impact(
             current_value=current_value,
             proposed_value=proposed_value,
             field=field,
+            current_event=current_event,
+            proposed_event=proposed_event,
             current_source=current_source,
             proposed_source=proposed_source,
+            selection_ids=selection_ids,
         )
+        data_completion_registrations = affected_registrations_for_event(
+            event_id,
+            current_value=current_value,
+            proposed_value=proposed_value,
+            field=field,
+            current_event=current_event,
+            proposed_event=proposed_event,
+            current_source=current_source,
+            proposed_source=proposed_source,
+            selection_ids=data_completion_selection_ids or set(),
+        ) if data_completion_selection_ids else []
         communication_impacts.append(message)
         communication_impact_details.append(
             {
                 "impact_id": impact_id,
-                "impact_type": "SCHEDULE_COMMUNICATION",
+                "impact_type": impact_type,
                 "message": message,
                 "entity_type": "division",
                 "entity_id": event_id,
@@ -1397,6 +1450,8 @@ def analyze_registration_publish_impact(
                     "ACKNOWLEDGE_NO_NOTICE",
                 ],
                 "requires_acknowledgement": bool(affected_registrations),
+                "requires_data_completion": bool(data_completion_registrations),
+                "data_completion_registrations": data_completion_registrations,
                 "usage": {
                     "registrations": int(usage.get("registrations", 0) or 0),
                     "event_draws": int(usage.get("event_draws", 0) or 0),
@@ -1527,21 +1582,143 @@ def analyze_registration_publish_impact(
                 usage=usage,
             )
 
-        rule_columns = ["skill_label", "skill_mode", "age_label", "age_mode", "age_rules"]
-        if has_usage and any(str(existing.get(column) or "") != str(event.get(column) or "") for column in rule_columns):
-            block_event(
-                f"Cannot change skill/age rules for populated division '{label}' in ways that could invalidate registrants.",
-                event_id=event_id,
-                label=label,
-                field="skill_age_rules",
-                current_value=_skill_age_rule_review_value(existing, source_label=current_source),
-                proposed_value=_skill_age_rule_review_value(proposed_event_for_review, source_label=proposed_source),
-                usage=usage,
-                current_event=existing,
-                proposed_event=proposed_event_for_review,
-                current_source=current_source,
-                proposed_source=proposed_source,
+        skill_policy_changed = _skill_policy_fingerprint(existing) != _skill_policy_fingerprint(event)
+        age_policy_changed = _normalized_age_policy_fingerprint(existing) != _normalized_age_policy_fingerprint(
+            proposed_event_for_review
+        )
+        if has_usage and (skill_policy_changed or age_policy_changed):
+            current_rule_value = _skill_age_rule_review_value(existing, source_label=current_source)
+            proposed_rule_value = _skill_age_rule_review_value(
+                proposed_event_for_review,
+                source_label=proposed_source,
             )
+            if skill_policy_changed:
+                block_event(
+                    f"Cannot change skill rules for populated division '{label}' without reviewing affected registrations.",
+                    event_id=event_id,
+                    label=label,
+                    field="skill_age_rules",
+                    current_value=current_rule_value,
+                    proposed_value=proposed_rule_value,
+                    usage=usage,
+                    current_event=existing,
+                    proposed_event=proposed_event_for_review,
+                    current_source=current_source,
+                    proposed_source=proposed_source,
+                )
+            elif age_policy_changed:
+                operational_usage = any(
+                    int(usage.get(key, 0) or 0)
+                    for key in ("event_draws", "teams", "games")
+                )
+                if operational_usage:
+                    block_event(
+                        f"Cannot change age grouping for populated division '{label}' after draws, teams, or games exist.",
+                        event_id=event_id,
+                        label=label,
+                        field="skill_age_rules",
+                        current_value=current_rule_value,
+                        proposed_value=proposed_rule_value,
+                        usage=usage,
+                        current_event=existing,
+                        proposed_event=proposed_event_for_review,
+                        current_source=current_source,
+                        proposed_source=proposed_source,
+                    )
+                else:
+                    event_selections = selections_by_event.get(event_id, [])
+                    try:
+                        age_preview = build_age_split_preview(
+                            policy=_normalized_event_age_policy(proposed_event_for_review),
+                            registrations=registrations_by_id,
+                            selections=event_selections,
+                            participant_type=str(
+                                proposed_event_for_review.get("event_type")
+                                or proposed_event_for_review.get("participant_type")
+                                or "GENDER_DOUBLES"
+                            ),
+                        )
+                    except ValueError as exc:
+                        block_event(
+                            f"Cannot apply the proposed age policy to populated division '{label}': {exc}",
+                            event_id=event_id,
+                            label=label,
+                            field="skill_age_rules",
+                            current_value=current_rule_value,
+                            proposed_value=proposed_rule_value,
+                            usage=usage,
+                            current_event=existing,
+                            proposed_event=proposed_event_for_review,
+                            current_source=current_source,
+                            proposed_source=proposed_source,
+                        )
+                    else:
+                        unassigned = [
+                            dict(row)
+                            for row in age_preview.get("unassigned_entries") or []
+                            if isinstance(row, dict)
+                        ]
+                        missing_data_selection_ids = {
+                            str(row.get("selection_id") or "").strip()
+                            for row in unassigned
+                            if str(row.get("assignment_issue_type") or "").strip().upper()
+                            == "MISSING_AGE_DATA"
+                            and str(row.get("selection_id") or "").strip()
+                        }
+                        invalid_selection_ids = {
+                            str(row.get("selection_id") or "").strip()
+                            for row in unassigned
+                            if str(row.get("assignment_issue_type") or "").strip().upper()
+                            != "MISSING_AGE_DATA"
+                            and str(row.get("selection_id") or "").strip()
+                        }
+                        all_selection_ids = {
+                            str(row.get("id") or "").strip()
+                            for row in event_selections
+                            if str(row.get("id") or "").strip()
+                        }
+                        if invalid_selection_ids:
+                            block_event(
+                                f"Cannot apply the proposed age policy to {len(invalid_selection_ids)} existing registration"
+                                f"{'s' if len(invalid_selection_ids) != 1 else ''} in division '{label}' without resolving eligibility.",
+                                event_id=event_id,
+                                label=label,
+                                field="skill_age_rules",
+                                current_value=current_rule_value,
+                                proposed_value=proposed_rule_value,
+                                usage=usage,
+                                current_event=existing,
+                                proposed_event=proposed_event_for_review,
+                                current_source=current_source,
+                                proposed_source=proposed_source,
+                                selection_ids=invalid_selection_ids,
+                            )
+                        registration_preserving_ids = all_selection_ids.difference(invalid_selection_ids)
+                        if occupied and registration_preserving_ids:
+                            missing_count = len(missing_data_selection_ids)
+                            data_message = (
+                                f" Complete age information for {missing_count} registration"
+                                f"{'s' if missing_count != 1 else ''} before final bracket assignment."
+                                if missing_count
+                                else ""
+                            )
+                            communication_event(
+                                f"Age grouping for populated division '{label}' changes, but affected registrations remain eligible."
+                                f"{data_message} Acknowledge the communication impact before publishing.",
+                                event_id=event_id,
+                                label=label,
+                                field="skill_age_rules",
+                                current_value=current_rule_value,
+                                proposed_value=proposed_rule_value,
+                                usage=usage,
+                                impact_type="AGE_GROUPING_COMMUNICATION",
+                                current_event=existing,
+                                proposed_event=proposed_event_for_review,
+                                current_source=current_source,
+                                proposed_source=proposed_source,
+                                selection_ids=registration_preserving_ids,
+                                data_completion_selection_ids=missing_data_selection_ids,
+                            )
 
         existing_capacity = existing.get("capacity_teams")
         next_capacity = event.get("capacity_teams")
