@@ -314,7 +314,7 @@ def test_review_auto_runs_compares_values_and_guards_forced_changes() -> None:
     assert "Force change with registration resolution" in panel
     assert "Manual registration-resolution queue" in panel
     assert "Open registration editor" in panel
-    assert "Save registration-resolution queue" in panel
+    assert "Save Review actions" in panel
     assert "comparablePublishedStateSignature" in panel
     assert "affected_registrations" in repo
     assert "FORCE_CHANGE_WITH_RESOLUTION" in repo
@@ -473,12 +473,23 @@ def test_review_reverts_only_blocked_fields_and_requires_explicit_completion() -
     assert 'item.field === "capacity_teams"' in revert_block
     assert "Other draft changes were preserved" in revert_block
     assert "nextValue: SetupRecord = { ...currentRow.value }" in revert_block
+    assert "mergedFamilyDays" in revert_block
+    assert "The parent Event also regained" in revert_block
+    assert "replaceBuilderRow(current.eventFamilies" in revert_block
 
     update_block = panel.split("function updateForcedRegistration", 1)[1].split("function forcedResolutionComplete", 1)[0]
     assert "next.resolved = false" in update_block
     assert 'Object.prototype.hasOwnProperty.call(patch, "resolved")' in update_block
-    assert "Boolean(safeString(next.action) && safeString(next.notes))" in update_block
+    assert 'const noteRequired = action === "OTHER"' in update_block
     assert "I completed and verified this registration action" in panel
+    assert "Schedule change — no registration conflict" in panel
+    assert "I completed and verified this communication action" in panel
+    assert "communication_change_acknowledgements" in panel
+    service = read_root("jupr_app/services/admin_tournament_setup_service.py")
+    assert "def _communication_acknowledgement_summary" in service
+    assert '"NOTIFY_AFFECTED"' in service
+    assert '"ACKNOWLEDGE_NO_NOTICE"' in service
+    assert "communication_change_acknowledgements" in service
 
 
 def test_age_preview_uses_only_canonical_tournament_event_ids() -> None:
@@ -498,6 +509,158 @@ def test_auto_review_does_not_loop_after_an_error() -> None:
 
     assert "autoReviewSignatureRef.current = """ not in catch_block
     assert "Use Refresh review to try again" in catch_block
+
+
+def test_registration_only_schedule_change_is_communication_impact() -> None:
+    storage = base_storage()
+    storage["tournament_registration_days"].append(
+        {
+            "id": "day2",
+            "tournament_id": "t1",
+            "label": "Day 2",
+            "event_date": "2026-10-02",
+            "court_count": 10,
+            "court_labels": [],
+            "enabled": True,
+            "sort_order": 2,
+        }
+    )
+    storage["tournament_event_options"][0]["scheduled_day_ids"] = ["day1", "day2"]
+    storage["tournament_registrations"] = [
+        {
+            "id": "r1",
+            "tournament_id": "t1",
+            "display_name": "Alex Player",
+            "email": "alex@example.com",
+            "status": "confirmed",
+            "submitted_at": "2026-01-01",
+        }
+    ]
+    storage["tournament_registration_selections"] = [
+        {
+            "id": "s1",
+            "tournament_id": "t1",
+            "registration_id": "r1",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+        }
+    ]
+    supabase = FakeSupabase(storage)
+    draft_event = {
+        **storage["tournament_event_options"][0],
+        "scheduled_day_ids": ["day1"],
+        "registration_day_id": "day1",
+    }
+
+    impact = analyze_registration_publish_impact(
+        supabase,
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[draft_event],
+    )
+
+    assert not [row for row in impact["blocked_details"] if row["field"] == "scheduled_day_ids"]
+    assert impact["summary"]["communication_impacts"] == 1
+    detail = impact["communication_impact_details"][0]
+    assert detail["impact_type"] == "SCHEDULE_COMMUNICATION"
+    assert detail["current_value"] == ["day1", "day2"]
+    assert detail["proposed_value"] == ["day1"]
+    assert detail["affected_registrations"][0]["registration_id"] == "r1"
+    assert detail["resolution_options"] == [
+        "KEEP_PUBLISHED_VALUE",
+        "NOTIFY_AFFECTED",
+        "ACKNOWLEDGE_NO_NOTICE",
+    ]
+
+
+
+
+
+def test_schedule_change_that_removes_selected_day_is_hard_conflict() -> None:
+    storage = base_storage()
+    storage["tournament_registration_days"].append(
+        {
+            "id": "day2",
+            "tournament_id": "t1",
+            "label": "Day 2",
+            "event_date": "2026-10-02",
+            "court_count": 10,
+            "court_labels": [],
+            "enabled": True,
+            "sort_order": 2,
+        }
+    )
+    storage["tournament_event_options"][0]["scheduled_day_ids"] = ["day1", "day2"]
+    storage["tournament_registrations"] = [
+        {"id": "r1", "tournament_id": "t1", "display_name": "Day Two Player", "status": "confirmed"}
+    ]
+    storage["tournament_registration_selections"] = [
+        {"id": "s1", "tournament_id": "t1", "registration_id": "r1", "registration_day_id": "day2", "event_option_id": "event1"}
+    ]
+    supabase = FakeSupabase(storage)
+    draft_event = {
+        **storage["tournament_event_options"][0],
+        "scheduled_day_ids": ["day1"],
+        "registration_day_id": "day1",
+    }
+
+    impact = analyze_registration_publish_impact(
+        supabase,
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[draft_event],
+    )
+
+    schedule_block = next(row for row in impact["blocked_details"] if row["field"] == "scheduled_day_ids")
+    assert schedule_block["forceable"] is True
+    assert "selected by existing registrations" in schedule_block["message"]
+    assert [row["registration_id"] for row in schedule_block["affected_registrations"]] == ["r1"]
+    assert impact["communication_impact_details"] == []
+
+
+def test_operational_schedule_change_remains_hard_blocked() -> None:
+    storage = base_storage()
+    storage["tournament_registration_days"].append(
+        {
+            "id": "day2",
+            "tournament_id": "t1",
+            "label": "Day 2",
+            "event_date": "2026-10-02",
+            "court_count": 10,
+            "court_labels": [],
+            "enabled": True,
+            "sort_order": 2,
+        }
+    )
+    storage["tournament_event_options"][0]["scheduled_day_ids"] = ["day1", "day2"]
+    storage["tournament_registrations"] = [
+        {"id": "r1", "tournament_id": "t1", "display_name": "Alex Player", "status": "confirmed"}
+    ]
+    storage["tournament_registration_selections"] = [
+        {"id": "s1", "tournament_id": "t1", "registration_id": "r1", "registration_day_id": "day1", "event_option_id": "event1"}
+    ]
+    storage["tournament_event_draws"] = [
+        {"id": "draw1", "tournament_id": "t1", "event_option_id": "event1", "registration_day_id": "day1"}
+    ]
+    supabase = FakeSupabase(storage)
+    draft_event = {
+        **storage["tournament_event_options"][0],
+        "scheduled_day_ids": ["day1"],
+        "registration_day_id": "day1",
+    }
+
+    impact = analyze_registration_publish_impact(
+        supabase,
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[draft_event],
+    )
+
+    schedule_block = next(row for row in impact["blocked_details"] if row["field"] == "scheduled_day_ids")
+    assert schedule_block["forceable"] is False
+    assert "after draws, teams, or games exist" in schedule_block["message"]
+    assert impact["communication_impact_details"] == []
+
 
 def test_registration_only_blocker_can_be_forced_but_operational_blocker_cannot() -> None:
     storage = base_storage()

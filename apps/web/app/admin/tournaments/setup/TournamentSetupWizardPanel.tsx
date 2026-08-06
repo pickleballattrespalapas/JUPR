@@ -330,7 +330,8 @@ function settingsDraftPayload(settings: Record<string, unknown>): Record<string,
     venue_courts_json: normalized.venue_courts_json,
     venue_court_count: normalized.venue_court_count,
     venue_court_labels: normalized.venue_court_labels,
-    forced_change_resolutions: objectValue(settings.forced_change_resolutions)
+    forced_change_resolutions: objectValue(settings.forced_change_resolutions),
+    communication_change_acknowledgements: objectValue(settings.communication_change_acknowledgements)
   };
 }
 
@@ -372,6 +373,7 @@ function impactContentSignature(
 ): string {
   const impactSettings = settingsDraftPayload(settings);
   delete impactSettings.forced_change_resolutions;
+  delete impactSettings.communication_change_acknowledgements;
   return JSON.stringify({
     basics: basicsDraftPayload(basics),
     settings: impactSettings,
@@ -386,6 +388,7 @@ function comparablePublishedStateSignature(
 ): string {
   const comparableSettings = settingsDraftPayload(settings);
   delete comparableSettings.forced_change_resolutions;
+  delete comparableSettings.communication_change_acknowledgements;
   const normalized = configurationWithGlobalStatus(
     configurationWithVenue(configuration, settings),
     settings.registration_status
@@ -620,6 +623,45 @@ type BlockedImpactDetail = {
   affected_registrations: AffectedRegistration[];
 };
 
+type CommunicationImpactDetail = {
+  impact_id: string;
+  impact_type: string;
+  message: string;
+  entity_type?: string;
+  entity_id?: string;
+  entity_label?: string;
+  field?: string;
+  current_value?: unknown;
+  proposed_value?: unknown;
+  current_source?: string;
+  proposed_source?: string;
+  step?: TournamentSetupStep;
+  resolution_options?: string[];
+  requires_acknowledgement: boolean;
+  affected_registrations: AffectedRegistration[];
+};
+
+function affectedRegistrations(value: unknown): AffectedRegistration[] {
+  return Array.isArray(value)
+    ? value
+        .filter((row) => row && typeof row === "object" && !Array.isArray(row))
+        .map((row) => {
+          const affected = row as Record<string, unknown>;
+          return {
+            registration_id: safeString(affected.registration_id),
+            selection_id: safeString(affected.selection_id),
+            display_name: safeString(affected.display_name) || safeString(affected.email) || safeString(affected.registration_id),
+            email: safeString(affected.email),
+            registration_status: safeString(affected.registration_status),
+            current_value: affected.current_value,
+            proposed_value: affected.proposed_value,
+            current_source: safeString(affected.current_source),
+            proposed_source: safeString(affected.proposed_source)
+          };
+        })
+    : [];
+}
+
 function blockedImpactDetail(value: unknown): BlockedImpactDetail {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const row = value as Record<string, unknown>;
@@ -636,24 +678,7 @@ function blockedImpactDetail(value: unknown): BlockedImpactDetail {
       proposed_source: safeString(row.proposed_source),
       step: safeString(row.step) as TournamentSetupStep,
       resolution_options: Array.isArray(row.resolution_options) ? row.resolution_options.map((value) => safeString(value)) : [],
-      affected_registrations: Array.isArray(row.affected_registrations)
-        ? row.affected_registrations
-            .filter((value) => value && typeof value === "object" && !Array.isArray(value))
-            .map((value) => {
-              const affected = value as Record<string, unknown>;
-              return {
-                registration_id: safeString(affected.registration_id),
-                selection_id: safeString(affected.selection_id),
-                display_name: safeString(affected.display_name) || safeString(affected.email) || safeString(affected.registration_id),
-                email: safeString(affected.email),
-                registration_status: safeString(affected.registration_status),
-                current_value: affected.current_value,
-                proposed_value: affected.proposed_value,
-                current_source: safeString(affected.current_source),
-                proposed_source: safeString(affected.proposed_source)
-              };
-            })
-        : []
+      affected_registrations: affectedRegistrations(row.affected_registrations)
     };
   }
   const message = formatImpactItem(value);
@@ -668,6 +693,28 @@ function blockedImpactDetail(value: unknown): BlockedImpactDetail {
   };
 }
 
+function communicationImpactDetail(value: unknown): CommunicationImpactDetail {
+  const row = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+  return {
+    impact_id: safeString(row.impact_id) || `${safeString(row.entity_id)}:${safeString(row.field)}:communication`,
+    impact_type: safeString(row.impact_type) || "SCHEDULE_COMMUNICATION",
+    message: formatImpactItem(value),
+    entity_type: safeString(row.entity_type),
+    entity_id: safeString(row.entity_id),
+    entity_label: safeString(row.entity_label),
+    field: safeString(row.field),
+    current_value: row.current_value,
+    proposed_value: row.proposed_value,
+    current_source: safeString(row.current_source),
+    proposed_source: safeString(row.proposed_source),
+    step: safeString(row.step) as TournamentSetupStep,
+    resolution_options: Array.isArray(row.resolution_options) ? row.resolution_options.map((item) => safeString(item)) : [],
+    requires_acknowledgement: row.requires_acknowledgement !== false,
+    affected_registrations: affectedRegistrations(row.affected_registrations)
+  };
+}
 
 
 function footerRow(children: ReactNode) {
@@ -1245,7 +1292,13 @@ async function loadDetail() {
   }
 
   function keepPublishedValueForBlockedChange(raw: unknown) {
-    const item = blockedImpactDetail(raw);
+    const rawRecord = raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+    const item = safeString(rawRecord.impact_id)
+      ? communicationImpactDetail(raw)
+      : blockedImpactDetail(raw);
+    const actionKey = "impact_id" in item ? item.impact_id : item.block_id;
     if (item.entity_type !== "division" && !item.entity_label) {
       setMessage("Open the affected setup step and restore the published value before reviewing again.");
       return;
@@ -1260,6 +1313,7 @@ async function loadDetail() {
     }
 
     let reverted = false;
+    let restoredParentDays: string[] = [];
     setConfiguration((current) => {
       const currentRow = current.eventOptions.find((row) => {
         if (item.entity_id && safeString(row.value.id) === item.entity_id) return true;
@@ -1268,11 +1322,32 @@ async function loadDetail() {
       if (!currentRow) return current;
       const publishedValue = published.value;
       let nextValue: SetupRecord = { ...currentRow.value };
-      if (item.field === "registration_day_id") {
-        nextValue.registration_day_id = publishedValue.registration_day_id;
-      } else if (item.field === "scheduled_day_ids") {
-        nextValue = setEventDayReferences(nextValue, eventDayReferences(publishedValue));
+      let nextFamilies = current.eventFamilies;
+      if (item.field === "registration_day_id" || item.field === "scheduled_day_ids") {
+        const publishedSchedule = eventDayReferences(publishedValue);
+        nextValue = setEventDayReferences(nextValue, publishedSchedule);
         nextValue.schedule_mode = "CUSTOM";
+
+        const familyName = eventFamilyName(currentRow.value) || eventFamilyName(publishedValue);
+        const currentFamily = current.eventFamilies.find(
+          (row) => eventFamilyName(row.value).toLowerCase() === familyName.toLowerCase()
+        );
+        if (!currentFamily) {
+          setMessage("The parent Event could not be matched. Open Events and restore the published schedule manually.");
+          return current;
+        }
+        const familyDays = eventDayReferences(currentFamily.value);
+        const dayOrder = new Map(
+          current.days.map((row, index) => [dayReference(row.value), index] as const)
+        );
+        const mergedFamilyDays = [...new Set([...familyDays, ...publishedSchedule])]
+          .sort((left, right) => (dayOrder.get(left) ?? 9999) - (dayOrder.get(right) ?? 9999));
+        restoredParentDays = mergedFamilyDays.filter((dayId) => !familyDays.includes(dayId));
+        const nextFamilyValue = setEventDayReferences(currentFamily.value, mergedFamilyDays);
+        nextFamilies = sortEventFamiliesByTournamentDay(
+          replaceBuilderRow(current.eventFamilies, currentFamily.key, nextFamilyValue),
+          current.days
+        );
       } else if (item.field === "event_type") {
         nextValue.event_type = publishedValue.event_type;
         nextValue.participant_type = publishedValue.event_type;
@@ -1287,23 +1362,105 @@ async function loadDetail() {
       } else if (item.field === "capacity_teams") {
         nextValue.capacity_teams = publishedValue.capacity_teams;
       } else {
-        setMessage("This blocker does not yet support a field-level revert. Open Divisions and restore the published field manually.");
+        setMessage("This impact does not yet support a field-level revert. Open Divisions and restore the published field manually.");
         return current;
       }
       reverted = true;
       return {
         ...current,
+        eventFamilies: nextFamilies,
         eventOptions: sortDivisionsByEventAndName(
           replaceBuilderRow(current.eventOptions, currentRow.key, nextValue),
-          current.eventFamilies,
+          nextFamilies,
           current.days
         )
       };
     });
     if (!reverted) return;
+    setSettings((current) => {
+      const forced = { ...objectValue(current.forced_change_resolutions) };
+      const communications = { ...objectValue(current.communication_change_acknowledgements) };
+      delete forced[actionKey];
+      delete communications[actionKey];
+      return {
+        ...current,
+        forced_change_resolutions: forced,
+        communication_change_acknowledgements: communications
+      };
+    });
+    setResolutionDraftDirty(false);
     setImpactReview(null);
     setReviewedDraftSignature("");
-    setMessage(`Restored only the blocked ${item.field || "field"} for ${item.entity_label || "the affected division"}. Other draft changes were preserved. Save the draft and review impact again.`);
+    autoReviewSignatureRef.current = "";
+    const parentMessage = restoredParentDays.length
+      ? ` The parent Event also regained ${restoredParentDays.length} required tournament day${restoredParentDays.length === 1 ? "" : "s"}, so the published Division schedule remains valid.`
+      : "";
+    setMessage(`Restored the published ${item.field || "value"} for ${item.entity_label || "the affected division"}.${parentMessage} Other draft changes were preserved. Review is refreshing.`);
+  }
+
+  function communicationAcknowledgementPlans(): Record<string, unknown> {
+    return objectValue(settings.communication_change_acknowledgements);
+  }
+
+  function communicationAcknowledgementPlan(item: CommunicationImpactDetail): Record<string, unknown> | null {
+    const plan = communicationAcknowledgementPlans()[item.impact_id];
+    return plan && typeof plan === "object" && !Array.isArray(plan)
+      ? (plan as Record<string, unknown>)
+      : null;
+  }
+
+  function updateCommunicationAcknowledgement(
+    item: CommunicationImpactDetail,
+    patch: Record<string, unknown>
+  ) {
+    setSettings((current) => {
+      const plans = { ...objectValue(current.communication_change_acknowledgements) };
+      const existing = plans[item.impact_id] && typeof plans[item.impact_id] === "object" && !Array.isArray(plans[item.impact_id])
+        ? (plans[item.impact_id] as Record<string, unknown>)
+        : {};
+      const next = {
+        impact_id: item.impact_id,
+        impact_type: item.impact_type,
+        entity_type: item.entity_type,
+        entity_id: item.entity_id,
+        entity_label: item.entity_label,
+        field: item.field,
+        current_value: item.current_value,
+        proposed_value: item.proposed_value,
+        affected_registrations: item.affected_registrations,
+        action: safeString(existing.action),
+        notes: safeString(existing.notes),
+        acknowledged: Boolean(existing.acknowledged),
+        status: safeString(existing.status) || "IN_PROGRESS",
+        ...patch
+      } as Record<string, unknown>;
+      if (Object.prototype.hasOwnProperty.call(patch, "action") || Object.prototype.hasOwnProperty.call(patch, "notes")) {
+        next.acknowledged = false;
+        next.status = "IN_PROGRESS";
+        next.acknowledged_at = null;
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, "acknowledged")) {
+        const action = safeString(next.action).toUpperCase();
+        const acknowledged = Boolean(patch.acknowledged)
+          && ["NOTIFY_AFFECTED", "ACKNOWLEDGE_NO_NOTICE"].includes(action);
+        next.acknowledged = acknowledged;
+        next.status = acknowledged ? "ACKNOWLEDGED" : "IN_PROGRESS";
+        next.acknowledged_at = acknowledged ? new Date().toISOString() : null;
+      }
+      plans[item.impact_id] = next;
+      return { ...current, communication_change_acknowledgements: plans };
+    });
+    setResolutionDraftDirty(true);
+    setReviewedDraftSignature("");
+  }
+
+  function communicationAcknowledgementComplete(item: CommunicationImpactDetail): boolean {
+    if (!item.requires_acknowledgement) return true;
+    const plan = communicationAcknowledgementPlan(item);
+    const action = safeString(plan?.action).toUpperCase();
+    return Boolean(plan?.acknowledged)
+      && safeString(plan?.status).toUpperCase() === "ACKNOWLEDGED"
+      && ["NOTIFY_AFFECTED", "ACKNOWLEDGE_NO_NOTICE"].includes(action);
   }
 
   function forcedResolutionPlans(): Record<string, unknown> {
@@ -1608,10 +1765,10 @@ async function saveResolutionDraft() {
       autoReviewSignatureRef.current = "";
       await loadDetail();
       if (!actionRequest.isCurrent(generation)) return;
-      setMessage("Conflict-resolution queue saved to the unpublished tournament draft. The impact review is refreshing against the saved queue.");
+      setMessage("Review actions saved to the unpublished tournament draft. The impact review is refreshing against the saved resolutions and communication acknowledgements.");
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
-        setMessage(error instanceof Error ? error.message : "Unable to save the conflict-resolution queue.");
+        setMessage(error instanceof Error ? error.message : "Unable to save the Review actions.");
       }
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
@@ -1682,7 +1839,7 @@ async function saveResolutionDraft() {
       return;
     }
     if (resolutionDraftDirty) {
-      setMessage("Save the registration-resolution queue before publishing.");
+      setMessage("Save the Review actions before publishing.");
       return;
     }
     const impact = impactReview.publish_impact || {};
@@ -1694,6 +1851,16 @@ async function saveResolutionDraft() {
       .filter((item) => !forcedResolutionComplete(item));
     if (unresolved.length) {
       setMessage(`Resolve ${unresolved.length} blocked change${unresolved.length === 1 ? "" : "s"} before publishing.`);
+      return;
+    }
+    const rawCommunicationDetails = Array.isArray(impact.communication_impact_details)
+      ? impact.communication_impact_details
+      : [];
+    const unresolvedCommunications = rawCommunicationDetails
+      .map(communicationImpactDetail)
+      .filter((item) => !communicationAcknowledgementComplete(item));
+    if (unresolvedCommunications.length) {
+      setMessage(`Acknowledge ${unresolvedCommunications.length} schedule communication impact${unresolvedCommunications.length === 1 ? "" : "s"} before publishing.`);
       return;
     }
     const generation = actionRequest.begin();
@@ -2680,6 +2847,9 @@ function renderDivisions() {
       ? impact.blocked_details
       : blocked;
     const blockedDetails = rawBlockedDetails.map(blockedImpactDetail);
+    const communicationDetails = (Array.isArray(impact.communication_impact_details)
+      ? impact.communication_impact_details
+      : []).map(communicationImpactDetail);
     const warnings = Array.isArray(impact.warnings) ? impact.warnings : [];
     const basicsReady = states.basics === "complete";
     const scheduleReady = states.schedule === "complete";
@@ -2692,7 +2862,10 @@ function renderDivisions() {
       divisionsReady &&
       issues.length === 0;
     const unresolvedBlockers = blockedDetails.filter((item) => !forcedResolutionComplete(item));
+    const unresolvedCommunications = communicationDetails.filter((item) => !communicationAcknowledgementComplete(item));
     const forcePlans = blockedDetails.filter((item) => Boolean(forcedResolutionPlan(item)));
+    const communicationPlans = communicationDetails.filter((item) => Boolean(communicationAcknowledgementPlan(item)));
+    const hasReviewActionPlans = forcePlans.length > 0 || communicationPlans.length > 0;
 
     const valueChanged = (current: unknown, proposed: unknown) =>
       JSON.stringify(current ?? null) !== JSON.stringify(proposed ?? null);
@@ -2823,9 +2996,9 @@ function renderDivisions() {
       {
         key: "review" as TournamentSetupStep,
         label: "Review",
-        complete: ready && unresolvedBlockers.length === 0,
+        complete: ready && unresolvedBlockers.length === 0 && unresolvedCommunications.length === 0,
         draft: impactReview
-          ? `${warnings.length} warning(s) · ${unresolvedBlockers.length} unresolved blocker(s)`
+          ? `${warnings.length} warning(s) · ${unresolvedBlockers.length} registration blocker(s) · ${unresolvedCommunications.length} communication impact(s)`
           : "Impact review calculating",
         published: registrationStatus.toLowerCase() === "open" ? "Registration open" : "Registration not open"
       }
@@ -2961,6 +3134,101 @@ function renderDivisions() {
                   <ul>{warnings.map((warning, index) => <li key={index}>{formatImpactItem(warning)}</li>)}</ul>
                 </>
               ) : null}
+              {communicationDetails.length ? (
+                <>
+                  <strong>Schedule and communication impacts — acknowledge before publishing</strong>
+                  <p style={{ color: "#475569" }}>
+                    These changes do not invalidate any registration. Review the affected registrants, record the communication decision once for the Division, and continue without a grandfather, move, cancellation, or refund queue.
+                  </p>
+                  <div style={{ display: "grid", gap: "0.75rem", marginTop: "0.55rem" }}>
+                    {communicationDetails.map((item) => {
+                      const plan = communicationAcknowledgementPlan(item);
+                      const acknowledged = communicationAcknowledgementComplete(item);
+                      const editHref = item.step === "divisions"
+                        ? `${tournamentSetupStepHref("divisions", tournamentId, basics.name || tournamentName)}&resolveDivision=${encodeURIComponent(item.entity_id || "")}`
+                        : tournamentSetupStepHref(item.step || "review", tournamentId, basics.name || tournamentName);
+                      return (
+                        <article key={item.impact_id} style={{ padding: "0.8rem", border: `1px solid ${acknowledged ? "#bbf7d0" : "#fde68a"}`, borderRadius: "12px", background: acknowledged ? "#f0fdf4" : "#fffbeb" }}>
+                          <strong>Schedule change — no registration conflict</strong>
+                          <p><strong>{item.entity_label || "Affected Division"}</strong><br />{item.message}</p>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.65rem" }}>
+                            <div style={{ padding: "0.6rem", borderRadius: "10px", background: "white", minWidth: 0, overflowWrap: "anywhere" }}>
+                              <small>Current published {humanReviewFieldLabel(item.field || "value")}{item.current_source ? ` · ${item.current_source}` : ""}</small>
+                              <ReviewValueDisplay field={item.field || "value"} value={item.current_value} days={configuration.days} timezone={basics.timezone} />
+                            </div>
+                            <div style={{ padding: "0.6rem", borderRadius: "10px", background: "#eff6ff", minWidth: 0, overflowWrap: "anywhere" }}>
+                              <small>Proposed draft {humanReviewFieldLabel(item.field || "value")}{item.proposed_source ? ` · ${item.proposed_source}` : ""}</small>
+                              <ReviewValueDisplay field={item.field || "value"} value={item.proposed_value} days={configuration.days} timezone={basics.timezone} />
+                            </div>
+                          </div>
+                          <p style={{ color: "#166534", fontWeight: 800 }}>
+                            All {item.affected_registrations.length} affected registration{item.affected_registrations.length === 1 ? " remains" : "s remain"} valid. No registration-level resolution is required.
+                          </p>
+                          {item.affected_registrations.length ? (
+                            <details>
+                              <summary style={{ cursor: "pointer", fontWeight: 800 }}>Affected registrants ({item.affected_registrations.length})</summary>
+                              <ul style={{ marginBottom: 0 }}>
+                                {item.affected_registrations.map((registration) => (
+                                  <li key={`${registration.registration_id}-${registration.selection_id || "registration"}`}>
+                                    {registration.display_name || registration.email || registration.registration_id}{registration.email ? ` · ${registration.email}` : ""}
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          ) : null}
+                          <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap", marginTop: "0.7rem" }}>
+                            <button type="button" style={ghostButtonStyle} onClick={() => keepPublishedValueForBlockedChange(item)}>
+                              Keep published value
+                            </button>
+                            <Link href={editHref} style={ghostButtonStyle}>Edit affected draft</Link>
+                          </div>
+                          {item.requires_acknowledgement ? (
+                            <div style={{ marginTop: "0.8rem", paddingTop: "0.8rem", borderTop: "1px solid #fde68a" }}>
+                              <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(260px, 2fr)", gap: "0.65rem" }}>
+                                <label><strong>Communication action</strong><br />
+                                  <select
+                                    value={safeString(plan?.action)}
+                                    style={inputStyle}
+                                    onChange={(event) => updateCommunicationAcknowledgement(item, { action: event.target.value })}
+                                  >
+                                    <option value="">Choose action…</option>
+                                    <option value="NOTIFY_AFFECTED">Notify affected registrants</option>
+                                    <option value="ACKNOWLEDGE_NO_NOTICE">No separate notice needed</option>
+                                  </select>
+                                </label>
+                                <label><strong>Communication note (optional)</strong><br />
+                                  <textarea
+                                    value={safeString(plan?.notes)}
+                                    style={{ ...inputStyle, minHeight: "76px" }}
+                                    placeholder="Optional record of the message, channel, timing, or why no separate notice is needed."
+                                    onChange={(event) => updateCommunicationAcknowledgement(item, { notes: event.target.value })}
+                                  />
+                                </label>
+                              </div>
+                              <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.6rem", fontWeight: 800 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={acknowledged}
+                                  disabled={!safeString(plan?.action)}
+                                  onChange={(event) => updateCommunicationAcknowledgement(item, { acknowledged: event.target.checked })}
+                                />
+                                I completed and verified this communication action
+                              </label>
+                              <small style={{ color: acknowledged ? "#166534" : "#92400e", fontWeight: 800 }}>
+                                {acknowledged ? "Communication impact acknowledged for publication" : "Choose an action and confirm completion"}
+                              </small>
+                            </div>
+                          ) : (
+                            <p style={{ color: "#166534", fontWeight: 800 }}>Informational only; no acknowledgement is required.</p>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <p style={{ color: "#166534", fontWeight: 800 }}>No schedule or communication impacts.</p>
+              )}
               {blockedDetails.length ? (
                 <>
                   <strong>Blocked changes — resolve each before publishing</strong>
@@ -3064,18 +3332,18 @@ function renderDivisions() {
                       );
                     })}
                   </div>
-                  {forcePlans.length ? (
-                    <div style={{ marginTop: "0.75rem" }}>
-                      <button type="button" style={buttonStyle} disabled={busy || !resolutionDraftDirty} onClick={() => void saveResolutionDraft()}>
-                        {busy ? "Saving queue…" : resolutionDraftDirty ? "Save registration-resolution queue" : "Resolution queue saved"}
-                      </button>
-                      {resolutionDraftDirty ? <p style={{ color: "#92400e" }}>Save the queue before publishing or refreshing the browser.</p> : null}
-                    </div>
-                  ) : null}
                 </>
               ) : (
                 <p style={{ color: "#166534", fontWeight: 800 }}>No blocked changes.</p>
               )}
+              {hasReviewActionPlans ? (
+                <div style={{ marginTop: "0.75rem" }}>
+                  <button type="button" style={buttonStyle} disabled={busy || !resolutionDraftDirty} onClick={() => void saveResolutionDraft()}>
+                    {busy ? "Saving Review actions…" : resolutionDraftDirty ? "Save Review actions" : "Review actions saved"}
+                  </button>
+                  {resolutionDraftDirty ? <p style={{ color: "#92400e" }}>Save the registration resolutions and communication acknowledgements before publishing or refreshing the browser.</p> : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </article>
@@ -3083,20 +3351,21 @@ function renderDivisions() {
         <article style={cardStyle}>
           <h3 style={{ marginTop: 0 }}>Publish tournament</h3>
           <p style={{ color: "#475569" }}>
-            Publish the exact reviewed Tournament, Competition, and Commerce setup. Existing registrations remain protected; a forced change is accepted only when its affected-registration queue is complete and saved.
+            Publish the exact reviewed Tournament, Competition, and Commerce setup. Existing registrations remain protected; hard conflicts require completed registration resolutions, while valid schedule changes require a saved communication acknowledgement.
           </p>
           <ConfirmAction
             triggerLabel={busy ? "Publishing…" : "Publish reviewed tournament"}
             title="Publish this reviewed tournament?"
-            description="Apply the exact reviewed draft to the published tournament. Registration status remains a separate action. Forced changes and their registration resolutions are written to the audit record."
+            description="Apply the exact reviewed draft to the published tournament. Registration status remains a separate action. Registration resolutions and schedule communication acknowledgements are written to the audit record."
             confirmLabel="Yes, publish tournament"
             confirmationText={publishConfirmation}
-            disabled={!impactReview || reviewedDraftSignature !== fullDraftSignature(basics, settings, configuration) || unresolvedBlockers.length > 0 || resolutionDraftDirty}
+            disabled={!impactReview || reviewedDraftSignature !== fullDraftSignature(basics, settings, configuration) || unresolvedBlockers.length > 0 || unresolvedCommunications.length > 0 || resolutionDraftDirty}
             busy={busy}
             onConfirm={publishSetup}
           />
           {unresolvedBlockers.length ? <p style={{ color: "#b91c1c" }}>Resolve {unresolvedBlockers.length} blocked change{unresolvedBlockers.length === 1 ? "" : "s"} before publishing.</p> : null}
-          {resolutionDraftDirty ? <p style={{ color: "#92400e" }}>Save the registration-resolution queue before publishing.</p> : null}
+          {unresolvedCommunications.length ? <p style={{ color: "#92400e" }}>Acknowledge {unresolvedCommunications.length} schedule communication impact{unresolvedCommunications.length === 1 ? "" : "s"} before publishing.</p> : null}
+          {resolutionDraftDirty ? <p style={{ color: "#92400e" }}>Save the Review actions before publishing.</p> : null}
         </article>
 
         <article style={cardStyle}>

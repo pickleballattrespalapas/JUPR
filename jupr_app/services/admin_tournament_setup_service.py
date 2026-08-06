@@ -401,6 +401,10 @@ FORCED_RESOLUTION_ACTIONS = {
     "GRANDFATHER",
     "OTHER",
 }
+COMMUNICATION_ACK_ACTIONS = {
+    "NOTIFY_AFFECTED",
+    "ACKNOWLEDGE_NO_NOTICE",
+}
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -560,6 +564,76 @@ def _forced_resolution_summary(
             "affected_registration_count": len(resolved_rows),
             "resolutions": resolved_rows,
         })
+    if errors:
+        raise ValueError("Publish remains blocked: " + " | ".join(errors))
+    return summaries
+
+
+def _communication_acknowledgement_summary(
+    impact: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    details = _list_of_dicts(impact.get("communication_impact_details"))
+    if not details:
+        return []
+    plans = _dict(_dict(settings).get("communication_change_acknowledgements"))
+    summaries: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for detail in details:
+        required_rows = _list_of_dicts(detail.get("affected_registrations"))
+        if not _bool(detail.get("requires_acknowledgement"), bool(required_rows)):
+            continue
+        impact_id = _clean(detail.get("impact_id"), limit=240)
+        label = _clean(detail.get("entity_label"), limit=180) or "schedule change"
+        plan = _dict(plans.get(impact_id))
+        if not plan:
+            errors.append(
+                f"{label}: acknowledge the schedule communication impact or keep the published value."
+            )
+            continue
+        action = _clean(plan.get("action"), limit=80).upper()
+        if (
+            _clean(plan.get("status"), limit=40).upper() != "ACKNOWLEDGED"
+            or not _bool(plan.get("acknowledged"))
+            or action not in COMMUNICATION_ACK_ACTIONS
+        ):
+            errors.append(f"{label}: the schedule communication acknowledgement is incomplete.")
+            continue
+        if stable_tournament_admin_fingerprint(plan.get("current_value")) != stable_tournament_admin_fingerprint(detail.get("current_value")):
+            errors.append(f"{label}: the published schedule changed after acknowledgement.")
+            continue
+        if stable_tournament_admin_fingerprint(plan.get("proposed_value")) != stable_tournament_admin_fingerprint(detail.get("proposed_value")):
+            errors.append(f"{label}: the proposed schedule changed after acknowledgement.")
+            continue
+        expected_keys = {
+            (
+                _clean(row.get("registration_id"), limit=120),
+                _clean(row.get("selection_id"), limit=120),
+            )
+            for row in required_rows
+        }
+        acknowledged_rows = _list_of_dicts(plan.get("affected_registrations"))
+        acknowledged_keys = {
+            (
+                _clean(row.get("registration_id"), limit=120),
+                _clean(row.get("selection_id"), limit=120),
+            )
+            for row in acknowledged_rows
+        }
+        if expected_keys != acknowledged_keys:
+            errors.append(f"{label}: affected registrations changed; refresh Review and acknowledge again.")
+            continue
+        summaries.append(
+            {
+                "impact_id": impact_id,
+                "entity_label": label,
+                "field": detail.get("field"),
+                "action": action,
+                "notes": _clean(plan.get("notes"), limit=2000) or None,
+                "affected_registration_count": len(acknowledged_rows),
+                "affected_registrations": acknowledged_rows,
+            }
+        )
     if errors:
         raise ValueError("Publish remains blocked: " + " | ".join(errors))
     return summaries
@@ -807,6 +881,7 @@ def publish_admin_tournament_setup(
         if str(reviewed_impact_fingerprint) != expected_impact_fingerprint:
             raise ValueError("Publish payload does not match the last reviewed impact. Review impact again before publishing.")
     forced_resolution_summary = _forced_resolution_summary(impact, settings)
+    communication_acknowledgement_summary = _communication_acknowledgement_summary(impact, settings)
     if dry_run:
         return {
             "ok": True,
@@ -815,6 +890,7 @@ def publish_admin_tournament_setup(
             "write_count": 0,
             "publish_impact": impact,
             "forced_resolution_summary": forced_resolution_summary,
+            "communication_acknowledgement_summary": communication_acknowledgement_summary,
             "event_families": list(event_families or []),
             "builder_event_options": list(builder_event_options or []),
             "basics": dict(basics or {}),
@@ -866,6 +942,7 @@ def publish_admin_tournament_setup(
     )
     published_draft_settings = dict(settings or {})
     published_draft_settings.pop("forced_change_resolutions", None)
+    published_draft_settings.pop("communication_change_acknowledgements", None)
     published_builder_draft = save_builder_draft(
         supabase,
         tournament_id=str(tournament_id),
@@ -888,6 +965,7 @@ def publish_admin_tournament_setup(
         before_json={
             "impact": impact,
             "forced_resolution_summary": forced_resolution_summary,
+            "communication_acknowledgement_summary": communication_acknowledgement_summary,
         },
         after_json={
             "result": result,
@@ -896,6 +974,7 @@ def publish_admin_tournament_setup(
             "basics": dict(basics or {}),
             "settings": dict(settings or {}),
             "forced_resolution_summary": forced_resolution_summary,
+            "communication_acknowledgement_summary": communication_acknowledgement_summary,
             "published_builder_draft": published_builder_draft,
         },
         source=source,
@@ -906,6 +985,7 @@ def publish_admin_tournament_setup(
         "publish_result": result,
         "publish_impact": impact,
         "forced_resolution_summary": forced_resolution_summary,
+        "communication_acknowledgement_summary": communication_acknowledgement_summary,
         "published_builder_draft": published_builder_draft,
         "days": [_day_payload(row) for row in list_registration_days(supabase, str(tournament_id))],
         "event_options": [_event_option_payload(row) for row in list_event_options(supabase, str(tournament_id))],
