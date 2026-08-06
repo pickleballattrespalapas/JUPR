@@ -584,11 +584,22 @@ def _communication_acknowledgement_summary(
         if not _bool(detail.get("requires_acknowledgement"), bool(required_rows)):
             continue
         impact_id = _clean(detail.get("impact_id"), limit=240)
-        label = _clean(detail.get("entity_label"), limit=180) or "schedule change"
+        label = _clean(detail.get("entity_label"), limit=180) or "configuration change"
+        data_completion_rows = _list_of_dicts(detail.get("data_completion_registrations"))
+        if data_completion_rows:
+            names = [
+                _clean(row.get("display_name"), limit=180)
+                or _clean(row.get("registration_id"), limit=120)
+                for row in data_completion_rows
+            ]
+            errors.append(
+                f"{label}: complete required age information for {', '.join(names[:5])} before acknowledging this change."
+            )
+            continue
         plan = _dict(plans.get(impact_id))
         if not plan:
             errors.append(
-                f"{label}: acknowledge the schedule communication impact or keep the published value."
+                f"{label}: acknowledge the communication impact or keep the published value."
             )
             continue
         action = _clean(plan.get("action"), limit=80).upper()
@@ -597,13 +608,13 @@ def _communication_acknowledgement_summary(
             or not _bool(plan.get("acknowledged"))
             or action not in COMMUNICATION_ACK_ACTIONS
         ):
-            errors.append(f"{label}: the schedule communication acknowledgement is incomplete.")
+            errors.append(f"{label}: the communication acknowledgement is incomplete.")
             continue
         if stable_tournament_admin_fingerprint(plan.get("current_value")) != stable_tournament_admin_fingerprint(detail.get("current_value")):
-            errors.append(f"{label}: the published schedule changed after acknowledgement.")
+            errors.append(f"{label}: the published value changed after acknowledgement.")
             continue
         if stable_tournament_admin_fingerprint(plan.get("proposed_value")) != stable_tournament_admin_fingerprint(detail.get("proposed_value")):
-            errors.append(f"{label}: the proposed schedule changed after acknowledgement.")
+            errors.append(f"{label}: the proposed value changed after acknowledgement.")
             continue
         expected_keys = {
             (

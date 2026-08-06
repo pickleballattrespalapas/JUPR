@@ -77,14 +77,24 @@ def normalize_age_policy(policy: Mapping[str, Any] | None) -> dict[str, Any]:
             }
         ]
     elif mode == "FIXED_AGE_BRACKET":
-        minimum_age = optional_number(raw.get("min_age"))
-        maximum_age = optional_number(raw.get("max_age"))
+        # Accept both the editable top-level shape and this function's own
+        # normalized bracket shape so normalization remains idempotent.
+        normalized_rows = _mapping_rows(raw.get("brackets"))
+        normalized_row = normalized_rows[0] if normalized_rows else {}
+        minimum_age = optional_number(
+            raw.get("min_age") if raw.get("min_age") not in (None, "") else normalized_row.get("min_age")
+        )
+        maximum_age = optional_number(
+            raw.get("max_age") if raw.get("max_age") not in (None, "") else normalized_row.get("max_age")
+        )
         if minimum_age is not None and maximum_age is not None and maximum_age < minimum_age:
             raise ValueError("Fixed age bracket has a maximum below its minimum.")
         brackets = [
             {
-                "id": "fixed-age",
-                "label": _clean(raw.get("label"), limit=80) or "Fixed age bracket",
+                "id": _clean(normalized_row.get("id"), limit=80) or "fixed-age",
+                "label": _clean(raw.get("label"), limit=80)
+                or _clean(normalized_row.get("label"), limit=80)
+                or "Fixed age bracket",
                 "min_age": minimum_age,
                 "max_age": maximum_age,
             }
@@ -290,7 +300,25 @@ def build_age_split_preview(
         }
 
         assigned = False
-        if split_age_mode:
+        mode = str(normalized_policy["mode"])
+        missing_player_age = player_age is None
+        missing_partner_age = team_event and partner_age is None
+        requires_age_data = mode != "ALL_AGES"
+        if requires_age_data and (missing_player_age or missing_partner_age):
+            missing_fields: list[str] = []
+            if missing_player_age:
+                missing_fields.append("player age")
+            if missing_partner_age:
+                missing_fields.append("partner age")
+            entry["assignment_issue_type"] = "MISSING_AGE_DATA"
+            entry["assignment_issue"] = (
+                f"Complete {' and '.join(missing_fields)} before assigning this entry to an age group."
+            )
+        elif mode == "ALL_AGES":
+            preview_brackets[0]["entries"].append(entry)
+            preview_brackets[0]["count"] += 1
+            assigned = True
+        elif split_age_mode:
             matches = (
                 split_threshold is not None
                 and player_age is not None
@@ -305,6 +333,7 @@ def build_age_split_preview(
                 preview_brackets[0]["count"] += 1
                 assigned = True
             else:
+                entry["assignment_issue_type"] = "TEAM_COMPOSITION"
                 entry["assignment_issue"] = (
                     f"Team must include one player under {int(split_threshold or 0)} "
                     f"and one player {int(split_threshold or 0)}+."
@@ -325,6 +354,14 @@ def build_age_split_preview(
                     bracket["count"] += 1
                     assigned = True
                     break
+            if not assigned and "assignment_issue" not in entry:
+                entry["assignment_issue_type"] = "AGE_NOT_ELIGIBLE"
+                if effective_age is None:
+                    entry["assignment_issue"] = "Age information is incomplete for this entry."
+                else:
+                    entry["assignment_issue"] = (
+                        f"Effective team age {effective_age:g} does not fit any configured age group."
+                    )
         if not assigned:
             unassigned.append(entry)
 
