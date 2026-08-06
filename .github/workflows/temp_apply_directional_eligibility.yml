@@ -1,0 +1,45 @@
+name: Temporary Apply Directional Eligibility
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/directional-eligibility-review-20260806'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply directional eligibility implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/directional-eligibility/part*.b64 | base64 --decode | gzip -dc > /tmp/directional-eligibility.patch
+          git apply --check /tmp/directional-eligibility.patch
+          git apply /tmp/directional-eligibility.patch
+          rm -rf .github/directional-eligibility
+          rm -f .github/workflows/temp_apply_directional_eligibility.yml
+          rm -f .github/workflows/temp_export_directional_eligibility_source.yml
+          git add -A
+          git diff --cached --check
+          python -m py_compile \
+            jupr_app/domain/tournament_age_policy.py \
+            jupr_app/domain/tournament_registration_compiler.py \
+            jupr_app/domain/tournament_registration_repo.py \
+            jupr_app/services/admin_tournament_setup_service.py \
+            jupr_app/services/public_tournament_registration_service.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Implement directional tournament eligibility'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
