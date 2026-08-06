@@ -111,9 +111,10 @@ export default function EditTournamentRegistrationForm({
   const linkedPlayer = useMemo(() => players.find((player) => player.id === String(registration.player_id ?? "")) ?? null, [players, registration.player_id]);
   const eligibilityProfile = useMemo(() => ({
     gender,
+    age: registration.age == null ? null : Number(registration.age),
     doublesSkill: linkedPlayer?.doubles_skill ?? numericState(doublesSkill),
     singlesSkill: linkedPlayer?.singles_skill ?? numericState(singlesSkill)
-  }), [gender, linkedPlayer, doublesSkill, singlesSkill]);
+  }), [gender, registration.age, linkedPlayer, doublesSkill, singlesSkill]);
   const selectionByEventId = useMemo(() => new Map(selections.map((selection) => [selection.event_option_id, selection])), [selections]);
   const selectionByFamily = useMemo(() => {
     const lookup = new Map<string, PublicRegistrationEditSelection>();

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import uuid
@@ -8,7 +9,11 @@ from typing import Any
 from urllib.parse import urlencode
 
 from jupr_app.config import get_env_or_default
-from jupr_app.domain.tournament_registration_compiler import validate_selection_against_skill
+from jupr_app.domain.tournament_age_policy import evaluate_age_eligibility, normalize_age_policy
+from jupr_app.domain.tournament_registration_compiler import (
+    evaluate_selection_gender_eligibility,
+    validate_selection_against_skill,
+)
 from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
 from jupr_app.domain.notifications.tournament_registration_confirmation_email import (
     PAYMENT_NOTE,
@@ -275,6 +280,65 @@ def _event_label(event: dict[str, Any]) -> str:
     return _clean_text(event.get("division_name") or event.get("label") or "Division", limit=160)
 
 
+def _age_rules_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _normalized_public_age_policy(event: dict[str, Any]) -> dict[str, Any]:
+    rules = _age_rules_mapping(event.get("age_rules"))
+    mode = _clean_text(event.get("age_mode") or rules.get("mode") or "ALL_AGES", limit=40).upper()
+    if mode in {"", "OPEN", "ALL", "ALL AGES", "ALL_AGES"}:
+        mode = "ALL_AGES"
+    return normalize_age_policy(
+        {
+            **rules,
+            "mode": mode,
+            "label": _clean_text(
+                event.get("age_label") or rules.get("label") or rules.get("age_label"),
+                limit=80,
+            ),
+        }
+    )
+
+
+def _validate_age_eligibility(
+    *,
+    event: dict[str, Any],
+    selection: dict[str, Any],
+    player_profile: dict[str, Any],
+) -> None:
+    result = evaluate_age_eligibility(
+        policy=_normalized_public_age_policy(event),
+        player_age=_safe_float(player_profile.get("age")),
+        partner_age=_safe_float(selection.get("partner_age")),
+        participant_type=_clean_text(
+            event.get("event_type") or event.get("participant_type") or "GENDER_DOUBLES",
+            limit=40,
+        ),
+    )
+    status = str(result.get("status") or "ELIGIBLE").upper()
+    if status == "ELIGIBLE":
+        return
+    partner_mode = _clean_text(selection.get("partner_mode") or "NONE", limit=40).upper()
+    missing_fields = {str(value) for value in (result.get("missing_fields") or [])}
+    if status == "MISSING_DATA" and partner_mode == "NEEDS_PARTNER" and missing_fields <= {"partner age"}:
+        # A player looking for a partner may register provisionally. The future
+        # partner's age determines the team's final preferred age placement.
+        return
+    raise ValueError(
+        f"{_event_label(event)}: "
+        f"{_clean_text(result.get('issue') or 'Age eligibility requirements were not met.', limit=500)}"
+    )
+
+
 def _validate_gender_eligibility(
     *,
     event: dict[str, Any],
@@ -282,33 +346,41 @@ def _validate_gender_eligibility(
     partner_mode: str,
     partner_gender: Any = None,
 ) -> None:
-    restriction = _clean_text(event.get("gender_restriction") or "ANY", limit=40).upper()
-    if restriction in {"", "ANY", "OPEN", "NONE"}:
+    selection = {"partner_mode": partner_mode}
+    partner = {"gender": partner_gender} if partner_gender not in (None, "") else None
+    result = evaluate_selection_gender_eligibility(
+        event=event,
+        selection=selection,
+        player={"gender": player_gender},
+        partner=partner,
+    )
+    status = str(result.get("status") or "ELIGIBLE").upper()
+    if status == "ELIGIBLE":
         return
-
-    player = _normalized_gender(player_gender)
+    missing_fields = {str(value) for value in (result.get("missing_fields") or [])}
+    if status == "MISSING_DATA" and str(partner_mode or "").upper() == "NEEDS_PARTNER" and missing_fields <= {"partner gender"}:
+        # A player looking for a partner may register provisionally. The future
+        # partner must satisfy the Division's gender rule before final pairing.
+        return
     label = _event_label(event)
-    if restriction in {"MEN", "MALE"}:
+    restriction = str(result.get("restriction") or "").upper()
+    player = str(result.get("player_gender") or "").upper()
+    partner_value = str(result.get("partner_gender") or "").upper()
+    issue_type = str(result.get("issue_type") or "").upper()
+    if issue_type == "GENDER_NOT_ELIGIBLE" and restriction == "MEN":
         if player != "MEN":
             raise ValueError(f"{label}: this division is limited to men's registrations.")
-        if partner_mode == "HAS_PARTNER" and _normalized_gender(partner_gender) != "MEN":
+        if partner_value != "MEN":
             raise ValueError(f"{label}: both partners must be eligible for the men's division.")
-        return
-    if restriction in {"WOMEN", "FEMALE"}:
+    if issue_type == "GENDER_NOT_ELIGIBLE" and restriction == "WOMEN":
         if player != "WOMEN":
             raise ValueError(f"{label}: this division is limited to women's registrations.")
-        if partner_mode == "HAS_PARTNER" and _normalized_gender(partner_gender) != "WOMEN":
+        if partner_value != "WOMEN":
             raise ValueError(f"{label}: both partners must be eligible for the women's division.")
-        return
-    if restriction == "MIXED":
-        if player not in {"MEN", "WOMEN"}:
-            raise ValueError(f"{label}: select an eligible gender for mixed doubles.")
-        if partner_mode == "HAS_PARTNER":
-            partner = _normalized_gender(partner_gender)
-            if partner not in {"MEN", "WOMEN"}:
-                raise ValueError(f"{label}: partner gender is required for mixed-doubles eligibility.")
-            if partner == player:
-                raise ValueError(f"{label}: mixed doubles requires one men's and one women's registrant.")
+    raise ValueError(
+        f"{label}: "
+        f"{_clean_text(result.get('issue') or 'Gender eligibility requirements were not met.', limit=500)}"
+    )
 
 
 def _event_family_key(event: dict[str, Any]) -> tuple[str, str]:
@@ -391,6 +463,7 @@ def _public_event(row: dict[str, Any], *, registration_open: bool) -> dict[str, 
         "age_label": _clean_text(row.get("age_label"), limit=80),
         "skill_mode": _clean_text(row.get("skill_mode"), limit=80),
         "age_mode": _clean_text(row.get("age_mode"), limit=80),
+        "age_rules": row.get("age_rules"),
         "event_format": _clean_text(event_format, limit=120),
         "scoring": _clean_text(scoring, limit=120),
         "capacity_teams": _safe_int(row.get("capacity_teams")),
@@ -1087,6 +1160,12 @@ def validate_and_clean_tournament_selection(
     )
     if not eligible:
         raise ValueError(f"{_event_label(event)}: {message or 'Skill eligibility requirements were not met.'}")
+
+    _validate_age_eligibility(
+        event=event,
+        selection=clean_selection,
+        player_profile=player_profile,
+    )
 
     clean_selection["registration_day_id"] = str(event.get("registration_day_id") or "")
     # This field is intentionally validation-only and is not part of the

@@ -10,8 +10,16 @@ from typing import Any
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
 from jupr_app.domain.tournament_public_references import build_public_tournament_reference
 
-from .tournament_registration_compiler import compile_tournament_registration_state, validate_selection_against_skill
-from .tournament_age_policy import build_age_split_preview, normalize_age_policy
+from .tournament_registration_compiler import (
+    canonical_gender_restriction,
+    canonical_skill_policy,
+    compile_tournament_registration_state,
+    evaluate_selection_gender_eligibility,
+    evaluate_selection_skill_eligibility,
+    skill_ceiling_exclusive,
+    validate_selection_against_skill,
+)
+from .tournament_age_policy import evaluate_age_eligibility, normalize_age_policy
 
 REGISTRATION_STATUS_OPTIONS = ["draft", "open", "closed"]
 EVENT_TYPE_OPTIONS = ["SINGLES", "GENDER_DOUBLES", "MIXED_DOUBLES"]
@@ -1090,8 +1098,13 @@ def _skill_age_rule_review_value(
         elif policy["mode"] == "SPLIT_AGE":
             age_label = str((policy.get("brackets") or [{}])[0].get("label") or "Split-age partners")
         return {
+            "event_type": event.get("event_type") or event.get("participant_type") or "GENDER_DOUBLES",
+            "gender_restriction": event.get("gender_restriction") or "ANY",
             "skill_label": event.get("skill_label") or "Open",
             "skill_mode": event.get("skill_mode") or "OPEN",
+            "eligibility_mode": event.get("eligibility_mode") or "STANDARD",
+            "skill_ceiling_exclusive": skill_ceiling_exclusive(event),
+            "combined_rating_cap": event.get("combined_rating_cap"),
             "age_label": age_label,
             "age_mode": policy["mode"],
             "age_rules": age_rules,
@@ -1099,8 +1112,13 @@ def _skill_age_rule_review_value(
         }
     except ValueError as exc:
         return {
+            "event_type": event.get("event_type") or event.get("participant_type") or "GENDER_DOUBLES",
+            "gender_restriction": event.get("gender_restriction") or "ANY",
             "skill_label": event.get("skill_label") or "Open",
             "skill_mode": event.get("skill_mode") or "OPEN",
+            "eligibility_mode": event.get("eligibility_mode") or "STANDARD",
+            "skill_ceiling_exclusive": skill_ceiling_exclusive(event),
+            "combined_rating_cap": event.get("combined_rating_cap"),
             "age_label": event.get("age_label") or "Not set",
             "age_mode": event.get("age_mode") or "Not set",
             "age_rules": _age_rules_mapping(event.get("age_rules")),
@@ -1109,60 +1127,213 @@ def _skill_age_rule_review_value(
         }
 
 
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _team_event(event: dict[str, Any]) -> bool:
+    event_type = str(event.get("event_type") or event.get("participant_type") or "").strip().upper()
+    if event_type == "SINGLES":
+        return False
+    if event_type in {"GENDER_DOUBLES", "MIXED_DOUBLES", "DOUBLES", "MIXED"}:
+        return True
+    try:
+        return int(event.get("team_roster_size") or 1) > 1
+    except (TypeError, ValueError):
+        return bool(event.get("partner_required"))
+
+
+def _selection_partner_mode(selection: dict[str, Any]) -> str:
+    mode = str(selection.get("partner_mode") or "").strip().upper()
+    if mode in {"HAS_PARTNER", "NEEDS_PARTNER", "NONE"}:
+        return mode
+    if any(selection.get(key) not in (None, "") for key in ("partner_name", "partner_email", "partner_skill", "partner_age", "partner_gender")):
+        return "HAS_PARTNER"
+    return "NONE"
+
+
+def _selection_partner_record(
+    selection: dict[str, Any],
+    partner_registration: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    mode = _selection_partner_mode(selection)
+    if mode != "HAS_PARTNER":
+        return None
+    partner_registration = partner_registration or {}
+    doubles_skill = _optional_float(partner_registration.get("doubles_skill"))
+    singles_skill = _optional_float(partner_registration.get("singles_skill"))
+    submitted_skill = _optional_float(selection.get("partner_skill"))
+    resolved_skill = doubles_skill if doubles_skill is not None else singles_skill
+    if resolved_skill is None:
+        resolved_skill = submitted_skill
+    return {
+        "doubles_skill": doubles_skill if doubles_skill is not None else resolved_skill,
+        "singles_skill": singles_skill if singles_skill is not None else resolved_skill,
+        "age": _optional_float(partner_registration.get("age"))
+        if partner_registration.get("age") not in (None, "")
+        else _optional_float(selection.get("partner_age")),
+        "gender": partner_registration.get("gender") or selection.get("partner_gender"),
+        "email": partner_registration.get("email") or selection.get("partner_email"),
+    }
+
+
+def _selection_with_resolved_partner(
+    selection: dict[str, Any],
+    partner_registration: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    resolved = dict(selection)
+    partner = _selection_partner_record(selection, partner_registration)
+    if not partner:
+        return resolved
+    if resolved.get("partner_skill") in (None, ""):
+        resolved["partner_skill"] = partner.get("doubles_skill") or partner.get("singles_skill")
+    if resolved.get("partner_age") in (None, ""):
+        resolved["partner_age"] = partner.get("age")
+    if resolved.get("partner_gender") in (None, ""):
+        resolved["partner_gender"] = partner.get("gender")
+    return resolved
+
+
+def _participant_eligibility_review(event: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
+    team_event = _team_event(event)
+    partner_mode = _selection_partner_mode(selection)
+    has_partner_data = any(
+        selection.get(key) not in (None, "")
+        for key in ("partner_name", "partner_email", "partner_skill", "partner_age", "partner_gender")
+    )
+    if not team_event:
+        if partner_mode == "HAS_PARTNER" or has_partner_data:
+            return {
+                "status": "INELIGIBLE",
+                "issue_type": "PARTICIPANT_FORMAT",
+                "issue": "This registration includes a partner but the proposed Division is Singles.",
+            }
+        return {"status": "ELIGIBLE", "issue_type": None, "issue": None}
+    if partner_mode in {"HAS_PARTNER", "NEEDS_PARTNER"}:
+        return {
+            "status": "ELIGIBLE",
+            "issue_type": None,
+            "issue": None,
+            "pending_partner": partner_mode == "NEEDS_PARTNER",
+        }
+    return {
+        "status": "MISSING_DATA",
+        "issue_type": "MISSING_PARTNER_DATA",
+        "issue": "Choose a partner or mark this registration as needing a partner for the proposed team Division.",
+        "missing_fields": ["partner status"],
+    }
+
+
+def _gender_eligibility_review(
+    event: dict[str, Any],
+    registration: dict[str, Any],
+    selection: dict[str, Any],
+    partner: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return evaluate_selection_gender_eligibility(
+        event=event,
+        selection=selection,
+        player=registration,
+        partner=partner,
+    )
+
+
+def _combined_eligibility_status(results: list[dict[str, Any]]) -> tuple[str, list[str], list[str]]:
+    hard_issues = [str(row.get("issue") or "") for row in results if row.get("status") == "INELIGIBLE" and row.get("issue")]
+    missing_issues = [str(row.get("issue") or "") for row in results if row.get("status") == "MISSING_DATA" and row.get("issue")]
+    if hard_issues:
+        return "INELIGIBLE", hard_issues, missing_issues
+    if missing_issues:
+        return "MISSING_DATA", hard_issues, missing_issues
+    return "ELIGIBLE", hard_issues, missing_issues
+
+
 def _registration_skill_age_review_value(
     event: dict[str, Any],
     registration: dict[str, Any],
     selection: dict[str, Any],
     *,
     source_label: str,
+    partner_registration: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     base = _skill_age_rule_review_value(event, source_label=source_label)
+    resolved_selection = _selection_with_resolved_partner(selection, partner_registration)
+    partner = _selection_partner_record(resolved_selection, partner_registration)
+    skill_review = evaluate_selection_skill_eligibility(
+        event=event,
+        selection=resolved_selection,
+        player=registration,
+        partner=partner,
+        allow_missing_partner_for_preview=True,
+    )
+    participant_review = _participant_eligibility_review(event, resolved_selection)
+    gender_review = _gender_eligibility_review(event, registration, resolved_selection, partner)
+
     try:
-        policy = _normalized_event_age_policy(event)
-        preview = build_age_split_preview(
-            policy=policy,
-            registrations={str(registration.get("id") or ""): registration},
-            selections=[selection],
+        age_review = evaluate_age_eligibility(
+            policy=_normalized_event_age_policy(event),
+            player_age=_optional_float(registration.get("age")),
+            partner_age=_optional_float(resolved_selection.get("partner_age")),
             participant_type=str(event.get("event_type") or event.get("participant_type") or "GENDER_DOUBLES"),
         )
-        selected_entry: dict[str, Any] | None = None
-        selected_label = ""
-        selection_id = str(selection.get("id") or "").strip()
-        for bracket in preview.get("brackets") or []:
-            for entry in bracket.get("entries") or []:
-                if str(entry.get("selection_id") or "").strip() == selection_id:
-                    selected_entry = dict(entry)
-                    selected_label = str(bracket.get("label") or "").strip()
-                    break
-            if selected_entry is not None:
-                break
-        if selected_entry is None:
-            unassigned = [dict(row) for row in preview.get("unassigned_entries") or [] if isinstance(row, dict)]
-            selected_entry = unassigned[0] if unassigned else {}
-            selected_label = (
-                "Needs age information"
-                if str(selected_entry.get("assignment_issue_type") or "").upper() == "MISSING_AGE_DATA"
-                else "Needs manual resolution"
-            )
-        base.update(
-            {
-                "age_label": selected_label or base.get("age_label") or "Not assigned",
-                "player_age": selected_entry.get("age", registration.get("age")),
-                "partner_age": selected_entry.get("partner_age", selection.get("partner_age")),
-                "effective_age": selected_entry.get("effective_age"),
-                "assignment_issue_type": selected_entry.get("assignment_issue_type"),
-                "assignment_issue": selected_entry.get("assignment_issue"),
-            }
-        )
     except ValueError as exc:
-        base.update(
-            {
-                "age_label": "Needs manual resolution",
-                "player_age": registration.get("age"),
-                "partner_age": selection.get("partner_age"),
-                "assignment_issue": str(exc),
-            }
-        )
+        age_review = {
+            "status": "INELIGIBLE",
+            "issue_type": "INVALID_AGE_POLICY",
+            "issue": str(exc),
+            "player_age": _optional_float(registration.get("age")),
+            "partner_age": _optional_float(resolved_selection.get("partner_age")),
+            "effective_age": None,
+            "eligible_age_groups": [],
+            "preferred_age_group": None,
+        }
+
+    preferred_age_group = str(age_review.get("preferred_age_group") or "").strip()
+    if age_review.get("status") == "MISSING_DATA":
+        age_label = "Needs age information"
+    elif age_review.get("status") == "INELIGIBLE":
+        age_label = "Not eligible"
+    else:
+        age_label = preferred_age_group or str(base.get("age_label") or "All ages")
+    base.update(
+        {
+            "age_label": age_label,
+            "preferred_age_group": preferred_age_group or None,
+            "eligible_age_groups": age_review.get("eligible_age_groups") or [],
+            "player_age": age_review.get("player_age", registration.get("age")),
+            "partner_age": age_review.get("partner_age", resolved_selection.get("partner_age")),
+            "effective_age": age_review.get("effective_age"),
+            "assignment_issue_type": age_review.get("issue_type"),
+            "assignment_issue": age_review.get("issue"),
+        }
+    )
+
+    status, hard_issues, missing_issues = _combined_eligibility_status(
+        [participant_review, gender_review, skill_review, age_review]
+    )
+    issue_types = [
+        str(row.get("issue_type") or "")
+        for row in (participant_review, gender_review, skill_review, age_review)
+        if row.get("issue_type")
+    ]
+    base.update(
+        {
+            "eligibility_status": status,
+            "eligibility_issue_types": issue_types,
+            "eligibility_issues": [*hard_issues, *missing_issues],
+            "data_completion_required": status == "MISSING_DATA",
+            "participant_eligibility": participant_review,
+            "gender_eligibility": gender_review,
+            "skill_eligibility": skill_review,
+            "age_eligibility": age_review,
+        }
+    )
     return base
 
 
@@ -1184,14 +1355,20 @@ def _normalized_age_policy_fingerprint(event: dict[str, Any]) -> str:
 
 
 def _skill_policy_fingerprint(event: dict[str, Any]) -> str:
+    return _stable_review_fingerprint(canonical_skill_policy(event))
+
+
+def _participant_policy_fingerprint(event: dict[str, Any]) -> str:
     return _stable_review_fingerprint(
         {
-            "skill_label": event.get("skill_label"),
-            "skill_mode": event.get("skill_mode"),
-            "eligibility_mode": event.get("eligibility_mode"),
-            "combined_rating_cap": event.get("combined_rating_cap"),
+            "team_event": _team_event(event),
+            "team_roster_size": int(event.get("team_roster_size") or (2 if _team_event(event) else 1)),
         }
     )
+
+
+def _gender_policy_fingerprint(event: dict[str, Any]) -> str:
+    return canonical_gender_restriction(event)
 
 
 def analyze_registration_publish_impact(
@@ -1220,10 +1397,16 @@ def analyze_registration_publish_impact(
     )
     usage_by_event = list_registration_usage_by_event_option(supabase, tournament_id)
     usage_by_day = list_registration_usage_by_day(supabase, tournament_id)
+    registration_rows = list_registrations(supabase, tournament_id)
     registrations_by_id = {
         str(row.get("id") or ""): row
-        for row in list_registrations(supabase, tournament_id)
+        for row in registration_rows
         if str(row.get("id") or "").strip()
+    }
+    registrations_by_email = {
+        _normalize_email(row.get("email")): row
+        for row in registration_rows
+        if _normalize_email(row.get("email"))
     }
     selections_by_event: dict[str, list[dict[str, Any]]] = {}
     for selection in list_registration_selections(supabase, tournament_id):
@@ -1288,20 +1471,25 @@ def analyze_registration_publish_impact(
                     )
                     if part
                 )
+            partner_registration = registrations_by_email.get(
+                _normalize_email(selection.get("partner_email"))
+            )
             registration_current_value = current_value
             registration_proposed_value = proposed_value
-            if field == "skill_age_rules" and current_event is not None and proposed_event is not None:
+            if field in {"skill_age_rules", "gender_restriction", "event_type"} and current_event is not None and proposed_event is not None:
                 registration_current_value = _registration_skill_age_review_value(
                     current_event,
                     registration,
                     selection,
                     source_label=current_source,
+                    partner_registration=partner_registration,
                 )
                 registration_proposed_value = _registration_skill_age_review_value(
                     proposed_event,
                     registration,
                     selection,
                     source_label=proposed_source,
+                    partner_registration=partner_registration,
                 )
             affected.append(
                 {
@@ -1561,59 +1749,165 @@ def analyze_registration_publish_impact(
                     proposed_value=draft_schedule,
                     usage=usage,
                 )
-        if has_usage and str(existing.get("event_type") or "") != str(event.get("event_type") or ""):
-            block_event(
-                f"Cannot change participant type for populated division '{label}'.",
-                event_id=event_id,
-                label=label,
-                field="event_type",
-                current_value=existing.get("event_type"),
-                proposed_value=event.get("event_type"),
-                usage=usage,
-            )
-        if has_usage and str(existing.get("gender_restriction") or "") != str(event.get("gender_restriction") or ""):
-            block_event(
-                f"Cannot change gender restriction for populated division '{label}'.",
-                event_id=event_id,
-                label=label,
-                field="gender_restriction",
-                current_value=existing.get("gender_restriction"),
-                proposed_value=event.get("gender_restriction"),
-                usage=usage,
-            )
-
+        participant_policy_changed = _participant_policy_fingerprint(existing) != _participant_policy_fingerprint(event)
+        gender_policy_changed = _gender_policy_fingerprint(existing) != _gender_policy_fingerprint(event)
         skill_policy_changed = _skill_policy_fingerprint(existing) != _skill_policy_fingerprint(event)
         age_policy_changed = _normalized_age_policy_fingerprint(existing) != _normalized_age_policy_fingerprint(
             proposed_event_for_review
         )
-        if has_usage and (skill_policy_changed or age_policy_changed):
-            current_rule_value = _skill_age_rule_review_value(existing, source_label=current_source)
-            proposed_rule_value = _skill_age_rule_review_value(
-                proposed_event_for_review,
-                source_label=proposed_source,
+
+        if has_usage and (participant_policy_changed or gender_policy_changed or skill_policy_changed or age_policy_changed):
+            event_selections = selections_by_event.get(event_id, [])
+            all_selection_ids = {
+                str(row.get("id") or "").strip()
+                for row in event_selections
+                if str(row.get("id") or "").strip()
+            }
+            proposed_review_by_selection: dict[str, dict[str, Any]] = {}
+            for selection in event_selections:
+                selection_id = str(selection.get("id") or "").strip()
+                registration_id = str(selection.get("registration_id") or "").strip()
+                registration = registrations_by_id.get(registration_id, {})
+                partner_registration = registrations_by_email.get(
+                    _normalize_email(selection.get("partner_email"))
+                )
+                if selection_id:
+                    proposed_review_by_selection[selection_id] = _registration_skill_age_review_value(
+                        proposed_event_for_review,
+                        registration,
+                        selection,
+                        source_label=proposed_source,
+                        partner_registration=partner_registration,
+                    )
+
+            def component_selection_ids(component: str) -> tuple[set[str], set[str], set[str]]:
+                invalid: set[str] = set()
+                missing: set[str] = set()
+                valid: set[str] = set()
+                for selection_id, review in proposed_review_by_selection.items():
+                    component_review = review.get(component) if isinstance(review.get(component), dict) else {}
+                    status = str(component_review.get("status") or "ELIGIBLE").upper()
+                    if status == "INELIGIBLE":
+                        invalid.add(selection_id)
+                    elif status == "MISSING_DATA":
+                        missing.add(selection_id)
+                    else:
+                        valid.add(selection_id)
+                return invalid, missing, valid
+
+            operational_usage = any(
+                int(usage.get(key, 0) or 0)
+                for key in ("event_draws", "teams", "games")
             )
-            if skill_policy_changed:
-                block_event(
-                    f"Cannot change skill rules for populated division '{label}' without reviewing affected registrations.",
-                    event_id=event_id,
-                    label=label,
-                    field="skill_age_rules",
-                    current_value=current_rule_value,
-                    proposed_value=proposed_rule_value,
-                    usage=usage,
-                    current_event=existing,
-                    proposed_event=proposed_event_for_review,
-                    current_source=current_source,
-                    proposed_source=proposed_source,
-                )
-            elif age_policy_changed:
-                operational_usage = any(
-                    int(usage.get(key, 0) or 0)
-                    for key in ("event_draws", "teams", "games")
-                )
-                if operational_usage:
+
+            if participant_policy_changed:
+                invalid_ids, missing_ids, valid_ids = component_selection_ids("participant_eligibility")
+                if invalid_ids:
                     block_event(
-                        f"Cannot change age grouping for populated division '{label}' after draws, teams, or games exist.",
+                        f"The proposed participant format makes {len(invalid_ids)} existing registration"
+                        f"{'s' if len(invalid_ids) != 1 else ''} in division '{label}' incompatible.",
+                        event_id=event_id,
+                        label=label,
+                        field="event_type",
+                        current_value=existing.get("event_type"),
+                        proposed_value=event.get("event_type"),
+                        usage=usage,
+                        current_event=existing,
+                        proposed_event=proposed_event_for_review,
+                        current_source=current_source,
+                        proposed_source=proposed_source,
+                        selection_ids=invalid_ids,
+                    )
+                if missing_ids:
+                    communication_event(
+                        f"Participant format for populated division '{label}' changes. Existing registrations remain potentially valid, but {len(missing_ids)} registration"
+                        f"{'s need' if len(missing_ids) != 1 else ' needs'} partner-status information before eligibility can be confirmed.",
+                        event_id=event_id,
+                        label=label,
+                        field="event_type",
+                        current_value=existing.get("event_type"),
+                        proposed_value=event.get("event_type"),
+                        usage=usage,
+                        impact_type="ELIGIBILITY_COMMUNICATION",
+                        current_event=existing,
+                        proposed_event=proposed_event_for_review,
+                        current_source=current_source,
+                        proposed_source=proposed_source,
+                        selection_ids=valid_ids | missing_ids,
+                        data_completion_selection_ids=missing_ids,
+                    )
+                elif valid_ids and not invalid_ids:
+                    warnings.append(
+                        f"Participant format for populated division '{label}' changes, but all existing registrations remain compatible."
+                    )
+
+            if gender_policy_changed:
+                invalid_ids, missing_ids, valid_ids = component_selection_ids("gender_eligibility")
+                if invalid_ids:
+                    block_event(
+                        f"The proposed gender restriction makes {len(invalid_ids)} existing registration"
+                        f"{'s' if len(invalid_ids) != 1 else ''} in division '{label}' ineligible.",
+                        event_id=event_id,
+                        label=label,
+                        field="gender_restriction",
+                        current_value=existing.get("gender_restriction"),
+                        proposed_value=event.get("gender_restriction"),
+                        usage=usage,
+                        current_event=existing,
+                        proposed_event=proposed_event_for_review,
+                        current_source=current_source,
+                        proposed_source=proposed_source,
+                        selection_ids=invalid_ids,
+                    )
+                if missing_ids:
+                    communication_event(
+                        f"Gender restriction for populated division '{label}' changes. Existing registrations remain potentially valid, but {len(missing_ids)} registration"
+                        f"{'s need' if len(missing_ids) != 1 else ' needs'} gender information before eligibility can be confirmed.",
+                        event_id=event_id,
+                        label=label,
+                        field="gender_restriction",
+                        current_value=existing.get("gender_restriction"),
+                        proposed_value=event.get("gender_restriction"),
+                        usage=usage,
+                        impact_type="ELIGIBILITY_COMMUNICATION",
+                        current_event=existing,
+                        proposed_event=proposed_event_for_review,
+                        current_source=current_source,
+                        proposed_source=proposed_source,
+                        selection_ids=valid_ids | missing_ids,
+                        data_completion_selection_ids=missing_ids,
+                    )
+                elif valid_ids and not invalid_ids:
+                    warnings.append(
+                        f"Gender restriction for populated division '{label}' changes, but every existing registration remains eligible."
+                    )
+
+            if skill_policy_changed or age_policy_changed:
+                current_rule_value = _skill_age_rule_review_value(existing, source_label=current_source)
+                proposed_rule_value = _skill_age_rule_review_value(
+                    proposed_event_for_review,
+                    source_label=proposed_source,
+                )
+                invalid_ids: set[str] = set()
+                missing_ids: set[str] = set()
+                valid_ids: set[str] = set()
+                for selection_id, review in proposed_review_by_selection.items():
+                    component_rows: list[dict[str, Any]] = []
+                    if skill_policy_changed:
+                        component_rows.append(review.get("skill_eligibility") if isinstance(review.get("skill_eligibility"), dict) else {})
+                    if age_policy_changed:
+                        component_rows.append(review.get("age_eligibility") if isinstance(review.get("age_eligibility"), dict) else {})
+                    statuses = {str(row.get("status") or "ELIGIBLE").upper() for row in component_rows}
+                    if "INELIGIBLE" in statuses:
+                        invalid_ids.add(selection_id)
+                    elif "MISSING_DATA" in statuses:
+                        missing_ids.add(selection_id)
+                    else:
+                        valid_ids.add(selection_id)
+
+                if operational_usage and age_policy_changed:
+                    block_event(
+                        f"Cannot reorganize age groups for populated division '{label}' after draws, teams, or games exist without rebuilding those operational records.",
                         event_id=event_id,
                         label=label,
                         field="skill_age_rules",
@@ -1626,21 +1920,13 @@ def analyze_registration_publish_impact(
                         proposed_source=proposed_source,
                     )
                 else:
-                    event_selections = selections_by_event.get(event_id, [])
-                    try:
-                        age_preview = build_age_split_preview(
-                            policy=_normalized_event_age_policy(proposed_event_for_review),
-                            registrations=registrations_by_id,
-                            selections=event_selections,
-                            participant_type=str(
-                                proposed_event_for_review.get("event_type")
-                                or proposed_event_for_review.get("participant_type")
-                                or "GENDER_DOUBLES"
-                            ),
+                    if invalid_ids:
+                        changed_label = "skill or age eligibility" if skill_policy_changed and age_policy_changed else (
+                            "skill ceiling" if skill_policy_changed else "minimum-age eligibility"
                         )
-                    except ValueError as exc:
                         block_event(
-                            f"Cannot apply the proposed age policy to populated division '{label}': {exc}",
+                            f"The proposed {changed_label} makes {len(invalid_ids)} existing registration"
+                            f"{'s' if len(invalid_ids) != 1 else ''} in division '{label}' ineligible.",
                             event_id=event_id,
                             label=label,
                             field="skill_age_rules",
@@ -1651,74 +1937,57 @@ def analyze_registration_publish_impact(
                             proposed_event=proposed_event_for_review,
                             current_source=current_source,
                             proposed_source=proposed_source,
+                            selection_ids=invalid_ids,
                         )
-                    else:
-                        unassigned = [
-                            dict(row)
-                            for row in age_preview.get("unassigned_entries") or []
-                            if isinstance(row, dict)
-                        ]
-                        missing_data_selection_ids = {
-                            str(row.get("selection_id") or "").strip()
-                            for row in unassigned
-                            if str(row.get("assignment_issue_type") or "").strip().upper()
-                            == "MISSING_AGE_DATA"
-                            and str(row.get("selection_id") or "").strip()
-                        }
-                        invalid_selection_ids = {
-                            str(row.get("selection_id") or "").strip()
-                            for row in unassigned
-                            if str(row.get("assignment_issue_type") or "").strip().upper()
-                            != "MISSING_AGE_DATA"
-                            and str(row.get("selection_id") or "").strip()
-                        }
-                        all_selection_ids = {
-                            str(row.get("id") or "").strip()
-                            for row in event_selections
-                            if str(row.get("id") or "").strip()
-                        }
-                        if invalid_selection_ids:
-                            block_event(
-                                f"Cannot apply the proposed age policy to {len(invalid_selection_ids)} existing registration"
-                                f"{'s' if len(invalid_selection_ids) != 1 else ''} in division '{label}' without resolving eligibility.",
-                                event_id=event_id,
-                                label=label,
-                                field="skill_age_rules",
-                                current_value=current_rule_value,
-                                proposed_value=proposed_rule_value,
-                                usage=usage,
-                                current_event=existing,
-                                proposed_event=proposed_event_for_review,
-                                current_source=current_source,
-                                proposed_source=proposed_source,
-                                selection_ids=invalid_selection_ids,
-                            )
-                        registration_preserving_ids = all_selection_ids.difference(invalid_selection_ids)
-                        if occupied and registration_preserving_ids:
-                            missing_count = len(missing_data_selection_ids)
-                            data_message = (
-                                f" Complete age information for {missing_count} registration"
-                                f"{'s' if missing_count != 1 else ''} before final bracket assignment."
-                                if missing_count
-                                else ""
-                            )
-                            communication_event(
-                                f"Age grouping for populated division '{label}' changes, but affected registrations remain eligible."
-                                f"{data_message} Acknowledge the communication impact before publishing.",
-                                event_id=event_id,
-                                label=label,
-                                field="skill_age_rules",
-                                current_value=current_rule_value,
-                                proposed_value=proposed_rule_value,
-                                usage=usage,
-                                impact_type="AGE_GROUPING_COMMUNICATION",
-                                current_event=existing,
-                                proposed_event=proposed_event_for_review,
-                                current_source=current_source,
-                                proposed_source=proposed_source,
-                                selection_ids=registration_preserving_ids,
-                                data_completion_selection_ids=missing_data_selection_ids,
-                            )
+
+                    preserving_ids = all_selection_ids.difference(invalid_ids)
+                    if age_policy_changed and preserving_ids:
+                        missing_count = len(missing_ids)
+                        data_message = (
+                            f" Complete eligibility information for {missing_count} registration"
+                            f"{'s' if missing_count != 1 else ''} before final preferred age-group placement."
+                            if missing_count
+                            else ""
+                        )
+                        communication_event(
+                            f"Age grouping for populated division '{label}' changes, but the affected registrations remain eligible under the proposed minimum-age rules."
+                            f" Older players may play in younger groups; each team is assigned to its oldest eligible preferred group.{data_message}",
+                            event_id=event_id,
+                            label=label,
+                            field="skill_age_rules",
+                            current_value=current_rule_value,
+                            proposed_value=proposed_rule_value,
+                            usage=usage,
+                            impact_type="AGE_GROUPING_COMMUNICATION",
+                            current_event=existing,
+                            proposed_event=proposed_event_for_review,
+                            current_source=current_source,
+                            proposed_source=proposed_source,
+                            selection_ids=preserving_ids,
+                            data_completion_selection_ids=missing_ids,
+                        )
+                    elif skill_policy_changed and missing_ids:
+                        communication_event(
+                            f"Skill ceiling for populated division '{label}' changes. No known rating is outside the proposed ceiling, but {len(missing_ids)} registration"
+                            f"{'s need' if len(missing_ids) != 1 else ' needs'} rating information before eligibility can be confirmed.",
+                            event_id=event_id,
+                            label=label,
+                            field="skill_age_rules",
+                            current_value=current_rule_value,
+                            proposed_value=proposed_rule_value,
+                            usage=usage,
+                            impact_type="ELIGIBILITY_COMMUNICATION",
+                            current_event=existing,
+                            proposed_event=proposed_event_for_review,
+                            current_source=current_source,
+                            proposed_source=proposed_source,
+                            selection_ids=valid_ids | missing_ids,
+                            data_completion_selection_ids=missing_ids,
+                        )
+                    elif skill_policy_changed and valid_ids and not invalid_ids:
+                        warnings.append(
+                            f"Skill ceiling for populated division '{label}' changes, but every existing registration remains eligible. Lower-rated players may continue to play up."
+                        )
 
         existing_capacity = existing.get("capacity_teams")
         next_capacity = event.get("capacity_teams")

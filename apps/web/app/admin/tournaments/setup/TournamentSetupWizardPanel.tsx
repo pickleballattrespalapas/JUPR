@@ -728,6 +728,9 @@ function communicationImpactTitle(item: CommunicationImpactDetail): string {
   if (impactType === "SCHEDULE_COMMUNICATION") {
     return "Schedule change — no registration conflict";
   }
+  if (impactType === "ELIGIBILITY_COMMUNICATION") {
+    return "Eligibility-rule change — no known registration conflict";
+  }
   return "Registration-preserving change — no registration conflict";
 }
 
@@ -737,14 +740,33 @@ function affectedRegistrationImpactSummary(
 ): string {
   const proposed = objectValue(registration.proposed_value);
   const impactType = item.impact_type.toUpperCase();
-  if (impactType === "AGE_GROUPING_COMMUNICATION") {
-    const ageLabel = safeString(proposed.age_label);
+  if (["AGE_GROUPING_COMMUNICATION", "ELIGIBILITY_COMMUNICATION"].includes(impactType)) {
+    const ageLabel = safeString(proposed.preferred_age_group || proposed.age_label);
     const effectiveAge = Number(proposed.effective_age);
+    const eligibilityStatus = safeString(proposed.eligibility_status);
+    const skill = objectValue(proposed.skill_eligibility);
+    const skillStatus = safeString(skill.status);
+    const ceiling = Number(skill.skill_ceiling_exclusive);
+    const controllingRating = Number(skill.controlling_rating);
+    const combinedRating = Number(skill.combined_rating);
+    const combinedCap = Number(skill.combined_rating_cap);
+    const issues = Array.isArray(proposed.eligibility_issues)
+      ? proposed.eligibility_issues.map((value) => safeString(value)).filter(Boolean)
+      : [];
     const assignmentIssue = safeString(proposed.assignment_issue);
     const parts: string[] = [];
-    if (ageLabel) parts.push(`Proposed group: ${ageLabel}`);
+    if (eligibilityStatus) parts.push(eligibilityStatus === "ELIGIBLE" ? "Eligible" : eligibilityStatus.replaceAll("_", " "));
+    if (ageLabel && ageLabel !== "All ages") parts.push(`Preferred age group: ${ageLabel}`);
     if (Number.isFinite(effectiveAge)) parts.push(`team age ${Number.isInteger(effectiveAge) ? effectiveAge.toFixed(0) : effectiveAge.toFixed(1)}`);
-    if (assignmentIssue) parts.push(assignmentIssue);
+    if (skillStatus === "ELIGIBLE" && Number.isFinite(ceiling)) {
+      parts.push(`skill eligible below ${ceiling.toFixed(2)}`);
+    }
+    if (Number.isFinite(controllingRating)) parts.push(`controlling rating ${controllingRating.toFixed(2)}`);
+    if (Number.isFinite(combinedRating) && Number.isFinite(combinedCap)) {
+      parts.push(`combined ${combinedRating.toFixed(2)} below ${combinedCap.toFixed(2)}`);
+    }
+    for (const issue of issues) if (!parts.includes(issue)) parts.push(issue);
+    if (assignmentIssue && !parts.includes(assignmentIssue)) parts.push(assignmentIssue);
     return parts.join(" · ");
   }
   return "";
@@ -3361,8 +3383,10 @@ function renderDivisions() {
                               <ReviewValueDisplay field={item.field || "value"} value={item.proposed_value} days={configuration.days} timezone={basics.timezone} />
                             </div>
                           </div>
-                          <p style={{ color: "#166534", fontWeight: 800 }}>
-                            All {item.affected_registrations.length} affected registration{item.affected_registrations.length === 1 ? " remains" : "s remain"} valid. No registration-level cancellation or eligibility resolution is required.
+                          <p style={{ color: dataCompletionPending ? "#9a3412" : "#166534", fontWeight: 800 }}>
+                            {dataCompletionPending
+                              ? `No known registration is ineligible. ${item.data_completion_registrations.length} registration${item.data_completion_registrations.length === 1 ? " needs" : "s need"} missing information before eligibility or preferred placement can be confirmed.`
+                              : `All ${item.affected_registrations.length} affected registration${item.affected_registrations.length === 1 ? " remains" : "s remain"} valid. No registration-level cancellation or eligibility resolution is required.`}
                           </p>
                           {item.affected_registrations.length ? (
                             <details>
@@ -3381,14 +3405,17 @@ function renderDivisions() {
                           ) : null}
                           {item.data_completion_registrations.length ? (
                             <article style={{ marginTop: "0.7rem", padding: "0.7rem", border: "1px solid #fecaca", borderRadius: "10px", background: "#fff7ed" }}>
-                              <strong>Required age information before final group assignment</strong>
+                              <strong>Required eligibility information</strong>
                               <p style={{ margin: "0.35rem 0", color: "#9a3412" }}>
-                                These registrations remain valid, but the proposed age group cannot be assigned until the missing player or partner age is completed. Publication stays blocked only for these data-completion tasks.
+                                No known rule makes these registrations ineligible, but the missing information must be completed before final eligibility or preferred placement can be confirmed. Publication stays blocked only for these targeted data-completion tasks.
                               </p>
                               <ul style={{ marginBottom: 0 }}>
                                 {item.data_completion_registrations.map((registration) => {
                                   const proposed = objectValue(registration.proposed_value);
-                                  const issue = safeString(proposed.assignment_issue) || "Complete the missing age information.";
+                                  const eligibilityIssues = Array.isArray(proposed.eligibility_issues)
+                                    ? proposed.eligibility_issues.map((value) => safeString(value)).filter(Boolean)
+                                    : [];
+                                  const issue = eligibilityIssues.join(" · ") || safeString(proposed.assignment_issue) || "Complete the missing eligibility information.";
                                   const editorHref = `/admin/tournaments/registration/registrants/${encodeURIComponent(registration.registration_id)}?${new URLSearchParams({ tournament: tournamentId, name: basics.name || tournamentName }).toString()}`;
                                   return (
                                     <li key={`data-${registration.registration_id}-${registration.selection_id || "registration"}`}>
@@ -3441,7 +3468,7 @@ function renderDivisions() {
                                 {acknowledged
                                   ? "Communication impact acknowledged for publication"
                                   : dataCompletionPending
-                                    ? "Complete the required age information before acknowledging this impact"
+                                    ? "Complete the required eligibility information before acknowledging this impact"
                                     : "Choose an action and confirm completion"}
                               </small>
                             </div>

@@ -10,10 +10,6 @@ import uuid
 
 
 DoublesTypes = {"GENDER_DOUBLES", "MIXED_DOUBLES", "DOUBLES", "MIXED"}
-CONTROLLED_SKILL_LABELS = {"2.5", "3.0", "3.5", "4.0", "4.5", "5.0", "5.5"}
-
-
-
 
 def _coerce_skill(value: Any) -> float | None:
     if value in (None, ""):
@@ -24,13 +20,11 @@ def _coerce_skill(value: Any) -> float | None:
         return None
 
 
-def _parse_skill_anchor(skill_label: str) -> float | None:
+def _parse_skill_label(skill_label: str) -> tuple[float, bool] | None:
     text = str(skill_label or "").strip()
     if not text or text.lower() == "open":
         return None
-    # Standard presets remain explicit, while numeric custom divisions such as
-    # 3.25, 3.75+, or 4.1 are accepted as organizer-defined half-point bands.
-    match = re.fullmatch(r"(?:skill\s*)?([0-9](?:\.[0-9]{1,2})?)\s*\+?", text, re.IGNORECASE)
+    match = re.fullmatch(r"(?:skill\s*)?([0-9](?:\.[0-9]{1,2})?)\s*(\+)?", text, re.IGNORECASE)
     if not match:
         return None
     try:
@@ -39,7 +33,12 @@ def _parse_skill_anchor(skill_label: str) -> float | None:
         return None
     if anchor < 1.0 or anchor > 7.0:
         return None
-    return round(anchor, 2)
+    return round(anchor, 2), bool(match.group(2))
+
+
+def _parse_skill_anchor(skill_label: str) -> float | None:
+    parsed = _parse_skill_label(skill_label)
+    return parsed[0] if parsed else None
 
 
 def _next_half_step(value: float) -> float:
@@ -47,10 +46,10 @@ def _next_half_step(value: float) -> float:
 
 
 def _skill_band_for_label(skill_label: Any) -> tuple[float, float] | None:
-    floor = _parse_skill_anchor(str(skill_label or ""))
-    if floor is None:
+    anchor = _parse_skill_anchor(str(skill_label or ""))
+    if anchor is None:
         return None
-    return floor, _next_half_step(floor)
+    return anchor, _next_half_step(anchor)
 
 
 def _rating_at_or_above_ceiling(rating: float | None, ceiling_exclusive: float) -> bool:
@@ -83,81 +82,279 @@ def _effective_doubles_skill(player: dict[str, Any]) -> float | None:
     return _coerce_skill(player.get("singles_skill"))
 
 
-def _validate_singles_selection_against_skill(event: dict[str, Any], player: dict[str, Any]) -> tuple[bool, str | None]:
-    band = _skill_band_for_label(event.get("skill_label"))
-    if not band:
-        return True, None
+def skill_ceiling_exclusive(event: dict[str, Any]) -> float | None:
+    """Return the hard upper boundary for a standard skill Division.
 
-    floor, ceiling = band
-    rating = _effective_singles_skill(player)
-    if _rating_at_or_above_ceiling(rating, ceiling):
-        recommended = _recommended_anchor_for_rating(rating)
-        return False, (
-            f"Your rating is {_format_skill(rating)}, which is above the {_format_skill(floor)} division cap. "
-            f"Please register for a {_format_skill(recommended)} or higher division."
-        )
-    return True, None
+    A displayed 3.5 Division accepts ratings strictly below 4.0. Lower-rated
+    players may play up and higher-rated players may not play down. A 3.5+ or
+    ``MINIMUM`` event has no hard ceiling: the plus indicates an upward/open
+    event, and playing up remains permitted.
+    """
+
+    eligibility_mode = str(event.get("eligibility_mode") or "STANDARD").strip().upper()
+    if eligibility_mode in {"OPEN", "NONE"}:
+        return None
+    skill_mode = str(event.get("skill_mode") or "").strip().upper()
+    if skill_mode in {"MINIMUM", "MIN", "AT_LEAST", "OPEN"}:
+        return None
+    parsed = _parse_skill_label(str(event.get("skill_label") or ""))
+    if not parsed or parsed[1]:
+        return None
+    return _next_half_step(parsed[0])
 
 
-def _validate_doubles_selection_against_skill(
-    event: dict[str, Any],
-    player: dict[str, Any],
-    partner: dict[str, Any] | None,
+def canonical_skill_policy(event: dict[str, Any]) -> dict[str, Any]:
+    mode = str(event.get("eligibility_mode") or "STANDARD").strip().upper()
+    if mode == "COMBINED_RATING_CAP":
+        cap = _coerce_skill(event.get("combined_rating_cap"))
+        return {
+            "mode": "COMBINED_RATING_CAP",
+            "combined_rating_cap": round(cap, 2) if cap is not None else None,
+        }
+    ceiling = skill_ceiling_exclusive(event)
+    if ceiling is None:
+        return {"mode": "OPEN", "skill_ceiling_exclusive": None}
+    return {
+        "mode": "STANDARD_CEILING",
+        "skill_ceiling_exclusive": round(ceiling, 2),
+    }
+
+
+def evaluate_selection_skill_eligibility(
     *,
-    allow_missing_partner_for_preview: bool = False,
-) -> tuple[bool, str | None]:
-    band = _skill_band_for_label(event.get("skill_label"))
-    if not band:
-        return True, None
-
-    floor, ceiling = band
-    player_rating = _effective_doubles_skill(player)
-    partner_rating = _effective_doubles_skill(partner or {}) if partner else None
-
-    known_ratings = [value for value in (player_rating, partner_rating) if value is not None]
-    over_cap_ratings = [value for value in known_ratings if _rating_at_or_above_ceiling(value, ceiling)]
-    if over_cap_ratings:
-        highest = max(over_cap_ratings)
-        recommended = _recommended_anchor_for_rating(highest)
-        return False, (
-            f"Your team is rated above the {_format_skill(floor)} division cap. "
-            f"Please register for a {_format_skill(recommended)} or higher division."
-        )
-
-    return True, None
-
-
-def _validate_combined_rating_selection(
     event: dict[str, Any],
     selection: dict[str, Any],
     player: dict[str, Any],
-    partner: dict[str, Any] | None,
+    partner: dict[str, Any] | None = None,
+    allow_missing_partner_for_preview: bool = False,
+) -> dict[str, Any]:
+    """Return ELIGIBLE, MISSING_DATA, or INELIGIBLE for skill rules."""
+
+    team_event = _is_doubles_event(event)
+    partner_mode = str(selection.get("partner_mode") or "NONE").strip().upper()
+    policy = canonical_skill_policy(event)
+    player_rating = _effective_doubles_skill(player) if team_event else _effective_singles_skill(player)
+    partner_rating = _effective_doubles_skill(partner or {}) if team_event and partner else None
+    base: dict[str, Any] = {
+        "policy": policy,
+        "player_rating": player_rating,
+        "partner_rating": partner_rating,
+        "pending_partner": team_event and partner_mode == "NEEDS_PARTNER",
+    }
+
+    if policy["mode"] == "OPEN":
+        return {**base, "status": "ELIGIBLE", "issue_type": None, "issue": None}
+
+    if policy["mode"] == "COMBINED_RATING_CAP":
+        if not team_event:
+            return {
+                **base,
+                "status": "INELIGIBLE",
+                "issue_type": "INVALID_SKILL_POLICY",
+                "issue": "Combined-rating divisions require a doubles or team event.",
+            }
+        cap = _coerce_skill(policy.get("combined_rating_cap"))
+        if cap is None or cap <= 0 or cap > 14:
+            return {
+                **base,
+                "status": "INELIGIBLE",
+                "issue_type": "INVALID_SKILL_POLICY",
+                "issue": "This combined-rating division is missing a valid rating cap.",
+            }
+        known = [value for value in (player_rating, partner_rating) if value is not None]
+        if any(value >= cap for value in known):
+            controlling = max(known)
+            return {
+                **base,
+                "status": "INELIGIBLE",
+                "issue_type": "SKILL_NOT_ELIGIBLE",
+                "issue": (
+                    f"Known rating {_format_skill(controlling)} cannot fit a combined-rating cap "
+                    f"strictly below {_format_skill(cap)}."
+                ),
+                "combined_rating_cap": cap,
+                "controlling_rating": controlling,
+            }
+        missing_fields: list[str] = []
+        if player_rating is None:
+            missing_fields.append("player rating")
+        if team_event and partner_mode in {"HAS_PARTNER", "NEEDS_PARTNER"} and partner_rating is None:
+            missing_fields.append("partner rating")
+        if missing_fields:
+            return {
+                **base,
+                "status": "MISSING_DATA",
+                "issue_type": "MISSING_SKILL_DATA",
+                "issue": f"Complete {' and '.join(missing_fields)} before confirming combined-rating eligibility.",
+                "missing_fields": missing_fields,
+                "combined_rating_cap": cap,
+            }
+        combined = round(float(player_rating or 0) + float(partner_rating or 0), 2)
+        if combined >= cap:
+            return {
+                **base,
+                "status": "INELIGIBLE",
+                "issue_type": "SKILL_NOT_ELIGIBLE",
+                "issue": (
+                    f"Combined rating {_format_skill(combined)} is not strictly below "
+                    f"the {_format_skill(cap)} cap."
+                ),
+                "combined_rating_cap": cap,
+                "combined_rating": combined,
+            }
+        return {
+            **base,
+            "status": "ELIGIBLE",
+            "issue_type": None,
+            "issue": None,
+            "combined_rating_cap": cap,
+            "combined_rating": combined,
+        }
+
+    ceiling = float(policy["skill_ceiling_exclusive"])
+    known_ratings = [value for value in (player_rating, partner_rating) if value is not None]
+    controlling_rating = max(known_ratings) if known_ratings else None
+    if _rating_at_or_above_ceiling(controlling_rating, ceiling):
+        anchor = round(ceiling - 0.5, 2)
+        recommended = _recommended_anchor_for_rating(controlling_rating)
+        subject = "Your team" if team_event else "Your rating"
+        return {
+            **base,
+            "status": "INELIGIBLE",
+            "issue_type": "SKILL_NOT_ELIGIBLE",
+            "issue": (
+                f"{subject} is rated above the {_format_skill(anchor)} division cap. "
+                f"Please register for a {_format_skill(recommended)} or higher division."
+            ),
+            "skill_ceiling_exclusive": ceiling,
+            "controlling_rating": controlling_rating,
+        }
+    missing_fields: list[str] = []
+    if player_rating is None:
+        missing_fields.append("player rating")
+    if team_event and partner_mode in {"HAS_PARTNER", "NEEDS_PARTNER"} and partner_rating is None:
+        missing_fields.append("partner rating")
+    if missing_fields:
+        return {
+            **base,
+            "status": "MISSING_DATA",
+            "issue_type": "MISSING_SKILL_DATA",
+            "issue": f"Complete {' and '.join(missing_fields)} before confirming skill eligibility.",
+            "missing_fields": missing_fields,
+            "skill_ceiling_exclusive": ceiling,
+            "controlling_rating": controlling_rating,
+        }
+    return {
+        **base,
+        "status": "ELIGIBLE",
+        "issue_type": None,
+        "issue": None,
+        "skill_ceiling_exclusive": ceiling,
+        "controlling_rating": controlling_rating,
+    }
+
+
+def normalize_tournament_gender(value: Any) -> str:
+    text = re.sub(r"[^a-z]", "", str(value or "").strip().lower())
+    if text in {"m", "male", "man", "men", "mens", "boy", "boys"}:
+        return "MEN"
+    if text in {"f", "female", "woman", "women", "womens", "girl", "girls"}:
+        return "WOMEN"
+    return "OTHER" if text else ""
+
+
+def canonical_gender_restriction(event: dict[str, Any]) -> str:
+    restriction = str(event.get("gender_restriction") or "ANY").strip().upper()
+    if restriction in {"", "OPEN", "NONE"}:
+        return "ANY"
+    if restriction == "MALE":
+        return "MEN"
+    if restriction == "FEMALE":
+        return "WOMEN"
+    return restriction
+
+
+def evaluate_selection_gender_eligibility(
     *,
-    allow_missing_partner_for_preview: bool,
-) -> tuple[bool, str | None]:
-    try:
-        cap = round(float(event.get("combined_rating_cap")), 2)
-    except (TypeError, ValueError):
-        return False, "This combined-rating division is missing a valid rating cap."
-    if cap <= 0 or cap > 14:
-        return False, "This combined-rating division has an invalid rating cap."
-    partner_mode = str(selection.get("partner_mode") or "NONE").upper()
-    if partner_mode == "NEEDS_PARTNER" and allow_missing_partner_for_preview:
-        return True, None
-    player_rating = _effective_doubles_skill(player)
-    partner_rating = _effective_doubles_skill(partner or {}) if partner else None
-    # Missing ratings remain registrable for organizer verification. The
-    # database review is authoritative before draw assignment.
-    if player_rating is None or partner_rating is None:
-        return True, None
-    combined = round(player_rating + partner_rating, 2)
-    if combined >= cap:
-        return False, (
-            f"Your combined rating is {_format_skill(combined)}. "
-            f"This division requires a combined rating strictly below {_format_skill(cap)}."
-        )
-    # No lower bound is applied: a team may deliberately play up.
-    return True, None
+    event: dict[str, Any],
+    selection: dict[str, Any],
+    player: dict[str, Any],
+    partner: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Evaluate gender restrictions without treating missing data as denial."""
+
+    restriction = canonical_gender_restriction(event)
+    player_gender = normalize_tournament_gender(player.get("gender"))
+    partner_gender = normalize_tournament_gender((partner or {}).get("gender")) if partner else ""
+    partner_mode = str(selection.get("partner_mode") or "NONE").strip().upper()
+    team_event = _is_doubles_event(event)
+    base = {
+        "restriction": restriction,
+        "player_gender": player_gender,
+        "partner_gender": partner_gender,
+        "pending_partner": team_event and partner_mode == "NEEDS_PARTNER",
+    }
+    if restriction == "ANY":
+        return {**base, "status": "ELIGIBLE", "issue_type": None, "issue": None}
+    if not player_gender:
+        return {
+            **base,
+            "status": "MISSING_DATA",
+            "issue_type": "MISSING_GENDER_DATA",
+            "issue": "Complete player gender before confirming eligibility.",
+            "missing_fields": ["player gender"],
+        }
+    if restriction in {"MEN", "WOMEN"}:
+        if player_gender != restriction:
+            return {
+                **base,
+                "status": "INELIGIBLE",
+                "issue_type": "GENDER_NOT_ELIGIBLE",
+                "issue": f"Player does not meet the proposed {restriction.lower()} restriction.",
+            }
+        if team_event and partner_mode in {"HAS_PARTNER", "NEEDS_PARTNER"}:
+            if not partner_gender:
+                return {
+                    **base,
+                    "status": "MISSING_DATA",
+                    "issue_type": "MISSING_GENDER_DATA",
+                    "issue": "Complete partner gender before confirming eligibility.",
+                    "missing_fields": ["partner gender"],
+                }
+            if partner_gender != restriction:
+                return {
+                    **base,
+                    "status": "INELIGIBLE",
+                    "issue_type": "GENDER_NOT_ELIGIBLE",
+                    "issue": f"Partner does not meet the proposed {restriction.lower()} restriction.",
+                }
+        return {**base, "status": "ELIGIBLE", "issue_type": None, "issue": None}
+    if restriction == "MIXED":
+        if player_gender not in {"MEN", "WOMEN"}:
+            return {
+                **base,
+                "status": "INELIGIBLE",
+                "issue_type": "GENDER_NOT_ELIGIBLE",
+                "issue": "Player does not meet the proposed Mixed Division rule.",
+            }
+        if partner_mode in {"HAS_PARTNER", "NEEDS_PARTNER"}:
+            if not partner_gender:
+                return {
+                    **base,
+                    "status": "MISSING_DATA",
+                    "issue_type": "MISSING_GENDER_DATA",
+                    "issue": "Complete partner gender before confirming Mixed Division eligibility.",
+                    "missing_fields": ["partner gender"],
+                }
+            if partner_gender not in {"MEN", "WOMEN"} or partner_gender == player_gender:
+                return {
+                    **base,
+                    "status": "INELIGIBLE",
+                    "issue_type": "GENDER_NOT_ELIGIBLE",
+                    "issue": "Mixed doubles requires one men's and one women's registrant.",
+                }
+        return {**base, "status": "ELIGIBLE", "issue_type": None, "issue": None}
+    return {**base, "status": "ELIGIBLE", "issue_type": None, "issue": None}
 
 
 def validate_selection_against_skill(
@@ -168,28 +365,18 @@ def validate_selection_against_skill(
     partner: dict[str, Any] | None = None,
     allow_missing_partner_for_preview: bool = False,
 ) -> tuple[bool, str | None]:
-    if str(event.get("eligibility_mode") or "").upper() == "COMBINED_RATING_CAP":
-        if not _is_doubles_event(event):
-            return False, "Combined-rating divisions require a doubles event."
-        return _validate_combined_rating_selection(
-            event,
-            selection,
-            player,
-            partner,
-            allow_missing_partner_for_preview=allow_missing_partner_for_preview,
-        )
-    if _is_doubles_event(event):
-        partner_mode = str(selection.get("partner_mode") or "NONE").upper()
-        resolved_partner = partner
-        if partner_mode == "NEEDS_PARTNER" and allow_missing_partner_for_preview:
-            resolved_partner = None
-        return _validate_doubles_selection_against_skill(
-            event,
-            player,
-            resolved_partner,
-            allow_missing_partner_for_preview=allow_missing_partner_for_preview,
-        )
-    return _validate_singles_selection_against_skill(event, player)
+    result = evaluate_selection_skill_eligibility(
+        event=event,
+        selection=selection,
+        player=player,
+        partner=partner,
+        allow_missing_partner_for_preview=allow_missing_partner_for_preview,
+    )
+    if result["status"] == "INELIGIBLE":
+        return False, str(result.get("issue") or "This registration is outside the proposed skill ceiling.")
+    return True, None
+
+
 def _uid(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
@@ -246,9 +433,14 @@ def _day_sort_key(day: dict[str, Any]) -> tuple:
 
 
 def _is_doubles_event(event: dict[str, Any]) -> bool:
-    event_type = str(event.get("event_type") or "").upper()
+    event_type = str(event.get("event_type") or event.get("participant_type") or "").upper()
     if event_type in DoublesTypes:
         return True
+    try:
+        if int(event.get("team_roster_size") or 1) > 1:
+            return True
+    except Exception:
+        pass
     return bool(event.get("partner_required"))
 
 
