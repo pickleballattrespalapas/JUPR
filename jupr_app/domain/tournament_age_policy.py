@@ -165,9 +165,33 @@ def normalize_age_policy(policy: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def age_in_bracket(age: float, bracket: Mapping[str, Any]) -> bool:
+    """Return hard directional age eligibility for a displayed age group.
+
+    Tournament age groups are minimum-age opportunities, not closed ranges.
+    Older players may play in younger groups; younger players may not play in
+    older groups. ``max_age`` remains useful for labels and preferred placement
+    but never makes an older player ineligible.
+    """
+
     minimum = optional_number(bracket.get("min_age"))
-    maximum = optional_number(bracket.get("max_age"))
-    return (minimum is None or age >= minimum) and (maximum is None or age <= maximum)
+    return minimum is None or age >= minimum
+
+
+def preferred_age_bracket(
+    age: float,
+    brackets: Iterable[Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    """Return the oldest age group for which ``age`` is eligible."""
+
+    eligible = [bracket for bracket in brackets if age_in_bracket(age, bracket)]
+    if not eligible:
+        return None
+    return max(
+        eligible,
+        key=lambda bracket: optional_number(bracket.get("min_age"))
+        if optional_number(bracket.get("min_age")) is not None
+        else float("-inf"),
+    )
 
 
 def effective_team_age(
@@ -186,6 +210,194 @@ def effective_team_age(
     if normalized_rule == "AVERAGE":
         return round(sum(ages) / len(ages), 1)
     return min(ages)
+
+
+def evaluate_age_eligibility(
+    *,
+    policy: Mapping[str, Any] | None,
+    player_age: float | None,
+    partner_age: float | None,
+    participant_type: str,
+) -> dict[str, Any]:
+    """Evaluate hard age eligibility and preferred placement separately.
+
+    Age groups are minimum-age opportunities. Older players may always play in
+    younger groups; younger players may not enter older groups. The preferred
+    group is the oldest eligible group, while a displayed maximum is used only
+    for labeling and preferred placement.
+    """
+
+    normalized = normalize_age_policy(policy)
+    participant = _clean(participant_type, limit=40).upper() or "GENDER_DOUBLES"
+    team_event = participant != "SINGLES"
+    mode = str(normalized["mode"])
+    player = optional_number(player_age)
+    partner = optional_number(partner_age)
+    base: dict[str, Any] = {
+        "mode": mode,
+        "team_age_rule": normalized["team_age_rule"],
+        "player_age": player,
+        "partner_age": partner if team_event else None,
+        "brackets": normalized["brackets"],
+    }
+
+    if mode == "ALL_AGES":
+        bracket = normalized["brackets"][0]
+        return {
+            **base,
+            "status": "ELIGIBLE",
+            "issue_type": None,
+            "issue": None,
+            "effective_age": player,
+            "eligible_age_groups": [bracket["label"]],
+            "preferred_age_group": bracket["label"],
+        }
+
+    missing_fields: list[str] = []
+    if player is None:
+        missing_fields.append("player age")
+    if team_event and partner is None:
+        missing_fields.append("partner age")
+
+    # Missing partner data cannot hide a known directional failure. For the
+    # canonical younger-player (or both-qualify) rule, any known age below the
+    # policy's youngest permitted minimum makes the team ineligible regardless
+    # of the future partner. If an open/youngest group has no minimum, no age is
+    # excluded on this basis.
+    numeric_minimums = [
+        optional_number(bracket.get("min_age"))
+        for bracket in normalized["brackets"]
+        if optional_number(bracket.get("min_age")) is not None
+    ]
+    has_open_group = any(optional_number(bracket.get("min_age")) is None for bracket in normalized["brackets"])
+    hard_minimum = None if has_open_group or not numeric_minimums else min(numeric_minimums)
+    rule = str(normalized["team_age_rule"])
+    if mode not in {"ALL_AGES", "SPLIT_AGE"} and hard_minimum is not None and rule in {"YOUNGER", "BOTH_QUALIFY"}:
+        known_ages = [age for age in (player, partner if team_event else None) if age is not None]
+        failing_age = next((age for age in known_ages if age < hard_minimum), None)
+        if failing_age is not None:
+            return {
+                **base,
+                "status": "INELIGIBLE",
+                "issue_type": "AGE_NOT_ELIGIBLE",
+                "issue": (
+                    f"Age {failing_age:g} does not meet minimum age {hard_minimum:g}; "
+                    "an older partner cannot make this team eligible because the younger player controls age."
+                ),
+                "effective_age": min(known_ages) if known_ages else None,
+                "eligible_age_groups": [],
+                "preferred_age_group": None,
+            }
+
+    if missing_fields:
+        return {
+            **base,
+            "status": "MISSING_DATA",
+            "issue_type": "MISSING_AGE_DATA",
+            "issue": f"Complete {' and '.join(missing_fields)} before confirming age eligibility and preferred placement.",
+            "missing_fields": missing_fields,
+            "effective_age": effective_team_age(player, partner if team_event else None, rule),
+            "eligible_age_groups": [],
+            "preferred_age_group": None,
+        }
+
+    if mode == "SPLIT_AGE":
+        if not team_event:
+            return {
+                **base,
+                "status": "INELIGIBLE",
+                "issue_type": "INVALID_AGE_POLICY",
+                "issue": "Split-age partners is available only for doubles and team events.",
+                "eligible_age_groups": [],
+                "preferred_age_group": None,
+            }
+        split_threshold = optional_number(normalized.get("split_age_threshold"))
+        player_age = player
+        partner_age = partner
+        matches = (
+            split_threshold is not None
+            and player_age is not None
+            and partner_age is not None
+            and (
+                (player_age < split_threshold <= partner_age)
+                or (partner_age < split_threshold <= player_age)
+            )
+        )
+        label = str(normalized["brackets"][0]["label"])
+        if not matches:
+            return {
+                **base,
+                "status": "INELIGIBLE",
+                "issue_type": "TEAM_COMPOSITION",
+                "issue": (
+                    f"Team must include one player under {int(split_threshold or 0)} "
+                    f"and one player {int(split_threshold or 0)}+."
+                ),
+                "eligible_age_groups": [],
+                "preferred_age_group": None,
+            }
+        return {
+            **base,
+            "status": "ELIGIBLE",
+            "issue_type": None,
+            "issue": None,
+            "effective_age": min(player, partner),
+            "eligible_age_groups": [label],
+            "preferred_age_group": label,
+        }
+
+    rule = str(normalized["team_age_rule"])
+    if rule == "BOTH_QUALIFY" and team_event:
+        eligible = [
+            bracket
+            for bracket in normalized["brackets"]
+            if player is not None
+            and partner is not None
+            and age_in_bracket(player, bracket)
+            and age_in_bracket(partner, bracket)
+        ]
+        effective = min(player, partner)
+    else:
+        effective = effective_team_age(player, partner if team_event else None, rule)
+        eligible = [
+            bracket
+            for bracket in normalized["brackets"]
+            if effective is not None and age_in_bracket(effective, bracket)
+        ]
+
+    if not eligible:
+        configured_minimums = [
+            optional_number(bracket.get("min_age"))
+            for bracket in normalized["brackets"]
+            if optional_number(bracket.get("min_age")) is not None
+        ]
+        minimum_text = f"minimum age {min(configured_minimums):g}" if configured_minimums else "the configured minimum age"
+        return {
+            **base,
+            "status": "INELIGIBLE",
+            "issue_type": "AGE_NOT_ELIGIBLE",
+            "issue": f"Effective team age {effective:g} does not meet {minimum_text}.",
+            "effective_age": effective,
+            "eligible_age_groups": [],
+            "preferred_age_group": None,
+        }
+
+    preferred = max(
+        eligible,
+        key=lambda bracket: optional_number(bracket.get("min_age"))
+        if optional_number(bracket.get("min_age")) is not None
+        else float("-inf"),
+    )
+    return {
+        **base,
+        "status": "ELIGIBLE",
+        "issue_type": None,
+        "issue": None,
+        "effective_age": effective,
+        "eligible_age_groups": [str(bracket.get("label") or "") for bracket in eligible],
+        "preferred_age_group": str(preferred.get("label") or ""),
+        "preferred_age_group_id": str(preferred.get("id") or ""),
+    }
 
 
 def registration_display_name(registration: Mapping[str, Any]) -> str:
@@ -299,70 +511,41 @@ def build_age_split_preview(
             "effective_age": effective_age,
         }
 
-        assigned = False
-        mode = str(normalized_policy["mode"])
-        missing_player_age = player_age is None
-        missing_partner_age = team_event and partner_age is None
-        requires_age_data = mode != "ALL_AGES"
-        if requires_age_data and (missing_player_age or missing_partner_age):
-            missing_fields: list[str] = []
-            if missing_player_age:
-                missing_fields.append("player age")
-            if missing_partner_age:
-                missing_fields.append("partner age")
-            entry["assignment_issue_type"] = "MISSING_AGE_DATA"
-            entry["assignment_issue"] = (
-                f"Complete {' and '.join(missing_fields)} before assigning this entry to an age group."
+        evaluation = evaluate_age_eligibility(
+            policy=normalized_policy,
+            player_age=player_age,
+            partner_age=partner_age if team_event else None,
+            participant_type=participant,
+        )
+        entry.update(
+            {
+                "effective_age": evaluation.get("effective_age"),
+                "eligible_age_groups": evaluation.get("eligible_age_groups") or [],
+                "preferred_age_group": evaluation.get("preferred_age_group"),
+            }
+        )
+        if evaluation.get("status") == "ELIGIBLE":
+            preferred_id = str(evaluation.get("preferred_age_group_id") or "").strip()
+            preferred_label = str(evaluation.get("preferred_age_group") or "").strip()
+            target = next(
+                (
+                    bracket
+                    for bracket in preview_brackets
+                    if (preferred_id and str(bracket.get("id") or "") == preferred_id)
+                    or (preferred_label and str(bracket.get("label") or "") == preferred_label)
+                ),
+                preview_brackets[0] if len(preview_brackets) == 1 else None,
             )
-        elif mode == "ALL_AGES":
-            preview_brackets[0]["entries"].append(entry)
-            preview_brackets[0]["count"] += 1
-            assigned = True
-        elif split_age_mode:
-            matches = (
-                split_threshold is not None
-                and player_age is not None
-                and partner_age is not None
-                and (
-                    (player_age < split_threshold <= partner_age)
-                    or (partner_age < split_threshold <= player_age)
-                )
-            )
-            if matches:
-                preview_brackets[0]["entries"].append(entry)
-                preview_brackets[0]["count"] += 1
-                assigned = True
+            if target is not None:
+                target["entries"].append(entry)
+                target["count"] += 1
             else:
-                entry["assignment_issue_type"] = "TEAM_COMPOSITION"
-                entry["assignment_issue"] = (
-                    f"Team must include one player under {int(split_threshold or 0)} "
-                    f"and one player {int(split_threshold or 0)}+."
-                )
+                entry["assignment_issue_type"] = "INVALID_AGE_POLICY"
+                entry["assignment_issue"] = "Preferred age group was not found in the configured policy."
+                unassigned.append(entry)
         else:
-            for bracket in preview_brackets:
-                if normalized_policy["team_age_rule"] == "BOTH_QUALIFY" and team_event:
-                    matches = (
-                        player_age is not None
-                        and partner_age is not None
-                        and age_in_bracket(player_age, bracket)
-                        and age_in_bracket(partner_age, bracket)
-                    )
-                else:
-                    matches = effective_age is not None and age_in_bracket(effective_age, bracket)
-                if matches:
-                    bracket["entries"].append(entry)
-                    bracket["count"] += 1
-                    assigned = True
-                    break
-            if not assigned and "assignment_issue" not in entry:
-                entry["assignment_issue_type"] = "AGE_NOT_ELIGIBLE"
-                if effective_age is None:
-                    entry["assignment_issue"] = "Age information is incomplete for this entry."
-                else:
-                    entry["assignment_issue"] = (
-                        f"Effective team age {effective_age:g} does not fit any configured age group."
-                    )
-        if not assigned:
+            entry["assignment_issue_type"] = evaluation.get("issue_type")
+            entry["assignment_issue"] = evaluation.get("issue")
             unassigned.append(entry)
 
     # Split-age partners is a team-composition rule, not an automatic bracket

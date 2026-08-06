@@ -225,10 +225,11 @@ export default function TournamentRegistrationForm({
   const eligibilityProfile = useMemo(
     () => ({
       gender: contact.gender,
+      age: numericValue(contact.age),
       doublesSkill: numericValue(profile.doublesSkill),
       singlesSkill: numericValue(profile.singlesSkill)
     }),
-    [contact.gender, profile.doublesSkill, profile.singlesSkill]
+    [contact.gender, contact.age, profile.doublesSkill, profile.singlesSkill]
   );
   const totalPrice = selectedIds.reduce((sum, id) => sum + Number(eventById.get(id)?.price_usd || 0), 0);
   const needsPartnerBoardConsent = selectedIds.some(

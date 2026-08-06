@@ -50,6 +50,7 @@ export type PublicRegistrationEvent = {
   age_label?: string | null;
   skill_mode?: string | null;
   age_mode?: string | null;
+  age_rules?: Record<string, unknown> | string | null;
   event_format?: string | null;
   scoring?: string | null;
   capacity_teams?: number | null;

@@ -102,8 +102,19 @@ function skillAgeItems(value: SetupRecord): Array<[string, string]> {
   const items: Array<[string, string]> = [];
   const skill = cleanString(value.skill_label);
   if (skill) items.push(["Skill", skill]);
-  const skillMode = cleanString(value.skill_mode);
-  if (skillMode) items.push(["Skill rule", titleCase(skillMode)]);
+  const eligibilityMode = cleanString(value.eligibility_mode).toUpperCase();
+  const ceilingRaw = value.skill_ceiling_exclusive;
+  const combinedCapRaw = value.combined_rating_cap;
+  const ceiling = ceilingRaw == null || ceilingRaw === "" ? Number.NaN : Number(ceilingRaw);
+  const combinedCap = combinedCapRaw == null || combinedCapRaw === "" ? Number.NaN : Number(combinedCapRaw);
+  if (eligibilityMode === "COMBINED_RATING_CAP" && Number.isFinite(combinedCap)) {
+    items.push(["Skill eligibility", `Combined team rating below ${combinedCap.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}`]);
+  } else if (Number.isFinite(ceiling)) {
+    items.push(["Skill eligibility", `Rating below ${ceiling.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}`]);
+    items.push(["Play-up rule", "Lower-rated players may play up; higher-rated players may not play down"]);
+  } else {
+    items.push(["Skill eligibility", "Open — no rating ceiling"]);
+  }
   const source = cleanString(value.policy_source);
   if (source) items.push(["Policy source", source]);
   const mode = cleanString(value.age_mode ?? ageRules.mode).toUpperCase();
@@ -113,12 +124,17 @@ function skillAgeItems(value: SetupRecord): Array<[string, string]> {
   const ageLabel = cleanString(value.age_label ?? ageRules.age_label);
   if (mode === "AUTO_AGE_SPLIT" && brackets.length) {
     items.push(["Candidate age brackets", brackets.map((row) => cleanString(row.label)).filter(Boolean).join(", ")]);
+    items.push(["Age eligibility", "Older players may play in younger groups; younger players may not play in older groups"]);
+    items.push(["Preferred placement", "Oldest age group the player or team qualifies for"]);
     const minimum = value.min_teams_per_age_group ?? ageRules.min_teams_per_age_group;
     if (minimum != null && minimum !== "") items.push(["Minimum entries per bracket", String(minimum)]);
     const merge = cleanString(value.merge_strategy ?? ageRules.merge_strategy);
     if (merge) items.push(["Underfilled bracket fallback", titleCase(merge)]);
   } else if (ageLabel) {
     items.push(["Age", ageLabel]);
+    if (mode === "FIXED_AGE_BRACKET") {
+      items.push(["Age eligibility", "Minimum-age rule; older players may play down into this group"]);
+    }
   }
   if (mode) items.push(["Age mode", titleCase(mode)]);
   const threshold = value.split_age_threshold ?? ageRules.split_age_threshold;

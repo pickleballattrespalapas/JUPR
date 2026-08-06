@@ -487,8 +487,8 @@ def test_review_reverts_only_blocked_fields_and_requires_explicit_completion() -
     assert "I completed and verified this registration action" in panel
     assert "Schedule change — no registration conflict" in panel
     assert "Age-grouping change — no registration conflict" in panel
-    assert "Required age information before final group assignment" in panel
-    assert "Complete the required age information before acknowledging this impact" in panel
+    assert "Required eligibility information" in panel
+    assert "Complete the required eligibility information before acknowledging this impact" in panel
     assert "I completed and verified this communication action" in panel
     assert "communication_change_acknowledgements" in panel
     service = read_root("jupr_app/services/admin_tournament_setup_service.py")
@@ -813,49 +813,56 @@ def test_operational_schedule_change_remains_hard_blocked() -> None:
     assert impact["communication_impact_details"] == []
 
 
-def test_registration_only_blocker_can_be_forced_but_operational_blocker_cannot() -> None:
+def test_skill_ceiling_expansion_preserves_registrations_and_true_play_down_conflict_is_forceable() -> None:
     storage = base_storage()
     storage["tournament_registrations"] = [
-        {"id": "r1", "tournament_id": "t1", "display_name": "Alex Player", "email": "alex@example.com", "status": "confirmed", "submitted_at": "2026-01-01"}
+        {
+            "id": "r1",
+            "tournament_id": "t1",
+            "display_name": "Alex Player",
+            "email": "alex@example.com",
+            "status": "confirmed",
+            "submitted_at": "2026-01-01",
+            "doubles_skill": 3.8,
+            "gender": "Men",
+            "age": 35,
+        }
     ]
     storage["tournament_registration_selections"] = [
-        {"id": "s1", "tournament_id": "t1", "registration_id": "r1", "registration_day_id": "day1", "event_option_id": "event1"}
+        {
+            "id": "s1",
+            "tournament_id": "t1",
+            "registration_id": "r1",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_mode": "NEEDS_PARTNER",
+        }
     ]
     supabase = FakeSupabase(storage)
-    draft_event = {**storage["tournament_event_options"][0], "skill_label": "4.0"}
 
+    expanded = {**storage["tournament_event_options"][0], "skill_label": "4.0"}
     impact = analyze_registration_publish_impact(
         supabase,
         tournament_id="t1",
         days=storage["tournament_registration_days"],
-        event_options=[draft_event],
+        event_options=[expanded],
     )
-    detail = next(row for row in impact["blocked_details"] if row["field"] == "skill_age_rules")
-    assert detail["forceable"] is True
-    assert detail["current_value"]["skill_label"] == "3.5"
-    assert detail["proposed_value"]["skill_label"] == "4.0"
-    assert detail["affected_registrations"][0]["registration_id"] == "r1"
-    assert "FORCE_CHANGE_WITH_RESOLUTION" in detail["resolution_options"]
+    assert not [row for row in impact["blocked_details"] if row["field"] == "skill_age_rules"]
 
-    with pytest.raises(ValueError, match="Publish blocked"):
-        publish_registration_configuration(
-            supabase,
-            tournament_id="t1",
-            days=storage["tournament_registration_days"],
-            event_options=[draft_event],
-        )
-
-    published = publish_registration_configuration(
+    storage["tournament_event_options"][0]["skill_label"] = "4.0"
+    storage["tournament_registrations"][0]["doubles_skill"] = 4.2
+    lowered = {**storage["tournament_event_options"][0], "skill_label": "3.5"}
+    impact_lowered = analyze_registration_publish_impact(
         supabase,
         tournament_id="t1",
         days=storage["tournament_registration_days"],
-        event_options=[draft_event],
-        allowed_block_ids={detail["block_id"]},
+        event_options=[lowered],
     )
-    assert published["forced_block_ids"] == [detail["block_id"]]
-    assert storage["tournament_event_options"][0]["skill_label"] == "4.0"
+    detail = next(row for row in impact_lowered["blocked_details"] if row["field"] == "skill_age_rules")
+    assert detail["forceable"] is True
+    assert [row["registration_id"] for row in detail["affected_registrations"]] == ["r1"]
+    assert "FORCE_CHANGE_WITH_RESOLUTION" in detail["resolution_options"]
 
-    storage["tournament_event_options"][0]["skill_label"] = "3.5"
     storage["tournament_event_draws"] = [
         {"id": "draw1", "tournament_id": "t1", "event_option_id": "event1", "registration_day_id": "day1"}
     ]
@@ -863,16 +870,400 @@ def test_registration_only_blocker_can_be_forced_but_operational_blocker_cannot(
         supabase,
         tournament_id="t1",
         days=storage["tournament_registration_days"],
-        event_options=[draft_event],
+        event_options=[lowered],
     )
     blocked_with_draw = next(row for row in impact_with_draw["blocked_details"] if row["field"] == "skill_age_rules")
     assert blocked_with_draw["forceable"] is False
     assert "FORCE_CHANGE_WITH_RESOLUTION" not in blocked_with_draw["resolution_options"]
-    with pytest.raises(ValueError, match="cannot be forced"):
-        publish_registration_configuration(
-            supabase,
-            tournament_id="t1",
-            days=storage["tournament_registration_days"],
-            event_options=[draft_event],
-            allowed_block_ids={blocked_with_draw["block_id"]},
-        )
+
+
+
+def test_directional_age_groups_prefer_oldest_eligible_group_and_allow_older_players_down() -> None:
+    policy = {
+        "mode": "AUTO_AGE_SPLIT",
+        "team_age_rule": "YOUNGER",
+        "merge_strategy": "CLOSEST",
+        "min_teams_per_age_group": 1,
+        "brackets": [
+            {"id": "under-50", "label": "Under 50", "max_age": 49},
+            {"id": "50-64", "label": "50–64", "min_age": 50, "max_age": 64},
+            {"id": "65-plus", "label": "65+", "min_age": 65},
+        ],
+    }
+    registrations = {
+        "r65": {"id": "r65", "display_name": "Older Team", "age": 67},
+        "r50": {"id": "r50", "display_name": "Middle Team", "age": 67},
+        "ru50": {"id": "ru50", "display_name": "Younger Team", "age": 67},
+    }
+    selections = [
+        {"id": "s65", "registration_id": "r65", "partner_age": 68},
+        {"id": "s50", "registration_id": "r50", "partner_age": 54},
+        {"id": "su50", "registration_id": "ru50", "partner_age": 45},
+    ]
+
+    preview = build_age_split_preview(
+        policy=policy,
+        registrations=registrations,
+        selections=selections,
+        participant_type="GENDER_DOUBLES",
+    )
+
+    by_group = {
+        row["label"]: [entry["selection_id"] for entry in row["entries"]]
+        for row in preview["brackets"]
+    }
+    assert by_group == {
+        "Under 50": ["su50"],
+        "50–64": ["s50"],
+        "65+": ["s65"],
+    }
+    assert preview["unassigned_entries"] == []
+
+
+def test_fixed_age_group_uses_minimum_age_not_closed_maximum() -> None:
+    policy = {
+        "mode": "FIXED_AGE_BRACKET",
+        "label": "50–64",
+        "min_age": 50,
+        "max_age": 64,
+        "team_age_rule": "YOUNGER",
+    }
+    registrations = {
+        "older": {"id": "older", "display_name": "Older", "age": 67},
+        "younger": {"id": "younger", "display_name": "Younger", "age": 49},
+    }
+    selections = [
+        {"id": "older-selection", "registration_id": "older", "partner_age": 68},
+        {"id": "younger-selection", "registration_id": "younger", "partner_age": 70},
+    ]
+
+    preview = build_age_split_preview(
+        policy=policy,
+        registrations=registrations,
+        selections=selections,
+        participant_type="GENDER_DOUBLES",
+    )
+
+    assert [row["selection_id"] for row in preview["brackets"][0]["entries"]] == ["older-selection"]
+    assert preview["unassigned_entries"][0]["selection_id"] == "younger-selection"
+    assert preview["unassigned_entries"][0]["assignment_issue_type"] == "AGE_NOT_ELIGIBLE"
+
+
+def test_gender_change_blocks_only_registrations_outside_proposed_restriction() -> None:
+    storage = base_storage()
+    storage["tournament_event_options"][0]["gender_restriction"] = "ANY"
+    storage["tournament_registrations"] = [
+        {"id": "man", "tournament_id": "t1", "display_name": "Man", "status": "confirmed", "gender": "Men"},
+        {"id": "woman", "tournament_id": "t1", "display_name": "Woman", "status": "confirmed", "gender": "Women"},
+    ]
+    storage["tournament_registration_selections"] = [
+        {"id": "sm", "tournament_id": "t1", "registration_id": "man", "registration_day_id": "day1", "event_option_id": "event1", "partner_mode": "NEEDS_PARTNER"},
+        {"id": "sw", "tournament_id": "t1", "registration_id": "woman", "registration_day_id": "day1", "event_option_id": "event1", "partner_mode": "NEEDS_PARTNER"},
+    ]
+    proposed = {**storage["tournament_event_options"][0], "gender_restriction": "WOMEN"}
+
+    impact = analyze_registration_publish_impact(
+        FakeSupabase(storage),
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[proposed],
+    )
+
+    detail = next(row for row in impact["blocked_details"] if row["field"] == "gender_restriction")
+    assert [row["registration_id"] for row in detail["affected_registrations"]] == ["man"]
+    assert detail["affected_registrations"][0]["proposed_value"]["gender_eligibility"]["status"] == "INELIGIBLE"
+
+
+def test_skill_ceiling_change_blocks_only_team_that_is_playing_down() -> None:
+    storage = base_storage()
+    storage["tournament_event_options"][0]["skill_label"] = "4.0"
+    storage["tournament_registrations"] = [
+        {"id": "valid", "tournament_id": "t1", "display_name": "Valid", "status": "confirmed", "doubles_skill": 3.8},
+        {"id": "invalid", "tournament_id": "t1", "display_name": "Invalid", "status": "confirmed", "doubles_skill": 3.8},
+    ]
+    storage["tournament_registration_selections"] = [
+        {"id": "sv", "tournament_id": "t1", "registration_id": "valid", "registration_day_id": "day1", "event_option_id": "event1", "partner_mode": "HAS_PARTNER", "partner_skill": 3.9},
+        {"id": "si", "tournament_id": "t1", "registration_id": "invalid", "registration_day_id": "day1", "event_option_id": "event1", "partner_mode": "HAS_PARTNER", "partner_skill": 4.05},
+    ]
+    proposed = {**storage["tournament_event_options"][0], "skill_label": "3.5"}
+
+    impact = analyze_registration_publish_impact(
+        FakeSupabase(storage),
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[proposed],
+    )
+
+    detail = next(row for row in impact["blocked_details"] if row["field"] == "skill_age_rules")
+    assert [row["registration_id"] for row in detail["affected_registrations"]] == ["invalid"]
+    proposed_value = detail["affected_registrations"][0]["proposed_value"]
+    assert proposed_value["skill_eligibility"]["controlling_rating"] == 4.05
+    assert proposed_value["skill_eligibility"]["skill_ceiling_exclusive"] == 4.0
+
+
+def test_cosmetic_skill_metadata_does_not_turn_age_grouping_into_skill_conflict() -> None:
+    storage = base_storage()
+    storage["tournament_event_options"][0].update({"skill_label": "3.5+", "skill_mode": "minimum"})
+    storage["tournament_registrations"] = [
+        {"id": "r1", "tournament_id": "t1", "display_name": "Eligible Team", "status": "confirmed", "age": 67, "doubles_skill": 3.7},
+    ]
+    storage["tournament_registration_selections"] = [
+        {"id": "s1", "tournament_id": "t1", "registration_id": "r1", "registration_day_id": "day1", "event_option_id": "event1", "partner_mode": "HAS_PARTNER", "partner_age": 68, "partner_skill": 3.8},
+    ]
+    proposed = {
+        **storage["tournament_event_options"][0],
+        "skill_label": "3.5",
+        "skill_mode": "SKILL_BRACKET",
+        "eligibility_mode": "STANDARD",
+        "age_mode": "AUTO_AGE_SPLIT",
+        "age_label": "All Ages",
+        "age_rules": {
+            "mode": "AUTO_AGE_SPLIT",
+            "team_age_rule": "YOUNGER",
+            "merge_strategy": "CLOSEST",
+            "min_teams_per_age_group": 1,
+            "brackets": [
+                {"id": "under-50", "label": "Under 50", "max_age": 49},
+                {"id": "50-64", "label": "50–64", "min_age": 50, "max_age": 64},
+                {"id": "65-plus", "label": "65+", "min_age": 65},
+            ],
+        },
+    }
+
+    impact = analyze_registration_publish_impact(
+        FakeSupabase(storage),
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[proposed],
+    )
+
+    assert not [row for row in impact["blocked_details"] if row["field"] == "skill_age_rules"]
+    detail = next(row for row in impact["communication_impact_details"] if row["impact_type"] == "AGE_GROUPING_COMMUNICATION")
+    assert detail["affected_registrations"][0]["proposed_value"]["age_label"] == "65+"
+
+
+def test_draw_and_scoring_changes_do_not_create_registration_eligibility_conflicts() -> None:
+    storage = base_storage()
+    storage["tournament_registrations"] = [
+        {"id": "r1", "tournament_id": "t1", "display_name": "Player", "status": "confirmed"},
+    ]
+    storage["tournament_registration_selections"] = [
+        {"id": "s1", "tournament_id": "t1", "registration_id": "r1", "registration_day_id": "day1", "event_option_id": "event1"},
+    ]
+    proposed = {
+        **storage["tournament_event_options"][0],
+        "event_format_default": "DOUBLE_ELIM",
+        "scoring_default": "GAME_TO_21",
+    }
+
+    impact = analyze_registration_publish_impact(
+        FakeSupabase(storage),
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[proposed],
+    )
+
+    assert impact["blocked_details"] == []
+    assert impact["communication_impact_details"] == []
+
+
+def test_review_resolves_linked_partner_profile_for_directional_eligibility() -> None:
+    storage = base_storage()
+    storage["tournament_event_options"][0].update(
+        {
+            "skill_label": "4.0",
+            "gender_restriction": "ANY",
+            "age_mode": "ALL_AGES",
+            "age_label": "All Ages",
+            "age_rules": {"mode": "ALL_AGES"},
+        }
+    )
+    storage["tournament_registrations"] = [
+        {
+            "id": "r1",
+            "tournament_id": "t1",
+            "display_name": "Primary",
+            "email": "primary@example.com",
+            "status": "confirmed",
+            "doubles_skill": 3.8,
+            "gender": "Women",
+            "age": 60,
+        },
+        {
+            "id": "r2",
+            "tournament_id": "t1",
+            "display_name": "Partner",
+            "email": "partner@example.com",
+            "status": "confirmed",
+            "doubles_skill": 4.05,
+            "gender": "Women",
+            "age": 67,
+        },
+    ]
+    storage["tournament_registration_selections"] = [
+        {
+            "id": "s1",
+            "tournament_id": "t1",
+            "registration_id": "r1",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_mode": "HAS_PARTNER",
+            "partner_email": "partner@example.com",
+        }
+    ]
+    proposed = {
+        **storage["tournament_event_options"][0],
+        "skill_label": "3.5",
+        "gender_restriction": "WOMEN",
+        "age_mode": "FIXED_AGE_BRACKET",
+        "age_label": "50+",
+        "age_rules": {
+            "mode": "FIXED_AGE_BRACKET",
+            "label": "50+",
+            "min_age": 50,
+            "team_age_rule": "YOUNGER",
+        },
+    }
+
+    impact = analyze_registration_publish_impact(
+        FakeSupabase(storage),
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[proposed],
+    )
+
+    detail = next(row for row in impact["blocked_details"] if row["field"] == "skill_age_rules")
+    proposed_value = detail["affected_registrations"][0]["proposed_value"]
+    assert proposed_value["skill_eligibility"]["controlling_rating"] == 4.05
+    assert proposed_value["gender_eligibility"]["status"] == "ELIGIBLE"
+    assert proposed_value["age_eligibility"]["status"] == "ELIGIBLE"
+    assert proposed_value["partner_age"] == 67
+
+
+def test_missing_partner_age_does_not_hide_known_directional_age_ineligibility() -> None:
+    preview = build_age_split_preview(
+        policy={
+            "mode": "FIXED_AGE_BRACKET",
+            "label": "50+",
+            "min_age": 50,
+            "team_age_rule": "YOUNGER",
+        },
+        registrations={
+            "r1": {"id": "r1", "display_name": "Young Player", "age": 45},
+        },
+        selections=[
+            {"id": "s1", "registration_id": "r1", "partner_mode": "NEEDS_PARTNER"},
+        ],
+        participant_type="GENDER_DOUBLES",
+    )
+
+    assert preview["unassigned_entries"][0]["assignment_issue_type"] == "AGE_NOT_ELIGIBLE"
+    assert "older partner cannot make this team eligible" in preview["unassigned_entries"][0]["assignment_issue"]
+
+
+def test_public_registration_uses_directional_skill_and_age_boundaries() -> None:
+    eligibility = read_web("lib/tournamentRegistrationEligibility.ts")
+    form = read_web("app/clubs/[clubSlug]/tournament-registration/TournamentRegistrationForm.tsx")
+    edit_form = read_web("app/clubs/[clubSlug]/tournament-registration/edit/EditTournamentRegistrationForm.tsx")
+    service = read_root("jupr_app/services/public_tournament_registration_service.py")
+
+    assert "controlledSkillCeiling" in eligibility
+    assert "anchor + 0.5" in eligibility
+    assert "match[2]" in eligibility
+    assert "MINIMUM" in eligibility
+    assert "rating >= ceiling" in eligibility
+    assert "hardMinimumAge" in eligibility
+    assert "age < minimumAge" in eligibility
+    assert "age: numericValue(contact.age)" in form
+    assert "age: registration.age == null ? null : Number(registration.age)" in edit_form
+    assert '"age_rules": row.get("age_rules")' in service
+    assert "_validate_age_eligibility" in service
+    assert "evaluate_selection_gender_eligibility" in service
+
+
+def test_upward_open_skill_event_age_regrouping_never_becomes_skill_conflict() -> None:
+    storage = base_storage()
+    storage["tournament_event_options"][0].update(
+        {
+            "skill_label": "3.5+",
+            "skill_mode": "minimum",
+            "eligibility_mode": "STANDARD",
+            "age_mode": "open",
+            "age_label": "Open",
+            "age_rules": None,
+        }
+    )
+    storage["tournament_registrations"] = [
+        {
+            "id": "complete",
+            "tournament_id": "t1",
+            "display_name": "Complete Team",
+            "email": "complete@example.com",
+            "status": "confirmed",
+            "doubles_skill": 4.3,
+            "age": 67,
+        },
+        {
+            "id": "missing",
+            "tournament_id": "t1",
+            "display_name": "Missing Partner Age",
+            "email": "missing@example.com",
+            "status": "confirmed",
+            "doubles_skill": 4.4,
+            "age": 44,
+        },
+    ]
+    storage["tournament_registration_selections"] = [
+        {
+            "id": "complete-selection",
+            "tournament_id": "t1",
+            "registration_id": "complete",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_mode": "HAS_PARTNER",
+            "partner_age": 68,
+            "partner_skill": 5.0,
+        },
+        {
+            "id": "missing-selection",
+            "tournament_id": "t1",
+            "registration_id": "missing",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_mode": "NEEDS_PARTNER",
+        },
+    ]
+    proposed = {
+        **storage["tournament_event_options"][0],
+        "age_mode": "AUTO_AGE_SPLIT",
+        "age_label": "Age groups",
+        "age_rules": {
+            "mode": "AUTO_AGE_SPLIT",
+            "team_age_rule": "YOUNGER",
+            "merge_strategy": "CLOSEST",
+            "min_teams_per_age_group": 1,
+            "brackets": [
+                {"id": "under-50", "label": "Under 50", "max_age": 49},
+                {"id": "50-64", "label": "50–64", "min_age": 50, "max_age": 64},
+                {"id": "65-plus", "label": "65+", "min_age": 65},
+            ],
+        },
+    }
+
+    impact = analyze_registration_publish_impact(
+        FakeSupabase(storage),
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[proposed],
+    )
+
+    assert not [row for row in impact["blocked_details"] if row["field"] == "skill_age_rules"]
+    detail = next(row for row in impact["communication_impact_details"] if row["impact_type"] == "AGE_GROUPING_COMMUNICATION")
+    by_registration = {
+        row["registration_id"]: row["proposed_value"]
+        for row in detail["affected_registrations"]
+    }
+    assert by_registration["complete"]["preferred_age_group"] == "65+"
+    assert by_registration["complete"]["skill_eligibility"]["status"] == "ELIGIBLE"
+    assert by_registration["missing"]["data_completion_required"] is True
+    assert [row["registration_id"] for row in detail["data_completion_registrations"]] == ["missing"]

@@ -106,7 +106,7 @@ def test_required_age_data_blocks_communication_acknowledgement() -> None:
         "affected_registrations": detail["affected_registrations"],
     }
 
-    with pytest.raises(ValueError, match="complete required age information"):
+    with pytest.raises(ValueError, match="complete required eligibility information"):
         _communication_acknowledgement_summary(
             impact,
             {"communication_change_acknowledgements": {detail["impact_id"]: plan}},

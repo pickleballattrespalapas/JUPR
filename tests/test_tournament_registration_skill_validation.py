@@ -106,7 +106,7 @@ def test_doubles_missing_player_and_partner_ratings_are_eligible():
     assert message is None
 
 
-@pytest.mark.parametrize("skill_label", ["Open", "Beginner", "3.25"])
+@pytest.mark.parametrize("skill_label", ["Open", "Beginner"])
 def test_open_or_non_controlled_skill_label_remains_eligible(skill_label):
     eligible, message = _is_eligible(
         event=_event(skill_label),
@@ -117,3 +117,83 @@ def test_open_or_non_controlled_skill_label_remains_eligible(skill_label):
 
     assert eligible is True
     assert message is None
+
+
+def test_custom_numeric_skill_label_is_directional_ceiling_band():
+    eligible, message = _is_eligible(
+        event=_event("3.25"),
+        selection=_selection("HAS_PARTNER"),
+        player=_player(3.6),
+        partner=_player(3.7),
+    )
+    assert eligible is True
+    assert message is None
+
+    eligible, message = _is_eligible(
+        event=_event("3.25"),
+        selection=_selection("HAS_PARTNER"),
+        player=_player(3.6),
+        partner=_player(3.75),
+    )
+    assert eligible is False
+    assert "above the 3.25 division cap" in str(message)
+
+
+def test_lower_rated_player_can_play_far_up() -> None:
+    eligible, message = _is_eligible(
+        event=_event("4.5", doubles=False),
+        selection=_selection(),
+        player=_player(2.5),
+    )
+
+    assert eligible is True
+    assert message is None
+
+
+def test_trailing_plus_is_upward_open_and_does_not_create_a_minimum() -> None:
+    for partner_rating in (3.0, 3.9, 4.0, 5.5):
+        eligible, message = _is_eligible(
+            event=_event("3.5+"),
+            selection=_selection("HAS_PARTNER"),
+            player=_player(2.9),
+            partner=_player(partner_rating),
+        )
+        assert eligible is True
+        assert message is None
+
+
+def test_minimum_skill_mode_is_upward_open_even_without_plus_label() -> None:
+    event = {**_event("3.5"), "skill_mode": "minimum"}
+    eligible, message = _is_eligible(
+        event=event,
+        selection=_selection("HAS_PARTNER"),
+        player=_player(2.9),
+        partner=_player(5.5),
+    )
+    assert eligible is True
+    assert message is None
+
+
+def test_combined_rating_cap_is_strict_and_uses_both_partners() -> None:
+    event = {
+        **_event("Open"),
+        "eligibility_mode": "COMBINED_RATING_CAP",
+        "combined_rating_cap": 8.0,
+    }
+    eligible, message = _is_eligible(
+        event=event,
+        selection=_selection("HAS_PARTNER"),
+        player=_player(3.9),
+        partner=_player(4.0),
+    )
+    assert eligible is True
+    assert message is None
+
+    eligible, message = _is_eligible(
+        event=event,
+        selection=_selection("HAS_PARTNER"),
+        player=_player(4.0),
+        partner=_player(4.0),
+    )
+    assert eligible is False
+    assert "not strictly below" in str(message)

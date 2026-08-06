@@ -143,3 +143,174 @@ def test_existing_registration_profile_prefers_canonical_linked_player_values() 
         "gender": "Women",
         "age": 42,
     }
+
+
+def _age_event(
+    *,
+    mode: str,
+    label: str,
+    rules: dict[str, object],
+    event_type: str = "SINGLES",
+) -> dict[str, object]:
+    return {
+        "id": "age-event",
+        "registration_day_id": "canonical-day",
+        "division_name": label,
+        "event_type": event_type,
+        "gender_restriction": "ANY",
+        "skill_label": "Open",
+        "partner_required": event_type != "SINGLES",
+        "partner_board_enabled": True,
+        "age_mode": mode,
+        "age_label": label,
+        "age_rules": rules,
+    }
+
+
+def _profile(*, age: int, rating: float = 3.5) -> dict[str, object]:
+    return {
+        "email": "player@example.com",
+        "player_id": None,
+        "doubles_skill": rating,
+        "singles_skill": rating,
+        "gender": "Women",
+        "age": age,
+    }
+
+
+def test_public_fixed_age_group_allows_older_players_to_play_down() -> None:
+    event = _age_event(
+        mode="FIXED_AGE_BRACKET",
+        label="50–64",
+        rules={
+            "mode": "FIXED_AGE_BRACKET",
+            "label": "50–64",
+            "min_age": 50,
+            "max_age": 64,
+        },
+    )
+
+    cleaned = validate_and_clean_tournament_selection(
+        object(),
+        club_id="club-1",
+        tournament_id="tournament-1",
+        event=event,
+        raw_selection={"event_option_id": "age-event", "partner_mode": "NONE"},
+        player_profile=_profile(age=67),
+        settings={"partner_board_enabled": True},
+    )
+
+    assert cleaned["event_option_id"] == "age-event"
+
+
+def test_public_fixed_age_group_blocks_younger_player_from_playing_up() -> None:
+    event = _age_event(
+        mode="FIXED_AGE_BRACKET",
+        label="50+",
+        rules={
+            "mode": "FIXED_AGE_BRACKET",
+            "label": "50+",
+            "min_age": 50,
+        },
+    )
+
+    with pytest.raises(ValueError, match="does not meet minimum age 50"):
+        validate_and_clean_tournament_selection(
+            object(),
+            club_id="club-1",
+            tournament_id="tournament-1",
+            event=event,
+            raw_selection={"event_option_id": "age-event", "partner_mode": "NONE"},
+            player_profile=_profile(age=45),
+            settings={"partner_board_enabled": True},
+        )
+
+
+def test_public_under_50_group_is_open_to_older_players() -> None:
+    event = _age_event(
+        mode="FIXED_AGE_BRACKET",
+        label="Under 50",
+        rules={
+            "mode": "FIXED_AGE_BRACKET",
+            "label": "Under 50",
+            "min_age": None,
+            "max_age": 49,
+        },
+    )
+
+    cleaned = validate_and_clean_tournament_selection(
+        object(),
+        club_id="club-1",
+        tournament_id="tournament-1",
+        event=event,
+        raw_selection={"event_option_id": "age-event", "partner_mode": "NONE"},
+        player_profile=_profile(age=72),
+        settings={"partner_board_enabled": True},
+    )
+
+    assert cleaned["event_option_id"] == "age-event"
+
+
+def test_public_exhaustive_age_groups_do_not_block_needs_partner_registration() -> None:
+    event = _age_event(
+        mode="AUTO_AGE_SPLIT",
+        label="Age groups",
+        event_type="DOUBLES",
+        rules={
+            "mode": "AUTO_AGE_SPLIT",
+            "team_age_rule": "YOUNGER",
+            "merge_strategy": "CLOSEST",
+            "min_teams_per_age_group": 1,
+            "brackets": [
+                {"id": "under-50", "label": "Under 50", "max_age": 49},
+                {"id": "50-64", "label": "50–64", "min_age": 50, "max_age": 64},
+                {"id": "65-plus", "label": "65+", "min_age": 65},
+            ],
+        },
+    )
+
+    cleaned = validate_and_clean_tournament_selection(
+        object(),
+        club_id="club-1",
+        tournament_id="tournament-1",
+        event=event,
+        raw_selection={
+            "event_option_id": "age-event",
+            "partner_mode": "NEEDS_PARTNER",
+            "show_on_partner_board": True,
+        },
+        player_profile=_profile(age=67),
+        settings={"partner_board_enabled": True},
+    )
+
+    assert cleaned["partner_mode"] == "NEEDS_PARTNER"
+    assert cleaned["partner_age"] is None
+
+
+def test_public_older_only_group_blocks_known_younger_player_even_when_partner_is_missing() -> None:
+    event = _age_event(
+        mode="FIXED_AGE_BRACKET",
+        label="50+",
+        event_type="DOUBLES",
+        rules={
+            "mode": "FIXED_AGE_BRACKET",
+            "label": "50+",
+            "min_age": 50,
+            "team_age_rule": "YOUNGER",
+        },
+    )
+
+    with pytest.raises(ValueError, match="older partner cannot make this team eligible"):
+        validate_and_clean_tournament_selection(
+            object(),
+            club_id="club-1",
+            tournament_id="tournament-1",
+            event=event,
+            raw_selection={
+                "event_option_id": "age-event",
+                "partner_mode": "NEEDS_PARTNER",
+                "show_on_partner_board": True,
+            },
+            player_profile=_profile(age=45),
+            settings={"partner_board_enabled": True},
+        )

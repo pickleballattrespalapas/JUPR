@@ -593,7 +593,7 @@ def _communication_acknowledgement_summary(
                 for row in data_completion_rows
             ]
             errors.append(
-                f"{label}: complete required age information for {', '.join(names[:5])} before acknowledging this change."
+                f"{label}: complete required eligibility information for {', '.join(names[:5])} before acknowledging this change."
             )
             continue
         plan = _dict(plans.get(impact_id))
