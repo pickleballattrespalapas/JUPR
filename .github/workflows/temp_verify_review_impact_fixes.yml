@@ -1,0 +1,42 @@
+name: Temporary Verify Review Impact Fixes
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.event.pull_request.head.ref == 'agent/review-impact-fixes-20260805'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install focused test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r services/api/requirements.txt
+          python -m pip install pytest
+
+      - name: Run Review impact lifecycle tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_tournament_four_domain_rebuild.py \
+            tests/test_tournament_review_communication_ack.py \
+            tests/test_api_contract_admin_tournament_setup.py \
+            tests/test_tournament_setup_request_safety_static.py
