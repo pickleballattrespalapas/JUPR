@@ -5,14 +5,14 @@ on:
     branches:
       - staging
     types:
-      - reopened
+      - closed
 
 permissions:
   contents: write
 
 jobs:
   execute:
-    if: github.event.pull_request.number == 1211
+    if: github.event.pull_request.number == 1211 && github.event.pull_request.merged == false
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
