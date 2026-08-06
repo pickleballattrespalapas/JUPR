@@ -1,22 +1,23 @@
 name: Temporary Export Directional Eligibility Source
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/directional-eligibility-review-20260806
+      - staging
 
 permissions:
   contents: read
 
 jobs:
   export:
+    if: github.event.pull_request.head.ref == 'agent/directional-eligibility-review-20260806'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out feature branch
         uses: actions/checkout@v4
         with:
-          ref: agent/directional-eligibility-review-20260806
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 1
 
       - name: Archive exact feature source
