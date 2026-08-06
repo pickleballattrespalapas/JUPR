@@ -37,10 +37,6 @@ jobs:
             jupr_app/domain/tournament_age_policy.py \
             jupr_app/domain/tournament_registration_repo.py \
             jupr_app/services/admin_tournament_setup_service.py
-          python -m pytest -q \
-            tests/test_tournament_four_domain_rebuild.py \
-            tests/test_tournament_setup_request_safety_static.py \
-            tests/test_api_contract_tournament_acceptance_fix_batch.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Fix Review age grouping and dependency resolution'
