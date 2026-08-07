@@ -28,8 +28,33 @@ jobs:
         run: |
           set -euo pipefail
           chunk_dir='.github/session-new-files/admin-editor-skill-plus-release'
-          test -s "$chunk_dir/chunk_00"
-          cat "$chunk_dir"/chunk_* | base64 --decode | gzip --decompress > /tmp/admin-editor-skill-plus.patch
+          python - <<'PY'
+          from pathlib import Path
+          import base64, gzip, hashlib, re
+          chunk_dir = Path('.github/session-new-files/admin-editor-skill-plus-release')
+          expected = {
+              'chunk_00': (18000, '0f761c8aa327d35d812b5b3ddfad3091a06f671c7a108df72432d958041f7fbf'),
+              'chunk_01': (18000, 'd32f569663400e0df00f9b09ac27d083569c18103f478870c9ead9ae288f70fd'),
+              'chunk_02': (18000, 'ec1d9584432694275d4e45196f56667e1d8f2c7b27fe354042bd4728cdbebf3d'),
+              'chunk_03': (18000, '6267f693ace70be534717a0395299fe624a981a661dc2a5c1b1b172165ee371f'),
+              'chunk_04': (16540, '82bea07176c5e9e4fe52d770805fcc2258023aac1214be0f6107cd7999c93d15'),
+          }
+          parts = []
+          for name in sorted(expected):
+              path = chunk_dir / name
+              data = path.read_bytes()
+              digest = hashlib.sha256(data).hexdigest()
+              print(f'{name}: bytes={len(data)} sha256={digest} expected={expected[name]}')
+              parts.append(data)
+          joined = b''.join(parts)
+          print(f'joined: bytes={len(joined)} sha256={hashlib.sha256(joined).hexdigest()}')
+          clean = re.sub(rb'[^A-Za-z0-9+/=]', b'', joined)
+          print(f'clean: bytes={len(clean)} sha256={hashlib.sha256(clean).hexdigest()}')
+          decoded = base64.b64decode(clean, validate=False)
+          patch = gzip.decompress(decoded)
+          Path('/tmp/admin-editor-skill-plus.patch').write_bytes(patch)
+          print(f'patch: bytes={len(patch)} sha256={hashlib.sha256(patch).hexdigest()}')
+          PY
           git apply --binary --index /tmp/admin-editor-skill-plus.patch
           rm -rf "$chunk_dir"
           rm -f .github/workflows/temp_apply_admin_editor_skill_plus_branch.yml
