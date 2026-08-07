@@ -1,0 +1,50 @@
+name: Temporary Branch Apply Admin Editor and Skill Eligibility Patch
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - synchronize
+      - reopened
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'agent/admin-editor-skill-plus-release-20260807'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/admin-editor-skill-plus-release-20260807
+          fetch-depth: 0
+
+      - name: Apply preserved product patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          chunk_dir='.github/session-new-files/admin-editor-skill-plus-release'
+          test -s "$chunk_dir/chunk_00"
+          cat "$chunk_dir"/chunk_* | base64 --decode | gzip --decompress > /tmp/admin-editor-skill-plus.patch
+          git apply --binary --index /tmp/admin-editor-skill-plus.patch
+          rm -rf "$chunk_dir"
+          rm -f .github/workflows/temp_apply_admin_editor_skill_plus_branch.yml
+          rm -f .github/workflows/temp_apply_admin_editor_skill_plus.yml
+          rm -f .github/workflows/temp_pr1211_executor.yml
+          git add -A
+          git diff --cached --check
+          python -m py_compile \
+            jupr_app/domain/tournament_registration_compiler.py \
+            jupr_app/domain/tournament_registration_repo.py \
+            jupr_app/services/admin_tournament_service.py \
+            jupr_app/services/admin_tournament_setup_service.py \
+            jupr_app/services/public_tournament_registration_service.py \
+            services/api/admin_tournament_routes.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Implement complete tournament registration editor and explicit skill eligibility'
+          git push origin HEAD:agent/admin-editor-skill-plus-release-20260807
