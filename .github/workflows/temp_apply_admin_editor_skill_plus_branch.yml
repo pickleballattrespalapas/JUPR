@@ -15,7 +15,7 @@ jobs:
   apply:
     if: github.head_ref == 'agent/admin-editor-skill-plus-release-20260807'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout feature branch
         uses: actions/checkout@v4
@@ -23,14 +23,18 @@ jobs:
           ref: agent/admin-editor-skill-plus-release-20260807
           fetch-depth: 0
 
-      - name: Apply preserved product patch
+      - name: Repair transfer, apply preserved product patch, and verify source
         shell: bash
         run: |
           set -euo pipefail
           chunk_dir='.github/session-new-files/admin-editor-skill-plus-release'
           python - <<'PY'
           from pathlib import Path
-          import base64, gzip, hashlib, re
+          import base64
+          import gzip
+          import hashlib
+          import re
+
           chunk_dir = Path('.github/session-new-files/admin-editor-skill-plus-release')
           expected = {
               'chunk_00': (18000, '0f761c8aa327d35d812b5b3ddfad3091a06f671c7a108df72432d958041f7fbf'),
@@ -39,22 +43,54 @@ jobs:
               'chunk_03': (18000, '6267f693ace70be534717a0395299fe624a981a661dc2a5c1b1b172165ee371f'),
               'chunk_04': (16540, '82bea07176c5e9e4fe52d770805fcc2258023aac1214be0f6107cd7999c93d15'),
           }
+
+          repair_name = 'chunk_01'
+          repair_path = chunk_dir / repair_name
+          repair_data = repair_path.read_bytes()
+          expected_length, expected_digest = expected[repair_name]
+          current_digest = hashlib.sha256(repair_data).hexdigest()
+          if len(repair_data) == expected_length - 1 and current_digest != expected_digest:
+              alphabet = b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='
+              repaired = None
+              for position in range(len(repair_data) + 1):
+                  prefix = repair_data[:position]
+                  suffix = repair_data[position:]
+                  for value in alphabet:
+                      candidate = prefix + bytes((value,)) + suffix
+                      if hashlib.sha256(candidate).hexdigest() == expected_digest:
+                          repaired = candidate
+                          print(f'Repaired {repair_name}: inserted {chr(value)!r} at offset {position}.')
+                          break
+                  if repaired is not None:
+                      break
+              if repaired is None:
+                  raise SystemExit(f'Could not reconstruct {repair_name} from the expected SHA-256 digest.')
+              repair_path.write_bytes(repaired)
+
           parts = []
           for name in sorted(expected):
               path = chunk_dir / name
               data = path.read_bytes()
               digest = hashlib.sha256(data).hexdigest()
-              print(f'{name}: bytes={len(data)} sha256={digest} expected={expected[name]}')
+              wanted_length, wanted_digest = expected[name]
+              print(f'{name}: bytes={len(data)} sha256={digest}')
+              if len(data) != wanted_length or digest != wanted_digest:
+                  raise SystemExit(
+                      f'{name} integrity mismatch: got {(len(data), digest)}, '
+                      f'expected {(wanted_length, wanted_digest)}'
+                  )
               parts.append(data)
+
           joined = b''.join(parts)
-          print(f'joined: bytes={len(joined)} sha256={hashlib.sha256(joined).hexdigest()}')
           clean = re.sub(rb'[^A-Za-z0-9+/=]', b'', joined)
-          print(f'clean: bytes={len(clean)} sha256={hashlib.sha256(clean).hexdigest()}')
-          decoded = base64.b64decode(clean, validate=False)
+          if len(clean) % 4:
+              raise SystemExit(f'Base64 transfer length is not divisible by four: {len(clean)}')
+          decoded = base64.b64decode(clean, validate=True)
           patch = gzip.decompress(decoded)
           Path('/tmp/admin-editor-skill-plus.patch').write_bytes(patch)
           print(f'patch: bytes={len(patch)} sha256={hashlib.sha256(patch).hexdigest()}')
           PY
+
           git apply --binary --index /tmp/admin-editor-skill-plus.patch
           rm -rf "$chunk_dir"
           rm -f .github/workflows/temp_apply_admin_editor_skill_plus_branch.yml
