@@ -1,0 +1,46 @@
+name: Temporary Apply Admin Editor and Skill Eligibility Patch
+
+on:
+  pull_request_target:
+    branches:
+      - staging
+    types:
+      - opened
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/admin-editor-skill-plus-release-20260807'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/admin-editor-skill-plus-release-20260807
+          fetch-depth: 0
+
+      - name: Apply preserved product patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch_file='.github/session-new-files/admin-editor-skill-plus-release.patch.gz.b64'
+          test -s "$patch_file"
+          base64 --decode "$patch_file" | gzip --decompress > /tmp/admin-editor-skill-plus.patch
+          git apply --binary --index /tmp/admin-editor-skill-plus.patch
+          rm -f "$patch_file"
+          rm -f .github/workflows/temp_apply_admin_editor_skill_plus.yml
+          git diff --cached --check
+          python -m py_compile \
+            jupr_app/domain/tournament_registration_compiler.py \
+            jupr_app/domain/tournament_registration_repo.py \
+            jupr_app/services/admin_tournament_service.py \
+            jupr_app/services/admin_tournament_setup_service.py \
+            jupr_app/services/public_tournament_registration_service.py \
+            services/api/admin_tournament_routes.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Implement complete tournament registration editor and explicit skill eligibility'
+          git push origin HEAD:agent/admin-editor-skill-plus-release-20260807
