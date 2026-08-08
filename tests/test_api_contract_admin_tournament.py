@@ -167,6 +167,7 @@ def tournament_tables():
                 "notes": "Original note",
                 "wants_partner_board_contact": True,
                 "submitted_at": "2026-03-03T00:00:00Z",
+                "updated_at": "2026-03-03T00:00:00Z",
             }
         ],
         "tournament_registration_selections": [
@@ -344,6 +345,7 @@ def test_admin_tournament_registration_update_contract(monkeypatch):
             "registration_status": "waitlist",
             "payment_status": "refunded",
             "notes": "Refunded after withdrawal.",
+            "expected_updated_at": "2026-03-03T00:00:00Z",
             "confirmation_text": "SAVE REGISTRATION",
         },
     )
@@ -678,7 +680,7 @@ def test_admin_tournament_selection_update_clears_stale_partner_identity(monkeyp
     assert updated["partner_age"] is None
 
 
-def test_admin_tournament_selection_update_rejects_free_text_partner_creation(monkeypatch):
+def test_admin_tournament_selection_update_requires_complete_manual_partner(monkeypatch):
     tables = tournament_tables()
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
@@ -698,7 +700,7 @@ def test_admin_tournament_selection_update_rejects_free_text_partner_creation(mo
     )
 
     assert response.status_code == 400
-    assert "canonical partner-link workflow" in response.json()["detail"]
+    assert "partner name is required" in response.json()["detail"]
     assert tables["tournament_registration_selections"][0]["partner_mode"] == "NEEDS_PARTNER"
 
 

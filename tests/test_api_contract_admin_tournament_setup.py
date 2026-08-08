@@ -282,7 +282,7 @@ def test_tournament_setup_draft_and_publish(monkeypatch):
     install_env(monkeypatch, supabase)
     client = TestClient(app)
     days = [{"id": "day1", "tournament_id": "t1", "label": "Day 1", "date": "2026-10-01", "enabled": True, "sort_order": 1}]
-    events = [{"id": "event1", "tournament_id": "t1", "registration_day_id": "day1", "event_family_label": "Mixed Doubles", "division_name": "Mixed Open", "event_type": "MIXED_DOUBLES", "gender_restriction": "MIXED", "event_format_default": "ROUND_ROBIN_PLUS_PLAYOFF", "scoring_default": "GAME_TO_15", "status": "open", "enabled": True, "sort_order": 1}]
+    events = [{"id": "event1", "tournament_id": "t1", "registration_day_id": "day1", "event_family_label": "Mixed Doubles", "division_name": "Mixed Open", "event_type": "MIXED_DOUBLES", "gender_restriction": "MIXED", "skill_label": "Open", "skill_mode": "OPEN", "event_format_default": "ROUND_ROBIN_PLUS_PLAYOFF", "scoring_default": "GAME_TO_15", "status": "open", "enabled": True, "sort_order": 1}]
 
     draft = client.put(
         "/admin/clubs/club/tournaments/setup/tournaments/t1/draft",

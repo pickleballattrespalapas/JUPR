@@ -4,7 +4,9 @@ export type AdminTournamentStatusResponse = {
   tournaments_endpoint?: string | null;
   tournament_detail_endpoint?: string | null;
   registration_update_endpoint?: string | null;
+  selection_create_endpoint?: string | null;
   selection_update_endpoint?: string | null;
+  selection_delete_endpoint?: string | null;
   bulk_registration_update_endpoint?: string | null;
   registration_export_endpoint?: string | null;
   broadcast_preview_endpoint?: string | null;
@@ -47,9 +49,17 @@ export type AdminTournament = {
 export type AdminTournamentRegistration = {
   id: string;
   player_id?: string | number | null;
+  first_name?: string | null;
+  last_name?: string | null;
   display_name: string;
   email?: string | null;
   phone?: string | null;
+  gender?: string | null;
+  age?: number | null;
+  age_bracket?: string | null;
+  dupr_id?: string | null;
+  doubles_skill?: number | null;
+  singles_skill?: number | null;
   registration_status?: string | null;
   payment_status?: string | null;
   notes?: string | null;
@@ -69,6 +79,10 @@ export type AdminTournamentSelection = {
   partner_name?: string | null;
   partner_email?: string | null;
   partner_phone?: string | null;
+  partner_dupr_id?: string | null;
+  partner_skill?: number | null;
+  partner_age?: number | null;
+  partner_gender?: string | null;
   partner_note?: string | null;
   show_on_partner_board?: boolean | null;
   partner_team_link_id?: string | null;

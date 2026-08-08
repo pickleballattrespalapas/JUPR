@@ -64,7 +64,7 @@ jobs:
             --esModuleInterop \
             --skipLibCheck \
             --outDir "$RUNNER_TEMP/tournament-setup-builder"
-          JUPR_TOURNAMENT_SETUP_BUILDER_MODULE="$RUNNER_TEMP/tournament-setup-builder/tournamentSetupBuilder.js" \
+          JUPR_TOURNAMENT_SETUP_BUILDER_MODULE="$RUNNER_TEMP/tournament-setup-builder/app/admin/tournament-setup/tournamentSetupBuilder.js" \
             node app/admin/tournament-setup/tournamentSetupBuilder.test.mjs
       - name: Test admin-session storage isolation
         run: |

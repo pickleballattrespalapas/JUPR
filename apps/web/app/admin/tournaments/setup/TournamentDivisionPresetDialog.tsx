@@ -20,19 +20,27 @@ import {
   DIVISION_AGE_POLICY_FIELDS,
   type AgePolicy
 } from "./TournamentAgePolicyEditor";
+import {
+  parsedSkillAnchor,
+  skillEligibilityLabel,
+  skillEligibilitySummary,
+  type SkillEligibilityMode
+} from "@/lib/tournamentSkillEligibility";
 
 const SKILL_PRESETS = ["2.5", "3.0", "3.5", "4.0", "4.5", "5.0", "Open"] as const;
 const COMBINED_CAP_PRESETS = [7, 7.5, 8, 8.5] as const;
 
 type GenderPreset = "MEN" | "WOMEN" | "MIXED" | "ANY";
-type EligibilityMode = "STANDARD" | "COMBINED_RATING_CAP";
+type EligibilityMode = "STANDARD" | "MINIMUM" | "COMBINED_RATING_CAP";
 
 type SkillSpec = {
   key: string;
   label: string;
   skillLabel: string;
   skillMode: string;
-  eligibilityMode: EligibilityMode;
+  eligibilityMode: SkillEligibilityMode;
+  skillMinRating: number | null;
+  skillMaxRating: number | null;
   combinedRatingCap: number | null;
 };
 
@@ -133,12 +141,32 @@ function fixedBracketPolicy(
 }
 
 function standardSkillSpec(label: string): SkillSpec {
+  const open = label.toLowerCase() === "open";
   return {
-    key: `standard-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+    key: `${open ? "open" : "standard"}-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
     label,
     skillLabel: label,
-    skillMode: label.toLowerCase() === "open" ? "OPEN" : "SKILL_BRACKET",
-    eligibilityMode: "STANDARD",
+    skillMode: open ? "OPEN" : "STANDARD",
+    eligibilityMode: open ? "OPEN" : "STANDARD",
+    skillMinRating: null,
+    skillMaxRating: null,
+    combinedRatingCap: null
+  };
+}
+
+function minimumSkillSpec(label: string): SkillSpec {
+  const threshold = Number(label.replace(/\+$/, ""));
+  const formatted = Number.isFinite(threshold)
+    ? threshold.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")
+    : label.replace(/\+$/, "");
+  return {
+    key: `minimum-${formatted.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+    label: `${formatted}+`,
+    skillLabel: `${formatted}+`,
+    skillMode: "MINIMUM",
+    eligibilityMode: "MINIMUM",
+    skillMinRating: Number.isFinite(threshold) ? threshold : null,
+    skillMaxRating: null,
     combinedRatingCap: null
   };
 }
@@ -149,8 +177,10 @@ function combinedSkillSpec(cap: number): SkillSpec {
     key: `combined-${formatted.replace(".", "-")}`,
     label: `Combined Below ${formatted}`,
     skillLabel: `Combined < ${formatted}`,
-    skillMode: "OPEN",
+    skillMode: "COMBINED_RATING_CAP",
     eligibilityMode: "COMBINED_RATING_CAP",
+    skillMinRating: null,
+    skillMaxRating: null,
     combinedRatingCap: Number(cap)
   };
 }
@@ -191,6 +221,8 @@ function buildProposal(
       skill_label: skill.skillLabel,
       skill_mode: skill.skillMode,
       eligibility_mode: skill.eligibilityMode,
+      skill_min_rating: skill.skillMinRating,
+      skill_max_rating: skill.skillMaxRating,
       combined_rating_cap: skill.combinedRatingCap,
       capacity_teams: Number(family.value.default_capacity_teams) || 16,
       price_usd: Number(family.value.default_price_usd) || 0,
@@ -297,10 +329,20 @@ export default function TournamentDivisionPresetDialog({
       if (customCapEnabled && Number.isFinite(parsedCustom) && parsedCustom > 0 && parsedCustom <= 14) caps.push(parsedCustom);
       return [...new Set(caps.map((value) => Number(value.toFixed(2))))].sort((a, b) => a - b).map(combinedSkillSpec);
     }
-    const specs = skills.map(standardSkillSpec);
+    const numericSkills = skills.filter((value) => value.toLowerCase() !== "open");
+    const specs = eligibilityMode === "MINIMUM"
+      ? numericSkills.map(minimumSkillSpec)
+      : skills.map(standardSkillSpec);
     const custom = customSkill.trim();
-    if (customSkillEnabled && custom && !skills.some((value) => value.toLowerCase() === custom.toLowerCase())) {
-      specs.push({ ...standardSkillSpec(custom), key: `custom-${custom.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, skillMode: "CUSTOM" });
+    const customAnchor = parsedSkillAnchor(custom);
+    if (customSkillEnabled && customAnchor != null) {
+      const canonical = customAnchor.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+      if (skills.some((value) => value.toLowerCase() === canonical.toLowerCase())) return specs;
+      specs.push(
+        eligibilityMode === "MINIMUM"
+          ? { ...minimumSkillSpec(canonical), key: `custom-minimum-${canonical.toLowerCase().replace(/[^a-z0-9]+/g, "-")}` }
+          : { ...standardSkillSpec(canonical), key: `custom-${canonical.toLowerCase().replace(/[^a-z0-9]+/g, "-")}` }
+      );
     }
     return specs;
   }, [eligibilityMode, skills, customSkillEnabled, customSkill, combinedCaps, customCapEnabled, customCap]);
@@ -352,7 +394,7 @@ export default function TournamentDivisionPresetDialog({
       });
     });
     if (!generated.length) {
-      setMessage(eligibilityMode === "STANDARD" ? "Choose at least one skill level." : "Choose at least one combined-rating cap.");
+      setMessage(eligibilityMode === "COMBINED_RATING_CAP" ? "Choose at least one combined-rating cap." : "Choose at least one skill level.");
     } else if (generated.some((row) => row.duplicate)) {
       setMessage("Existing divisions were detected and left unselected.");
     } else {
@@ -376,6 +418,10 @@ export default function TournamentDivisionPresetDialog({
   }
 
   async function submit() {
+    if (customSkillEnabled && parsedSkillAnchor(customSkill) == null) {
+      setMessage("Custom skill must be a numeric rating between 1.0 and 7.0.");
+      return;
+    }
     const selectedProposals = proposals.filter((row) => row.selected);
     if (!selectedProposals.length) {
       setMessage("Choose at least one new division.");
@@ -443,7 +489,11 @@ export default function TournamentDivisionPresetDialog({
           <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
             <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
               <input type="radio" checked={eligibilityMode === "STANDARD"} onChange={() => setEligibilityMode("STANDARD")} />
-              Individual skill divisions
+              Standard skill ceilings
+            </label>
+            <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <input type="radio" checked={eligibilityMode === "MINIMUM"} onChange={() => setEligibilityMode("MINIMUM")} />
+              Minimum skill / Skill+
             </label>
             {canUseCombined ? (
               <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
@@ -452,7 +502,7 @@ export default function TournamentDivisionPresetDialog({
               </label>
             ) : null}
           </div>
-          {eligibilityMode === "STANDARD" ? (
+          {eligibilityMode !== "COMBINED_RATING_CAP" ? (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.45rem", marginTop: "0.65rem" }}>
               {SKILL_PRESETS.map((skill) => (
                 <label key={skill} style={{ display: "flex", gap: "0.5rem" }}>
@@ -465,7 +515,7 @@ export default function TournamentDivisionPresetDialog({
                 Custom skill division
                 <input value={customSkill} disabled={!customSkillEnabled} placeholder="Example: 3.75" style={{ ...inputStyle, maxWidth: "240px" }} onChange={(event) => setCustomSkill(event.target.value)} />
               </label>
-              <small style={{ gridColumn: "1 / -1", color: "#64748b" }}>A numeric custom label uses the standard half-step eligibility band; other labels remain organizer-defined.</small>
+              <small style={{ gridColumn: "1 / -1", color: "#64748b" }}>{eligibilityMode === "MINIMUM" ? "Each selected level becomes a true minimum with no upper ceiling." : "Numeric levels use the standard half-step ceiling; Open has no rating restriction."}</small>
             </div>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.45rem", marginTop: "0.65rem" }}>
@@ -525,7 +575,7 @@ export default function TournamentDivisionPresetDialog({
                       issue: undefined,
                       value: { ...row.value, division_name: event.target.value, label: event.target.value }
                     } : row))} /></label>
-                    <div><strong>Eligibility</strong><br />{cleanString(proposal.value.eligibility_mode).toUpperCase() === "COMBINED_RATING_CAP" ? `Combined below ${Number(proposal.value.combined_rating_cap).toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}` : cleanString(proposal.value.skill_label)}</div>
+                    <div><strong>Eligibility</strong><br />{skillEligibilityLabel(proposal.value)}<br /><small>{skillEligibilitySummary(proposal.value)}</small></div>
                     <div><strong>Gender</strong><br />{titleCase(cleanString(proposal.value.gender_restriction))}</div>
                   </div>
                   <small style={{ color: proposal.duplicate ? "#92400e" : "#64748b" }}>

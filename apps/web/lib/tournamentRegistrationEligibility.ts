@@ -1,4 +1,5 @@
 import { PublicRegistrationEvent } from "@/lib/tournamentRegistrationApi";
+import { skillEligibilityPolicy } from "@/lib/tournamentSkillEligibility";
 
 export type RegistrationEligibilityProfile = {
   gender?: string | null;
@@ -16,16 +17,6 @@ function normalizedGender(value?: string | null): "MEN" | "WOMEN" | "OTHER" | ""
 
 function finiteNumber(value?: number | null): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function controlledSkillCeiling(event: PublicRegistrationEvent): number | null {
-  const skillMode = String(event.skill_mode || "").trim().toUpperCase();
-  if (["MINIMUM", "MIN", "AT_LEAST", "OPEN"].includes(skillMode)) return null;
-  const match = String(event.skill_label || "").trim().match(/^(?:skill\s*)?([0-9](?:\.[0-9]{1,2})?)\s*(\+)?$/i);
-  if (!match || match[2]) return null;
-  const anchor = Number(match[1]);
-  if (!Number.isFinite(anchor) || anchor < 1 || anchor > 7) return null;
-  return Math.round((anchor + 0.5) * 100) / 100;
 }
 
 function ageRules(event: PublicRegistrationEvent): Record<string, unknown> {
@@ -72,14 +63,27 @@ export function publicEventEligibilityReason(
     return `Age ${age.toFixed(0)} does not meet this division's minimum age of ${minimumAge.toFixed(0)}.`;
   }
 
-  const ceiling = controlledSkillCeiling(event);
-  if (ceiling == null) return null;
+  const policy = skillEligibilityPolicy(event);
+  if (policy.mode === "OPEN") return null;
   const eventType = String(event.event_type || "").toUpperCase();
   const isDoubles = Boolean(event.partner_required) || ["DOUBLES", "GENDER_DOUBLES", "MIXED_DOUBLES", "MIXED"].includes(eventType);
   const rating = isDoubles
     ? finiteNumber(profile.doublesSkill) ?? finiteNumber(profile.singlesSkill)
     : finiteNumber(profile.singlesSkill) ?? finiteNumber(profile.doublesSkill);
-  if (rating != null && rating >= ceiling) {
+  if (rating == null) return null;
+  if (
+    policy.mode === "COMBINED_RATING_CAP" &&
+    policy.combinedCap != null &&
+    rating >= policy.combinedCap
+  ) {
+    return `Rating ${rating.toFixed(2)} cannot fit a combined team-rating cap strictly below ${policy.combinedCap.toFixed(2)}.`;
+  }
+  // Doubles lower bounds use the team's higher rating. The partner is chosen
+  // after the event, so a lower-rated primary player is not conclusive here.
+  if (!isDoubles && policy.minimum != null && rating < policy.minimum) {
+    return `Rating ${rating.toFixed(2)} does not meet this division's minimum of ${policy.minimum.toFixed(2)}.`;
+  }
+  if (policy.maximumExclusive != null && rating >= policy.maximumExclusive) {
     const recommended = Math.floor(rating * 2) / 2;
     return `Rating ${rating.toFixed(2)} is above this division cap. Choose ${recommended.toFixed(1)} or higher.`;
   }

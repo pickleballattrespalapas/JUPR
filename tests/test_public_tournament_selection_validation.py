@@ -72,7 +72,7 @@ def test_non_confirmed_partner_modes_clear_stale_partner_identity_rating_and_age
     assert cleaned["partner_dupr_id"] == ""
     assert cleaned["partner_skill"] is None
     assert cleaned["partner_age"] is None
-    assert "partner_gender" not in cleaned
+    assert cleaned["partner_gender"] == ""
     assert cleaned["show_on_partner_board"] is expected_board_visibility
 
 

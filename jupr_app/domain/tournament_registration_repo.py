@@ -26,7 +26,8 @@ EVENT_TYPE_OPTIONS = ["SINGLES", "GENDER_DOUBLES", "MIXED_DOUBLES"]
 GENDER_RESTRICTION_OPTIONS = ["ANY", "MEN", "WOMEN", "MIXED"]
 PARTNER_MODE_OPTIONS = ["NONE", "HAS_PARTNER", "NEEDS_PARTNER"]
 ADMIN_REGISTRATION_STATUS_OPTIONS = ["confirmed", "waitlist", "cancelled"]
-ADMIN_PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "refunded"]
+ADMIN_PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "waived", "refunded"]
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class SelectionWriteConflict(RuntimeError):
@@ -54,6 +55,7 @@ class TournamentRegistrationRelationshipLockedError(ValueError):
 
 
 ADMIN_SELECTION_UPDATE_RPC = "admin_update_tournament_registration_selection"
+ADMIN_SELECTION_DELETE_RPC = "admin_delete_tournament_registration_selection"
 PUBLIC_REGISTRATION_EDIT_RPC = "server_update_public_tournament_registration_edit"
 PUBLIC_REGISTRATION_COMMERCE_CREATE_RPC = (
     "server_create_public_tournament_registration_with_commerce"
@@ -67,6 +69,8 @@ SELECTION_NOT_FOUND_CODE = "SELECTION_NOT_FOUND"
 RELATION_SELECTION_NOT_FOUND_MARKER = "JUPR_RELATION_SELECTION_NOT_FOUND"
 SELECTION_INVALID_TARGET_MARKER = "JUPR_SELECTION_INVALID_TARGET"
 SELECTION_INVALID_PATCH_MARKER = "JUPR_SELECTION_INVALID_PATCH"
+SELECTION_RELATIONSHIP_LOCKED_CODE = "SELECTION_RELATIONSHIP_LOCKED"
+SELECTION_IMPORTED_TO_DRAW_CODE = "SELECTION_IMPORTED_TO_DRAW"
 REGISTRATION_EDIT_CONFLICT_CODE = "REGISTRATION_EDIT_CONFLICT"
 REGISTRATION_EDIT_CONFLICT_MARKER = "JUPR_REGISTRATION_EDIT_CONFLICT"
 REGISTRATION_EDIT_IMPORTED_CODE = "REGISTRATION_IMPORTED_TO_DRAW"
@@ -82,6 +86,7 @@ REGISTRATION_SCHEMA_CONTRACT_MIGRATIONS = [
     "migrations/20261010_tournament_builder_refactor.sql",
     "migrations/20261018_tournament_registration_schema_contract.sql",
     "migrations/20261019_tournament_registration_partner_links.sql",
+    "supabase/migrations/20260807150000_tournament_complete_registration_editor.sql",
 ]
 
 CORE_REGISTRATION_SCHEMA_TABLES = [
@@ -140,6 +145,8 @@ REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "event_format_override",
         "scoring_override",
         "skill_mode",
+        "skill_min_rating",
+        "skill_max_rating",
         "age_mode",
         "age_rules",
         "waitlist_enabled",
@@ -153,6 +160,9 @@ REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "tournament_registrations.player_id": (
         "player_id",
+    ),
+    "tournament_registration_selections": (
+        "partner_gender",
     ),
     "tournament_registration_partner_requests": (
         "id",
@@ -857,6 +867,8 @@ EVENT_CONFIGURATION_WRITE_FIELDS = {
     "event_format_override",
     "scoring_override",
     "skill_mode",
+    "skill_min_rating",
+    "skill_max_rating",
     "age_mode",
     "age_rules",
     "eligibility_mode",
@@ -1102,6 +1114,8 @@ def _skill_age_rule_review_value(
             "gender_restriction": event.get("gender_restriction") or "ANY",
             "skill_label": event.get("skill_label") or "Open",
             "skill_mode": event.get("skill_mode") or "OPEN",
+            "skill_min_rating": event.get("skill_min_rating"),
+            "skill_max_rating": event.get("skill_max_rating"),
             "eligibility_mode": event.get("eligibility_mode") or "STANDARD",
             "skill_ceiling_exclusive": skill_ceiling_exclusive(event),
             "combined_rating_cap": event.get("combined_rating_cap"),
@@ -1116,6 +1130,8 @@ def _skill_age_rule_review_value(
             "gender_restriction": event.get("gender_restriction") or "ANY",
             "skill_label": event.get("skill_label") or "Open",
             "skill_mode": event.get("skill_mode") or "OPEN",
+            "skill_min_rating": event.get("skill_min_rating"),
+            "skill_max_rating": event.get("skill_max_rating"),
             "eligibility_mode": event.get("eligibility_mode") or "STANDARD",
             "skill_ceiling_exclusive": skill_ceiling_exclusive(event),
             "combined_rating_cap": event.get("combined_rating_cap"),
@@ -2461,32 +2477,87 @@ def update_admin_registration(
     payload: dict[str, Any],
     expected_updated_at: str | None = None,
 ) -> dict[str, Any]:
-    update_payload = {
-        "first_name": str(payload.get("first_name") or "").strip() or None,
-        "last_name": str(payload.get("last_name") or "").strip() or None,
-        "display_name": str(payload.get("display_name") or "").strip() or None,
-        "email": _normalize_email(payload.get("email")) or None,
-        "phone": str(payload.get("phone") or "").strip() or None,
-        "gender": str(payload.get("gender") or "").strip() or None,
-        "age": payload.get("age"),
-        "dupr_id": str(payload.get("dupr_id") or "").strip() or None,
-        "doubles_skill": payload.get("doubles_skill"),
-        "singles_skill": payload.get("singles_skill"),
-        "status": str(payload.get("status") or "").strip().lower() or None,
-        "payment_status": str(payload.get("payment_status") or "").strip().lower() or None,
-        "notes": str(payload.get("notes") or "").strip() or None,
-        "updated_at": _now_iso(),
+    clean_payload: dict[str, Any] = {}
+    text_limits = {
+        "first_name": 120,
+        "last_name": 120,
+        "display_name": 240,
+        "phone": 80,
+        "gender": 40,
+        "age_bracket": 80,
+        "dupr_id": 120,
+        "notes": 2000,
     }
-    clean_payload = {k: v for k, v in update_payload.items() if v is not None}
+    for field, limit in text_limits.items():
+        if field in payload:
+            value = str(payload.get(field) or "").strip()[:limit]
+            clean_payload[field] = value or None
+    if "email" in payload:
+        clean_payload["email"] = _normalize_email(payload.get("email")) or None
+    for field in ("player_id", "age"):
+        if field in payload:
+            value = payload.get(field)
+            if value in (None, ""):
+                clean_payload[field] = None
+                continue
+            if isinstance(value, bool):
+                raise ValueError(f"{field.replace('_', ' ').title()} must be a whole number.")
+            try:
+                number = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field.replace('_', ' ').title()} must be a whole number.") from exc
+            if not math.isfinite(number) or not number.is_integer():
+                raise ValueError(f"{field.replace('_', ' ').title()} must be a whole number.")
+            clean_payload[field] = int(number)
+    for field in ("doubles_skill", "singles_skill"):
+        if field in payload:
+            value = payload.get(field)
+            if value in (None, ""):
+                clean_payload[field] = None
+                continue
+            if isinstance(value, bool):
+                raise ValueError(f"{field.replace('_', ' ').title()} must be a number.")
+            try:
+                number = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field.replace('_', ' ').title()} must be a number.") from exc
+            if not math.isfinite(number):
+                raise ValueError(f"{field.replace('_', ' ').title()} must be a finite number.")
+            clean_payload[field] = number
+    if "wants_partner_board_contact" in payload:
+        clean_payload["wants_partner_board_contact"] = _coerce_bool(payload.get("wants_partner_board_contact"))
+    if "status" in payload:
+        clean_payload["status"] = str(payload.get("status") or "").strip().lower() or None
+    if "payment_status" in payload:
+        clean_payload["payment_status"] = str(payload.get("payment_status") or "").strip().lower() or None
+
     if clean_payload.get("status") and clean_payload["status"] not in ADMIN_REGISTRATION_STATUS_OPTIONS:
         raise ValueError(f"Invalid registration status: {clean_payload['status']}")
     if clean_payload.get("payment_status") and clean_payload["payment_status"] not in ADMIN_PAYMENT_STATUS_OPTIONS:
         raise ValueError(f"Invalid payment status: {clean_payload['payment_status']}")
+    if "player_id" in clean_payload and clean_payload["player_id"] is not None and int(clean_payload["player_id"]) <= 0:
+        raise ValueError("Player id must be a positive whole number.")
+    if "age" in clean_payload and clean_payload["age"] is not None and not 5 <= int(clean_payload["age"]) <= 120:
+        raise ValueError("Age must be between 5 and 120.")
+    for field in ("doubles_skill", "singles_skill"):
+        value = clean_payload.get(field)
+        if value is not None and not 1 <= float(value) <= 7:
+            raise ValueError(f"{field.replace('_', ' ').title()} must be between 1.00 and 7.00.")
+    if "display_name" in clean_payload and not clean_payload.get("display_name"):
+        first = clean_payload.get("first_name")
+        last = clean_payload.get("last_name")
+        fallback = " ".join(part for part in (first, last) if part)
+        clean_payload["display_name"] = fallback or None
+    if clean_payload.get("email") and not _EMAIL_RE.match(str(clean_payload["email"])):
+        raise ValueError("Enter a valid registration email address.")
     if clean_payload.get("email"):
         existing = _get_registration_by_email(supabase, str(tournament_id), str(clean_payload["email"]))
         if existing and str(existing.get("id")) != str(registration_id):
             raise ValueError("Another registration already uses that email.")
+    if not clean_payload:
+        raise ValueError("No supported registration fields were provided.")
 
+    clean_payload["updated_at"] = _now_iso()
     query = (
         supabase.table("tournament_registrations")
         .update(clean_payload)
@@ -2498,12 +2569,9 @@ def update_admin_registration(
     try:
         resp = query.execute()
     except Exception as exc:
-        if _database_error_contains(
-            exc, REGISTRATION_COMMERCE_FULFILLED_CANCEL_MARKER
-        ):
+        if _database_error_contains(exc, REGISTRATION_COMMERCE_FULFILLED_CANCEL_MARKER):
             raise ValueError(
-                "This registration has fulfilled extras. Resolve fulfillment "
-                "before cancelling the registration."
+                "This registration has fulfilled extras. Resolve fulfillment before cancelling the registration."
             ) from exc
         raise
     updated = _safe_first(resp)
@@ -2515,6 +2583,108 @@ def update_admin_registration(
         raise ValueError("Registration not found for this tournament.")
     return updated
 
+
+
+def create_admin_registration_selection(
+    supabase,
+    *,
+    tournament_id: str,
+    registration_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    now = _now_iso()
+    existing = (
+        supabase.table("tournament_registration_selections")
+        .select("sort_order")
+        .eq("tournament_id", str(tournament_id))
+        .eq("registration_id", str(registration_id))
+        .execute()
+    )
+    sort_order = max([int(row.get("sort_order") or 0) for row in _safe_data(existing)] or [-1]) + 1
+    row = {
+        "id": str(payload.get("id") or _uid("sel")),
+        "tournament_id": str(tournament_id),
+        "registration_id": str(registration_id),
+        "registration_day_id": str(payload.get("registration_day_id") or "").strip(),
+        "event_option_id": str(payload.get("event_option_id") or "").strip(),
+        "partner_mode": str(payload.get("partner_mode") or "NONE").strip().upper(),
+        "partner_name": str(payload.get("partner_name") or "").strip() or None,
+        "partner_email": _normalize_email(payload.get("partner_email")) or None,
+        "partner_phone": str(payload.get("partner_phone") or "").strip() or None,
+        "partner_dupr_id": str(payload.get("partner_dupr_id") or "").strip() or None,
+        "partner_skill": payload.get("partner_skill"),
+        "partner_age": payload.get("partner_age"),
+        "partner_gender": str(payload.get("partner_gender") or "").strip() or None,
+        "partner_note": str(payload.get("partner_note") or "").strip() or None,
+        "show_on_partner_board": _coerce_bool(payload.get("show_on_partner_board", False)),
+        "sort_order": sort_order,
+        "created_at": now,
+        "updated_at": now,
+    }
+    response = supabase.table("tournament_registration_selections").insert(row).execute()
+    created = _safe_first(response)
+    if not created:
+        raise RuntimeError("Tournament event entry was not created.")
+    return created
+
+
+def delete_admin_registration_selection(
+    supabase,
+    *,
+    tournament_id: str,
+    selection_id: str,
+    expected_updated_at: str | None = None,
+) -> dict[str, Any]:
+    clean_expected_updated_at = str(expected_updated_at or "").strip()
+    if not clean_expected_updated_at:
+        raise ValueError("expected_updated_at is required for event-entry deletion.")
+
+    params = {
+        "p_tournament_id": str(tournament_id),
+        "p_selection_id": str(selection_id),
+        "p_expected_updated_at": clean_expected_updated_at,
+    }
+    try:
+        response = supabase.rpc(ADMIN_SELECTION_DELETE_RPC, params).execute()
+    except Exception as exc:
+        if _database_error_contains(exc, SELECTION_WRITE_CONFLICT_CODE):
+            raise StaleTournamentRegistrationSelectionError(
+                "Event entry changed after it was loaded. Refresh and try again."
+            ) from exc
+        if _database_error_contains(exc, SELECTION_NOT_FOUND_CODE):
+            raise ValueError("Event entry was not found for this tournament.") from exc
+        if _database_error_contains(exc, SELECTION_RELATIONSHIP_LOCKED_CODE):
+            raise TournamentRegistrationRelationshipLockedError(
+                "This event entry has an active partner relationship. Resolve it before removing the entry."
+            ) from exc
+        if _database_error_contains(exc, SELECTION_IMPORTED_TO_DRAW_CODE):
+            raise TournamentRegistrationImportedDrawError(
+                "This event entry is already imported into a draw. Remove it from Tournament Ops first."
+            ) from exc
+        raise RuntimeError("Tournament event entry deletion failed.") from exc
+
+    result = _rpc_object(response)
+    if result is None:
+        raise RuntimeError("Tournament event entry deletion returned an invalid response.")
+    code = str(result.get("code") or "").strip().upper()
+    if code == SELECTION_WRITE_CONFLICT_CODE:
+        raise StaleTournamentRegistrationSelectionError(
+            "Event entry changed after it was loaded. Refresh and try again."
+        )
+    if code == SELECTION_NOT_FOUND_CODE:
+        raise ValueError("Event entry was not found for this tournament.")
+    if code == SELECTION_RELATIONSHIP_LOCKED_CODE:
+        raise TournamentRegistrationRelationshipLockedError(
+            "This event entry has an active partner relationship. Resolve it before removing the entry."
+        )
+    if code == SELECTION_IMPORTED_TO_DRAW_CODE:
+        raise TournamentRegistrationImportedDrawError(
+            "This event entry is already imported into a draw. Remove it from Tournament Ops first."
+        )
+    deleted = result.get("selection")
+    if result.get("ok") is not True or not isinstance(deleted, dict):
+        raise RuntimeError("Tournament event entry deletion returned an invalid response.")
+    return deleted
 
 def update_admin_registration_selection(
     supabase,
@@ -2534,7 +2704,7 @@ def update_admin_registration_selection(
         partner_mode = str(payload.get("partner_mode") or "").strip().upper() or None
         if partner_mode is not None:
             clean_payload["partner_mode"] = partner_mode
-    for field in ("partner_name", "partner_phone", "partner_dupr_id", "partner_note"):
+    for field in ("partner_name", "partner_phone", "partner_dupr_id", "partner_gender", "partner_note"):
         if field in payload:
             clean_payload[field] = str(payload.get(field) or "").strip() or None
     if "partner_email" in payload:
@@ -2906,6 +3076,7 @@ def save_registration(
             "doubles_skill": selection.get("partner_skill"),
             "singles_skill": selection.get("partner_skill"),
             "age": selection.get("partner_age"),
+            "gender": str(selection.get("partner_gender") or "").strip() or None,
         }
         if partner_payload.get("doubles_skill") in (None, "") and partner_email:
             partner_registration = _get_registration_by_email(supabase, tournament_id, partner_email)
@@ -2942,6 +3113,7 @@ def save_registration(
                 "partner_dupr_id": str(selection.get("partner_dupr_id") or "").strip() or None,
                 "partner_skill": selection.get("partner_skill"),
                 "partner_age": selection.get("partner_age"),
+                "partner_gender": str(selection.get("partner_gender") or "").strip() or None,
                 "partner_note": str(selection.get("partner_note") or "").strip() or None,
                 "show_on_partner_board": _coerce_bool(selection.get("show_on_partner_board", False)),
                 "sort_order": index,

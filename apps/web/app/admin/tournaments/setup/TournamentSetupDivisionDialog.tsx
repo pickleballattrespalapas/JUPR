@@ -23,6 +23,14 @@ import TournamentAgePolicyEditor, {
   validateAgePolicy,
   writeAgePolicy
 } from "./TournamentAgePolicyEditor";
+import {
+  skillAnchor,
+  skillEligibilityLabel,
+  skillEligibilityMode,
+  skillEligibilitySummary,
+  validateTournamentSkillEligibility,
+  type SkillEligibilityMode
+} from "@/lib/tournamentSkillEligibility";
 
 type Props = {
   open: boolean;
@@ -34,8 +42,6 @@ type Props = {
   onConfirm: (value: SetupRecord) => void | Promise<void>;
 };
 
-type DivisionEligibilityMode = "STANDARD" | "COMBINED_RATING_CAP";
-
 const inputStyle: CSSProperties = {
   width: "100%",
   minWidth: 0,
@@ -46,27 +52,65 @@ const inputStyle: CSSProperties = {
   font: "inherit"
 };
 
-function eligibilityMode(value: SetupRecord): DivisionEligibilityMode {
-  return cleanString(value.eligibility_mode).toUpperCase() === "COMBINED_RATING_CAP"
-    ? "COMBINED_RATING_CAP"
-    : "STANDARD";
-}
-
 function applyEligibilityMode(
   value: SetupRecord,
-  nextMode: DivisionEligibilityMode
+  nextMode: SkillEligibilityMode
 ): SetupRecord {
+  const anchor = skillAnchor(value.skill_label) ?? 3.5;
   if (nextMode === "COMBINED_RATING_CAP") {
+    const cap = Number(value.combined_rating_cap);
     return {
       ...value,
       eligibility_mode: "COMBINED_RATING_CAP",
-      combined_rating_cap:
-        Number(value.combined_rating_cap) > 0 ? Number(value.combined_rating_cap) : 8
+      skill_mode: "COMBINED_RATING_CAP",
+      skill_label: `Below ${Number.isFinite(cap) && cap > 0 ? cap : 8} combined`,
+      skill_min_rating: null,
+      skill_max_rating: null,
+      combined_rating_cap: Number.isFinite(cap) && cap > 0 ? cap : 8
+    };
+  }
+  if (nextMode === "MINIMUM") {
+    const minimum = Number(value.skill_min_rating);
+    const threshold = Number.isFinite(minimum) && minimum > 0 ? minimum : anchor;
+    return {
+      ...value,
+      eligibility_mode: "MINIMUM",
+      skill_mode: "MINIMUM",
+      skill_label: `${threshold.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}+`,
+      skill_min_rating: threshold,
+      skill_max_rating: null,
+      combined_rating_cap: null
+    };
+  }
+  if (nextMode === "OPEN") {
+    return {
+      ...value,
+      eligibility_mode: "OPEN",
+      skill_mode: "OPEN",
+      skill_label: "Open",
+      skill_min_rating: null,
+      skill_max_rating: null,
+      combined_rating_cap: null
+    };
+  }
+  if (nextMode === "CUSTOM") {
+    return {
+      ...value,
+      eligibility_mode: "CUSTOM",
+      skill_mode: "CUSTOM",
+      skill_label: cleanString(value.skill_label) || "Custom rating",
+      skill_min_rating: value.skill_min_rating ?? null,
+      skill_max_rating: value.skill_max_rating ?? null,
+      combined_rating_cap: null
     };
   }
   return {
     ...value,
     eligibility_mode: "STANDARD",
+    skill_mode: "STANDARD",
+    skill_label: anchor.toFixed(2).replace(/0+$/, "").replace(/\.$/, ""),
+    skill_min_rating: null,
+    skill_max_rating: null,
     combined_rating_cap: null
   };
 }
@@ -167,7 +211,7 @@ export default function TournamentSetupDivisionDialog({
       setMessage("Division name is required.");
       return;
     }
-    if (!cleanString(draft.skill_label)) {
+    if (!cleanString(draft.skill_label) && skillEligibilityMode(draft) !== "OPEN") {
       setMessage("Skill division is required.");
       return;
     }
@@ -185,12 +229,19 @@ export default function TournamentSetupDivisionDialog({
       setMessage("Entry fee cannot be negative.");
       return;
     }
-    if (eligibilityMode(draft) === "COMBINED_RATING_CAP") {
-      const cap = Number(draft.combined_rating_cap);
-      if (!Number.isFinite(cap) || cap <= 0 || cap > 14) {
-        setMessage("Maximum combined rating must be greater than 0 and no more than 14.");
-        return;
-      }
+    const skillIssue = validateTournamentSkillEligibility(draft);
+    if (skillIssue) {
+      setMessage(skillIssue);
+      return;
+    }
+    const participantType = cleanString(family?.participant_type).toUpperCase();
+    const competitionFormat = cleanString(family?.competition_format).toUpperCase();
+    if (
+      skillEligibilityMode(draft) === "COMBINED_RATING_CAP" &&
+      (participantType === "SINGLES" || competitionFormat === "FOUR_PLAYER_TEAM")
+    ) {
+      setMessage("Combined team-rating cap is available only for standard doubles/team divisions.");
+      return;
     }
     if (agePolicySource === "OVERRIDE") {
       const ageIssues = validateAgePolicy(divisionAgePolicy, cleanString(family?.participant_type));
@@ -302,18 +353,68 @@ export default function TournamentSetupDivisionDialog({
           <label>
             <strong>Division eligibility</strong><br />
             <select
-              value={eligibilityMode(draft)}
+              value={skillEligibilityMode(draft)}
               style={inputStyle}
               onChange={(event) =>
-                setDraft((current) => applyEligibilityMode(current, event.target.value as DivisionEligibilityMode))
+                setDraft((current) => applyEligibilityMode(current, event.target.value as SkillEligibilityMode))
               }
             >
-              <option value="STANDARD">Standard event eligibility</option>
-              <option value="COMBINED_RATING_CAP">Combined-rating doubles cap</option>
+              <option value="STANDARD">Standard skill ceiling</option>
+              <option value="MINIMUM">Minimum skill / Skill+</option>
+              <option value="OPEN">Open — no rating restriction</option>
+              <option
+                value="COMBINED_RATING_CAP"
+                disabled={
+                  cleanString(family?.participant_type).toUpperCase() === "SINGLES" ||
+                  cleanString(family?.competition_format).toUpperCase() === "FOUR_PLAYER_TEAM"
+                }
+              >
+                Combined team-rating cap
+              </option>
+              <option value="CUSTOM">Custom rating boundaries</option>
             </select>
-            <small>Four-player team is configured at the parent Event level.</small>
+            <small>{skillEligibilitySummary(draft)}</small>
           </label>
-          {eligibilityMode(draft) === "COMBINED_RATING_CAP" ? (
+          {skillEligibilityMode(draft) === "MINIMUM" ? (
+            <label>
+              <strong>Minimum rating</strong><br />
+              <input
+                type="number"
+                inputMode="decimal"
+                min="1"
+                max="7"
+                step="0.01"
+                value={numberInputValue(draft.skill_min_rating ?? skillAnchor(draft.skill_label))}
+                style={inputStyle}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setDraft((current) => {
+                    const next = setRecordNumber(current, "skill_min_rating", value);
+                    const parsed = Number(value);
+                    return {
+                      ...next,
+                      skill_label: Number.isFinite(parsed) && value !== ""
+                        ? `${parsed.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}+`
+                        : current.skill_label
+                    };
+                  });
+                }}
+              />
+            </label>
+          ) : null}
+          {skillEligibilityMode(draft) === "CUSTOM" ? (
+            <>
+              <label>
+                <strong>Minimum rating (optional)</strong><br />
+                <input type="number" inputMode="decimal" min="1" max="7" step="0.01" value={numberInputValue(draft.skill_min_rating)} style={inputStyle} onChange={(event) => setDraft((current) => setRecordNumber(current, "skill_min_rating", event.target.value))} />
+              </label>
+              <label>
+                <strong>Maximum rating — exclusive (optional)</strong><br />
+                <input type="number" inputMode="decimal" min="1" max="7.5" step="0.01" value={numberInputValue(draft.skill_max_rating)} style={inputStyle} onChange={(event) => setDraft((current) => setRecordNumber(current, "skill_max_rating", event.target.value))} />
+              </label>
+            </>
+          ) : null}
+          {skillEligibilityMode(draft) === "COMBINED_RATING_CAP" ? (
             <label>
               <strong>Maximum combined rating</strong><br />
               <input
@@ -352,6 +453,13 @@ export default function TournamentSetupDivisionDialog({
             />
             <small>Commerce is the consolidated place to review all fees.</small>
           </label>
+        </div>
+        <div style={{ marginTop: "0.85rem", padding: "0.75rem", border: "1px solid #bfdbfe", borderRadius: "10px", background: "#eff6ff" }}>
+          <strong>{skillEligibilityLabel(draft)}</strong><br />
+          <span>{skillEligibilitySummary(draft)}</span>
+          {!["OPEN", "COMBINED_RATING_CAP"].includes(skillEligibilityMode(draft)) && cleanString(family?.participant_type).toUpperCase() !== "SINGLES" ? (
+            <small style={{ display: "block", marginTop: "0.25rem" }}>For doubles, the higher-rated partner is the controlling rating.</small>
+          ) : null}
         </div>
 
         <fieldset style={{ marginTop: "1rem", padding: "0.85rem", border: "1px solid #cbd5e1", borderRadius: "12px" }}>

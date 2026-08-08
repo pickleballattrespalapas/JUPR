@@ -59,6 +59,8 @@ export type PublicRegistrationEvent = {
   partner_board_enabled?: boolean | null;
   waitlist_enabled?: boolean | null;
   eligibility_mode?: string | null;
+  skill_min_rating?: number | null;
+  skill_max_rating?: number | null;
   combined_rating_cap?: number | null;
   rating_source_policy?: string | null;
   rating_review_timing?: string | null;

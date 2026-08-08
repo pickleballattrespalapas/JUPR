@@ -8,6 +8,7 @@ import {
   type BuilderRow,
   type SetupRecord
 } from "../../tournament-setup/tournamentSetupBuilder";
+import { skillEligibilityLabel, skillEligibilityMode, skillEligibilitySummary } from "@/lib/tournamentSkillEligibility";
 
 const valueBox: CSSProperties = {
   padding: "0.65rem",
@@ -100,20 +101,11 @@ function skillAgeItems(value: SetupRecord): Array<[string, string]> {
     ? parsedRules
     : {};
   const items: Array<[string, string]> = [];
-  const skill = cleanString(value.skill_label);
+  const skill = skillEligibilityLabel(value);
   if (skill) items.push(["Skill", skill]);
-  const eligibilityMode = cleanString(value.eligibility_mode).toUpperCase();
-  const ceilingRaw = value.skill_ceiling_exclusive;
-  const combinedCapRaw = value.combined_rating_cap;
-  const ceiling = ceilingRaw == null || ceilingRaw === "" ? Number.NaN : Number(ceilingRaw);
-  const combinedCap = combinedCapRaw == null || combinedCapRaw === "" ? Number.NaN : Number(combinedCapRaw);
-  if (eligibilityMode === "COMBINED_RATING_CAP" && Number.isFinite(combinedCap)) {
-    items.push(["Skill eligibility", `Combined team rating below ${combinedCap.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}`]);
-  } else if (Number.isFinite(ceiling)) {
-    items.push(["Skill eligibility", `Rating below ${ceiling.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}`]);
-    items.push(["Play-up rule", "Lower-rated players may play up; higher-rated players may not play down"]);
-  } else {
-    items.push(["Skill eligibility", "Open — no rating ceiling"]);
+  items.push(["Skill eligibility", skillEligibilitySummary(value)]);
+  if (!["OPEN", "COMBINED_RATING_CAP"].includes(skillEligibilityMode(value))) {
+    items.push(["Doubles controlling rating", "Higher-rated partner"]);
   }
   const source = cleanString(value.policy_source);
   if (source) items.push(["Policy source", source]);

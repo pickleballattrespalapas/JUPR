@@ -321,8 +321,8 @@ export default function EditTournamentRegistrationForm({
           <label>Email<br /><input name="email" type="email" value={registration.email} disabled style={{ width: "100%" }} /></label>
           <label>Phone<br /><input name="phone" defaultValue={registration.phone || ""} style={{ width: "100%" }} /></label>
           <label>DUPR ID<br /><input name="dupr_id" defaultValue={registration.dupr_id || ""} style={{ width: "100%" }} /></label>
-          <label>Doubles skill<br /><input name="doubles_skill" value={linkedPlayer?.doubles_skill ?? doublesSkill} onChange={(event) => setDoublesSkill(event.target.value)} disabled={registration.player_id != null} type="number" min="0" max="7" step="0.01" style={{ width: "100%" }} /></label>
-          <label>Singles skill<br /><input name="singles_skill" value={linkedPlayer?.singles_skill ?? singlesSkill} onChange={(event) => setSinglesSkill(event.target.value)} disabled={registration.player_id != null} type="number" min="0" max="7" step="0.01" style={{ width: "100%" }} /></label>
+          <label>Doubles skill<br /><input name="doubles_skill" value={linkedPlayer?.doubles_skill ?? doublesSkill} onChange={(event) => setDoublesSkill(event.target.value)} disabled={registration.player_id != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
+          <label>Singles skill<br /><input name="singles_skill" value={linkedPlayer?.singles_skill ?? singlesSkill} onChange={(event) => setSinglesSkill(event.target.value)} disabled={registration.player_id != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
           <label>Age<br /><input name="age" defaultValue={registration.age ?? ""} type="number" min="1" max="120" style={{ width: "100%" }} /></label>
           <label>Gender<br /><select name="gender" value={gender} onChange={(event) => setGender(event.target.value)} style={{ width: "100%" }}><option value="">Select</option><option>Women</option><option>Men</option><option>Non-binary</option><option>Prefer not to say</option></select></label>
         </div>
@@ -363,8 +363,8 @@ export default function EditTournamentRegistrationForm({
                             <label>Partner phone<br /><input name={`partner_phone_${eventOption.id}`} defaultValue={prior?.partner_phone || ""} style={{ width: "100%" }} /></label>
                             <label>Partner DUPR ID<br /><input name={`partner_dupr_id_${eventOption.id}`} defaultValue={prior?.partner_dupr_id || ""} style={{ width: "100%" }} /></label>
                             <label>Partner skill<br /><input name={`partner_skill_${eventOption.id}`} defaultValue={prior?.partner_skill ?? ""} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
-                            <label>Partner age<br /><input name={`partner_age_${eventOption.id}`} defaultValue={prior?.partner_age ?? ""} type="number" min="1" max="120" style={{ width: "100%" }} /></label>
-                            <label>Partner gender<br /><select name={`partner_gender_${eventOption.id}`} required={String(eventOption.gender_restriction || "ANY").toUpperCase() !== "ANY"} style={{ width: "100%" }}><option value="">Select</option><option value="Women">Women</option><option value="Men">Men</option><option value="Other">Other</option><option value="Prefer not to say">Prefer not to say</option></select></label>
+                            <label>Partner age<br /><input name={`partner_age_${eventOption.id}`} defaultValue={prior?.partner_age ?? ""} type="number" min="1" max="120" required style={{ width: "100%" }} /></label>
+                            <label>Partner gender<br /><select name={`partner_gender_${eventOption.id}`} defaultValue={prior?.partner_gender || ""} required style={{ width: "100%" }}><option value="">Select</option><option value="Women">Women</option><option value="Men">Men</option><option value="Non-binary">Non-binary</option><option value="Other">Other</option><option value="Prefer not to say">Prefer not to say</option></select></label>
                           </div>
                         ) : null}
                         {mode === "NEEDS_PARTNER" ? (

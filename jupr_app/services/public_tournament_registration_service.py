@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import uuid
 from datetime import date, datetime
@@ -93,19 +94,27 @@ def _clean_email(value: Any) -> str:
 def _safe_int(value: Any) -> int | None:
     if value in (None, ""):
         return None
+    if isinstance(value, bool):
+        return None
     try:
-        return int(float(value))
+        numeric = float(value)
     except Exception:
         return None
+    if not math.isfinite(numeric) or not numeric.is_integer():
+        return None
+    return int(numeric)
 
 
 def _safe_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
+    if isinstance(value, bool):
+        return None
     try:
-        return float(value)
+        numeric = float(value)
     except Exception:
         return None
+    return numeric if math.isfinite(numeric) else None
 
 
 def _safe_bool(value: Any) -> bool:
@@ -136,8 +145,14 @@ def _canonical_player_skills(row: dict[str, Any]) -> tuple[float | None, float |
     if overall is not None:
         # JUPR stores its club rating as Elo (roughly 1,200 == 3.0 skill).
         canonical = overall / 400.0 if overall > 10 else overall
-        return canonical, canonical
-    return _safe_float(row.get("doubles_skill")), _safe_float(row.get("singles_skill"))
+        if 1.0 <= canonical <= 7.0:
+            return canonical, canonical
+    doubles = _safe_float(row.get("doubles_skill"))
+    singles = _safe_float(row.get("singles_skill"))
+    return (
+        doubles if doubles is not None and 1.0 <= doubles <= 7.0 else None,
+        singles if singles is not None and 1.0 <= singles <= 7.0 else None,
+    )
 
 
 def _public_registration_player(row: dict[str, Any]) -> dict[str, Any]:
@@ -474,6 +489,8 @@ def _public_event(row: dict[str, Any], *, registration_open: bool) -> dict[str, 
         "eligibility_mode": _clean_text(
             row.get("eligibility_mode") or "STANDARD", limit=40
         ),
+        "skill_min_rating": _safe_float(row.get("skill_min_rating")),
+        "skill_max_rating": _safe_float(row.get("skill_max_rating")),
         "combined_rating_cap": _safe_float(row.get("combined_rating_cap")),
         "rating_source_policy": _clean_text(
             row.get("rating_source_policy"), limit=80
@@ -935,9 +952,6 @@ def _clean_selection(selection: dict[str, Any]) -> dict[str, Any]:
         "partner_dupr_id": _clean_text(selection.get("partner_dupr_id"), limit=80),
         "partner_skill": _safe_float(selection.get("partner_skill")),
         "partner_age": _safe_int(selection.get("partner_age")),
-        # Transient validation-only field. The established staging schema does not
-        # persist partner gender, so edits re-resolve it from a registered partner
-        # or ask for it again when a restricted division needs it.
         "partner_gender": _clean_text(selection.get("partner_gender"), limit=40),
         "partner_note": _clean_text(selection.get("partner_note"), limit=500),
         "show_on_partner_board": _safe_bool(selection.get("show_on_partner_board")),
@@ -946,13 +960,17 @@ def _clean_selection(selection: dict[str, Any]) -> dict[str, Any]:
 
 def _validated_rating(value: Any, *, label: str) -> float | None:
     rating = _safe_float(value)
-    if rating is not None and not 0.0 <= rating <= 7.0:
-        raise ValueError(f"{label} must be between 0 and 7.")
+    if value not in (None, "") and rating is None:
+        raise ValueError(f"{label} must be a finite number between 1 and 7.")
+    if rating is not None and not 1.0 <= rating <= 7.0:
+        raise ValueError(f"{label} must be between 1 and 7.")
     return rating
 
 
 def _validated_age(value: Any, *, label: str) -> int | None:
     age = _safe_int(value)
+    if value not in (None, "") and age is None:
+        raise ValueError(f"{label} must be a finite whole number between 1 and 120.")
     if age is not None and not 1 <= age <= 120:
         raise ValueError(f"{label} must be between 1 and 120.")
     return age
@@ -1059,6 +1077,13 @@ def validate_and_clean_tournament_selection(
         raise ValueError("Invalid partner status in event selection.")
 
     clean_selection = _clean_selection(raw_selection)
+    if raw_mode == "HAS_PARTNER":
+        clean_selection["partner_skill"] = _validated_rating(
+            raw_selection.get("partner_skill"), label="Partner skill"
+        )
+        clean_selection["partner_age"] = _validated_age(
+            raw_selection.get("partner_age"), label="Partner age"
+        )
     event_option_id = str(clean_selection.get("event_option_id") or "").strip()
     if not event_option_id:
         raise ValueError("Each event selection must identify a division.")
@@ -1094,8 +1119,12 @@ def validate_and_clean_tournament_selection(
         )
         if registered_partner:
             submitted_skill = _validated_rating(clean_selection.get("partner_skill"), label="Partner skill")
-            registered_doubles = _safe_float(registered_partner.get("doubles_skill"))
-            registered_singles = _safe_float(registered_partner.get("singles_skill"))
+            registered_doubles = _validated_rating(
+                registered_partner.get("doubles_skill"), label="Partner doubles skill"
+            )
+            registered_singles = _validated_rating(
+                registered_partner.get("singles_skill"), label="Partner singles skill"
+            )
             resolved_skill = (
                 registered_doubles
                 if registered_doubles is not None
@@ -1145,6 +1174,8 @@ def validate_and_clean_tournament_selection(
             clean_selection[key] = None if key in {"partner_skill", "partner_age"} else ""
         partner_gender = ""
 
+    clean_selection["partner_gender"] = _clean_text(partner_gender, limit=40)
+
     _validate_gender_eligibility(
         event=event,
         player_gender=player_profile.get("gender"),
@@ -1168,9 +1199,6 @@ def validate_and_clean_tournament_selection(
     )
 
     clean_selection["registration_day_id"] = str(event.get("registration_day_id") or "")
-    # This field is intentionally validation-only and is not part of the
-    # established tournament_registration_selections schema.
-    clean_selection.pop("partner_gender", None)
     return clean_selection
 
 

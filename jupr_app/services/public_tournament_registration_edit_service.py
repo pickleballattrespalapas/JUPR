@@ -79,6 +79,7 @@ def _selection_public_payload(selection: dict[str, Any]) -> dict[str, Any]:
         "partner_dupr_id": _clean_text(selection.get("partner_dupr_id"), limit=80),
         "partner_skill": _safe_float(selection.get("partner_skill")),
         "partner_age": _safe_int(selection.get("partner_age")),
+        "partner_gender": _clean_text(selection.get("partner_gender"), limit=40),
         "partner_note": _clean_text(selection.get("partner_note"), limit=500),
         "show_on_partner_board": _safe_bool(selection.get("show_on_partner_board")),
         "updated_at": selection.get("updated_at"),

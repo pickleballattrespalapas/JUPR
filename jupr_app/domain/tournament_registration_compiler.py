@@ -14,10 +14,13 @@ DoublesTypes = {"GENDER_DOUBLES", "MIXED_DOUBLES", "DOUBLES", "MIXED"}
 def _coerce_skill(value: Any) -> float | None:
     if value in (None, ""):
         return None
+    if isinstance(value, bool):
+        return None
     try:
-        return float(value)
+        parsed = float(value)
     except Exception:
         return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def _parse_skill_label(skill_label: str) -> tuple[float, bool] | None:
@@ -82,20 +85,58 @@ def _effective_doubles_skill(player: dict[str, Any]) -> float | None:
     return _coerce_skill(player.get("singles_skill"))
 
 
-def skill_ceiling_exclusive(event: dict[str, Any]) -> float | None:
-    """Return the hard upper boundary for a standard skill Division.
+def _explicit_skill_mode(event: dict[str, Any]) -> str:
+    eligibility_mode = str(event.get("eligibility_mode") or "").strip().upper()
+    skill_mode = str(event.get("skill_mode") or "").strip().upper()
+    label = str(event.get("skill_label") or "").strip()
+    parsed = _parse_skill_label(label)
+    if eligibility_mode == "COMBINED_RATING_CAP" or skill_mode == "COMBINED_RATING_CAP":
+        return "COMBINED_RATING_CAP"
+    if eligibility_mode == "CUSTOM" or skill_mode == "CUSTOM":
+        return "CUSTOM"
+    if eligibility_mode == "MINIMUM" or skill_mode in {"MINIMUM", "MIN", "AT_LEAST"}:
+        return "MINIMUM"
+    if eligibility_mode in {"OPEN", "NONE"}:
+        return "OPEN"
+    # New editor writes an explicit skill_mode. Let it override stale label
+    # text left by a mode transition; legacy Open rows used OPEN/NONE here.
+    if skill_mode in {"STANDARD", "SKILL_BRACKET", "CEILING", "MAXIMUM"}:
+        return "STANDARD"
+    if label.lower() == "open":
+        return "OPEN"
+    # A trailing plus was historically an upward/open label. Only the new
+    # explicit MINIMUM mode turns it into a lower-bound rule.
+    if label.endswith("+"):
+        return "OPEN"
+    if eligibility_mode == "STANDARD":
+        return "STANDARD"
+    # Legacy rows sometimes retained skill_mode=OPEN after the organizer chose
+    # a numeric label. The numeric label remains the authoritative boundary.
+    if parsed is not None:
+        return "STANDARD"
+    if skill_mode in {"OPEN", "NONE"}:
+        return "OPEN"
+    # Legacy organizer-defined labels such as "Beginner" historically carried no
+    # numeric rating boundary. Preserve that behavior unless the organizer selects
+    # an explicit Standard or Custom policy.
+    return "OPEN"
 
-    A displayed 3.5 Division accepts ratings strictly below 4.0. Lower-rated
-    players may play up and higher-rated players may not play down. A 3.5+ or
-    ``MINIMUM`` event has no hard ceiling: the plus indicates an upward/open
-    event, and playing up remains permitted.
+
+def skill_ceiling_exclusive(event: dict[str, Any]) -> float | None:
+    """Return the hard upper boundary for the proposed Division.
+
+    Standard 3.5 means a controlling rating strictly below 4.0. Minimum / Skill+
+    and Open divisions have no upper ceiling. Custom divisions may provide an
+    explicit exclusive upper boundary.
     """
 
-    eligibility_mode = str(event.get("eligibility_mode") or "STANDARD").strip().upper()
-    if eligibility_mode in {"OPEN", "NONE"}:
+    mode = _explicit_skill_mode(event)
+    if mode in {"OPEN", "MINIMUM", "COMBINED_RATING_CAP"}:
         return None
-    skill_mode = str(event.get("skill_mode") or "").strip().upper()
-    if skill_mode in {"MINIMUM", "MIN", "AT_LEAST", "OPEN"}:
+    explicit = _coerce_skill(event.get("skill_max_rating"))
+    if explicit is not None:
+        return round(explicit, 2)
+    if mode == "CUSTOM":
         return None
     parsed = _parse_skill_label(str(event.get("skill_label") or ""))
     if not parsed or parsed[1]:
@@ -103,20 +144,51 @@ def skill_ceiling_exclusive(event: dict[str, Any]) -> float | None:
     return _next_half_step(parsed[0])
 
 
+def skill_minimum_inclusive(event: dict[str, Any]) -> float | None:
+    mode = _explicit_skill_mode(event)
+    if mode not in {"MINIMUM", "CUSTOM"}:
+        return None
+    explicit = _coerce_skill(event.get("skill_min_rating"))
+    if explicit is not None:
+        return round(explicit, 2)
+    if mode == "MINIMUM":
+        parsed = _parse_skill_label(str(event.get("skill_label") or ""))
+        return parsed[0] if parsed else None
+    return None
+
+
 def canonical_skill_policy(event: dict[str, Any]) -> dict[str, Any]:
-    mode = str(event.get("eligibility_mode") or "STANDARD").strip().upper()
+    mode = _explicit_skill_mode(event)
     if mode == "COMBINED_RATING_CAP":
         cap = _coerce_skill(event.get("combined_rating_cap"))
         return {
             "mode": "COMBINED_RATING_CAP",
             "combined_rating_cap": round(cap, 2) if cap is not None else None,
         }
+    if mode == "OPEN":
+        return {
+            "mode": "OPEN",
+            "skill_minimum_inclusive": None,
+            "skill_ceiling_exclusive": None,
+        }
+    minimum = skill_minimum_inclusive(event)
     ceiling = skill_ceiling_exclusive(event)
-    if ceiling is None:
-        return {"mode": "OPEN", "skill_ceiling_exclusive": None}
+    if mode == "MINIMUM":
+        return {
+            "mode": "MINIMUM",
+            "skill_minimum_inclusive": minimum,
+            "skill_ceiling_exclusive": None,
+        }
+    if mode == "CUSTOM":
+        return {
+            "mode": "CUSTOM",
+            "skill_minimum_inclusive": minimum,
+            "skill_ceiling_exclusive": ceiling,
+        }
     return {
         "mode": "STANDARD_CEILING",
-        "skill_ceiling_exclusive": round(ceiling, 2),
+        "skill_minimum_inclusive": None,
+        "skill_ceiling_exclusive": round(ceiling, 2) if ceiling is not None else None,
     }
 
 
@@ -135,10 +207,13 @@ def evaluate_selection_skill_eligibility(
     policy = canonical_skill_policy(event)
     player_rating = _effective_doubles_skill(player) if team_event else _effective_singles_skill(player)
     partner_rating = _effective_doubles_skill(partner or {}) if team_event and partner else None
+    known_ratings = [value for value in (player_rating, partner_rating) if value is not None]
+    controlling_rating = max(known_ratings) if known_ratings else None
     base: dict[str, Any] = {
         "policy": policy,
         "player_rating": player_rating,
         "partner_rating": partner_rating,
+        "controlling_rating": controlling_rating,
         "pending_partner": team_event and partner_mode == "NEEDS_PARTNER",
     }
 
@@ -161,19 +236,17 @@ def evaluate_selection_skill_eligibility(
                 "issue_type": "INVALID_SKILL_POLICY",
                 "issue": "This combined-rating division is missing a valid rating cap.",
             }
-        known = [value for value in (player_rating, partner_rating) if value is not None]
-        if any(value >= cap for value in known):
-            controlling = max(known)
+        if any(value >= cap for value in known_ratings):
+            highest = max(known_ratings)
             return {
                 **base,
                 "status": "INELIGIBLE",
                 "issue_type": "SKILL_NOT_ELIGIBLE",
                 "issue": (
-                    f"Known rating {_format_skill(controlling)} cannot fit a combined-rating cap "
+                    f"Known rating {_format_skill(highest)} cannot fit a combined-rating cap "
                     f"strictly below {_format_skill(cap)}."
                 ),
                 "combined_rating_cap": cap,
-                "controlling_rating": controlling,
             }
         missing_fields: list[str] = []
         if player_rating is None:
@@ -181,6 +254,8 @@ def evaluate_selection_skill_eligibility(
         if team_event and partner_mode in {"HAS_PARTNER", "NEEDS_PARTNER"} and partner_rating is None:
             missing_fields.append("partner rating")
         if missing_fields:
+            if allow_missing_partner_for_preview and missing_fields == ["partner rating"] and partner_mode == "NEEDS_PARTNER":
+                return {**base, "status": "ELIGIBLE", "issue_type": None, "issue": None, "combined_rating_cap": cap}
             return {
                 **base,
                 "status": "MISSING_DATA",
@@ -211,48 +286,87 @@ def evaluate_selection_skill_eligibility(
             "combined_rating": combined,
         }
 
-    ceiling = float(policy["skill_ceiling_exclusive"])
-    known_ratings = [value for value in (player_rating, partner_rating) if value is not None]
-    controlling_rating = max(known_ratings) if known_ratings else None
-    if _rating_at_or_above_ceiling(controlling_rating, ceiling):
-        anchor = round(ceiling - 0.5, 2)
+    minimum = _coerce_skill(policy.get("skill_minimum_inclusive"))
+    ceiling = _coerce_skill(policy.get("skill_ceiling_exclusive"))
+    if policy["mode"] == "MINIMUM" and minimum is None:
+        return {
+            **base,
+            "status": "INELIGIBLE",
+            "issue_type": "INVALID_SKILL_POLICY",
+            "issue": "This Skill+ division is missing a valid minimum rating.",
+        }
+    if policy["mode"] == "STANDARD_CEILING" and ceiling is None:
+        return {
+            **base,
+            "status": "INELIGIBLE",
+            "issue_type": "INVALID_SKILL_POLICY",
+            "issue": "This standard skill division is missing a numeric skill level.",
+        }
+    if policy["mode"] == "CUSTOM" and minimum is None and ceiling is None:
+        return {
+            **base,
+            "status": "INELIGIBLE",
+            "issue_type": "INVALID_SKILL_POLICY",
+            "issue": "This custom skill division needs a minimum or maximum rating.",
+        }
+
+    # A known rating at or above an upper boundary is definitively ineligible,
+    # even when a partner rating is still missing: adding another partner cannot
+    # lower the controlling (higher) rating. Evaluate this before missing-data
+    # handling so Review/public/admin surfaces agree.
+    if ceiling is not None and _rating_at_or_above_ceiling(controlling_rating, ceiling):
+        anchor = round(ceiling - 0.5, 2) if policy["mode"] == "STANDARD_CEILING" else None
         recommended = _recommended_anchor_for_rating(controlling_rating)
         subject = "Your team" if team_event else "Your rating"
+        label = _format_skill(anchor) if anchor is not None else str(event.get("skill_label") or "this")
         return {
             **base,
             "status": "INELIGIBLE",
             "issue_type": "SKILL_NOT_ELIGIBLE",
             "issue": (
-                f"{subject} is rated above the {_format_skill(anchor)} division cap. "
+                f"{subject} is rated above the {label} division cap. "
                 f"Please register for a {_format_skill(recommended)} or higher division."
             ),
+            "skill_minimum_inclusive": minimum,
             "skill_ceiling_exclusive": ceiling,
-            "controlling_rating": controlling_rating,
         }
+
     missing_fields: list[str] = []
     if player_rating is None:
         missing_fields.append("player rating")
     if team_event and partner_mode in {"HAS_PARTNER", "NEEDS_PARTNER"} and partner_rating is None:
         missing_fields.append("partner rating")
     if missing_fields:
+        if allow_missing_partner_for_preview and missing_fields == ["partner rating"] and partner_mode == "NEEDS_PARTNER":
+            return {**base, "status": "ELIGIBLE", "issue_type": None, "issue": None}
         return {
             **base,
             "status": "MISSING_DATA",
             "issue_type": "MISSING_SKILL_DATA",
             "issue": f"Complete {' and '.join(missing_fields)} before confirming skill eligibility.",
             "missing_fields": missing_fields,
+            "skill_minimum_inclusive": minimum,
             "skill_ceiling_exclusive": ceiling,
-            "controlling_rating": controlling_rating,
+        }
+
+    if minimum is not None and controlling_rating is not None and controlling_rating < minimum:
+        subject = "Your team's controlling rating" if team_event else "Your rating"
+        return {
+            **base,
+            "status": "INELIGIBLE",
+            "issue_type": "SKILL_NOT_ELIGIBLE",
+            "issue": f"{subject} is {_format_skill(controlling_rating)}. This division requires {_format_skill(minimum)} or higher.",
+            "skill_minimum_inclusive": minimum,
+            "skill_ceiling_exclusive": ceiling,
         }
     return {
         **base,
         "status": "ELIGIBLE",
         "issue_type": None,
         "issue": None,
+        "skill_minimum_inclusive": minimum,
         "skill_ceiling_exclusive": ceiling,
-        "controlling_rating": controlling_rating,
     }
-
 
 def normalize_tournament_gender(value: Any) -> str:
     text = re.sub(r"[^a-z]", "", str(value or "").strip().lower())
