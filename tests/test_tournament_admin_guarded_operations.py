@@ -409,6 +409,8 @@ def test_setup_impact_rows_without_ids_are_deterministic_and_publishable(monkeyp
             "division_name": "Mixed Open",
             "event_type": "MIXED_DOUBLES",
             "gender_restriction": "MIXED",
+            "skill_label": "Open",
+            "skill_mode": "OPEN",
             "enabled": True,
             "sort_order": 1,
         }

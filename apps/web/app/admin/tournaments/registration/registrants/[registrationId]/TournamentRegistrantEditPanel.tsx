@@ -32,6 +32,19 @@ type Props = {
 };
 
 type RegistrationEdit = {
+  firstName: string;
+  lastName: string;
+  displayName: string;
+  email: string;
+  phone: string;
+  playerId: string;
+  gender: string;
+  age: string;
+  ageBracket: string;
+  duprId: string;
+  doublesSkill: string;
+  singlesSkill: string;
+  wantsPartnerBoardContact: boolean;
   registrationStatus: string;
   paymentStatus: string;
   notes: string;
@@ -40,7 +53,15 @@ type RegistrationEdit = {
 type SelectionEdit = {
   eventOptionId: string;
   partnerMode: string;
+  partnerName: string;
+  partnerEmail: string;
+  partnerPhone: string;
+  partnerDuprId: string;
+  partnerSkill: string;
+  partnerAge: string;
+  partnerGender: string;
   partnerNote: string;
+  showOnPartnerBoard: boolean;
   partnerSelectionId: string;
 };
 
@@ -57,7 +78,7 @@ type ExtrasQuoteResponse = {
 
 const REGISTRATION_STATUS_OPTIONS = ["confirmed", "waitlist", "cancelled"];
 const PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "waived", "refunded"];
-const PARTNER_MODE_OPTIONS = ["NONE", "NEEDS_PARTNER"];
+const PARTNER_MODE_OPTIONS = ["NONE", "HAS_PARTNER", "NEEDS_PARTNER"];
 const cardStyle = {
   border: "1px solid #e2e8f0",
   borderRadius: "14px",
@@ -92,6 +113,19 @@ function registrationEdit(
   row: AdminTournamentRegistration | null
 ): RegistrationEdit {
   return {
+    firstName: row?.first_name || "",
+    lastName: row?.last_name || "",
+    displayName: row?.display_name || "",
+    email: row?.email || "",
+    phone: row?.phone || "",
+    playerId: row?.player_id == null ? "" : String(row.player_id),
+    gender: row?.gender || "",
+    age: row?.age == null ? "" : String(row.age),
+    ageBracket: row?.age_bracket || "",
+    duprId: row?.dupr_id || "",
+    doublesSkill: row?.doubles_skill == null ? "" : String(row.doubles_skill),
+    singlesSkill: row?.singles_skill == null ? "" : String(row.singles_skill),
+    wantsPartnerBoardContact: Boolean(row?.wants_partner_board_contact),
     registrationStatus: row?.registration_status || "confirmed",
     paymentStatus: row?.payment_status || "unpaid",
     notes: row?.notes || ""
@@ -100,11 +134,16 @@ function registrationEdit(
 function selectionEdit(row: AdminTournamentSelection | null): SelectionEdit {
   return {
     eventOptionId: row?.event_option_id || "",
-    partnerMode:
-      row?.partner_mode === "HAS_PARTNER"
-        ? "NONE"
-        : row?.partner_mode || "NONE",
+    partnerMode: row?.partner_selection_id ? "NONE" : row?.partner_mode || "NONE",
+    partnerName: row?.partner_name || "",
+    partnerEmail: row?.partner_email || "",
+    partnerPhone: row?.partner_phone || "",
+    partnerDuprId: row?.partner_dupr_id || "",
+    partnerSkill: row?.partner_skill == null ? "" : String(row.partner_skill),
+    partnerAge: row?.partner_age == null ? "" : String(row.partner_age),
+    partnerGender: row?.partner_gender || "",
     partnerNote: row?.partner_note || "",
+    showOnPartnerBoard: Boolean(row?.show_on_partner_board),
     partnerSelectionId: row?.partner_selection_id || ""
   };
 }
@@ -177,6 +216,7 @@ export default function TournamentRegistrantEditPanel({
   const [registrationDraft, setRegistrationDraft] =
     useState<RegistrationEdit>(() => registrationEdit(null));
   const [selectedSelectionId, setSelectedSelectionId] = useState("");
+  const [newEventOptionId, setNewEventOptionId] = useState("");
   const [selectionDraft, setSelectionDraft] = useState<SelectionEdit>(() =>
     selectionEdit(null)
   );
@@ -212,6 +252,7 @@ export default function TournamentRegistrantEditPanel({
     setCommerceWarning(null);
     setRegistrationDraft(registrationEdit(null));
     setSelectedSelectionId("");
+    setNewEventOptionId("");
     setSelectionDraft(selectionEdit(null));
     setExtraQuantities({});
     setExtrasQuote(null);
@@ -308,6 +349,10 @@ export default function TournamentRegistrantEditPanel({
         null;
       setSelectedSelectionId(nextSelection?.id || "");
       setSelectionDraft(selectionEdit(nextSelection));
+      const selectedEventIds = new Set(nextSelections.map((row) => row.event_option_id));
+      setNewEventOptionId(
+        String(payload.event_options.find((row) => !selectedEventIds.has(String(row.id)))?.id || "")
+      );
     } catch (error) {
       if (detailRequest.isCurrent(generation))
         setMessage(
@@ -346,6 +391,19 @@ export default function TournamentRegistrantEditPanel({
         {
           method: "PATCH",
           body: JSON.stringify({
+            first_name: registrationDraft.firstName || null,
+            last_name: registrationDraft.lastName || null,
+            display_name: registrationDraft.displayName || null,
+            email: registrationDraft.email || null,
+            phone: registrationDraft.phone || null,
+            player_id: registrationDraft.playerId ? Number(registrationDraft.playerId) : null,
+            gender: registrationDraft.gender || null,
+            age: registrationDraft.age ? Number(registrationDraft.age) : null,
+            age_bracket: registrationDraft.ageBracket || null,
+            dupr_id: registrationDraft.duprId || null,
+            doubles_skill: registrationDraft.doublesSkill ? Number(registrationDraft.doublesSkill) : null,
+            singles_skill: registrationDraft.singlesSkill ? Number(registrationDraft.singlesSkill) : null,
+            wants_partner_board_contact: registrationDraft.wantsPartnerBoardContact,
             registration_status: registrationDraft.registrationStatus,
             payment_status: registrationDraft.paymentStatus,
             notes: registrationDraft.notes,
@@ -371,6 +429,71 @@ export default function TournamentRegistrantEditPanel({
     }
   }
 
+  async function addSelection(confirmationText: string) {
+    if (!newEventOptionId) {
+      setMessage("Choose a Division before adding an event entry.");
+      return;
+    }
+    const generation = actionRequest.begin();
+    setBusy(true);
+    setMessage(null);
+    try {
+      const selectedEvent = detail?.event_options.find(
+        (row) => String(row.id) === newEventOptionId
+      );
+      const response = await requestJson<AdminTournamentWriteResponse & { selection?: AdminTournamentSelection }>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/registrations/${encodeURIComponent(registrationId)}/selections`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            event_option_id: newEventOptionId,
+            partner_mode: Boolean(selectedEvent?.partner_required) ? "NEEDS_PARTNER" : "NONE",
+            expected_state_fingerprint: detail?.state_fingerprint || null,
+            confirmation_text: confirmationText,
+            source: "next_tournament_registration_detail"
+          })
+        }
+      );
+      if (!actionRequest.isCurrent(generation)) return;
+      await loadDetail(response.selection?.id || "");
+      if (actionRequest.isCurrent(generation)) setMessage("Event entry added.");
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to add event entry.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function removeSelection(confirmationText: string) {
+    if (!selectedSelection?.updated_at) {
+      setMessage("Reload this event entry before removing it.");
+      return;
+    }
+    const generation = actionRequest.begin();
+    setBusy(true);
+    setMessage(null);
+    try {
+      await requestJson<AdminTournamentWriteResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/selections/${encodeURIComponent(selectedSelection.id)}`,
+        {
+          method: "DELETE",
+          body: JSON.stringify({
+            expected_updated_at: selectedSelection.updated_at,
+            confirmation_text: confirmationText,
+            source: "next_tournament_registration_detail"
+          })
+        }
+      );
+      if (!actionRequest.isCurrent(generation)) return;
+      await loadDetail("");
+      if (actionRequest.isCurrent(generation)) setMessage("Event entry removed.");
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to remove event entry.");
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
   async function saveSelection(confirmationText: string) {
     if (!selectedSelection?.updated_at) {
       setMessage("Reload this event entry before saving.");
@@ -380,6 +503,27 @@ export default function TournamentRegistrantEditPanel({
     setBusy(true);
     setMessage(null);
     try {
+      const selectionPatch = selectedSelection.partner_selection_id
+        ? {
+            partner_note: selectionDraft.partnerNote
+          }
+        : {
+            event_option_id: selectionDraft.eventOptionId,
+            partner_mode: selectionDraft.partnerMode,
+            partner_name: selectionDraft.partnerName || null,
+            partner_email: selectionDraft.partnerEmail || null,
+            partner_phone: selectionDraft.partnerPhone || null,
+            partner_dupr_id: selectionDraft.partnerDuprId || null,
+            partner_skill: selectionDraft.partnerSkill
+              ? Number(selectionDraft.partnerSkill)
+              : null,
+            partner_age: selectionDraft.partnerAge
+              ? Number(selectionDraft.partnerAge)
+              : null,
+            partner_gender: selectionDraft.partnerGender || null,
+            partner_note: selectionDraft.partnerNote,
+            show_on_partner_board: selectionDraft.showOnPartnerBoard
+          };
       await requestJson<AdminTournamentWriteResponse>(
         `/admin/clubs/${encodeURIComponent(
           clubId
@@ -389,11 +533,7 @@ export default function TournamentRegistrantEditPanel({
         {
           method: "PATCH",
           body: JSON.stringify({
-            event_option_id: selectionDraft.eventOptionId,
-            partner_mode: selectedSelection.partner_selection_id
-              ? "HAS_PARTNER"
-              : selectionDraft.partnerMode,
-            partner_note: selectionDraft.partnerNote,
+            ...selectionPatch,
             expected_updated_at: selectedSelection.updated_at,
             confirmation_text: confirmationText,
             source: "next_tournament_registration_detail"
@@ -601,6 +741,11 @@ export default function TournamentRegistrantEditPanel({
       );
   }, [detail, selectedSelection]);
 
+  const availableNewEvents = useMemo(() => {
+    const selectedIds = new Set(selections.map((row) => row.event_option_id));
+    return (detail?.event_options || []).filter((row) => !selectedIds.has(String(row.id)));
+  }, [detail, selections]);
+
   const activeVariants = useMemo(() => {
     if (!commerce) return [];
     const itemById = new Map(
@@ -708,7 +853,37 @@ export default function TournamentRegistrantEditPanel({
           </article>
 
           <article style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>Registration</h2>
+            <h2 style={{ marginTop: 0 }}>Complete registration</h2>
+            <p style={{ color: "#475569" }}>
+              Edit the registrant&apos;s identity, contact information, player linkage, eligibility data, status, payment state, consent, and notes. Event entries, partners, extras, and fulfillment are managed below.
+            </p>
+            <h3>Registrant identity and eligibility</h3>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+                gap: "0.75rem",
+                marginBottom: "0.75rem"
+              }}
+            >
+              <label><strong>First name</strong><br /><input value={registrationDraft.firstName} onChange={(event) => setRegistrationDraft((current) => ({ ...current, firstName: event.target.value }))} style={inputStyle} /></label>
+              <label><strong>Last name</strong><br /><input value={registrationDraft.lastName} onChange={(event) => setRegistrationDraft((current) => ({ ...current, lastName: event.target.value }))} style={inputStyle} /></label>
+              <label><strong>Display name</strong><br /><input value={registrationDraft.displayName} onChange={(event) => setRegistrationDraft((current) => ({ ...current, displayName: event.target.value }))} style={inputStyle} /></label>
+              <label><strong>Email</strong><br /><input type="email" value={registrationDraft.email} onChange={(event) => setRegistrationDraft((current) => ({ ...current, email: event.target.value }))} style={inputStyle} /></label>
+              <label><strong>Phone</strong><br /><input type="tel" value={registrationDraft.phone} onChange={(event) => setRegistrationDraft((current) => ({ ...current, phone: event.target.value }))} style={inputStyle} /></label>
+              <label><strong>Linked player ID</strong><br /><input type="number" min="1" value={registrationDraft.playerId} onChange={(event) => setRegistrationDraft((current) => ({ ...current, playerId: event.target.value }))} style={inputStyle} /><small>Clear to unlink this tournament registration from a player profile.</small></label>
+              <label><strong>Gender</strong><br /><select value={registrationDraft.gender} onChange={(event) => setRegistrationDraft((current) => ({ ...current, gender: event.target.value }))} style={inputStyle}><option value="">Not specified</option><option value="Women">Women</option><option value="Men">Men</option><option value="Non-binary">Non-binary</option><option value="Other">Other</option><option value="Prefer not to say">Prefer not to say</option></select></label>
+              <label><strong>Age</strong><br /><input type="number" min="5" max="120" value={registrationDraft.age} onChange={(event) => setRegistrationDraft((current) => ({ ...current, age: event.target.value }))} style={inputStyle} /></label>
+              <label><strong>Age bracket note</strong><br /><input value={registrationDraft.ageBracket} onChange={(event) => setRegistrationDraft((current) => ({ ...current, ageBracket: event.target.value }))} style={inputStyle} /></label>
+              <label><strong>DUPR ID</strong><br /><input value={registrationDraft.duprId} onChange={(event) => setRegistrationDraft((current) => ({ ...current, duprId: event.target.value }))} style={inputStyle} /></label>
+              <label><strong>Doubles skill</strong><br /><input type="number" min="1" max="7" step="0.01" value={registrationDraft.doublesSkill} onChange={(event) => setRegistrationDraft((current) => ({ ...current, doublesSkill: event.target.value }))} style={inputStyle} /></label>
+              <label><strong>Singles skill</strong><br /><input type="number" min="1" max="7" step="0.01" value={registrationDraft.singlesSkill} onChange={(event) => setRegistrationDraft((current) => ({ ...current, singlesSkill: event.target.value }))} style={inputStyle} /></label>
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.9rem" }}>
+              <input type="checkbox" checked={registrationDraft.wantsPartnerBoardContact} onChange={(event) => setRegistrationDraft((current) => ({ ...current, wantsPartnerBoardContact: event.target.checked }))} />
+              Registrant consents to contact information appearing on the Partner Board
+            </label>
+            <h3>Administrative status and payment</h3>
             <div
               style={{
                 display: "grid",
@@ -777,7 +952,7 @@ export default function TournamentRegistrantEditPanel({
               <ConfirmAction
                 triggerLabel={busy ? "Saving…" : "Save registration"}
                 title="Save this registration update?"
-                description={`Update ${registration.display_name}'s status, offline payment state, and notes.`}
+                description={`Update every editable registration detail for ${registration.display_name}. Eligibility-affecting changes are rechecked when event entries are saved and during Tournament Review.`}
                 confirmLabel="Yes, save registration"
                 confirmationText="SAVE REGISTRATION"
                 busy={busy}
@@ -788,6 +963,25 @@ export default function TournamentRegistrantEditPanel({
 
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Event entries and partners</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "0.75rem", alignItems: "end", marginBottom: "1rem" }}>
+              <label>
+                <strong>Add another event entry</strong><br />
+                <select value={newEventOptionId} onChange={(event) => setNewEventOptionId(event.target.value)} style={inputStyle}>
+                  <option value="">{availableNewEvents.length ? "Choose Division" : "All available Divisions are already selected"}</option>
+                  {availableNewEvents.map((row) => <option key={String(row.id)} value={String(row.id)}>{eventLabel(row)}</option>)}
+                </select>
+              </label>
+              <ConfirmAction
+                triggerLabel={busy ? "Adding…" : "Add event entry"}
+                title="Add this event entry?"
+                description="Add the selected Division to this registration. Eligibility is checked before the entry is saved."
+                confirmLabel="Yes, add event entry"
+                confirmationText="SAVE SELECTION"
+                disabled={!newEventOptionId || busy}
+                busy={busy}
+                onConfirm={addSelection}
+              />
+            </div>
             {selections.length ? (
               <>
                 <label>
@@ -859,12 +1053,41 @@ export default function TournamentRegistrantEditPanel({
                             <option key={value} value={value}>
                               {value === "NONE"
                                 ? "No partner request"
-                                : "Needs partner"}
+                                : value === "HAS_PARTNER"
+                                  ? "Has manual / unregistered partner"
+                                  : "Needs partner"}
                             </option>
                           ))}
                         </select>
                       </label>
                     </div>
+                    {selectionDraft.partnerMode === "HAS_PARTNER" && !selectionDraft.partnerSelectionId ? (
+                      <div style={{ marginTop: "0.75rem", padding: "0.85rem", border: "1px solid #bfdbfe", borderRadius: "12px", background: "#eff6ff" }}>
+                        <h3 style={{ marginTop: 0 }}>Manual partner details</h3>
+                        <p style={{ color: "#475569" }}>Use this when the partner does not have a separate tournament registration. These fields are used for skill, age, and gender eligibility.</p>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem" }}>
+                          <label><strong>Partner name</strong><br /><input value={selectionDraft.partnerName} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerName: event.target.value }))} style={inputStyle} /></label>
+                          <label><strong>Partner email</strong><br /><input type="email" value={selectionDraft.partnerEmail} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerEmail: event.target.value }))} style={inputStyle} /></label>
+                          <label><strong>Partner phone</strong><br /><input type="tel" value={selectionDraft.partnerPhone} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerPhone: event.target.value }))} style={inputStyle} /></label>
+                          <label><strong>Partner DUPR ID</strong><br /><input value={selectionDraft.partnerDuprId} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerDuprId: event.target.value }))} style={inputStyle} /></label>
+                          <label><strong>Partner doubles skill</strong><br /><input type="number" min="1" max="7" step="0.01" value={selectionDraft.partnerSkill} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerSkill: event.target.value }))} style={inputStyle} /></label>
+                          <label><strong>Partner age</strong><br /><input type="number" min="5" max="120" value={selectionDraft.partnerAge} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerAge: event.target.value }))} style={inputStyle} /></label>
+                          <label><strong>Partner gender</strong><br /><select value={selectionDraft.partnerGender} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerGender: event.target.value }))} style={inputStyle}><option value="">Not specified</option><option value="Women">Women</option><option value="Men">Men</option><option value="Non-binary">Non-binary</option><option value="Other">Other</option><option value="Prefer not to say">Prefer not to say</option></select></label>
+                        </div>
+                      </div>
+                    ) : null}
+                    {selectionDraft.partnerMode === "NEEDS_PARTNER" && !selectionDraft.partnerSelectionId ? (
+                      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.75rem" }}>
+                        <input
+                          type="checkbox"
+                          checked={selectionDraft.showOnPartnerBoard}
+                          disabled={!Boolean(registration.wants_partner_board_contact)}
+                          onChange={(event) => setSelectionDraft((current) => ({ ...current, showOnPartnerBoard: event.target.checked }))}
+                        />
+                        Show this partner request on the Partner Board
+                        {!registration.wants_partner_board_contact ? <small>Enable and save the registrant&apos;s Partner Board contact consent above first.</small> : null}
+                      </label>
+                    ) : null}
                     <label
                       style={{ display: "block", marginTop: "0.75rem" }}
                     >
@@ -932,7 +1155,7 @@ export default function TournamentRegistrantEditPanel({
                       <ConfirmAction
                         triggerLabel={busy ? "Saving…" : "Save event entry"}
                         title="Save this event-entry update?"
-                        description="Update the selected division and partner-board note."
+                        description="Update the Division, unpaired mode, complete manual-partner details, eligibility data, Partner Board visibility, and partner note."
                         confirmLabel="Yes, save event entry"
                         confirmationText="SAVE SELECTION"
                         busy={busy}
@@ -952,6 +1175,16 @@ export default function TournamentRegistrantEditPanel({
                         confirmationText="SAVE PARTNER"
                         busy={busy}
                         onConfirm={savePartner}
+                      />
+                      <ConfirmAction
+                        triggerLabel={busy ? "Removing…" : "Remove event entry"}
+                        title="Remove this event entry?"
+                        description="Remove the Division from this registration. Confirmed teams and imported draws remain protected and must be changed in their canonical workflow first."
+                        confirmLabel="Yes, remove event entry"
+                        confirmationText="REMOVE SELECTION"
+                        tone="danger"
+                        busy={busy}
+                        onConfirm={removeSelection}
                       />
                     </div>
                   </div>

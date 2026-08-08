@@ -1474,6 +1474,8 @@ async function loadDetail() {
         "skill_label",
         "skill_mode",
         "eligibility_mode",
+        "skill_min_rating",
+        "skill_max_rating",
         "combined_rating_cap",
         "age_label",
         "age_mode",

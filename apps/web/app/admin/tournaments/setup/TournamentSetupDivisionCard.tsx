@@ -16,6 +16,7 @@ import {
   type ValidationIssue
 } from "../../tournament-setup/tournamentSetupBuilder";
 import styles from "../../tournament-setup/TournamentSetupBuilder.module.css";
+import { skillEligibilityLabel, skillEligibilitySummary } from "@/lib/tournamentSkillEligibility";
 import {
   DIVISION_AGE_POLICY_FIELDS,
   EVENT_AGE_POLICY_FIELDS,
@@ -40,13 +41,6 @@ function optionLabel(value: string): string {
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-function divisionEligibility(value: Record<string, unknown>): string {
-  if (cleanString(value.eligibility_mode).toUpperCase() === "COMBINED_RATING_CAP") {
-    return `Combined-rating doubles · cap ${numberInputValue(value.combined_rating_cap) || "not set"}`;
-  }
-  return "Standard event eligibility";
 }
 
 
@@ -108,11 +102,11 @@ export default function TournamentSetupDivisionCard({
         </div>
       </div>
       <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.7rem", margin: "0.9rem 0 0" }}>
-        <div><dt style={{ fontWeight: 800 }}>Skill</dt><dd style={{ margin: 0 }}>{cleanString(value.skill_label) || "Open"}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Skill</dt><dd style={{ margin: 0 }}>{skillEligibilityLabel(value)}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Age policy</dt><dd style={{ margin: 0 }}>{agePolicySummary(agePolicy)}{agePolicySource === "INHERIT_EVENT" ? " (from event)" : " (division override)"}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Event format</dt><dd style={{ margin: 0 }}>{eventFormat}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Gender</dt><dd style={{ margin: 0 }}>{optionLabel(gender)}</dd></div>
-        <div><dt style={{ fontWeight: 800 }}>Division eligibility</dt><dd style={{ margin: 0 }}>{divisionEligibility(value)}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Division eligibility</dt><dd style={{ margin: 0 }}>{skillEligibilitySummary(value)}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Capacity</dt><dd style={{ margin: 0 }}>{numberInputValue(value.capacity_teams) || "—"}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Entry fee</dt><dd style={{ margin: 0 }}>${Number(value.price_usd || 0).toFixed(2)}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Waitlist</dt><dd style={{ margin: 0 }}>{recordBoolean(value.waitlist_enabled, true) ? "Enabled" : "Disabled"}</dd></div>

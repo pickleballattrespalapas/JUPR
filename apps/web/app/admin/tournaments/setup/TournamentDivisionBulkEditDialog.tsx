@@ -19,6 +19,12 @@ import {
   type BuilderRow,
   type SetupRecord
 } from "../../tournament-setup/tournamentSetupBuilder";
+import {
+  skillAnchor,
+  skillEligibilityMode,
+  skillEligibilitySummary,
+  type SkillEligibilityMode
+} from "@/lib/tournamentSkillEligibility";
 
 type Props = {
   open: boolean;
@@ -40,7 +46,9 @@ type BulkValues = {
   partnerBoard: boolean;
   draw: string;
   scoring: string;
-  eligibility: "STANDARD" | "COMBINED_RATING_CAP";
+  eligibility: SkillEligibilityMode;
+  minimum: string;
+  maximum: string;
   combinedCap: string;
   scheduleMode: "INHERIT_EVENT" | "CUSTOM";
   scheduledDayIds: string[];
@@ -65,9 +73,10 @@ function sameStringArray(values: string[][]): string[] | undefined {
   return normalized.every((value) => value === normalized[0]) ? [...values[0]] : undefined;
 }
 
-function eligibilityMode(value: SetupRecord): "STANDARD" | "COMBINED_RATING_CAP" {
-  return cleanString(value.eligibility_mode).toUpperCase() === "COMBINED_RATING_CAP" ? "COMBINED_RATING_CAP" : "STANDARD";
+function eligibilityMode(value: SetupRecord): SkillEligibilityMode {
+  return skillEligibilityMode(value);
 }
+
 
 function applyBulkValues(value: SetupRecord, selected: FieldSelection, values: BulkValues): SetupRecord {
   let next = { ...value };
@@ -79,7 +88,16 @@ function applyBulkValues(value: SetupRecord, selected: FieldSelection, values: B
   if (selected.scoring) { next.scoring_override = values.scoring; next.division_scoring = values.scoring; }
   if (selected.eligibility) {
     next.eligibility_mode = values.eligibility;
+    next.skill_mode = values.eligibility;
     next.combined_rating_cap = values.eligibility === "COMBINED_RATING_CAP" ? Number(values.combinedCap) : null;
+    next.skill_min_rating = ["MINIMUM", "CUSTOM"].includes(values.eligibility) && values.minimum !== "" ? Number(values.minimum) : null;
+    next.skill_max_rating = values.eligibility === "CUSTOM" && values.maximum !== "" ? Number(values.maximum) : null;
+    if (values.eligibility === "OPEN") next.skill_label = "Open";
+    if (values.eligibility === "MINIMUM" && values.minimum !== "") next.skill_label = `${Number(values.minimum).toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}+`;
+    if (values.eligibility === "STANDARD") {
+      const anchor = skillAnchor(next.skill_label) ?? 3.5;
+      next.skill_label = anchor.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+    }
   }
   if (selected.schedule) {
     next.schedule_mode = values.scheduleMode;
@@ -97,6 +115,8 @@ function changedFields(before: SetupRecord, after: SetupRecord): string[] {
     ["Draw override", before.event_format_override ?? before.division_format, after.event_format_override ?? after.division_format],
     ["Scoring override", before.scoring_override ?? before.division_scoring, after.scoring_override ?? after.division_scoring],
     ["Eligibility", before.eligibility_mode, after.eligibility_mode],
+    ["Minimum rating", before.skill_min_rating, after.skill_min_rating],
+    ["Maximum rating", before.skill_max_rating, after.skill_max_rating],
     ["Combined cap", before.combined_rating_cap, after.combined_rating_cap],
     ["Schedule", eventDayReferences(before).join("|"), eventDayReferences(after).join("|")]
   ];
@@ -105,12 +125,24 @@ function changedFields(before: SetupRecord, after: SetupRecord): string[] {
 
 export default function TournamentDivisionBulkEditDialog({ open, divisions, eventFamilies, days, disabled = false, onCancel, onConfirm }: Props) {
   const [selected, setSelected] = useState<FieldSelection>({ capacity: false, fee: false, waitlist: false, partnerBoard: false, draw: false, scoring: false, eligibility: false, schedule: false });
-  const [values, setValues] = useState<BulkValues>({ capacity: "", fee: "", waitlist: true, partnerBoard: true, draw: "", scoring: "", eligibility: "STANDARD", combinedCap: "8.0", scheduleMode: "INHERIT_EVENT", scheduledDayIds: [] });
+  const [values, setValues] = useState<BulkValues>({ capacity: "", fee: "", waitlist: true, partnerBoard: true, draw: "", scoring: "", eligibility: "STANDARD", minimum: "3.5", maximum: "4.0", combinedCap: "8.0", scheduleMode: "INHERIT_EVENT", scheduledDayIds: [] });
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const participantTypes = useMemo(() => divisions.map((row) => effectiveParticipantType(row.value, eventFamilies)), [divisions, eventFamilies]);
   const allTeamFormats = participantTypes.every((value) => value !== "SINGLES");
+  const allCombinedEligible = useMemo(
+    () =>
+      allTeamFormats &&
+      divisions.every((row) => {
+        const family = eventFamilyDefaults(eventFamilies, eventFamilyName(row.value));
+        const format = cleanString(
+          row.value.competition_format ?? family?.competition_format
+        ).toUpperCase();
+        return format !== "FOUR_PLAYER_TEAM";
+      }),
+    [allTeamFormats, divisions, eventFamilies]
+  );
   const familyNames = useMemo(() => [...new Set(divisions.map((row) => eventFamilyName(row.value).toLowerCase()))], [divisions]);
   const sameFamily = familyNames.length === 1;
   const familyDefaults = sameFamily ? eventFamilyDefaults(eventFamilies, eventFamilyName(divisions[0]?.value || {})) : null;
@@ -126,11 +158,13 @@ export default function TournamentDivisionBulkEditDialog({ open, divisions, even
     const commonDraw = uniqueValue(divisions.map((row) => cleanString(row.value.event_format_override ?? row.value.division_format)));
     const commonScoring = uniqueValue(divisions.map((row) => cleanString(row.value.scoring_override ?? row.value.division_scoring)));
     const commonEligibility = uniqueValue(divisions.map((row) => eligibilityMode(row.value)));
+    const commonMinimum = uniqueValue(divisions.map((row) => numberInputValue(row.value.skill_min_rating)));
+    const commonMaximum = uniqueValue(divisions.map((row) => numberInputValue(row.value.skill_max_rating)));
     const commonCap = uniqueValue(divisions.map((row) => numberInputValue(row.value.combined_rating_cap)));
     const commonScheduleMode = uniqueValue(divisions.map((row) => cleanString(row.value.schedule_mode).toUpperCase() === "CUSTOM" ? "CUSTOM" : "INHERIT_EVENT"));
     const commonSchedule = sameStringArray(divisions.map((row) => eventDayReferences(row.value)));
     setSelected({ capacity: false, fee: false, waitlist: false, partnerBoard: false, draw: false, scoring: false, eligibility: false, schedule: false });
-    setValues({ capacity: commonCapacity ?? "", fee: commonFee ?? "", waitlist: commonWaitlist ?? true, partnerBoard: commonPartnerBoard ?? true, draw: commonDraw ?? "", scoring: commonScoring ?? "", eligibility: commonEligibility ?? "STANDARD", combinedCap: commonCap || "8.0", scheduleMode: (commonScheduleMode as "INHERIT_EVENT" | "CUSTOM" | undefined) ?? "INHERIT_EVENT", scheduledDayIds: commonSchedule ?? (sameFamily ? familyDays : []) });
+    setValues({ capacity: commonCapacity ?? "", fee: commonFee ?? "", waitlist: commonWaitlist ?? true, partnerBoard: commonPartnerBoard ?? true, draw: commonDraw ?? "", scoring: commonScoring ?? "", eligibility: commonEligibility ?? "STANDARD", minimum: commonMinimum === undefined ? "3.5" : commonMinimum, maximum: commonMaximum === undefined ? "4.0" : commonMaximum, combinedCap: commonCap || "8.0", scheduleMode: (commonScheduleMode as "INHERIT_EVENT" | "CUSTOM" | undefined) ?? "INHERIT_EVENT", scheduledDayIds: commonSchedule ?? (sameFamily ? familyDays : []) });
     setMessage("");
     setSubmitting(false);
   }, [open, divisions, sameFamily, familyDays]);
@@ -147,10 +181,24 @@ export default function TournamentDivisionBulkEditDialog({ open, divisions, even
     if (!Object.values(selected).some(Boolean)) { setMessage("Choose at least one shared setting to change."); return; }
     if (selected.capacity) { const capacity = Number(values.capacity); if (!Number.isInteger(capacity) || capacity < 1) { setMessage("Capacity must be a whole number of at least 1."); return; } }
     if (selected.fee) { const fee = Number(values.fee); if (!Number.isFinite(fee) || fee < 0) { setMessage("Entry fee cannot be negative."); return; } }
-    if (selected.eligibility && values.eligibility === "COMBINED_RATING_CAP") {
-      const cap = Number(values.combinedCap);
-      if (!allTeamFormats) { setMessage("Combined team rating is not available when Singles divisions are selected."); return; }
-      if (!Number.isFinite(cap) || cap <= 0 || cap > 14) { setMessage("Combined rating cap must be greater than 0 and no more than 14."); return; }
+    if (selected.eligibility) {
+      if (values.eligibility === "COMBINED_RATING_CAP") {
+        const cap = Number(values.combinedCap);
+        if (!allCombinedEligible) { setMessage("Combined team rating is available only for standard doubles/team divisions."); return; }
+        if (!Number.isFinite(cap) || cap <= 0 || cap > 14) { setMessage("Combined rating cap must be greater than 0 and no more than 14."); return; }
+      }
+      if (values.eligibility === "MINIMUM") {
+        const minimum = Number(values.minimum);
+        if (!Number.isFinite(minimum) || minimum < 1 || minimum > 7) { setMessage("Minimum rating must be between 1.0 and 7.0."); return; }
+      }
+      if (values.eligibility === "CUSTOM") {
+        const minimum = values.minimum === "" ? null : Number(values.minimum);
+        const maximum = values.maximum === "" ? null : Number(values.maximum);
+        if (minimum == null && maximum == null) { setMessage("Custom eligibility requires a minimum, a maximum, or both."); return; }
+        if (minimum != null && (!Number.isFinite(minimum) || minimum < 1 || minimum > 7)) { setMessage("Custom minimum rating must be between 1.0 and 7.0."); return; }
+        if (maximum != null && (!Number.isFinite(maximum) || maximum <= 1 || maximum > 7.5)) { setMessage("Custom maximum rating must be greater than 1.0 and no more than 7.5."); return; }
+        if (minimum != null && maximum != null && maximum <= minimum) { setMessage("Custom maximum must be greater than the minimum."); return; }
+      }
     }
     if (selected.schedule) {
       if (!sameFamily) { setMessage("Tournament days can be bulk edited only when all selected divisions share the same parent Event."); return; }
@@ -175,7 +223,7 @@ export default function TournamentDivisionBulkEditDialog({ open, divisions, even
           {allTeamFormats ? <BulkField label="Partner Board" checked={selected.partnerBoard} disabled={disabled || submitting} summary={mixedSummary(divisions.map((row) => recordBoolean(row.value.partner_board_enabled, true)))} onChange={(checked) => toggleField("partnerBoard", checked)}><select value={values.partnerBoard ? "ENABLED" : "DISABLED"} disabled={!selected.partnerBoard || disabled || submitting} style={inputStyle} onChange={(event) => setValues((current) => ({ ...current, partnerBoard: event.target.value === "ENABLED" }))}><option value="ENABLED">Enabled</option><option value="DISABLED">Disabled</option></select></BulkField> : null}
           <BulkField label="Draw-format override" checked={selected.draw} disabled={disabled || submitting} summary={mixedSummary(divisions.map((row) => cleanString(row.value.event_format_override ?? row.value.division_format)))} onChange={(checked) => toggleField("draw", checked)}><select value={values.draw} disabled={!selected.draw || disabled || submitting} style={inputStyle} onChange={(event) => setValues((current) => ({ ...current, draw: event.target.value }))}><option value="">Use each Event default</option>{COMPETITION_FORMATS.map((format) => <option key={format} value={format}>{optionLabel(format)}</option>)}</select></BulkField>
           <BulkField label="Scoring override" checked={selected.scoring} disabled={disabled || submitting} summary={mixedSummary(divisions.map((row) => cleanString(row.value.scoring_override ?? row.value.division_scoring)))} onChange={(checked) => toggleField("scoring", checked)}><select value={values.scoring} disabled={!selected.scoring || disabled || submitting} style={inputStyle} onChange={(event) => setValues((current) => ({ ...current, scoring: event.target.value }))}><option value="">Use each Event default</option>{SCORING_OPTIONS.map((format) => <option key={format} value={format}>{optionLabel(format)}</option>)}</select></BulkField>
-          {allTeamFormats ? <BulkField label="Eligibility" checked={selected.eligibility} disabled={disabled || submitting} summary={mixedSummary(divisions.map((row) => eligibilityMode(row.value)))} onChange={(checked) => toggleField("eligibility", checked)}><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(140px, 1fr)", gap: "0.5rem" }}><select value={values.eligibility} disabled={!selected.eligibility || disabled || submitting} style={inputStyle} onChange={(event) => setValues((current) => ({ ...current, eligibility: event.target.value === "COMBINED_RATING_CAP" ? "COMBINED_RATING_CAP" : "STANDARD" }))}><option value="STANDARD">Standard Event eligibility</option><option value="COMBINED_RATING_CAP">Combined team rating cap</option></select><input type="number" min="0.1" max="14" step="0.1" value={values.combinedCap} disabled={!selected.eligibility || values.eligibility !== "COMBINED_RATING_CAP" || disabled || submitting} style={inputStyle} onChange={(event) => setValues((current) => ({ ...current, combinedCap: event.target.value }))} /></div></BulkField> : null}
+          <BulkField label="Eligibility" checked={selected.eligibility} disabled={disabled || submitting} summary={mixedSummary(divisions.map((row) => skillEligibilitySummary(row.value)))} onChange={(checked) => toggleField("eligibility", checked)}><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.5rem" }}><select value={values.eligibility} disabled={!selected.eligibility || disabled || submitting} style={inputStyle} onChange={(event) => setValues((current) => ({ ...current, eligibility: event.target.value as SkillEligibilityMode }))}><option value="STANDARD">Standard skill ceiling</option><option value="MINIMUM">Minimum skill / Skill+</option><option value="OPEN">Open — no rating restriction</option><option value="CUSTOM">Custom rating boundaries</option><option value="COMBINED_RATING_CAP" disabled={!allCombinedEligible}>Combined team rating cap</option></select>{["MINIMUM", "CUSTOM"].includes(values.eligibility) ? <input aria-label="Minimum rating" type="number" min="1" max="7" step="0.01" value={values.minimum} disabled={!selected.eligibility || disabled || submitting} style={inputStyle} onChange={(event) => setValues((current) => ({ ...current, minimum: event.target.value }))} /> : null}{values.eligibility === "CUSTOM" ? <input aria-label="Maximum rating exclusive" type="number" min="1.01" max="7.5" step="0.01" value={values.maximum} disabled={!selected.eligibility || disabled || submitting} style={inputStyle} onChange={(event) => setValues((current) => ({ ...current, maximum: event.target.value }))} /> : null}{values.eligibility === "COMBINED_RATING_CAP" ? <input aria-label="Combined rating cap" type="number" min="0.1" max="14" step="0.1" value={values.combinedCap} disabled={!selected.eligibility || disabled || submitting} style={inputStyle} onChange={(event) => setValues((current) => ({ ...current, combinedCap: event.target.value }))} /> : null}</div></BulkField>
           {sameFamily ? <BulkField label="Tournament days" checked={selected.schedule} disabled={disabled || submitting} summary={mixedSummary(divisions.map((row) => eventDayReferences(row.value).sort().join("|")))} onChange={(checked) => toggleField("schedule", checked)}><div><select value={values.scheduleMode} disabled={!selected.schedule || disabled || submitting} style={inputStyle} onChange={(event) => setValues((current) => ({ ...current, scheduleMode: event.target.value === "CUSTOM" ? "CUSTOM" : "INHERIT_EVENT", scheduledDayIds: event.target.value === "INHERIT_EVENT" ? familyDays : current.scheduledDayIds }))}><option value="INHERIT_EVENT">Use every day selected for the parent Event</option><option value="CUSTOM">Choose a permitted subset</option></select>{selected.schedule && values.scheduleMode === "CUSTOM" ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.35rem", marginTop: "0.45rem" }}>{familyDays.map((dayId) => <label key={dayId} style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}><input type="checkbox" checked={values.scheduledDayIds.includes(dayId)} disabled={disabled || submitting || (values.scheduledDayIds.length === 1 && values.scheduledDayIds.includes(dayId))} onChange={(event) => setValues((current) => ({ ...current, scheduledDayIds: event.target.checked ? [...current.scheduledDayIds, dayId] : current.scheduledDayIds.filter((value) => value !== dayId) }))} />{dayLabels.get(dayId) || dayId}</label>)}</div> : null}</div></BulkField> : <p style={{ margin: 0, padding: "0.65rem", borderRadius: "10px", background: "#fff7ed", color: "#9a3412" }}>Tournament days are hidden because the selected divisions do not share one parent Event.</p>}
         </div>
         <article style={{ marginTop: "0.9rem", padding: "0.8rem", border: "1px solid #e2e8f0", borderRadius: "12px", background: "#f8fafc" }}><h3 style={{ marginTop: 0 }}>Per-division preview</h3><div style={{ display: "grid", gap: "0.45rem" }}>{previewRows.map((row) => <div key={row.key} style={{ padding: "0.55rem", border: "1px solid #e2e8f0", borderRadius: "8px", background: "white" }}><strong>{row.name || "Untitled division"}</strong><br /><small style={{ color: row.changes.length ? "#166534" : "#64748b" }}>{row.changes.length ? row.changes.join(" · ") : "No change"}</small></div>)}</div></article>

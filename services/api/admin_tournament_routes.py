@@ -53,6 +53,8 @@ from jupr_app.services.admin_tournament_score_service import update_admin_tourna
 from jupr_app.services.admin_tournament_service import (
     build_admin_tournament_registration_import_handoff,
     build_admin_tournament_status,
+    create_admin_tournament_selection,
+    delete_admin_tournament_selection,
     get_admin_tournament_detail,
     replace_admin_tournament_selection_partner,
     is_admin_tournament_admin_enabled,
@@ -77,10 +79,23 @@ from services.api.auth import authenticate_bearer, auth_header
 
 
 class AdminTournamentRegistrationUpdateRequest(BaseModel):
+    first_name: str | None = None
+    last_name: str | None = None
+    display_name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    player_id: int | None = None
+    gender: str | None = None
+    age: int | None = None
+    age_bracket: str | None = None
+    dupr_id: str | None = None
+    doubles_skill: float | None = None
+    singles_skill: float | None = None
+    wants_partner_board_contact: bool | None = None
     registration_status: str | None = None
     payment_status: str | None = None
     notes: str | None = None
-    expected_updated_at: str | None = None
+    expected_updated_at: str
     confirmation_text: str = ""
     source: str = "next_tournament_admin_registration_update"
 
@@ -249,9 +264,39 @@ class AdminTournamentSelectionUpdateRequest(BaseModel):
     partner_name: str | None = None
     partner_email: str | None = None
     partner_phone: str | None = None
+    partner_dupr_id: str | None = None
+    partner_skill: float | None = None
+    partner_age: int | None = None
+    partner_gender: str | None = None
     partner_note: str | None = None
+    show_on_partner_board: bool | None = None
     confirmation_text: str = ""
     source: str = "next_tournament_admin_selection_update"
+
+
+class AdminTournamentSelectionCreateRequest(BaseModel):
+    event_option_id: str
+    partner_mode: str = Field(
+        default="NONE", pattern=r"^(NONE|HAS_PARTNER|NEEDS_PARTNER)$"
+    )
+    partner_name: str | None = None
+    partner_email: str | None = None
+    partner_phone: str | None = None
+    partner_dupr_id: str | None = None
+    partner_skill: float | None = None
+    partner_age: int | None = None
+    partner_gender: str | None = None
+    partner_note: str | None = None
+    show_on_partner_board: bool | None = None
+    expected_state_fingerprint: str
+    confirmation_text: str = ""
+    source: str = "next_tournament_registration_detail"
+
+
+class AdminTournamentSelectionDeleteRequest(BaseModel):
+    expected_updated_at: str
+    confirmation_text: str = ""
+    source: str = "next_tournament_registration_detail"
 
 
 class AdminTournamentSelectionPartnerRequest(BaseModel):
@@ -1346,14 +1391,14 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
             raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        patch = _dump_model(payload)
+        patch = _dump_patch_model(payload)
         source = str(patch.pop("source", payload.source))
         confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
-        expected_updated_at = str(patch.pop("expected_updated_at", payload.expected_updated_at) or "")
+        expected_updated_at = str(patch.pop("expected_updated_at", payload.expected_updated_at))
         try:
             _require_confirmation(confirmation_text, "SAVE REGISTRATION")
-            preflight = lambda: update_admin_tournament_registration(supabase, club_id=str(club_id), tournament_id=str(tournament_id), registration_id=str(registration_id), patch=patch, expected_updated_at=expected_updated_at or None, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source, dry_run=True)
-            mutate = lambda: update_admin_tournament_registration(supabase, club_id=str(club_id), tournament_id=str(tournament_id), registration_id=str(registration_id), patch=patch, expected_updated_at=expected_updated_at if tournament_admin_guarded_runtime_enabled("registration") else None, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source)
+            preflight = lambda: update_admin_tournament_registration(supabase, club_id=str(club_id), tournament_id=str(tournament_id), registration_id=str(registration_id), patch=patch, expected_updated_at=expected_updated_at, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source, dry_run=True)
+            mutate = lambda: update_admin_tournament_registration(supabase, club_id=str(club_id), tournament_id=str(tournament_id), registration_id=str(registration_id), patch=patch, expected_updated_at=expected_updated_at, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source)
             return _guarded_admin_mutation(
                 supabase,
                 club_id=str(club_id),
@@ -1374,13 +1419,92 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         except Exception as exc:
             _handle(exc)
 
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/{registration_id}/selections")
+    def post_admin_tournament_selection(
+        club_id: str,
+        tournament_id: str,
+        registration_id: str,
+        payload: AdminTournamentSelectionCreateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        patch = _dump_patch_model(payload)
+        source = str(patch.pop("source", payload.source))
+        confirmation_text = str(
+            patch.pop("confirmation_text", payload.confirmation_text)
+        )
+        expected_state_fingerprint = str(
+            patch.pop("expected_state_fingerprint", payload.expected_state_fingerprint)
+        ).strip()
+        try:
+            _require_confirmation(confirmation_text, "SAVE SELECTION")
+            if not expected_state_fingerprint:
+                raise ValueError("expected_state_fingerprint is required for event-entry creation.")
+            preflight = lambda: create_admin_tournament_selection(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                registration_id=str(registration_id),
+                patch=patch,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=confirmation_text,
+                source=source,
+                dry_run=True,
+            )
+            mutate = lambda: create_admin_tournament_selection(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                registration_id=str(registration_id),
+                patch=patch,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=confirmation_text,
+                source=source,
+            )
+            return _guarded_admin_mutation(
+                supabase,
+                club_id=str(club_id),
+                surface="registration",
+                action="tournament_registration_selection_create",
+                entity_type="tournament_registration_selection",
+                entity_id=f"{registration_id}:{patch['event_option_id']}",
+                lock_scope=str(tournament_id),
+                expected_state=expected_state_fingerprint,
+                current_state=lambda: str(
+                    get_admin_tournament_detail(
+                        supabase,
+                        club_id=str(club_id),
+                        tournament_id=str(tournament_id),
+                    ).get("state_fingerprint")
+                    or ""
+                ),
+                payload=patch,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=source,
+                preflight=preflight,
+                mutate=mutate,
+            )
+        except Exception as exc:
+            _handle(exc)
+
     @app.patch("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}")
     def patch_admin_tournament_selection(club_id: str, tournament_id: str, selection_id: str, payload: AdminTournamentSelectionUpdateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_tournament_admin_enabled():
             raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        patch = _dump_model(payload)
+        patch = _dump_patch_model(payload)
         source = str(patch.pop("source", payload.source))
         confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
         expected_updated_at = str(patch.pop("expected_updated_at", payload.expected_updated_at))
@@ -1410,6 +1534,88 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 expected_state=expected_updated_at,
                 current_state=lambda: next((str(row.get("updated_at") or "") for row in get_admin_tournament_detail(supabase, club_id=str(club_id), tournament_id=str(tournament_id)).get("selections") or [] if str(row.get("id") or "") == str(selection_id)), ""),
                 payload=patch,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=source,
+                preflight=preflight,
+                mutate=mutate,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.delete("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}")
+    def delete_admin_tournament_selection_route(
+        club_id: str,
+        tournament_id: str,
+        selection_id: str,
+        payload: AdminTournamentSelectionDeleteRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        body = _dump_patch_model(payload)
+        source = str(body.pop("source", payload.source))
+        confirmation_text = str(
+            body.pop("confirmation_text", payload.confirmation_text)
+        )
+        expected_updated_at = str(
+            body.pop("expected_updated_at", payload.expected_updated_at)
+        ).strip()
+        try:
+            _require_confirmation(confirmation_text, "REMOVE SELECTION")
+            preflight = lambda: delete_admin_tournament_selection(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                selection_id=str(selection_id),
+                expected_updated_at=expected_updated_at,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=confirmation_text,
+                source=source,
+                dry_run=True,
+            )
+            mutate = lambda: delete_admin_tournament_selection(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                selection_id=str(selection_id),
+                expected_updated_at=expected_updated_at,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=confirmation_text,
+                source=source,
+            )
+            return _guarded_admin_mutation(
+                supabase,
+                club_id=str(club_id),
+                surface="registration",
+                action="tournament_registration_selection_delete",
+                entity_type="tournament_registration_selection",
+                entity_id=str(selection_id),
+                lock_scope=str(tournament_id),
+                expected_state=expected_updated_at,
+                current_state=lambda: next(
+                    (
+                        str(row.get("updated_at") or "")
+                        for row in get_admin_tournament_detail(
+                            supabase,
+                            club_id=str(club_id),
+                            tournament_id=str(tournament_id),
+                        ).get("selections")
+                        or []
+                        if str(row.get("id") or "") == str(selection_id)
+                    ),
+                    "",
+                ),
+                payload={"selection_id": str(selection_id), **body},
                 actor_email=actor_email,
                 actor_role=actor_role,
                 source=source,

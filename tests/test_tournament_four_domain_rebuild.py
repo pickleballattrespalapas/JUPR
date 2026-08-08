@@ -272,7 +272,9 @@ def test_event_policy_owns_four_player_team_and_age_policy() -> None:
     assert "TournamentAgePolicyEditor" in event_dialog
     assert "Event age policy" in event_dialog
     assert 'type EventStructure = "SINGLES" | "GENDER_DOUBLES" | "MIXED_DOUBLES" | "FOUR_PLAYER_TEAM"' in event_dialog
-    assert "FOUR_PLAYER_TEAM" not in division_dialog.split("Division eligibility", 1)[1].split("Capacity", 1)[0]
+    eligibility_section = division_dialog.split("Division eligibility", 1)[1].split("Capacity", 1)[0]
+    assert 'value="COMBINED_RATING_CAP"' in eligibility_section
+    assert 'competition_format).toUpperCase() === "FOUR_PLAYER_TEAM"' in eligibility_section
     assert "Inherit from parent event" in division_dialog
     assert "Override for this division" in division_dialog
     assert "AUTO_AGE_SPLIT" in age_editor
@@ -1163,15 +1165,16 @@ def test_missing_partner_age_does_not_hide_known_directional_age_ineligibility()
 
 def test_public_registration_uses_directional_skill_and_age_boundaries() -> None:
     eligibility = read_web("lib/tournamentRegistrationEligibility.ts")
+    skill_helper = read_web("lib/tournamentSkillEligibility.ts")
     form = read_web("app/clubs/[clubSlug]/tournament-registration/TournamentRegistrationForm.tsx")
     edit_form = read_web("app/clubs/[clubSlug]/tournament-registration/edit/EditTournamentRegistrationForm.tsx")
     service = read_root("jupr_app/services/public_tournament_registration_service.py")
 
-    assert "controlledSkillCeiling" in eligibility
-    assert "anchor + 0.5" in eligibility
-    assert "match[2]" in eligibility
-    assert "MINIMUM" in eligibility
-    assert "rating >= ceiling" in eligibility
+    assert "skillEligibilityPolicy" in eligibility
+    assert "anchor + 0.5" in skill_helper
+    assert 'mode === "MINIMUM"' in skill_helper
+    assert "policy.minimum" in eligibility
+    assert "rating >= policy.maximumExclusive" in eligibility
     assert "hardMinimumAge" in eligibility
     assert "age < minimumAge" in eligibility
     assert "age: numericValue(contact.age)" in form

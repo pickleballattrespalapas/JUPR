@@ -1,3 +1,8 @@
+import {
+  skillEligibilityMode,
+  skillEligibilityPolicy
+} from "../../../lib/tournamentSkillEligibility";
+
 export type SetupRecord = Record<string, unknown>;
 
 export type BuilderRow = {
@@ -785,6 +790,21 @@ function booleanWithDefault(row: SetupRecord, key: string, fallback: boolean): b
   return hasValue(row, key) ? recordBoolean(row[key], fallback) : fallback;
 }
 
+function publishedSkillEligibility(row: SetupRecord): SetupRecord {
+  const mode = skillEligibilityMode(row);
+  const policy = skillEligibilityPolicy(row);
+  return {
+    eligibility_mode: mode,
+    skill_min_rating:
+      mode === "MINIMUM" || mode === "CUSTOM" ? policy.minimum : null,
+    // Standard's next-half-step ceiling is derived from skill_label. Persisting
+    // it would violate the canonical cross-field contract.
+    skill_max_rating: mode === "CUSTOM" ? policy.maximumExclusive : null,
+    combined_rating_cap:
+      mode === "COMBINED_RATING_CAP" ? policy.combinedCap : null
+  };
+}
+
 function legacyAgeRules(row: SetupRecord): unknown {
   const state = readAgeRules(row);
   const mode = eventAgeMode(row);
@@ -892,7 +912,7 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
           ? scheduledDayIds
           : (primary ? [primary] : []);
       }
-      return next;
+      return { ...next, ...publishedSkillEligibility(projected) };
     }
 
     const familyName = eventFamilyName(row);
@@ -1005,11 +1025,7 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
         booleanWithDefault(row, "team_allow_substitutes", false)
       );
     }
-    const eligibilityMode = firstCleanString(row.eligibility_mode).toUpperCase();
-    if (eligibilityMode && eligibilityMode !== "STANDARD") {
-      canonical.eligibility_mode = eligibilityMode;
-      canonical.combined_rating_cap = row.combined_rating_cap ?? null;
-    }
+    Object.assign(canonical, publishedSkillEligibility(row));
     for (const key of ["id", "tournament_id"] as const) {
       if (hasValue(row, key)) canonical[key] = row[key];
     }

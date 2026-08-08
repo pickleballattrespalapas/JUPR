@@ -156,7 +156,11 @@ def test_imported_draw_refusal_precedes_registration_mutation(monkeypatch) -> No
     response = TestClient(app).patch(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/registrations/registration_1",
         headers={"Authorization": "Bearer local"},
-        json={"registration_status": "cancelled", "confirmation_text": "SAVE REGISTRATION"},
+        json={
+            "registration_status": "cancelled",
+            "expected_updated_at": "2026-03-03T00:00:00Z",
+            "confirmation_text": "SAVE REGISTRATION",
+        },
     )
 
     assert response.status_code == 400

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -33,6 +35,21 @@ TRUTHY = {"1", "true", "yes", "y", "on"}
 CONFIRM_SETTINGS = "SAVE SETUP"
 CONFIRM_DRAFT = "SAVE SETUP DRAFT"
 CONFIRM_PUBLISH = "PUBLISH SETUP"
+ELIGIBILITY_MODES = frozenset(
+    {"STANDARD", "MINIMUM", "OPEN", "COMBINED_RATING_CAP", "CUSTOM"}
+)
+STANDARD_TEAM_EVENT_TYPES = frozenset(
+    {"GENDER_DOUBLES", "MIXED_DOUBLES", "DOUBLES", "MIXED"}
+)
+LEGACY_MINIMUM_SKILL_MODES = frozenset({"MINIMUM", "MIN", "AT_LEAST"})
+EXPLICIT_STANDARD_SKILL_MODES = frozenset(
+    {"STANDARD", "SKILL_BRACKET", "CEILING", "MAXIMUM"}
+)
+LEGACY_OPEN_SKILL_MODES = frozenset({"OPEN", "NONE"})
+SKILL_LABEL_PATTERN = re.compile(
+    r"^(?:skill\s*)?([0-9](?:\.[0-9]{1,2})?)\s*(\+)?$",
+    re.IGNORECASE,
+)
 
 
 def _truthy_env(name: str) -> bool:
@@ -150,6 +167,8 @@ def _event_option_payload(row: dict[str, Any]) -> dict[str, Any]:
         "age_mode": row.get("age_mode"),
         "age_rules": row.get("age_rules"),
         "eligibility_mode": row.get("eligibility_mode"),
+        "skill_min_rating": row.get("skill_min_rating"),
+        "skill_max_rating": row.get("skill_max_rating"),
         "combined_rating_cap": row.get("combined_rating_cap"),
         "competition_format": row.get("competition_format"),
         "team_roster_size": row.get("team_roster_size"),
@@ -262,6 +281,10 @@ def build_admin_tournament_setup_templates(
                 "scoring_default": "GAME_TO_15",
                 "skill_label": "Open",
                 "skill_mode": "OPEN",
+                "eligibility_mode": "OPEN",
+                "skill_min_rating": None,
+                "skill_max_rating": None,
+                "combined_rating_cap": None,
                 "age_mode": "ALL_AGES",
                 "age_label": "All ages",
                 "age_rules": "{}",
@@ -413,6 +436,235 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
     return [dict(row) for row in value if isinstance(row, dict)] if isinstance(value, list) else []
+
+
+def _eligibility_number(
+    event: dict[str, Any],
+    *,
+    field: str,
+    event_label: str,
+) -> float | None:
+    value = event.get(field)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{event_label}: {field} must be a finite number, not a boolean.")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{event_label}: {field} must be a finite number.") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{event_label}: {field} must be a finite number.")
+    return parsed
+
+
+def _skill_label_anchor(value: Any, *, require_plus: bool | None) -> float | None:
+    match = SKILL_LABEL_PATTERN.fullmatch(_clean(value, limit=80))
+    if not match:
+        return None
+    has_plus = bool(match.group(2))
+    if require_plus is not None and has_plus is not require_plus:
+        return None
+    try:
+        anchor = float(match.group(1))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return anchor if math.isfinite(anchor) and 1.0 <= anchor <= 7.0 else None
+
+
+def _canonicalize_legacy_event_option_eligibility(event: dict[str, Any]) -> None:
+    """Upgrade legacy draft metadata without relaxing explicit new policies."""
+
+    raw_value = event.get("eligibility_mode")
+    if raw_value is not None and not isinstance(raw_value, str):
+        return
+    raw_mode = _clean(raw_value, limit=60).upper()
+    if raw_mode not in {"", "STANDARD"}:
+        return
+
+    skill_mode = _clean(event.get("skill_mode"), limit=60).upper()
+    skill_label = _clean(event.get("skill_label"), limit=80)
+    if skill_mode in LEGACY_MINIMUM_SKILL_MODES:
+        minimum = _skill_label_anchor(skill_label, require_plus=True)
+        if minimum is None:
+            raise ValueError(
+                "Legacy MINIMUM eligibility requires a numeric skill_label from 1 to 7 ending in +."
+            )
+        event["eligibility_mode"] = "MINIMUM"
+        event["skill_mode"] = "MINIMUM"
+        event["skill_min_rating"] = minimum
+        event["skill_max_rating"] = None
+        event["combined_rating_cap"] = None
+        return
+
+    if skill_mode in EXPLICIT_STANDARD_SKILL_MODES:
+        event["eligibility_mode"] = "STANDARD"
+        return
+
+    if skill_label.lower() == "open" or skill_label.endswith("+"):
+        event["eligibility_mode"] = "OPEN"
+        event["skill_mode"] = "OPEN"
+        event["skill_label"] = "Open"
+        event["skill_min_rating"] = None
+        event["skill_max_rating"] = None
+        event["combined_rating_cap"] = None
+        return
+
+    if raw_mode == "STANDARD" and _skill_label_anchor(
+        skill_label, require_plus=False
+    ) is not None:
+        event["eligibility_mode"] = "STANDARD"
+        return
+
+    if skill_mode in LEGACY_OPEN_SKILL_MODES:
+        event["eligibility_mode"] = "OPEN"
+        event["skill_mode"] = "OPEN"
+        event["skill_label"] = "Open"
+        event["skill_min_rating"] = None
+        event["skill_max_rating"] = None
+        event["combined_rating_cap"] = None
+        return
+
+    event["eligibility_mode"] = "STANDARD"
+
+
+def _validate_event_option_eligibility(
+    event: dict[str, Any],
+    *,
+    index: int,
+    payload_name: str,
+) -> None:
+    label = _clean(
+        event.get("division_name")
+        or event.get("label")
+        or event.get("event_family_label"),
+        limit=180,
+    ) or f"{payload_name} row {index}"
+    event_label = f"Division {label}"
+    raw_mode = event.get("eligibility_mode")
+    if isinstance(raw_mode, bool):
+        raise ValueError(
+            f"{event_label}: eligibility_mode must be one of {', '.join(sorted(ELIGIBILITY_MODES))}."
+        )
+    mode = (
+        "STANDARD"
+        if raw_mode is None or (isinstance(raw_mode, str) and not raw_mode.strip())
+        else _clean(raw_mode, limit=60).upper()
+    )
+    if mode not in ELIGIBILITY_MODES:
+        raise ValueError(
+            f"{event_label}: eligibility_mode must be one of {', '.join(sorted(ELIGIBILITY_MODES))}."
+        )
+
+    minimum = _eligibility_number(
+        event,
+        field="skill_min_rating",
+        event_label=event_label,
+    )
+    maximum = _eligibility_number(
+        event,
+        field="skill_max_rating",
+        event_label=event_label,
+    )
+    combined_cap = _eligibility_number(
+        event,
+        field="combined_rating_cap",
+        event_label=event_label,
+    )
+
+    competition_format = _clean(
+        event.get("competition_format") or "STANDARD", limit=60
+    ).upper()
+    if competition_format == "FOUR_PLAYER_TEAM" and mode != "STANDARD":
+        raise ValueError(
+            f"{event_label}: four-player team divisions must keep STANDARD eligibility."
+        )
+
+    if mode == "STANDARD":
+        if minimum is not None or maximum is not None or combined_cap is not None:
+            raise ValueError(
+                f"{event_label}: STANDARD eligibility cannot include explicit minimum, maximum, or combined-cap fields."
+            )
+        if _skill_label_anchor(event.get("skill_label"), require_plus=False) is None:
+            raise ValueError(
+                f"{event_label}: STANDARD eligibility requires a numeric skill_label between 1 and 7 without a trailing +."
+            )
+        return
+
+    if mode == "MINIMUM":
+        if minimum is None or not 1.0 <= minimum <= 7.0:
+            raise ValueError(
+                f"{event_label}: MINIMUM eligibility requires skill_min_rating between 1 and 7."
+            )
+        if maximum is not None or combined_cap is not None:
+            raise ValueError(
+                f"{event_label}: MINIMUM eligibility cannot include a maximum or combined cap."
+            )
+        return
+
+    if mode == "OPEN":
+        if minimum is not None or maximum is not None or combined_cap is not None:
+            raise ValueError(
+                f"{event_label}: OPEN eligibility cannot include rating boundaries or a combined cap."
+            )
+        return
+
+    if mode == "COMBINED_RATING_CAP":
+        if minimum is not None or maximum is not None:
+            raise ValueError(
+                f"{event_label}: COMBINED_RATING_CAP cannot include individual rating boundaries."
+            )
+        if combined_cap is None or not 0.0 < combined_cap <= 14.0:
+            raise ValueError(
+                f"{event_label}: COMBINED_RATING_CAP requires combined_rating_cap greater than 0 and no more than 14."
+            )
+        event_type = _clean(
+            event.get("event_type") or event.get("participant_type"), limit=60
+        ).upper()
+        if competition_format != "STANDARD" or event_type not in STANDARD_TEAM_EVENT_TYPES:
+            raise ValueError(
+                f"{event_label}: COMBINED_RATING_CAP is only available for standard doubles/team divisions, not Singles or FOUR_PLAYER_TEAM."
+            )
+        return
+
+    if combined_cap is not None:
+        raise ValueError(f"{event_label}: CUSTOM eligibility cannot include a combined cap.")
+    if minimum is None and maximum is None:
+        raise ValueError(
+            f"{event_label}: CUSTOM eligibility requires a minimum, a maximum, or both."
+        )
+    if minimum is not None and not 1.0 <= minimum <= 7.0:
+        raise ValueError(
+            f"{event_label}: CUSTOM minimum rating must be between 1 and 7."
+        )
+    if maximum is not None and not 1.0 < maximum <= 7.5:
+        raise ValueError(
+            f"{event_label}: CUSTOM maximum rating must be greater than 1 and no more than 7.5."
+        )
+    if minimum is not None and maximum is not None and minimum >= maximum:
+        raise ValueError(
+            f"{event_label}: CUSTOM maximum rating must be greater than the minimum rating."
+        )
+
+
+def _validate_tournament_setup_eligibility(
+    *,
+    event_options: list[dict[str, Any]],
+    builder_event_options: list[dict[str, Any]] | None,
+) -> None:
+    for payload_name, rows in (
+        ("event_options", event_options),
+        ("builder_event_options", builder_event_options or []),
+    ):
+        for index, event in enumerate(rows, start=1):
+            if not isinstance(event, dict):
+                raise ValueError(f"{payload_name} row {index} must be an object.")
+            _canonicalize_legacy_event_option_eligibility(event)
+            _validate_event_option_eligibility(
+                event,
+                index=index,
+                payload_name=payload_name,
+            )
 
 
 def preview_admin_tournament_age_split(
@@ -665,6 +917,11 @@ def review_admin_tournament_setup_impact(
 ) -> dict[str, Any]:
     """Analyze a draft without writing any table."""
 
+    _assert_enabled()
+    _validate_tournament_setup_eligibility(
+        event_options=event_options,
+        builder_event_options=builder_event_options,
+    )
     detail = get_admin_tournament_setup_detail(
         supabase,
         club_id=str(club_id),
@@ -857,6 +1114,10 @@ def publish_admin_tournament_setup(
     _assert_enabled()
     if _clean(confirmation_text, limit=80).upper() != CONFIRM_PUBLISH:
         raise ValueError(f"Type {CONFIRM_PUBLISH} to publish tournament setup.")
+    _validate_tournament_setup_eligibility(
+        event_options=event_options,
+        builder_event_options=builder_event_options,
+    )
     _get_tournament_for_club(supabase, club_id=str(club_id), tournament_id=str(tournament_id))
     impact = analyze_registration_publish_impact(
         supabase,

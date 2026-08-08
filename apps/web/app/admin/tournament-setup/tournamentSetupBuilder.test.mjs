@@ -93,6 +93,8 @@ test("guided rows preserve the API payload exactly until an operator edits them"
       registration_day_id: "day-1",
       event_family_label: "Mixed Doubles",
       division_name: "Open",
+      skill_label: "Open",
+      skill_mode: "OPEN",
       capacity_teams: 16,
       price_usd: 0,
       unknown_backend_field: { value: 42 }
@@ -107,7 +109,13 @@ test("guided rows preserve the API payload exactly until an operator edits them"
   assert.deepEqual(configurationPayload(configuration), source);
   assert.deepEqual(publishConfigurationPayload(configuration), {
     days: source.days,
-    event_options: source.event_options
+    event_options: [{
+      ...source.event_options[0],
+      eligibility_mode: "OPEN",
+      skill_min_rating: null,
+      skill_max_rating: null,
+      combined_rating_cap: null
+    }]
   });
 });
 
@@ -197,6 +205,10 @@ test("publish projection converts a multi-day legacy draft without changing its 
         gender_restriction: "MIXED",
         skill_label: "3.5",
         skill_mode: "SKILL_BRACKET",
+        eligibility_mode: "STANDARD",
+        skill_min_rating: null,
+        skill_max_rating: null,
+        combined_rating_cap: null,
         age_label: "All Ages",
         age_mode: "ALL_AGES",
         age_rules: null,
@@ -225,6 +237,10 @@ test("publish projection converts a multi-day legacy draft without changing its 
         gender_restriction: "ANY",
         skill_label: "Open",
         skill_mode: "OPEN",
+        eligibility_mode: "OPEN",
+        skill_min_rating: null,
+        skill_max_rating: null,
+        combined_rating_cap: null,
         age_label: "50+",
         age_mode: "SPLIT_AGE",
         age_rules: JSON.stringify({
@@ -258,6 +274,101 @@ test("publish projection converts a multi-day legacy draft without changing its 
   assert.deepEqual(configurationPayload(configuration), savedDraftBeforeProjection);
   assert.equal(Object.hasOwn(configuration.eventOptions[0].value, "registration_day_id"), false);
   assert.equal(configuration.eventOptions[1].value.assigned_day, "Saturday");
+});
+
+test("publish projection canonicalizes legacy skill policies and omits Standard's derived ceiling", () => {
+  const configuration = validConfiguration();
+  const base = configuration.eventOptions[0].value;
+  configuration.eventOptions = wrapBuilderRows([
+    {
+      ...base,
+      id: "legacy-minimum",
+      eligibility_mode: "STANDARD",
+      skill_mode: "minimum",
+      skill_label: "3.5+",
+      skill_min_rating: null,
+      skill_max_rating: 6,
+      combined_rating_cap: 9
+    },
+    {
+      ...base,
+      id: "legacy-open",
+      eligibility_mode: "STANDARD",
+      skill_mode: "OPEN",
+      skill_label: "Open",
+      skill_min_rating: 3,
+      skill_max_rating: 4,
+      combined_rating_cap: 8
+    },
+    {
+      ...base,
+      id: "explicit-standard",
+      eligibility_mode: "STANDARD",
+      skill_mode: "STANDARD",
+      skill_label: "4.0",
+      skill_max_rating: 4.5
+    },
+    {
+      ...base,
+      id: "explicit-custom",
+      eligibility_mode: "CUSTOM",
+      skill_mode: "CUSTOM",
+      skill_label: "Custom",
+      skill_min_rating: 3,
+      skill_max_rating: 4
+    },
+    {
+      ...base,
+      id: "custom-with-label-only",
+      eligibility_mode: "CUSTOM",
+      skill_mode: "CUSTOM",
+      skill_label: "3.0–4.0",
+      skill_min_rating: null,
+      skill_max_rating: null
+    }
+  ], "division");
+
+  const published = publishConfigurationPayload(configuration).event_options;
+  assert.deepEqual(
+    published.map((row) => ({
+      eligibility_mode: row.eligibility_mode,
+      skill_min_rating: row.skill_min_rating,
+      skill_max_rating: row.skill_max_rating,
+      combined_rating_cap: row.combined_rating_cap
+    })),
+    [
+      {
+        eligibility_mode: "MINIMUM",
+        skill_min_rating: 3.5,
+        skill_max_rating: null,
+        combined_rating_cap: null
+      },
+      {
+        eligibility_mode: "OPEN",
+        skill_min_rating: null,
+        skill_max_rating: null,
+        combined_rating_cap: null
+      },
+      {
+        eligibility_mode: "STANDARD",
+        skill_min_rating: null,
+        skill_max_rating: null,
+        combined_rating_cap: null
+      },
+      {
+        eligibility_mode: "CUSTOM",
+        skill_min_rating: 3,
+        skill_max_rating: 4,
+        combined_rating_cap: null
+      },
+      {
+        eligibility_mode: "CUSTOM",
+        skill_min_rating: null,
+        skill_max_rating: null,
+        combined_rating_cap: null
+      }
+    ]
+  );
 });
 
 test("structured field changes preserve unrelated and legacy fields", () => {

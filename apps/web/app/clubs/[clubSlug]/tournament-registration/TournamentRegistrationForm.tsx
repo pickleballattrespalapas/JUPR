@@ -451,8 +451,8 @@ export default function TournamentRegistrationForm({
       ["Singles skill", profile.singlesSkill]
     ]) {
       const parsed = numericValue(value);
-      if (parsed != null && (parsed < 0 || parsed > 7)) {
-        setError(`${label} must be between 0 and 7.`);
+      if (parsed != null && (parsed < 1 || parsed > 7)) {
+        setError(`${label} must be between 1 and 7.`);
         return;
       }
     }
@@ -749,8 +749,8 @@ export default function TournamentRegistrationForm({
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
             <label>Display name *<br /><input aria-label="Display name" value={profile.displayName} onChange={(event) => updateProfile("displayName", event.target.value)} style={inputStyle} /></label>
             <label>DUPR ID<br /><input aria-label="DUPR ID" value={profile.duprId} onChange={(event) => updateProfile("duprId", event.target.value)} style={inputStyle} /></label>
-            <label>Doubles skill<br /><input aria-label="Doubles skill" type="number" min="0" max="7" step="0.01" value={profile.doublesSkill} onChange={(event) => updateProfile("doublesSkill", event.target.value)} style={inputStyle} /></label>
-            <label>Singles skill<br /><input aria-label="Singles skill" type="number" min="0" max="7" step="0.01" value={profile.singlesSkill} onChange={(event) => updateProfile("singlesSkill", event.target.value)} style={inputStyle} /></label>
+            <label>Doubles skill<br /><input aria-label="Doubles skill" type="number" min="1" max="7" step="0.01" value={profile.doublesSkill} onChange={(event) => updateProfile("doublesSkill", event.target.value)} style={inputStyle} /></label>
+            <label>Singles skill<br /><input aria-label="Singles skill" type="number" min="1" max="7" step="0.01" value={profile.singlesSkill} onChange={(event) => updateProfile("singlesSkill", event.target.value)} style={inputStyle} /></label>
           </div>
         </section>
       ) : null}
@@ -794,7 +794,7 @@ export default function TournamentRegistrationForm({
                                 <label>Partner email *<br /><input aria-label={`${eventOption.division_name} partner email`} type="email" value={partner.email} onChange={(event) => updatePartner(eventOption.id, { email: event.target.value })} style={inputStyle} /></label>
                                 <label>Partner age *<br /><input aria-label={`${eventOption.division_name} partner age`} type="number" min="1" max="120" value={partner.age} onChange={(event) => updatePartner(eventOption.id, { age: event.target.value })} style={inputStyle} /></label>
                                 <label>Partner gender *<br /><select aria-label={`${eventOption.division_name} partner gender`} value={partner.gender} onChange={(event) => updatePartner(eventOption.id, { gender: event.target.value })} style={inputStyle}><option value="">Select</option><option>Women</option><option>Men</option><option>Non-binary</option><option>Other</option><option>Prefer not to say</option></select></label>
-                                <label>Partner skill<br /><input aria-label={`${eventOption.division_name} partner skill`} type="number" min="0" max="7" step="0.01" value={partner.skill} onChange={(event) => updatePartner(eventOption.id, { skill: event.target.value })} style={inputStyle} /></label>
+                                <label>Partner skill<br /><input aria-label={`${eventOption.division_name} partner skill`} type="number" min="1" max="7" step="0.01" value={partner.skill} onChange={(event) => updatePartner(eventOption.id, { skill: event.target.value })} style={inputStyle} /></label>
                                 <label>Partner phone<br /><input aria-label={`${eventOption.division_name} partner phone`} value={partner.phone} onChange={(event) => updatePartner(eventOption.id, { phone: event.target.value })} style={inputStyle} /></label>
                                 <label>Partner DUPR ID<br /><input aria-label={`${eventOption.division_name} partner DUPR ID`} value={partner.duprId} onChange={(event) => updatePartner(eventOption.id, { duprId: event.target.value })} style={inputStyle} /></label>
                               </div>
