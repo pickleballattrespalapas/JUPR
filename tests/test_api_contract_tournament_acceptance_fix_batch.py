@@ -39,9 +39,15 @@ def test_publish_result_stays_visible_in_the_confirmation_dialog() -> None:
 
 def test_registration_status_does_not_create_a_false_unpublished_setup_banner() -> None:
     panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+    builder = read_web("app/admin/tournament-setup/tournamentSetupBuilder.ts")
 
     assert "delete comparableSettings.registration_status" in panel
-    assert "delete comparableEvent.status" in panel
+    assert "stableSetupJsonStringify" in panel
+    assert "comparablePublishedConfigurationPayload" in panel
+    assert "comparablePublishedDay" in builder
+    assert "comparablePublishedEvent" in builder
+    assert "age_rules: comparableJsonValue(event.age_rules)" in builder
+    assert 'fourPlayerTeam ? 4 : 2' in builder
     assert "draftSettingsValue.registration_status = publishedSettingsValue.registration_status" in panel
     assert 'safeString(publishedSettings.registration_status || "draft")' in panel
 
