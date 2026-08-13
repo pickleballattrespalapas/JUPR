@@ -6,9 +6,21 @@ export type AdminPlayerEditorStatusResponse = {
   social_identities_endpoint?: string | null;
   player_merge_endpoint?: string | null;
   merge_operation_endpoint?: string | null;
+  operation_endpoint?: string | null;
   transactional_merge_ready?: boolean;
   player_count?: number | null;
   warnings: string[];
+};
+
+export type AdminPlayerEditorOperationResponse = {
+  ok: boolean;
+  operation_key: string;
+  workflow?: "player_editor_create" | "player_editor_update" | "player_editor_league_rating_update" | string;
+  status: string;
+  result?: AdminPlayerEditorWriteResponse | null;
+  error?: string | null;
+  recovery_required?: boolean;
+  updated_at?: string | null;
 };
 
 export type AdminPlayerEditorPlayer = {
@@ -25,6 +37,7 @@ export type AdminPlayerEditorPlayer = {
   active?: boolean | null;
   inactive_at?: string | null;
   last_game_at?: string | null;
+  state_fingerprint?: string;
 };
 
 export type AdminPlayerEditorLeagueRating = {
@@ -39,6 +52,7 @@ export type AdminPlayerEditorLeagueRating = {
   matches_played?: number | null;
   is_active?: boolean | null;
   inactive_at?: string | null;
+  state_fingerprint?: string;
 };
 
 export type AdminPlayerSocialIdentity = {
@@ -113,7 +127,11 @@ export type AdminPlayerEditorWriteResponse = {
   social_identity_rows_updated?: number;
   transaction_mode?: string;
   operation_id?: string;
+  operation_key?: string;
   operation_status?: "merged_pending_replay" | "replay_verified" | "compensated" | string;
+  status?: string;
+  recovery_required?: boolean;
+  reconciled?: boolean;
   preview_fingerprint?: string;
   requires_replay?: boolean;
   recovery?: {

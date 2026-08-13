@@ -177,7 +177,7 @@ def test_existing_shared_action_guards_remain_token_scoped() -> None:
         "replaceSubscriber",
         "deactivateSubscriber",
     ):
-        assert "await runAction(" in _async_function_body(player_updates, wrapper)
+        assert "return runAction(" in _async_function_body(player_updates, wrapper)
 
     replay = _source("apps/web/app/admin/replay-history/ReplayHistoryForm.tsx")
     replay_action = _async_function_body(replay, "onSubmit")

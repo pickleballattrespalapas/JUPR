@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import type { AdminTournament, AdminTournamentListResponse, AdminTournamentStatusResponse, AdminTournamentWriteResponse } from "@/lib/adminTournamentApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
@@ -73,7 +74,7 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
   async function deleteDraft(confirmationText: string) {
     if (!selectedTournamentId) {
       setMessage("Select a draft tournament first.");
-      return;
+      throw new Error("Select a draft tournament first.");
     }
     const generation = actionRequest.begin();
     const requestedTournamentId = selectedTournamentId;
@@ -84,12 +85,15 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
         `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/delete-draft`,
         { method: "POST", body: JSON.stringify({ expected_updated_at: selectedTournament?.updated_at, confirmation_text: confirmationText, source: "next_tournament_admin_delete_draft_page" }) }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Draft deleted", `Draft ${payload.tournament_id} was permanently deleted.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       setTournaments((current) => current.filter((row) => row.id !== requestedTournamentId));
       setSelectedTournamentId("");
       setMessage(`Deleted draft ${payload.tournament_id}. Usage summary: ${usageText(payload.usage_summary)}.`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to delete draft tournament.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }

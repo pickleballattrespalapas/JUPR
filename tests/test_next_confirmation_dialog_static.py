@@ -7,72 +7,60 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "apps" / "web"
 
-ACTION_CONFIRMATION_FILES = (
-    "app/admin/badges/BadgeDiagnosticsPanel.tsx",
-    "app/admin/challenge-ladder/ChallengeLadderAdminPanel.tsx",
-    "app/admin/jupr-live/JuprLiveAdminPanel.tsx",
-    "app/admin/league-manager/GuidedLeagueSettingsEditor.tsx",
-    "app/admin/league-manager/LeagueManagerPanel.tsx",
-    "app/admin/league-manager/awards/LeagueAwardsPanel.tsx",
-    "app/admin/league-manager/live/LeagueLiveRoundPanel.tsx",
-    "app/admin/match-canonical-audit/MatchCanonicalAuditPanel.tsx",
-    "app/admin/match-log/MatchLogApplyPanel.tsx",
-    "app/admin/match-log/MatchLogBulkExcludePanel.tsx",
-    "app/admin/match-log/MatchLogQuickReplayPanel.tsx",
-    "app/admin/match-log/MatchLogSocialPanel.tsx",
-    "app/admin/moneyball/MoneyballPanel.tsx",
-    "app/admin/player-updates/PlayerUpdatesPanel.tsx",
-    "app/admin/player-updates/verified-requests/VerifiedRequestsPanel.tsx",
-    "app/admin/players/PlayerEditorPanel.tsx",
-    "app/admin/replay-history/ReplayHistoryForm.tsx",
-    "app/admin/support-requests/SupportRequestsPanel.tsx",
-    "app/admin/tools/AdminToolsPanel.tsx",
-    "app/admin/tournament-live/TournamentLivePanel.tsx",
-    "app/admin/tournament-setup/TournamentSetupPanel.tsx",
-    "app/admin/tournaments/TournamentAdminPanel.tsx",
-    "app/admin/tournaments/bulk/BulkRegistrationPanel.tsx",
-    "app/admin/tournaments/delete-draft/DeleteDraftPanel.tsx",
-    "app/admin/tournaments/ops/TournamentOpsPanel.tsx",
-    "app/admin/tournaments/status/TournamentStatusPanel.tsx",
-    "app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx",
-)
-
-
 def test_shared_confirmation_dialog_is_accessible_and_keeps_the_server_phrase_internal() -> None:
     source = (WEB / "components" / "ConfirmAction.tsx").read_text()
+    provider = (WEB / "components" / "interaction" / "InteractionProvider.tsx").read_text()
+    dialog = (WEB / "components" / "interaction" / "InteractionDialog.tsx").read_text()
+    lifecycle = (WEB / "components" / "interaction" / "useActionLifecycle.ts").read_text()
 
     for required in (
         'export function ConfirmAction',
+        'openAction(',
+        'cancelLabel = "No, go back"',
+    ):
+        assert required in source
+
+    for required in (
+        '<InteractionDialog',
+        'active.onConfirm(active.confirmationText)',
+        'lifecycle.run',
+        'lifecycle.recover',
+        'Object.freeze({ ...request, origin })',
+    ):
+        assert required in provider
+
+    for required in (
         'createPortal(',
         'setPortalContainer(document.body)',
         '<dialog',
         'aria-labelledby={titleId}',
         'aria-describedby=',
         'aria-modal="true"',
-        'cancelRef.current?.focus()',
         'window.requestAnimationFrame',
-        'fallbackFocusRef.current',
         'wasOpenRef.current',
-        'restoreFocusAfterDialog',
-        'trigger?.isConnected && !trigger.disabled',
         'document.querySelector<HTMLElement>("main")',
-        'onCancel={handleDialogCancel}',
-        'onConfirm(confirmationText)',
-        'if (disabled || busy || submittingRef.current)',
-        'submittingRef.current',
-        'role="alert"',
-        'cancelLabel = "No, go back"',
+        'onCancel={handleCancel}',
     ):
-        assert required in source
+        assert required in dialog
+
+    assert "inFlightRef.current" in lifecycle
+    assert 'setPhase("success")' not in lifecycle
+    assert "setPhase(result.status)" in lifecycle
 
 
 def test_all_admin_action_confirmations_use_dialogs_instead_of_typed_inputs() -> None:
     offenders: list[str] = []
+    action_confirmation_files = sorted(
+        path
+        for path in (WEB / "app" / "admin").rglob("*.tsx")
+        if "<ConfirmAction" in path.read_text()
+    )
+    assert action_confirmation_files
 
-    for relative in ACTION_CONFIRMATION_FILES:
-        source = (WEB / relative).read_text()
+    for path in action_confirmation_files:
+        relative = str(path.relative_to(WEB))
+        source = path.read_text()
         assert 'import { ConfirmAction } from "@/components/ConfirmAction";' in source, relative
-        assert '<ConfirmAction' in source, relative
 
         for tag in re.findall(r"<input\b[^>]*>", source, flags=re.IGNORECASE | re.DOTALL):
             if re.search(r"confirm(?:ation)?", tag, flags=re.IGNORECASE):

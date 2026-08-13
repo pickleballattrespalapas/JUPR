@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { FormDialog, InteractionActionError, type ActionCompletion } from "@/components/interaction";
 
 const MAX_VENUE_COURTS = 100;
 const PRESET_COUNTS = [4, 6, 8, 10] as const;
@@ -10,7 +11,8 @@ type Props = {
   existingCount: number;
   disabled?: boolean;
   onCancel: () => void;
-  onConfirm: (count: number) => void | Promise<void>;
+  onConfirm: (count: number) => Promise<ActionCompletion>;
+  onAcknowledge?: () => void;
 };
 
 const inputStyle: CSSProperties = {
@@ -33,32 +35,23 @@ const ghostButtonStyle: CSSProperties = {
   cursor: "pointer"
 };
 
-const buttonStyle: CSSProperties = {
-  ...ghostButtonStyle,
-  borderColor: "#0f172a",
-  background: "#0f172a",
-  color: "white"
-};
-
 export default function TournamentBulkAddCourtsDialog({
   open,
   existingCount,
   disabled = false,
   onCancel,
-  onConfirm
+  onConfirm,
+  onAcknowledge
 }: Props) {
   const safeExistingCount = Math.max(0, Math.min(MAX_VENUE_COURTS, Math.trunc(existingCount || 0)));
   const maximumAddition = Math.max(0, MAX_VENUE_COURTS - safeExistingCount);
   const defaultCount = Math.min(4, maximumAddition);
   const [count, setCount] = useState(defaultCount);
-  const [message, setMessage] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const countRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
     setCount(Math.min(4, Math.max(0, MAX_VENUE_COURTS - safeExistingCount)));
-    setMessage("");
-    setSubmitting(false);
   }, [open, safeExistingCount]);
 
   const preview = useMemo(() => {
@@ -68,60 +61,34 @@ export default function TournamentBulkAddCourtsDialog({
 
   if (!open) return null;
 
-  async function submit() {
+  async function submit(): Promise<ActionCompletion> {
     const safeCount = Math.trunc(Number(count));
     if (!Number.isInteger(safeCount) || safeCount < 1) {
-      setMessage("Choose at least one court to add.");
-      return;
+      throw new InteractionActionError("Choose at least one court to add.", { kind: "validation", fieldErrors: { "Courts to add": "Choose at least one court to add." } });
     }
     if (safeCount > maximumAddition) {
-      setMessage(`A venue can have no more than ${MAX_VENUE_COURTS} courts.`);
-      return;
+      throw new InteractionActionError(`A venue can have no more than ${MAX_VENUE_COURTS} courts.`, { kind: "validation", fieldErrors: { "Courts to add": `Choose ${maximumAddition} or fewer courts.` } });
     }
-    setSubmitting(true);
-    setMessage("");
-    try {
-      await onConfirm(safeCount);
-    } finally {
-      setSubmitting(false);
-    }
+    return onConfirm(safeCount);
   }
 
   return (
-    <div
-      role="presentation"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1100,
-        display: "grid",
-        placeItems: "center",
-        padding: "1rem",
-        background: "rgba(15, 23, 42, 0.62)"
-      }}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !disabled && !submitting) onCancel();
-      }}
+    <FormDialog
+      open={open}
+      mode="bulk"
+      size="wide"
+      title="Bulk add venue courts"
+      description="Add several stable court records at once. Court titles remain optional and can be edited after the courts are created."
+      dirty={count !== defaultCount}
+      submitLabel={`Add ${count || 0} court${count === 1 ? "" : "s"}`}
+      submitDisabled={disabled || count < 1 || count > maximumAddition}
+      workingLabel="Adding courts…"
+      initialFocusRef={countRef}
+      getFirstInvalidField={() => countRef.current}
+      onSubmit={submit}
+      onCancel={onCancel}
+      onAcknowledge={onAcknowledge}
     >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="bulk-court-title"
-        style={{
-          width: "min(680px, 100%)",
-          maxHeight: "calc(100vh - 2rem)",
-          overflowY: "auto",
-          padding: "1.1rem",
-          borderRadius: "16px",
-          background: "white",
-          boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)"
-        }}
-      >
-        <h2 id="bulk-court-title" style={{ marginTop: 0 }}>Bulk add venue courts</h2>
-        <p style={{ color: "#475569" }}>
-          Add several stable court records at once. Court titles remain optional and can be edited after the courts are created.
-        </p>
-
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem" }}>
           <div style={{ padding: "0.75rem", border: "1px solid #e2e8f0", borderRadius: "12px", background: "#f8fafc" }}>
             <strong>Current inventory</strong><br />
@@ -140,7 +107,7 @@ export default function TournamentBulkAddCourtsDialog({
               <button
                 key={preset}
                 type="button"
-                disabled={disabled || submitting || preset > maximumAddition}
+                disabled={disabled || preset > maximumAddition}
                 style={{
                   ...ghostButtonStyle,
                   borderColor: count === preset ? "#2563eb" : "#64748b",
@@ -148,7 +115,6 @@ export default function TournamentBulkAddCourtsDialog({
                 }}
                 onClick={() => {
                   setCount(preset);
-                  setMessage("");
                 }}
               >
                 Add {preset}
@@ -158,16 +124,16 @@ export default function TournamentBulkAddCourtsDialog({
           <label style={{ display: "block", marginTop: "0.75rem" }}>
             <strong>Custom number</strong><br />
             <input
+              ref={countRef}
               type="number"
               min="1"
               max={maximumAddition || 1}
               step="1"
               value={count || ""}
-              disabled={disabled || submitting || maximumAddition < 1}
+              disabled={disabled || maximumAddition < 1}
               style={inputStyle}
               onChange={(event) => {
                 setCount(Math.trunc(Number(event.target.value) || 0));
-                setMessage("");
               }}
             />
             <small>Maximum venue inventory: {MAX_VENUE_COURTS} courts.</small>
@@ -192,20 +158,6 @@ export default function TournamentBulkAddCourtsDialog({
         </article>
 
         {maximumAddition < 1 ? <p role="alert" style={{ color: "#b91c1c" }}>This venue already has the maximum court inventory.</p> : null}
-        {message ? <p role="alert" style={{ color: "#b91c1c" }}>{message}</p> : null}
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.65rem", flexWrap: "wrap", marginTop: "1rem" }}>
-          <button type="button" style={ghostButtonStyle} disabled={disabled || submitting} onClick={onCancel}>Cancel</button>
-          <button
-            type="button"
-            style={buttonStyle}
-            disabled={disabled || submitting || count < 1 || count > maximumAddition}
-            onClick={() => void submit()}
-          >
-            {submitting ? "Adding courts…" : `Add ${count || 0} court${count === 1 ? "" : "s"}`}
-          </button>
-        </div>
-      </section>
-    </div>
+    </FormDialog>
   );
 }

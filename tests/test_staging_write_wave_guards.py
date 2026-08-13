@@ -86,6 +86,7 @@ def test_every_unsafe_fastapi_route_has_an_exact_nonstale_wave_classification() 
     league_domain_overlap = {
         ("POST", "/admin/clubs/{club_id}/league-manager/live/roster-suggestion"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/live-operations/{operation_key}/reconcile"),
         ("PATCH", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/snapshot"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/plan"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}"),

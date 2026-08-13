@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { FormDialog, InteractionActionError, type ActionCompletion } from "@/components/interaction";
 import {
   SKILL_LABEL_OPTIONS,
   cleanString,
@@ -39,7 +40,8 @@ type Props = {
   eventFamilies: BuilderRow[];
   days: BuilderRow[];
   onCancel: () => void;
-  onConfirm: (value: SetupRecord) => void | Promise<void>;
+  onConfirm: (value: SetupRecord) => Promise<ActionCompletion>;
+  onAcknowledge?: () => void;
 };
 
 const inputStyle: CSSProperties = {
@@ -160,11 +162,20 @@ export default function TournamentSetupDivisionDialog({
   eventFamilies,
   days,
   onCancel,
-  onConfirm
+  onConfirm,
+  onAcknowledge
 }: Props) {
   const [draft, setDraft] = useState<SetupRecord>(initialValue);
-  const [message, setMessage] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [baseline, setBaseline] = useState("");
+  const familyRef = useRef<HTMLSelectElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const skillRef = useRef<HTMLInputElement>(null);
+  const eligibilityRef = useRef<HTMLSelectElement>(null);
+  const capacityRef = useRef<HTMLInputElement>(null);
+  const priceRef = useRef<HTMLInputElement>(null);
+  const agePolicyRef = useRef<HTMLFieldSetElement>(null);
+  const scheduleRef = useRef<HTMLFieldSetElement>(null);
+  const invalidFieldRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -173,13 +184,13 @@ export default function TournamentSetupDivisionDialog({
       eventFamilies.find(
         (row) => eventFamilyName(row.value).toLowerCase() === familyName.toLowerCase()
       )?.value || eventFamilies[0]?.value;
-    setDraft(
+    const prepared =
       dialogMode === "add" && family
         ? applyFamily({ ...initialValue }, family)
-        : { ...initialValue }
-    );
-    setMessage("");
-    setSubmitting(false);
+        : { ...initialValue };
+    setDraft(prepared);
+    setBaseline(JSON.stringify(prepared));
+    invalidFieldRef.current = null;
   }, [open, initialValue, eventFamilies, dialogMode]);
 
   const family = useMemo(() => {
@@ -202,37 +213,35 @@ export default function TournamentSetupDivisionDialog({
 
   if (!open) return null;
 
-  async function submit() {
+  function validationError(message: string, field: string, target: HTMLElement | null): never {
+    invalidFieldRef.current = target;
+    throw new InteractionActionError(message, { kind: "validation", fieldErrors: { [field]: message } });
+  }
+
+  async function submit(): Promise<ActionCompletion> {
     if (!eventFamilyName(draft)) {
-      setMessage("Choose an event before adding the division.");
-      return;
+      validationError("Choose an event before adding the division.", "Parent event", familyRef.current);
     }
     if (!cleanString(draft.division_name ?? draft.label)) {
-      setMessage("Division name is required.");
-      return;
+      validationError("Division name is required.", "Division name", nameRef.current);
     }
     if (!cleanString(draft.skill_label) && skillEligibilityMode(draft) !== "OPEN") {
-      setMessage("Skill division is required.");
-      return;
+      validationError("Skill division is required.", "Skill division", skillRef.current);
     }
     if (!selectedDayIds.length) {
-      setMessage("Choose at least one tournament day for this division.");
-      return;
+      validationError("Choose at least one tournament day for this division.", "Tournament days", scheduleRef.current);
     }
     const capacity = Number(draft.capacity_teams);
     if (!Number.isInteger(capacity) || capacity < 1) {
-      setMessage("Capacity must be a whole number of at least 1.");
-      return;
+      validationError("Capacity must be a whole number of at least 1.", "Capacity", capacityRef.current);
     }
     const price = Number(draft.price_usd);
     if (!Number.isFinite(price) || price < 0) {
-      setMessage("Entry fee cannot be negative.");
-      return;
+      validationError("Entry fee cannot be negative.", "Entry fee", priceRef.current);
     }
     const skillIssue = validateTournamentSkillEligibility(draft);
     if (skillIssue) {
-      setMessage(skillIssue);
-      return;
+      validationError(skillIssue, "Division eligibility", eligibilityRef.current);
     }
     const participantType = cleanString(family?.participant_type).toUpperCase();
     const competitionFormat = cleanString(family?.competition_format).toUpperCase();
@@ -240,63 +249,33 @@ export default function TournamentSetupDivisionDialog({
       skillEligibilityMode(draft) === "COMBINED_RATING_CAP" &&
       (participantType === "SINGLES" || competitionFormat === "FOUR_PLAYER_TEAM")
     ) {
-      setMessage("Combined team-rating cap is available only for standard doubles/team divisions.");
-      return;
+      validationError("Combined team-rating cap is available only for standard doubles/team divisions.", "Division eligibility", eligibilityRef.current);
     }
     if (agePolicySource === "OVERRIDE") {
       const ageIssues = validateAgePolicy(divisionAgePolicy, cleanString(family?.participant_type));
       if (ageIssues.length) {
-        setMessage(ageIssues[0]);
-        return;
+        validationError(ageIssues[0], "Age policy", agePolicyRef.current);
       }
     }
-    setSubmitting(true);
-    try {
-      await onConfirm(draft);
-    } finally {
-      setSubmitting(false);
-    }
+    return onConfirm(draft);
   }
 
   return (
-    <div
-      role="presentation"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        display: "grid",
-        placeItems: "center",
-        padding: "1rem",
-        background: "rgba(15, 23, 42, 0.58)"
-      }}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onCancel();
-      }}
+    <FormDialog
+      open={open}
+      mode={dialogMode === "add" ? "create" : "edit"}
+      size="wide"
+      title={dialogMode === "add" ? "Add division" : `Edit ${cleanString(draft.division_name ?? draft.label) || "division"}`}
+      description="Divisions implement the event policy for a specific skill or age group. Saving returns a compact, read-only card; published data remains unchanged until Review."
+      dirty={Boolean(baseline) && JSON.stringify(draft) !== baseline}
+      submitLabel={dialogMode === "add" ? "Add division" : "Save division"}
+      workingLabel="Saving division…"
+      initialFocusRef={nameRef}
+      getFirstInvalidField={() => invalidFieldRef.current}
+      onSubmit={submit}
+      onCancel={onCancel}
+      onAcknowledge={onAcknowledge}
     >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="division-dialog-title"
-        style={{
-          width: "min(900px, 100%)",
-          maxHeight: "calc(100vh - 2rem)",
-          overflowY: "auto",
-          padding: "1.1rem",
-          borderRadius: "16px",
-          background: "white",
-          boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)"
-        }}
-      >
-        <h2 id="division-dialog-title" style={{ marginTop: 0 }}>
-          {dialogMode === "add"
-            ? "Add division"
-            : `Edit ${cleanString(draft.division_name ?? draft.label) || "division"}`}
-        </h2>
-        <p style={{ color: "#475569" }}>
-          Divisions implement the event policy for a specific skill or age group. Saving returns a compact, read-only card; published data remains unchanged until Review.
-        </p>
-
         <div
           style={{
             display: "grid",
@@ -307,6 +286,7 @@ export default function TournamentSetupDivisionDialog({
           <label>
             <strong>Parent event</strong><br />
             <select
+              ref={familyRef}
               value={eventFamilyName(draft)}
               style={inputStyle}
               onChange={(event) => {
@@ -326,6 +306,7 @@ export default function TournamentSetupDivisionDialog({
           <label>
             <strong>Division name</strong><br />
             <input
+              ref={nameRef}
               value={cleanString(draft.division_name ?? draft.label)}
               placeholder="3.5 · 50+"
               style={inputStyle}
@@ -339,6 +320,7 @@ export default function TournamentSetupDivisionDialog({
           <label>
             <strong>Skill division</strong><br />
             <input
+              ref={skillRef}
               list="new-division-skills"
               value={draft.skill_label == null ? "" : String(draft.skill_label)}
               style={inputStyle}
@@ -353,6 +335,7 @@ export default function TournamentSetupDivisionDialog({
           <label>
             <strong>Division eligibility</strong><br />
             <select
+              ref={eligibilityRef}
               value={skillEligibilityMode(draft)}
               style={inputStyle}
               onChange={(event) =>
@@ -432,6 +415,7 @@ export default function TournamentSetupDivisionDialog({
           <label>
             <strong>Capacity</strong><br />
             <input
+              ref={capacityRef}
               type="number"
               min="1"
               step="1"
@@ -443,6 +427,7 @@ export default function TournamentSetupDivisionDialog({
           <label>
             <strong>Entry fee (USD)</strong><br />
             <input
+              ref={priceRef}
               type="number"
               inputMode="decimal"
               min="0"
@@ -462,7 +447,7 @@ export default function TournamentSetupDivisionDialog({
           ) : null}
         </div>
 
-        <fieldset style={{ marginTop: "1rem", padding: "0.85rem", border: "1px solid #cbd5e1", borderRadius: "12px" }}>
+        <fieldset ref={agePolicyRef} tabIndex={-1} style={{ marginTop: "1rem", padding: "0.85rem", border: "1px solid #cbd5e1", borderRadius: "12px" }}>
           <legend style={{ fontWeight: 800 }}>Age policy</legend>
           <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
             <input
@@ -496,7 +481,7 @@ export default function TournamentSetupDivisionDialog({
           ) : null}
         </fieldset>
 
-        <fieldset style={{ marginTop: "1rem", padding: "0.85rem", border: "1px solid #cbd5e1", borderRadius: "12px" }}>
+        <fieldset ref={scheduleRef} tabIndex={-1} style={{ marginTop: "1rem", padding: "0.85rem", border: "1px solid #cbd5e1", borderRadius: "12px" }}>
           <legend style={{ fontWeight: 800 }}>Tournament days</legend>
           <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
             <input
@@ -545,17 +530,6 @@ export default function TournamentSetupDivisionDialog({
           ) : null}
         </fieldset>
 
-        {message ? <p role="alert" style={{ color: "#b91c1c" }}>{message}</p> : null}
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.65rem", flexWrap: "wrap", marginTop: "1rem" }}>
-          <button type="button" disabled={submitting} onClick={onCancel} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #64748b", background: "white", color: "#0f172a", fontWeight: 800, cursor: "pointer" }}>
-            Cancel
-          </button>
-          <button type="button" disabled={submitting} onClick={() => void submit()} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800, cursor: "pointer" }}>
-            {submitting ? "Saving…" : dialogMode === "add" ? "Add division" : "Save division"}
-          </button>
-        </div>
-      </section>
-    </div>
+    </FormDialog>
   );
 }

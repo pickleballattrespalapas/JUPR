@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type { AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
@@ -298,10 +299,11 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
     else wizardRequest.invalidate();
   }
 
-  async function runAction(action: "freeze" | "preview" | "mint" | "archive", confirmationText = "") {
+  async function runAction(action: "freeze" | "preview" | "mint" | "archive", confirmationText = ""): Promise<ActionCompletion> {
     if (!leagueName) {
-      setMessage("Select a league first.");
-      return;
+      const error = new Error("Select a league first.");
+      setMessage(error.message);
+      throw error;
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -316,16 +318,19 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
           source: `next_league_manager_awards_${action}`
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the awards response was applied.");
       hydrate(payload);
       clearKey(action);
-      setMessage(
+      const successMessage =
         action === "mint"
           ? `Mint verified ${payload.badge_verified_count || 0} of ${payload.badge_expected_count || 0} expected badge row(s).`
-          : `${action[0].toUpperCase()}${action.slice(1)} saved at workflow revision ${payload.wizard.revision || 0}.`
-      );
+          : `${action[0].toUpperCase()}${action.slice(1)} saved at workflow revision ${payload.wizard.revision || 0}.`;
+      setMessage(successMessage);
+      const title = action === "freeze" ? "League frozen" : action === "mint" ? "Awards minted and verified" : action === "archive" ? "League archived" : "Award preview saved";
+      return actionSuccess(title, successMessage);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : `Unable to ${action} awards.`} The same operation key is retained for a safe retry; use Recover saved state first.`);
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -533,7 +538,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>4. Persist award preview</h2>
           <p style={{ color: "#475569" }}>FastAPI recomputes the Python-authoritative top performers and stores the exact rows and fingerprint used by later steps.</p>
-          <button type="button" onClick={() => runAction("preview")} disabled={busy || !writeReady} style={buttonStyle}>{wizard.preview ? "Recompute and replace preview" : "Compute and save preview"}</button>
+          <button type="button" onClick={() => void runAction("preview").catch(() => undefined)} disabled={busy || !writeReady} style={buttonStyle}>{wizard.preview ? "Recompute and replace preview" : "Compute and save preview"}</button>
         </article>
       ) : null}
 

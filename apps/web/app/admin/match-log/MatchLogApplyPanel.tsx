@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import type { ConfirmActionSuccess } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type {
   AdminDuplicateDeletePreview,
   AdminDuplicateGroup,
@@ -586,7 +586,7 @@ export default function MatchLogApplyPanel({
     }
   }
 
-  async function submitGuidedPatches(confirmationText: string): Promise<ConfirmActionSuccess | void> {
+  async function submitGuidedPatches(confirmationText: string): Promise<ActionCompletion> {
     setBusy(true);
     clearMessage();
     setResult(null);
@@ -623,9 +623,9 @@ export default function MatchLogApplyPanel({
       setRecoveryOperationId(null);
       setIdempotencyKey(requestKey());
       onMutationComplete();
-      return {
-        title: payload.mode === "applied_and_replayed" ? "Match edit and replay complete" : "Match edit complete",
-        description: (
+      return actionSuccess(
+        payload.mode === "applied_and_replayed" ? "Match edit and replay complete" : "Match edit complete",
+        (
           <div>
             <p role="status" style={{ color: "#166534" }}><strong>{summary}</strong></p>
             {correctionSummaries.length ? <ul>{correctionSummaries.map((item) => <li key={item}>{item}</li>)}</ul> : null}
@@ -637,8 +637,8 @@ export default function MatchLogApplyPanel({
             {payload.warnings?.length ? <ul style={{ color: "#92400e" }}>{payload.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
           </div>
         ),
-        closeLabel: "OK",
-      };
+        "OK"
+      );
     } catch (error) {
       if (error instanceof ApiCallError && error.operationId) setRecoveryOperationId(error.operationId);
       const applyError = error instanceof Error ? error : new Error("Unable to apply match edits.");
@@ -649,8 +649,8 @@ export default function MatchLogApplyPanel({
     }
   }
 
-  async function recoverMandatoryReplay(confirmationText: string) {
-    if (!recoveryOperationId) return;
+  async function recoverMandatoryReplay(confirmationText: string): Promise<ActionCompletion> {
+    if (!recoveryOperationId) throw new Error("No replay recovery operation is available.");
     setBusy(true);
     clearMessage();
     try {
@@ -659,21 +659,23 @@ export default function MatchLogApplyPanel({
         source: "next_match_log_recovery"
       });
       setResult(payload);
-      showMessage("recovery", resultSummary(payload) || "Replay recovery completed.", payload.ok ? "success" : "error");
-      if (payload.ok) {
-        setRecoveryOperationId(null);
-        setStagedPatches([]);
-        setIdempotencyKey(requestKey());
-        onMutationComplete();
-      }
+      const summary = resultSummary(payload) || "Replay recovery completed.";
+      showMessage("recovery", summary, payload.ok ? "success" : "error");
+      if (!payload.ok) throw new Error(summary);
+      setRecoveryOperationId(null);
+      setStagedPatches([]);
+      setIdempotencyKey(requestKey());
+      onMutationComplete();
+      return actionSuccess("Replay recovery complete", summary);
     } catch (error) {
       showMessage("recovery", error instanceof Error ? error.message : "Unable to complete replay recovery.");
+      throw error;
     } finally {
       setBusy(false);
     }
   }
 
-  async function cleanupDuplicates(confirmationText: string) {
+  async function cleanupDuplicates(confirmationText: string): Promise<ActionCompletion> {
     const deleteIds = duplicatePreview?.delete_ids ?? [];
     setBusy(true);
     clearMessage();
@@ -707,26 +709,28 @@ export default function MatchLogApplyPanel({
         source: "next_match_log_duplicate_cleanup_panel"
       });
       setResult(payload);
-      showMessage("duplicate-cleanup", resultSummary(payload) || "Duplicate cleanup completed.", payload.ok ? "success" : "error");
+      const summary = resultSummary(payload) || "Duplicate cleanup completed.";
+      showMessage("duplicate-cleanup", summary, payload.ok ? "success" : "error");
       const operation = exclusionOperationFromPayload(payload);
       if (operation) onExclusionOperationChange(operation);
       const status = payload.status || payload.operation_status || payload.operation?.status;
-      if (payload.ok && (!status || status === "succeeded")) {
-        setDuplicateIdempotencyKey(requestKey());
-        onExclusionOperationChange(null);
-        onMutationComplete();
-      }
+      if (!payload.ok || (status && status !== "succeeded")) throw new Error(status ? `Duplicate cleanup remains ${status}. Resume the exact recovery before another cleanup.` : summary);
+      setDuplicateIdempotencyKey(requestKey());
+      onExclusionOperationChange(null);
+      onMutationComplete();
+      return actionSuccess("Duplicate cleanup complete", summary);
     } catch (error) {
       if (error instanceof ApiCallError && error.operation) {
         onExclusionOperationChange(error.operation);
       }
       showMessage("duplicate-cleanup", error instanceof Error ? error.message : "Unable to clean duplicates.");
+      throw error;
     } finally {
       setBusy(false);
     }
   }
 
-  async function resolveNoIssue(group: AdminDuplicateGroup, confirmationText: string) {
+  async function resolveNoIssue(group: AdminDuplicateGroup, confirmationText: string): Promise<ActionCompletion> {
     setBusy(true);
     clearMessage();
     setResult(null);
@@ -739,13 +743,15 @@ export default function MatchLogApplyPanel({
         source: "next_match_log_duplicate_no_issue_panel"
       });
       setResult(payload);
-      showMessage("duplicate-resolution", resultSummary(payload) || "Duplicate decision saved.", payload.ok ? "success" : "error", group.dup_key);
-      if (payload.ok) {
-        setNoIssueReason("");
-        onMutationComplete();
-      }
+      const summary = resultSummary(payload) || "Duplicate decision saved.";
+      showMessage("duplicate-resolution", summary, payload.ok ? "success" : "error", group.dup_key);
+      if (!payload.ok) throw new Error(summary);
+      setNoIssueReason("");
+      onMutationComplete();
+      return actionSuccess("Duplicate decision saved", summary);
     } catch (error) {
       showMessage("duplicate-resolution", error instanceof Error ? error.message : "Unable to mark duplicate group as no issue.", "error", group.dup_key);
+      throw error;
     } finally {
       setBusy(false);
     }

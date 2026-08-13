@@ -28,12 +28,12 @@ def test_basics_supports_sponsor_reordering_and_draft_publication_clarity() -> N
 def test_publish_result_stays_visible_in_the_confirmation_dialog() -> None:
     panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
 
-    assert 'import type { ConfirmActionSuccess } from "@/components/ConfirmAction";' in panel
-    assert "Promise<ConfirmActionSuccess | void>" in panel
-    assert 'title: "Tournament published"' in panel
+    assert 'import { actionSuccess, type ActionSuccess } from "@/components/interaction";' in panel
+    assert "return actionSuccess(" in panel
+    assert 'actionSuccess(\n        "Tournament published"' in panel
     assert "The reviewed tournament setup is now published." in panel
     assert "Registration status was left unchanged." in panel
-    assert 'closeLabel: "Done"' in panel
+    assert '"Done"' in panel
     assert "throw publishError" in panel
 
 

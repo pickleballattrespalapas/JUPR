@@ -8,11 +8,13 @@ from pydantic import BaseModel, Field
 from jupr_app.domain.admin.roles import PERMISSION_MANAGE_PLAYERS, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_player_editor_service import (
+    PlayerEditorConflictError,
     build_admin_player_editor_status,
     create_admin_player_editor_player,
     get_admin_player_editor_detail,
     is_admin_player_editor_enabled,
     list_admin_player_editor_players,
+    reconcile_admin_player_editor_operation,
     update_admin_player_editor_player,
 )
 from jupr_app.services.admin_player_league_rating_service import update_admin_player_editor_league_rating
@@ -30,12 +32,21 @@ from jupr_app.services.admin_player_social_identity_service import (
     list_admin_player_social_identities,
     update_admin_player_social_identity,
 )
+from jupr_app.services.admin_guarded_write_service import (
+    GuardedWriteRecoveryRequired,
+    get_guarded_operation,
+)
 from services.api.auth import authenticate_bearer, auth_header
 
 
 class AdminPlayerEditorCreateRequest(BaseModel):
     name: str
     starting_jupr: float = Field(default=3.5, ge=1.0, le=7.0)
+    idempotency_key: str = Field(
+        min_length=8,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
     source: str = "next_player_editor"
 
 
@@ -44,6 +55,12 @@ class AdminPlayerEditorUpdateRequest(BaseModel):
     rating_jupr: float | None = Field(default=None, ge=1.0, le=7.0)
     starting_jupr: float | None = Field(default=None, ge=1.0, le=7.0)
     active: bool | None = None
+    expected_state_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(
+        min_length=8,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
     source: str = "next_player_editor"
 
 
@@ -51,8 +68,19 @@ class AdminPlayerEditorLeagueRatingUpdateRequest(BaseModel):
     rating_jupr: float | None = Field(default=None, ge=1.0, le=7.0)
     starting_jupr: float | None = Field(default=None, ge=1.0, le=7.0)
     is_active: bool | None = None
+    expected_state_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(
+        min_length=8,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
     confirmation_text: str = ""
     source: str = "next_player_editor_league_rating"
+
+
+class AdminPlayerEditorOperationReconcileRequest(BaseModel):
+    confirmation_text: str = Field(default="", max_length=80)
+    source: str = "next_player_editor_operation_reconcile"
 
 
 class AdminPlayerSocialIdentityUpdateRequest(BaseModel):
@@ -110,6 +138,28 @@ def _resolve_player_editor_role_or_403(*, supabase: Any, club_id: str, authoriza
 
 
 def _handle_common(exc: Exception) -> None:
+    if isinstance(exc, GuardedWriteRecoveryRequired):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RECOVERY_REQUIRED",
+                "kind": "uncertain",
+                "message": str(exc),
+                "operation_key": exc.operation_key,
+                "recovery_required": True,
+            },
+        ) from exc
+    if isinstance(exc, PlayerEditorConflictError):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "STALE_VERSION",
+                "kind": "conflict",
+                "message": str(exc),
+                "operation_key": exc.operation_key,
+                "recovery_required": False,
+            },
+        ) from exc
     if isinstance(exc, PermissionError): raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, PlayerMergeConflictError): raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, ValueError): raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -201,21 +251,38 @@ def install_admin_player_editor_routes(app, *, get_supabase_client) -> None:
     def post_admin_player_editor_player(club_id: str, payload: AdminPlayerEditorCreateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_player_editor_enabled(): raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        try: return create_admin_player_editor_player(supabase, club_id=str(club_id), name=payload.name, starting_jupr=payload.starting_jupr, actor_email=actor_email, actor_role=actor_role, source=payload.source)
+        try: return create_admin_player_editor_player(supabase, club_id=str(club_id), name=payload.name, starting_jupr=payload.starting_jupr, actor_email=actor_email, actor_role=actor_role, idempotency_key=payload.idempotency_key, source=payload.source)
         except Exception as exc: _handle_common(exc)
 
     @app.patch("/admin/clubs/{club_id}/players/editor/players/{player_id}")
     def patch_admin_player_editor_player(club_id: str, player_id: int, payload: AdminPlayerEditorUpdateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_player_editor_enabled(): raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        patch = _dump_model(payload); source = str(patch.pop("source", payload.source))
-        try: return update_admin_player_editor_player(supabase, club_id=str(club_id), player_id=int(player_id), patch=patch, actor_email=actor_email, actor_role=actor_role, source=source)
+        patch = _dump_model(payload); source = str(patch.pop("source", payload.source)); expected_state_fingerprint = str(patch.pop("expected_state_fingerprint", payload.expected_state_fingerprint)); idempotency_key = str(patch.pop("idempotency_key", payload.idempotency_key))
+        try: return update_admin_player_editor_player(supabase, club_id=str(club_id), player_id=int(player_id), patch=patch, actor_email=actor_email, actor_role=actor_role, expected_state_fingerprint=expected_state_fingerprint, idempotency_key=idempotency_key, source=source)
         except Exception as exc: _handle_common(exc)
 
     @app.patch("/admin/clubs/{club_id}/players/editor/players/{player_id}/league-ratings/{league_rating_id}")
     def patch_admin_player_editor_league_rating(club_id: str, player_id: int, league_rating_id: int, payload: AdminPlayerEditorLeagueRatingUpdateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_player_editor_enabled(): raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        patch = _dump_model(payload); source = str(patch.pop("source", payload.source)); confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
-        try: return update_admin_player_editor_league_rating(supabase, club_id=str(club_id), player_id=int(player_id), league_rating_id=int(league_rating_id), patch=patch, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source)
+        patch = _dump_model(payload); source = str(patch.pop("source", payload.source)); confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text)); expected_state_fingerprint = str(patch.pop("expected_state_fingerprint", payload.expected_state_fingerprint)); idempotency_key = str(patch.pop("idempotency_key", payload.idempotency_key))
+        try: return update_admin_player_editor_league_rating(supabase, club_id=str(club_id), player_id=int(player_id), league_rating_id=int(league_rating_id), patch=patch, actor_email=actor_email, actor_role=actor_role, expected_state_fingerprint=expected_state_fingerprint, idempotency_key=idempotency_key, confirmation_text=confirmation_text, source=source)
+        except Exception as exc: _handle_common(exc)
+
+    @app.get("/admin/clubs/{club_id}/players/editor/operations/{operation_key}")
+    def get_admin_player_editor_operation(club_id: str, operation_key: str, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_player_editor_enabled(): raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
+        supabase = get_supabase_client(); _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_player_editor_operation")
+        workflows = ("player_editor_create", "player_editor_update", "player_editor_league_rating_update")
+        operation = next((row for workflow in workflows if (row := get_guarded_operation(supabase, club_id=str(club_id), workflow=workflow, operation_key=str(operation_key))) is not None), None)
+        if operation is None: raise HTTPException(status_code=404, detail="Player Editor operation was not found.")
+        result_json = operation.get("result_json") or {}; error_text = operation.get("error_text")
+        return {"ok": True, "operation_key": operation.get("operation_key"), "workflow": operation.get("workflow"), "status": operation.get("status"), "result_json": result_json, "error_text": error_text, "result": result_json, "error": error_text, "recovery_required": operation.get("status") in {"intent_recorded", "recovery_required"}, "updated_at": operation.get("updated_at")}
+
+    @app.post("/admin/clubs/{club_id}/players/editor/operations/{operation_key}/reconcile")
+    def post_admin_player_editor_operation_reconcile(club_id: str, operation_key: str, payload: AdminPlayerEditorOperationReconcileRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_player_editor_enabled(): raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
+        supabase = get_supabase_client(); actor_email, actor_role = _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try: return reconcile_admin_player_editor_operation(supabase, club_id=str(club_id), operation_key=str(operation_key), confirmation_text=payload.confirmation_text, actor_email=actor_email, actor_role=actor_role, source=payload.source)
         except Exception as exc: _handle_common(exc)

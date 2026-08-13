@@ -2,6 +2,8 @@
 
 import { useMemo, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, actionUncertain } from "@/components/interaction";
+import type { ActionCompletion } from "@/components/interaction";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import { deriveLiveLadderOperationKey, idempotencyKeyFor, rotateIdempotencyKey } from "@/lib/liveLadderOperations";
 
@@ -72,8 +74,8 @@ export default function MoneyballPanel({ apiBase, clubId, status }: Props) {
   }
 
   async function submitMoneyball(confirmationText: string) {
-    if (!writesEnabled) { setMessage("Next Moneyball writes are guarded off. Use the Streamlit fallback."); return; }
-    if (!settlement) { setMessage("Review the Python settlement before official publish."); return; }
+    if (!writesEnabled) { const text = "Next Moneyball writes are guarded off. Use the Streamlit fallback."; setMessage(text); throw new Error(text); }
+    if (!settlement) { const text = "Review the Python settlement before official publish."; setMessage(text); throw new Error(text); }
     const scope = `publish:${weekTag}`;
     const idempotencyKey = idempotencyKeyFor(operationKeys.current, scope);
     let operationKey = "";
@@ -83,15 +85,42 @@ export default function MoneyballPanel({ apiBase, clubId, status }: Props) {
       setLastOperationKey(operationKey);
       const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/moneyball/submit`, { method: "POST", body: JSON.stringify({ player_ids: selectedIds.map(Number), scores: scoreRows, rating_context: ratingContext, league_name: leagueName, week_tag: weekTag, match_type: matchType, win_rate: Number(winRate), point_rate: Number(pointRate), settlement_fingerprint: settlement.settlement_fingerprint, expected_version: settlement.settlement_fingerprint, idempotency_key: idempotencyKey, confirmation_text: confirmationText }) });
       rotateIdempotencyKey(operationKeys.current, scope); setLastResult(payload);
-      setMessage(`${payload.idempotent_replay ? "Recovered" : "Published"} ${payload.submitted_count || scoreRows.length} Moneyball match(es).`);
-    } catch (error) { setMessage(`${error instanceof Error ? error.message : "Moneyball publish outcome is uncertain."} Do not blindly resubmit; reconcile operation ${operationKey || "shown below"}.`); } finally { setBusy(false); }
+      const publishedCount = payload.submitted_count || scoreRows.length;
+      setMessage(`${payload.idempotent_replay ? "Recovered" : "Published"} ${publishedCount} Moneyball match(es).`);
+      return actionSuccess("Moneyball matches published", `${publishedCount} reviewed Moneyball match${publishedCount === 1 ? " was" : "es were"} published.`);
+    } catch (error) {
+      const recoveryKey = operationKey || idempotencyKey;
+      setMessage(`${error instanceof Error ? error.message : "Moneyball publish outcome is uncertain."} Do not blindly resubmit; reconcile operation ${recoveryKey}.`);
+      return actionUncertain(
+        "Moneyball publish needs verification",
+        `The request ended without a confirmed result. Reconcile operation ${recoveryKey} before retrying.`,
+        recoveryKey,
+        "Reconcile operation",
+        () => reconcileOperation("RECONCILE MONEYBALL", recoveryKey)
+      );
+    } finally { setBusy(false); }
   }
 
-  async function reconcileOperation(confirmationText: string) {
-    if (!lastOperationKey) return;
+  async function reconcileOperation(confirmationText: string, explicitOperationKey = lastOperationKey): Promise<ActionCompletion> {
+    if (!explicitOperationKey) throw new Error("No Moneyball operation is available to reconcile.");
     setBusy(true); setMessage(null);
-    try { const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/moneyball/operations/${encodeURIComponent(lastOperationKey)}/reconcile`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText }) }); setLastResult(payload); setMessage(payload.ok ? "Recovered the durable Moneyball response; no match was republished." : "The outcome remains uncertain. Use Match Log and Replay History."); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "Unable to reconcile Moneyball operation."); } finally { setBusy(false); }
+    try {
+      const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/moneyball/operations/${encodeURIComponent(explicitOperationKey)}/reconcile`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText }) });
+      setLastResult(payload);
+      if (payload.ok) {
+        setMessage("Recovered the durable Moneyball response; no match was republished.");
+        return actionSuccess("Moneyball operation reconciled", "The durable response was recovered without republishing a match.");
+      }
+      setMessage("The outcome remains uncertain. Use Match Log and Replay History.");
+      return actionUncertain(
+        "Moneyball outcome remains uncertain",
+        "The durable operation still has no conclusive result. Review Match Log and Replay History before retrying.",
+        explicitOperationKey,
+        "Reconcile again",
+        () => reconcileOperation("RECONCILE MONEYBALL", explicitOperationKey)
+      );
+    }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Unable to reconcile Moneyball operation."); throw error; } finally { setBusy(false); }
   }
 
   if (!status?.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Moneyball is disabled</h2><p>{status?.warnings?.[0] || "Enable JUPR_ENABLE_NEXT_ADMIN_MONEYBALL on FastAPI."}</p></article>;

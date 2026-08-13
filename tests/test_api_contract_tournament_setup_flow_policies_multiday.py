@@ -81,14 +81,15 @@ def test_add_division_uses_dialog_instead_of_appending_hidden_row() -> None:
     dialog = read("app/admin/tournaments/setup/TournamentSetupDivisionDialog.tsx")
     division_card = read("app/admin/tournaments/setup/TournamentSetupDivisionCard.tsx")
     assert "TournamentSetupDivisionDialog" in panel
+    assert 'import { FormDialog' in dialog
+    assert '<FormDialog' in dialog
     assert 'onClick={() => setDivisionDialogKey(null)}' in panel
     assert 'mode={divisionDialogKey === null ? "add" : "edit"}' in panel
     assert 'onEdit={() => setDivisionDialogKey(row.key)}' in panel
-    assert 'role="dialog"' in dialog
     assert '? "Add division"' in dialog
     assert '`Edit ${cleanString(draft.division_name ?? draft.label) || "division"}`' in dialog
     assert 'dialogMode === "add" ? "Add division" : "Save division"' in dialog
-    assert 'onConfirm(draft)' in dialog
+    assert 'return onConfirm(draft)' in dialog
     assert 'setDivisionDialogKey(undefined)' in panel
     assert 'onClick={onEdit}' in division_card
     assert '>Edit<' not in division_card  # JSX includes line breaks around the label.

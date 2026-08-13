@@ -282,6 +282,7 @@ export type PublicRegistrationEditLinkRequestPayload = {
   registration_slug?: string | null;
   email: string;
   website?: string | null;
+  idempotency_key: string;
 };
 
 export type PublicRegistrationEditLinkRequestResponse = {

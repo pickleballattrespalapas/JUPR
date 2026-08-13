@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import type {
   AdminTournamentDetailResponse,
   AdminTournamentRegistration,
@@ -376,7 +377,7 @@ export default function TournamentRegistrantEditPanel({
   async function saveRegistration(confirmationText: string) {
     if (!registration?.updated_at) {
       setMessage("Reload this registration before saving.");
-      return;
+      throw new Error("Reload this registration before saving.");
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -413,10 +414,12 @@ export default function TournamentRegistrantEditPanel({
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Registration saved", `${registration.display_name}'s registration and eligibility information were saved.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadDetail(selectedSelectionId);
       if (actionRequest.isCurrent(generation))
         setMessage("Registration saved.");
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation))
         setMessage(
@@ -424,6 +427,7 @@ export default function TournamentRegistrantEditPanel({
             ? error.message
             : "Unable to save registration."
         );
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -432,7 +436,7 @@ export default function TournamentRegistrantEditPanel({
   async function addSelection(confirmationText: string) {
     if (!newEventOptionId) {
       setMessage("Choose a Division before adding an event entry.");
-      return;
+      throw new Error("Choose a Division before adding an event entry.");
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -454,11 +458,14 @@ export default function TournamentRegistrantEditPanel({
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Event entry added", "The selected division was added to this registration.");
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadDetail(response.selection?.id || "");
       if (actionRequest.isCurrent(generation)) setMessage("Event entry added.");
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to add event entry.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -467,7 +474,7 @@ export default function TournamentRegistrantEditPanel({
   async function removeSelection(confirmationText: string) {
     if (!selectedSelection?.updated_at) {
       setMessage("Reload this event entry before removing it.");
-      return;
+      throw new Error("Reload this event entry before removing it.");
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -484,11 +491,14 @@ export default function TournamentRegistrantEditPanel({
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Event entry removed", "The event entry was removed from this registration.");
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadDetail("");
       if (actionRequest.isCurrent(generation)) setMessage("Event entry removed.");
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to remove event entry.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -497,7 +507,7 @@ export default function TournamentRegistrantEditPanel({
   async function saveSelection(confirmationText: string) {
     if (!selectedSelection?.updated_at) {
       setMessage("Reload this event entry before saving.");
-      return;
+      throw new Error("Reload this event entry before saving.");
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -540,10 +550,12 @@ export default function TournamentRegistrantEditPanel({
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Event entry saved", "The division, eligibility, and partner-board details were saved.");
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadDetail(selectedSelection.id);
       if (actionRequest.isCurrent(generation))
         setMessage("Event entry saved.");
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation))
         setMessage(
@@ -551,6 +563,7 @@ export default function TournamentRegistrantEditPanel({
             ? error.message
             : "Unable to save event entry."
         );
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -559,7 +572,7 @@ export default function TournamentRegistrantEditPanel({
   async function savePartner(confirmationText: string) {
     if (!selectedSelection?.updated_at) {
       setMessage("Reload this event entry before changing its partner.");
-      return;
+      throw new Error("Reload this event entry before changing its partner.");
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -583,7 +596,9 @@ export default function TournamentRegistrantEditPanel({
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const partnerAssigned = Boolean(selectionDraft.partnerSelectionId);
+      const completion = actionSuccess(partnerAssigned ? "Event partner saved" : "Event partner removed", partnerAssigned ? "The selected compatible registration is now assigned as this event partner." : "The assigned event partner was removed and the unpaired mode was saved.");
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadDetail(selectedSelection.id);
       if (actionRequest.isCurrent(generation))
         setMessage(
@@ -591,6 +606,7 @@ export default function TournamentRegistrantEditPanel({
             ? "Event partner saved."
             : "Event partner removed."
         );
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation))
         setMessage(
@@ -598,6 +614,7 @@ export default function TournamentRegistrantEditPanel({
             ? error.message
             : "Unable to save event partner."
         );
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -650,7 +667,7 @@ export default function TournamentRegistrantEditPanel({
   async function saveExtras(confirmationText: string) {
     if (!extrasQuote) {
       setMessage("Review the updated extras total before saving.");
-      return;
+      throw new Error("Review the updated extras total before saving.");
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -676,15 +693,18 @@ export default function TournamentRegistrantEditPanel({
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Registrant extras saved", "The extras order was saved and its totals were recalculated from the reviewed quote.");
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadDetail(selectedSelectionId);
       if (actionRequest.isCurrent(generation))
         setMessage("Registrant extras saved and totals recalculated.");
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation))
         setMessage(
           error instanceof Error ? error.message : "Unable to save extras."
         );
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }

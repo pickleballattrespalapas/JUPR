@@ -17,9 +17,12 @@ def test_match_uploader_followups_are_present() -> None:
 
 def test_confirmation_can_show_completion_result() -> None:
     source = Path("apps/web/components/ConfirmAction.tsx").read_text(encoding="utf-8")
+    provider = Path("apps/web/components/interaction/InteractionProvider.tsx").read_text(encoding="utf-8")
     assert "ConfirmActionSuccess" in source
-    assert "setSuccess(completion)" in source
-    assert 'success.closeLabel || "OK"' in source
+    assert "openAction(" in source
+    assert 'completion?.status === "success"' in provider
+    assert 'completion.closeLabel ?? "OK"' in provider
+    assert "lifecycle.run" in provider
 
 
 def test_match_log_success_and_replay_history_are_visible() -> None:

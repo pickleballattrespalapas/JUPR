@@ -2,6 +2,7 @@
 
 import { useId } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import {
   AGE_MODES,
   COMPETITION_FORMATS,
@@ -126,7 +127,10 @@ export function TournamentSetupDivisionCard({
           confirmationText=""
           tone="danger"
           disabled={disabled}
-          onConfirm={onRemove}
+          onConfirm={async () => {
+            onRemove();
+            return actionSuccess("Division removed", "The division was removed from the local draft.");
+          }}
         />
       </div>
       <div className={styles.grid}>

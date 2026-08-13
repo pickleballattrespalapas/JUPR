@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import type {
   AdminTournamentOpsSnapshotResponse,
   AdminTournamentOpsTeam,
@@ -235,7 +236,7 @@ export default function TournamentOpsPanel({
   async function createDraw(confirmationText: string) {
     if (!selectedTournamentId) {
       setMessage("Select a tournament before creating a draw.");
-      return;
+      throw new Error("Select a tournament before creating a draw.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -247,14 +248,17 @@ export default function TournamentOpsPanel({
         method: "POST",
         body: JSON.stringify({ event_option_id: drawEventOptionId || null, registration_day_id: String(selectedEvent?.registration_day_id || "") || null, name: drawName, expected_state_fingerprint: reviewedState, confirmation_text: confirmationText, source: "next_tournament_ops_create_draw" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
       const nextDrawId = payload.draw?.id || "";
+      const completion = actionSuccess("Draw created", `The draft draw${payload.draw?.name ? ` ${payload.draw.name}` : ""} was created.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       setSelectedDrawId(nextDrawId);
       await loadOps(tournamentId, nextDrawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Draw created${payload.draw?.name ? `: ${payload.draw.name}` : ""}.${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to create draw.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -263,7 +267,7 @@ export default function TournamentOpsPanel({
   async function importRegistrations(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before importing registrations.");
-      return;
+      throw new Error("Select a tournament and draw before importing registrations.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -275,12 +279,16 @@ export default function TournamentOpsPanel({
         method: "POST",
         body: JSON.stringify({ import_mode: registrationImportMode, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_import_registrations" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const importedCount = payload.updated_count ?? payload.teams?.length ?? 0;
+      const completion = actionSuccess("Registration teams imported", `${importedCount} registration team${importedCount === 1 ? " was" : "s were"} imported.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Imported ${payload.updated_count ?? payload.teams?.length ?? 0} registration team(s) with ${payload.import_mode || registrationImportMode} mode.${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to import registrations.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -289,7 +297,7 @@ export default function TournamentOpsPanel({
   async function importBulkTeams(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before importing teams.");
-      return;
+      throw new Error("Select a tournament and draw before importing teams.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -301,12 +309,16 @@ export default function TournamentOpsPanel({
         method: "POST",
         body: JSON.stringify({ raw_text: bulkTeamText, import_mode: bulkTeamMode, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_import_bulk_teams" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const importedCount = payload.updated_count ?? payload.teams?.length ?? 0;
+      const completion = actionSuccess("Teams imported", `${importedCount} team${importedCount === 1 ? " was" : "s were"} imported from the reviewed file.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Imported ${payload.updated_count ?? payload.teams?.length ?? 0} bulk team(s) with ${payload.import_mode || bulkTeamMode} mode.${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to import bulk teams.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -315,18 +327,18 @@ export default function TournamentOpsPanel({
   async function saveTeams(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before saving teams.");
-      return;
+      throw new Error("Select a tournament and draw before saving teams.");
     }
     const teams = teamRows
       .filter((row) => row.player1_id.trim())
       .map((row, index) => ({ team_number: Number(row.team_number || index + 1), player1_id: Number(row.player1_id), player2_id: row.player2_id.trim() ? Number(row.player2_id) : null, seed: row.seed.trim() ? Number(row.seed) : null, source: "MANUAL", notes: row.notes }));
     if (!teams.length) {
       setMessage("Add at least one team with Player 1 before saving.");
-      return;
+      throw new Error("Add at least one team with Player 1 before saving.");
     }
     if (teams.some((team) => !Number.isFinite(team.team_number) || !Number.isFinite(team.player1_id) || (team.player2_id !== null && !Number.isFinite(team.player2_id)))) {
       setMessage("Team number and player IDs must be numeric. Use player selectors when available.");
-      return;
+      throw new Error("Team number and player IDs must be numeric. Use player selectors when available.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -338,12 +350,16 @@ export default function TournamentOpsPanel({
         method: "PUT",
         body: JSON.stringify({ teams, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_team_editor" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const savedCount = payload.updated_count ?? payload.teams?.length ?? teams.length;
+      const completion = actionSuccess("Teams saved", `${savedCount} team${savedCount === 1 ? " was" : "s were"} saved to the draw.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Saved ${payload.updated_count ?? payload.teams?.length ?? teams.length} team(s).${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save teams.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -352,7 +368,7 @@ export default function TournamentOpsPanel({
   async function generateGames(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before generating games.");
-      return;
+      throw new Error("Select a tournament and draw before generating games.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -364,12 +380,16 @@ export default function TournamentOpsPanel({
         method: "POST",
         body: JSON.stringify({ expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, confirmation_text: confirmationText, source: "next_tournament_ops_generate_round_robin" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const gameCount = payload.game_count ?? payload.games?.length ?? 0;
+      const completion = actionSuccess("Round-robin games generated", `${gameCount} round-robin game${gameCount === 1 ? " was" : "s were"} generated.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Generated ${payload.game_count ?? payload.games?.length ?? 0} round-robin game(s).${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to generate games.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -378,12 +398,12 @@ export default function TournamentOpsPanel({
   async function generatePlayoffs(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before generating playoffs.");
-      return;
+      throw new Error("Select a tournament and draw before generating playoffs.");
     }
     const advanceCount = Number(playoffAdvanceCount);
     if (!Number.isFinite(advanceCount)) {
       setMessage("Advance count must be numeric.");
-      return;
+      throw new Error("Advance count must be numeric.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -395,12 +415,16 @@ export default function TournamentOpsPanel({
         method: "POST",
         body: JSON.stringify({ advance_count: advanceCount, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, expected_source_game_versions: reviewedSourceGameVersions, confirmation_text: confirmationText, source: "next_tournament_ops_generate_playoffs" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const gameCount = payload.game_count ?? payload.games?.length ?? 0;
+      const completion = actionSuccess("Playoff games generated", `${gameCount} playoff game${gameCount === 1 ? " was" : "s were"} generated.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Generated ${payload.game_count ?? payload.games?.length ?? 0} playoff game(s).${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to generate playoffs.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -409,13 +433,13 @@ export default function TournamentOpsPanel({
   async function saveScore(confirmationText: string) {
     if (!selectedTournamentId || !scoreGameId) {
       setMessage("Select a game before saving a score.");
-      return;
+      throw new Error("Select a game before saving a score.");
     }
     const nextA = Number(scoreA);
     const nextB = Number(scoreB);
     if (!Number.isFinite(nextA) || !Number.isFinite(nextB)) {
       setMessage("Both scores must be numeric.");
-      return;
+      throw new Error("Both scores must be numeric.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -429,12 +453,16 @@ export default function TournamentOpsPanel({
         method: "PATCH",
         body: JSON.stringify({ score_a: nextA, score_b: nextB, expected_state_fingerprint: reviewedState, expected_game_updated_at: String(selectedGame?.updated_at || "") || null, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_score_game" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const savedGameId = String(payload.game?.id || gameId);
+      const completion = actionSuccess("Score saved", `The score for game ${savedGameId} was saved.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Saved score for game ${String(payload.game?.id || gameId)}.${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save score.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -443,7 +471,7 @@ export default function TournamentOpsPanel({
   async function generatePodium(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before generating a podium.");
-      return;
+      throw new Error("Select a tournament and draw before generating a podium.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -455,12 +483,16 @@ export default function TournamentOpsPanel({
         method: "POST",
         body: JSON.stringify({ expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, expected_source_game_versions: reviewedSourceGameVersions, confirmation_text: confirmationText, source: "next_tournament_ops_generate_podium" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const podiumCount = payload.podium?.length ?? 0;
+      const completion = actionSuccess("Podium generated", `${podiumCount} podium placement${podiumCount === 1 ? " was" : "s were"} generated.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Generated ${payload.podium?.length ?? 0} ${payload.podium_source || "draw"} podium placement(s).${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to generate podium.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -469,7 +501,7 @@ export default function TournamentOpsPanel({
   async function awardPodium(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before awarding podium trophies.");
-      return;
+      throw new Error("Select a tournament and draw before awarding podium trophies.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -481,12 +513,16 @@ export default function TournamentOpsPanel({
         method: "POST",
         body: JSON.stringify({ expected_state_fingerprint: reviewedState, confirmation_text: confirmationText, source: "next_tournament_ops_award_podium" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const awardedCount = payload.awarded_count ?? 0;
+      const completion = actionSuccess("Podium awards complete", `${awardedCount} new badge${awardedCount === 1 ? " was" : "s were"} awarded from the verified podium.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Awarded ${payload.awarded_count ?? 0} new badge(s) from ${payload.candidate_count ?? 0} podium candidate(s).${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to award podium trophies.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -498,12 +534,12 @@ export default function TournamentOpsPanel({
   ) {
     if (!selectedTournamentId || (!selectedDrawId && !ratingChildDrawId)) {
       setMessage("Select a tournament and draw before publishing official matches.");
-      return;
+      throw new Error("Select a tournament and draw before publishing official matches.");
     }
     const bonusElo = ratingChildDrawId ? 0 : Number(publishBonusElo || "0");
     if (!Number.isFinite(bonusElo) || bonusElo < 0) {
       setMessage("Playoff winner bonus must be a non-negative number.");
-      return;
+      throw new Error("Playoff winner bonus must be a non-negative number.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -515,16 +551,20 @@ export default function TournamentOpsPanel({
         method: "POST",
         body: JSON.stringify({ confirmation_text: confirmationText, playoff_winner_bonus_elo: bonusElo, expected_state_fingerprint: reviewedState, source: ratingChildDrawId ? "next_team_tournament_child_publish" : "next_tournament_ops_publish_matches" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const matchCount = payload.match_count ?? 0;
+      const completion = actionSuccess("Official matches published", `${matchCount} official rating match${matchCount === 1 ? " was" : "es were"} published.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, ratingChildDrawId ? "" : drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(
         ratingChildDrawId
           ? `Published ${payload.match_count ?? 0} four-player child game as an official rating match.${operationSuffix(payload)}`
           : `Published ${payload.match_count ?? 0} official rating match(es). Bonus applied to ${payload.bonus_match_count ?? 0} medal-playoff match(es) at ${payload.playoff_winner_bonus_elo ?? bonusElo} Elo per winning player.${operationSuffix(payload)}`
       );
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to publish official tournament matches.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -571,7 +611,7 @@ export default function TournamentOpsPanel({
   async function commitResultsImport(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId || !resultsPreview) {
       setMessage("Create and review a results preview before committing.");
-      return;
+      throw new Error("Create and review a results preview before committing.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -595,13 +635,17 @@ export default function TournamentOpsPanel({
           source: "next_tournament_ops_results_import"
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const gameCount = payload.game_count ?? 0;
+      const completion = actionSuccess("Tournament results imported", `${gameCount} reviewed result${gameCount === 1 ? " was" : "s were"} committed to the draw.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setResultsReviewDirty(true);
       setMessage(`Imported ${payload.game_count ?? 0} reviewed result(s), ${payload.team_count ?? 0} team(s), and ${payload.podium_count ?? 0} podium row(s).${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to commit tournament results.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }

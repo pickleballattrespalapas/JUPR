@@ -6,7 +6,6 @@ from typing import Any
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.events import upsert_or_get_active_event
-from jupr_app.domain.player_ops import safe_add_player
 from jupr_app.domain.schedule import (
     EXPECTED_DOUBLES_GAMES_BY_FORMAT,
     SCHEDULE_MODE_FULL,
@@ -15,6 +14,14 @@ from jupr_app.domain.schedule import (
 )
 from jupr_app.services.direct_match_entry_service import (
     submit_atomic_direct_matches,
+)
+from jupr_app.services.admin_guarded_write_service import (
+    GuardedWriteRecoveryRequired,
+    begin_guarded_operation,
+    canonical_fingerprint,
+    get_guarded_operation,
+    operation_result,
+    update_guarded_operation,
 )
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
@@ -62,6 +69,57 @@ def _clean_text(value: Any, *, limit: int = 200) -> str:
 
 def _normalize_name(value: Any) -> str:
     return " ".join(str(value or "").replace("\u00A0", " ").split()).strip()
+
+
+def _reviewed_name_key(value: Any) -> str:
+    """Canonical browser-compatible membership key for reviewed batches."""
+    return _normalize_name(value).lower()
+
+
+def _normalized_new_player_batch(players: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    requested: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    for row in players or []:
+        if not isinstance(row, dict):
+            continue
+        name = _normalize_name(row.get("name"))
+        if not name:
+            raise ValueError("New player name is required.")
+        # Keep reviewed-batch identity aligned with browser
+        # ``toLocaleLowerCase("en-US")``. Python ``casefold`` is broader (for
+        # example Straße == STRASSE) and would change list membership/hash.
+        name_key = _reviewed_name_key(name)
+        if name_key in seen_names:
+            continue
+        requested.append(
+            {
+                "name": name,
+                "starting_jupr": _coerce_starting_jupr(row.get("starting_jupr")),
+            }
+        )
+        seen_names.add(name_key)
+    if not requested:
+        raise ValueError("Provide at least one new player to create.")
+    return requested
+
+
+def match_uploader_player_batch_fingerprint(players: list[dict[str, Any]]) -> str:
+    """Return the cross-runtime reviewed fingerprint for a normalized player batch.
+
+    Ratings use four fixed decimal places so Python and browser JSON encoders do
+    not disagree about integer-valued floats (for example, 3.0 versus 3).
+    """
+    requested = _normalized_new_player_batch(players)
+    review_payload = {
+        "players": [
+            {
+                "name": item["name"],
+                "starting_jupr": f"{float(item['starting_jupr']):.4f}",
+            }
+            for item in requested
+        ]
+    }
+    return canonical_fingerprint(review_payload)
 
 
 def _safe_int(value: Any) -> int | None:
@@ -128,6 +186,272 @@ def _fetch_all_players(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
             }
         )
     return sorted(players, key=lambda row: str(row.get("name") or "").lower())
+
+
+def _fetch_all_players_for_guarded_write(
+    supabase: Any,
+    *,
+    club_id: str,
+) -> list[dict[str, Any]]:
+    """Read players without converting transport/readback errors into an empty club."""
+    rows = _safe_rows(
+        supabase.table("players")
+        .select("id,name,rating,starting_rating,wins,losses,matches_played,active,club_id")
+        .eq("club_id", str(club_id))
+        .execute()
+    )
+    players: list[dict[str, Any]] = []
+    for row in rows:
+        pid = _safe_int(row.get("id"))
+        name = _normalize_name(row.get("name"))
+        if pid is None or not name:
+            continue
+        players.append(
+            {
+                "id": int(pid),
+                "club_id": str(row.get("club_id") or club_id),
+                "name": name,
+                "rating": row.get("rating"),
+                "starting_rating": row.get("starting_rating"),
+                "wins": row.get("wins"),
+                "losses": row.get("losses"),
+                "matches_played": row.get("matches_played"),
+                "is_active": row.get("active", row.get("is_active", True)),
+            }
+        )
+    return sorted(players, key=lambda row: str(row.get("name") or "").casefold())
+
+
+def get_admin_match_uploader_player_operation(
+    supabase: Any,
+    *,
+    club_id: str,
+    operation_key: str,
+) -> dict[str, Any] | None:
+    return get_guarded_operation(
+        supabase,
+        club_id=str(club_id),
+        workflow="match_uploader_player_batch",
+        operation_key=str(operation_key),
+    )
+
+
+def _player_batch_reconcile_evidence(
+    operation: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    before_json = operation.get("before_json") or {}
+    result_json = operation.get("result_json") or {}
+    reviewed = before_json.get("reviewed_players") if isinstance(before_json, dict) else None
+    preflight = result_json.get("preflight") if isinstance(result_json, dict) else None
+    if not isinstance(preflight, dict) and isinstance(before_json, dict):
+        preflight = before_json.get("preflight")
+    if not isinstance(reviewed, list) or not reviewed or not isinstance(preflight, dict):
+        raise ValueError(
+            "This player-batch operation predates proof-based reconciliation. Inspect Player Editor manually."
+        )
+    return _normalized_new_player_batch(reviewed), dict(preflight)
+
+
+def reconcile_admin_match_uploader_player_operation(
+    supabase: Any,
+    *,
+    club_id: str,
+    operation_key: str,
+    confirmation_text: str,
+    actor_email: str,
+    actor_role: str,
+    source: str = "next_match_uploader_player_reconcile",
+) -> dict[str, Any]:
+    if not is_admin_match_uploader_enabled():
+        raise PermissionError("Next Match Uploader is disabled.")
+    if _clean_text(confirmation_text, limit=80).upper() != "RECONCILE PLAYER BATCH":
+        raise ValueError("Type RECONCILE PLAYER BATCH to reconcile this exact operation.")
+    operation = get_admin_match_uploader_player_operation(
+        supabase,
+        club_id=str(club_id),
+        operation_key=str(operation_key),
+    )
+    if operation is None:
+        raise ValueError("Player batch operation was not found.")
+    status = str(operation.get("status") or "")
+    if status == "completed":
+        return operation_result(operation)
+    if status not in {"intent_recorded", "recovery_required"}:
+        raise ValueError(f"Player batch operation is {status or 'unknown'} and cannot be reconciled.")
+
+    requested, preflight = _player_batch_reconcile_evidence(operation)
+    to_create = preflight.get("to_create")
+    preexisting = preflight.get("preexisting")
+    if not isinstance(to_create, list) or not isinstance(preexisting, list):
+        raise ValueError("Player batch preflight evidence is incomplete.")
+    to_create_by_key = {
+        _reviewed_name_key(item.get("name")): item
+        for item in to_create
+        if isinstance(item, dict)
+    }
+    preexisting_by_key = {
+        _reviewed_name_key(item.get("name")): item
+        for item in preexisting
+        if isinstance(item, dict)
+    }
+    current_players = _fetch_all_players_for_guarded_write(
+        supabase,
+        club_id=str(club_id),
+    )
+    current_by_key: dict[str, list[dict[str, Any]]] = {}
+    for player in current_players:
+        current_by_key.setdefault(_reviewed_name_key(player.get("name")), []).append(player)
+
+    proven: list[dict[str, Any]] = []
+    absent_created: list[str] = []
+    ambiguous: list[str] = []
+    for item in requested:
+        key = _reviewed_name_key(item.get("name"))
+        candidates = current_by_key.get(key, [])
+        if len(candidates) != 1:
+            if not candidates and key in to_create_by_key:
+                absent_created.append(str(item.get("name") or ""))
+            else:
+                ambiguous.append(str(item.get("name") or ""))
+            continue
+        player = candidates[0]
+        if key in preexisting_by_key:
+            expected_id = _safe_int(preexisting_by_key[key].get("id"))
+            if expected_id is None or _safe_int(player.get("id")) != expected_id:
+                ambiguous.append(str(item.get("name") or ""))
+                continue
+        elif key in to_create_by_key:
+            expected_elo = float(item["starting_jupr"]) * 400.0
+            if (
+                _safe_int(player.get("wins")) != 0
+                or _safe_int(player.get("losses")) != 0
+                or _safe_int(player.get("matches_played")) != 0
+                or abs(float(player.get("rating") or 0) - expected_elo) > 1e-9
+                or abs(float(player.get("starting_rating") or 0) - expected_elo) > 1e-9
+                or player.get("is_active") is False
+            ):
+                ambiguous.append(str(item.get("name") or ""))
+                continue
+        else:
+            ambiguous.append(str(item.get("name") or ""))
+            continue
+        proven.append(player)
+
+    if (
+        absent_created
+        and not ambiguous
+        and len(absent_created) == len(to_create_by_key)
+        and len(proven) == len(preexisting_by_key)
+    ):
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=str(operation_key),
+            status="failed",
+            result_json={
+                "reconciled": True,
+                "proof": "expected_created_players_absent",
+                "absent_players": absent_created,
+            },
+            error_text="Authoritative readback proves the expected created player rows are absent.",
+        )
+        return {
+            "ok": False,
+            "mode": "match_uploader_player_batch_reconciled_failed",
+            "operation_key": str(operation_key),
+            "status": "failed",
+            "absent_players": absent_created,
+            "recovery_required": False,
+        }
+    if ambiguous or len(proven) != len(requested):
+        raise GuardedWriteRecoveryRequired(
+            str(operation_key),
+            "Current player state does not exactly prove this batch outcome. Keep the operation blocked and inspect Player Editor.",
+        )
+
+    audit_write = write_admin_activity_log(
+        supabase,
+        build_activity_payload(
+            club_id=str(club_id),
+            actor_email=str(actor_email or ""),
+            actor_role=str(actor_role or ""),
+            action_type="reconcile_match_uploader_player_batch",
+            entity_type="players",
+            entity_id="batch",
+            before_json=operation.get("before_json"),
+            after_json={
+                "source_client": "fastapi/nextjs",
+                "source_page": source,
+                "operation_key": str(operation_key),
+                "proof": "authoritative_player_readback",
+                "players": [{"id": row.get("id"), "name": row.get("name")} for row in proven],
+            },
+            source_page=source,
+            flagged_for_review=True,
+        ),
+    )
+    if not audit_write.ok:
+        _mark_player_batch_recovery(
+            supabase,
+            operation=operation,
+            operation_key=str(operation_key),
+            result_json={**(operation.get("result_json") or {}), "reconcile_audit_failed": True},
+            error_text="Authoritative player proof succeeded, but reconciliation audit did not persist.",
+        )
+        raise GuardedWriteRecoveryRequired(
+            str(operation_key),
+            "Player proof succeeded, but the reconciliation audit is unavailable. Do not retry with a new key.",
+        )
+    calculated_fingerprint = match_uploader_player_batch_fingerprint(requested)
+    result = {
+        "ok": True,
+        "mode": "match_uploader_new_players",
+        "requested_count": len(requested),
+        "accepted_count": len(proven),
+        "created_count": len(to_create_by_key),
+        "unchanged_count": len(preexisting_by_key),
+        "reviewed_fingerprint": calculated_fingerprint,
+        "operation_key": str(operation_key),
+        "player_insert_atomic": True,
+        "idempotent_replay": True,
+        "reconciled": True,
+        "players": proven,
+        "recovery": {
+            "player_editor": "/admin/players",
+            "operator_rule": "This operation was finalized from authoritative player readback and reconciliation audit.",
+        },
+        "warnings": [],
+    }
+    update_guarded_operation(
+        supabase,
+        operation_id=operation.get("id"),
+        operation_key=str(operation_key),
+        status="completed",
+        after_json={"players": proven, "reconciled": True},
+        result_json=result,
+    )
+    return result
+
+
+def _mark_player_batch_recovery(
+    supabase: Any,
+    *,
+    operation: dict[str, Any],
+    operation_key: str,
+    result_json: Any = None,
+    error_text: str,
+) -> None:
+    try:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=str(operation_key),
+            status="recovery_required",
+            result_json=result_json,
+            error_text=error_text,
+        )
+    except Exception:
+        pass
 
 
 def _latest_match_id(supabase: Any, *, club_id: str) -> Any:
@@ -514,6 +838,8 @@ def _coerce_starting_jupr(value: Any) -> float:
         raise ValueError("Starting JUPR must be a number.") from exc
     if rating < 1.0 or rating > 7.0:
         raise ValueError("Starting JUPR must be between 1.0 and 7.0.")
+    if abs(rating - round(rating, 4)) > 1e-9:
+        raise ValueError("Starting JUPR may use at most four decimal places.")
     return rating
 
 
@@ -524,41 +850,190 @@ def create_admin_match_uploader_players(
     players: list[dict[str, Any]],
     actor_email: str,
     actor_role: str,
+    reviewed_fingerprint: str,
+    idempotency_key: str,
+    confirmation_text: str,
     source: str = "next_match_uploader_new_players",
 ) -> dict[str, Any]:
     if not is_admin_match_uploader_enabled():
         raise PermissionError("Next Match Uploader is disabled.")
-    requested: list[dict[str, Any]] = []
-    seen_names: set[str] = set()
-    for row in players or []:
-        if not isinstance(row, dict):
-            continue
-        name = _normalize_name(row.get("name"))
-        if not name:
-            raise ValueError("New player name is required.")
-        if name in seen_names:
-            continue
-        requested.append({"name": name, "starting_jupr": _coerce_starting_jupr(row.get("starting_jupr"))})
-        seen_names.add(name)
-    if not requested:
-        raise ValueError("Provide at least one new player to create.")
+    requested = _normalized_new_player_batch(players)
 
-    errors: list[str] = []
-    for item in requested:
-        ok, err = safe_add_player(
-            supabase=supabase,
+    if _clean_text(confirmation_text, limit=80).upper() != "CREATE PLAYERS":
+        raise ValueError("Type CREATE PLAYERS to create the reviewed player batch.")
+    request_payload = {
+        "players": [
+            {
+                "name": item["name"],
+                "starting_jupr": f"{float(item['starting_jupr']):.4f}",
+            }
+            for item in requested
+        ]
+    }
+    calculated_fingerprint = canonical_fingerprint(request_payload)
+    if str(reviewed_fingerprint or "").strip().lower() != calculated_fingerprint:
+        raise ValueError("The player batch changed after review. Review the list again before creating players.")
+
+    try:
+        existing_players = _fetch_all_players_for_guarded_write(
+            supabase,
             club_id=str(club_id),
-            name=item["name"],
-            rating_jupr=float(item["starting_jupr"]),
         )
-        if not ok:
-            errors.append(f"{item['name']}: {err}")
-    if errors:
-        raise ValueError("; ".join(errors))
+    except Exception as exc:
+        raise RuntimeError("The player batch was not started because current players could not be loaded.") from exc
+    existing_by_name = {
+        _reviewed_name_key(player.get("name")): player
+        for player in existing_players
+    }
+    to_create = [
+        item for item in requested
+        if _reviewed_name_key(item["name"]) not in existing_by_name
+    ]
+    preflight = {
+        "reviewed_fingerprint": calculated_fingerprint,
+        "preexisting": [
+            {"id": player.get("id"), "name": player.get("name")}
+            for key, player in existing_by_name.items()
+            if key in {_reviewed_name_key(item["name"]) for item in requested}
+        ],
+        "to_create": to_create,
+    }
 
-    refreshed_players = _fetch_all_players(supabase, club_id=str(club_id))
-    requested_names = {_normalize_name(item["name"]) for item in requested}
-    matching_players = [player for player in refreshed_players if _normalize_name(player.get("name")) in requested_names]
+    operation, idempotent = begin_guarded_operation(
+        supabase,
+        club_id=str(club_id),
+        workflow="match_uploader_player_batch",
+        action="create_match_uploader_players",
+        operation_key=str(idempotency_key),
+        request_payload={
+            **request_payload,
+            "reviewed_fingerprint": calculated_fingerprint,
+            "confirmation_text": "CREATE PLAYERS",
+        },
+        actor_email=actor_email,
+        actor_role=actor_role,
+        source=source,
+        before_json={
+            "reviewed_player_names": [item["name"] for item in requested],
+            "reviewed_players": requested,
+            "preflight": preflight,
+        },
+    )
+    if idempotent:
+        return operation_result(operation)
+
+    update_guarded_operation(
+        supabase,
+        operation_id=operation.get("id"),
+        operation_key=str(idempotency_key),
+        status="intent_recorded",
+        result_json={"phase": "preflight", "preflight": preflight},
+    )
+
+    if to_create:
+        insert_payloads = [
+            {
+                "club_id": str(club_id),
+                "name": item["name"],
+                "rating": float(item["starting_jupr"]) * 400.0,
+                "starting_rating": float(item["starting_jupr"]) * 400.0,
+                "wins": 0,
+                "losses": 0,
+                "matches_played": 0,
+                "active": True,
+                "last_game_at": None,
+                "inactive_at": None,
+            }
+            for item in to_create
+        ]
+        try:
+            # PostgREST sends this as one multi-row INSERT statement. PostgreSQL
+            # rolls the complete statement back when any row fails.
+            inserted = _safe_rows(supabase.table("players").insert(insert_payloads).execute())
+        except Exception as exc:
+            readback: list[dict[str, Any]] | None = None
+            try:
+                current_players = _fetch_all_players_for_guarded_write(
+                    supabase,
+                    club_id=str(club_id),
+                )
+                requested_names = {
+                    _reviewed_name_key(item["name"])
+                    for item in requested
+                }
+                readback = [
+                    player
+                    for player in current_players
+                    if _reviewed_name_key(player.get("name")) in requested_names
+                ]
+            except Exception:
+                readback = None
+            _mark_player_batch_recovery(
+                supabase,
+                operation=operation,
+                operation_key=str(idempotency_key),
+                result_json={
+                    "preflight": preflight,
+                    "readback_verified": readback is not None,
+                    "matched_count": None if readback is None else len(readback),
+                    "players": readback or [],
+                },
+                error_text=(
+                    "Bulk player insert returned an ambiguous transport result; "
+                    "the operation must be inspected before retrying."
+                ),
+            )
+            raise GuardedWriteRecoveryRequired(
+                str(idempotency_key),
+                "The player batch may have committed. Inspect this exact operation before retrying; do not use a new key.",
+            ) from exc
+        if len(inserted) != len(insert_payloads):
+            _mark_player_batch_recovery(
+                supabase,
+                operation=operation,
+                operation_key=str(idempotency_key),
+                result_json={"preflight": preflight, "inserted_count": len(inserted)},
+                error_text="Bulk player insert readback did not match the reviewed batch.",
+            )
+            raise GuardedWriteRecoveryRequired(
+                str(idempotency_key),
+                "The player batch outcome could not be verified. Inspect the Player Editor before retrying.",
+            )
+
+    try:
+        refreshed_players = _fetch_all_players_for_guarded_write(
+            supabase,
+            club_id=str(club_id),
+        )
+    except Exception as exc:
+        _mark_player_batch_recovery(
+            supabase,
+            operation=operation,
+            operation_key=str(idempotency_key),
+            result_json={"preflight": preflight},
+            error_text="Post-insert player readback could not be completed.",
+        )
+        raise GuardedWriteRecoveryRequired(
+            str(idempotency_key),
+            "The player batch outcome could not be read back. Inspect this exact operation before retrying.",
+        ) from exc
+    requested_names = {_reviewed_name_key(item["name"]) for item in requested}
+    matching_players = [
+        player for player in refreshed_players
+        if _reviewed_name_key(player.get("name")) in requested_names
+    ]
+    if len(matching_players) != len(requested):
+        _mark_player_batch_recovery(
+            supabase,
+            operation=operation,
+            operation_key=str(idempotency_key),
+            result_json={"preflight": preflight, "matched_count": len(matching_players)},
+            error_text="Post-insert player readback did not match the reviewed batch.",
+        )
+        raise GuardedWriteRecoveryRequired(
+            str(idempotency_key),
+            "The player batch committed but its readback was incomplete. Inspect the Player Editor before retrying.",
+        )
     audit_payload = build_activity_payload(
         club_id=str(club_id),
         actor_email=str(actor_email or ""),
@@ -580,15 +1055,44 @@ def create_admin_match_uploader_players(
     if audit_write.warning:
         warnings.append(audit_write.warning)
     if not audit_write.ok and is_api_audit_log_required():
-        raise RuntimeError("audit log write required but unavailable")
-    return {
+        _mark_player_batch_recovery(
+            supabase,
+            operation=operation,
+            operation_key=str(idempotency_key),
+            result_json={"preflight": preflight, "players": matching_players},
+            error_text="Required completion audit did not persist.",
+        )
+        raise GuardedWriteRecoveryRequired(
+            str(idempotency_key),
+            "The players were created but their required completion audit is unavailable. Inspect the Player Editor before retrying.",
+        )
+    result = {
         "ok": True,
         "mode": "match_uploader_new_players",
         "requested_count": len(requested),
         "accepted_count": len(matching_players),
+        "created_count": len(to_create),
+        "unchanged_count": len(requested) - len(to_create),
+        "reviewed_fingerprint": calculated_fingerprint,
+        "operation_key": str(idempotency_key),
+        "player_insert_atomic": True,
+        "idempotent_replay": False,
         "players": matching_players,
+        "recovery": {
+            "player_editor": "/admin/players",
+            "operator_rule": "Retry the exact unchanged request with the same idempotency key after an interrupted response.",
+        },
         "warnings": warnings,
     }
+    update_guarded_operation(
+        supabase,
+        operation_id=operation.get("id"),
+        operation_key=str(idempotency_key),
+        status="completed",
+        after_json={"players": matching_players},
+        result_json=result,
+    )
+    return result
 
 
 def submit_admin_match_uploader_batch(

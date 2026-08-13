@@ -30,6 +30,14 @@ def _patch_admin_auth(monkeypatch, supabase: FakeSupabase, role: str = "club_own
     )
 
 
+def _social_guard(expected_current: dict, *, key: str = "social-edit-test-1") -> dict:
+    return {
+        "expected_current": expected_current,
+        "idempotency_key": key,
+        "confirmation_text": "SAVE SOCIAL MATCH",
+    }
+
+
 def test_admin_match_log_disabled_contract(monkeypatch):
     monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", raising=False)
     monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", raising=False)
@@ -239,7 +247,7 @@ def test_admin_match_log_social_update_contract(monkeypatch):
     response = TestClient(app).patch(
         "/admin/clubs/club/match-log/social/social-1",
         headers={"Authorization": "Bearer local"},
-        json={"event_name": "  Friday   Social  ", "score_t1": 8, "score_t2": 11},
+        json={"score_t1": 8, "score_t2": 11, **_social_guard({"score_t1": 7, "score_t2": 11})},
     )
 
     assert response.status_code == 200
@@ -251,7 +259,7 @@ def test_admin_match_log_social_update_contract(monkeypatch):
     assert payload["result"]["patch"] == {"score_t1": 8}
     assert payload["result"]["before"] == {"score_t1": 7}
     assert payload["result"]["after"] == {"score_t1": 8}
-    audit = tables["admin_activity_log"][0]
+    audit = next(row for row in tables["admin_activity_log"] if row["action_type"] == "social_match_log_update")
     assert audit["action_type"] == "social_match_log_update"
     assert audit["actor_email"] == "admin@example.com"
     assert audit["actor_role"] == "club_owner"
@@ -266,6 +274,55 @@ def test_admin_match_log_social_update_contract(monkeypatch):
     assert audit["after_json"]["result"] == payload["result"]
 
 
+def test_admin_match_log_social_update_exact_retry_is_idempotent(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+    client = TestClient(app)
+    request = {
+        "score_t1": 8,
+        **_social_guard({"score_t1": 7}, key="social-edit-replay"),
+    }
+
+    first = client.patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json=request,
+    )
+    replay = client.patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json=request,
+    )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json()["idempotent"] is True
+    assert tables["live_event_matches"][0]["score_t1"] == 8
+    assert len([row for row in tables["admin_activity_log"] if row["action_type"] == "social_match_log_update"]) == 1
+
+
+def test_admin_match_log_social_update_rejects_stale_expected_value(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "score_t1": 8,
+            **_social_guard({"score_t1": 6}, key="social-edit-stale"),
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "STALE_VERSION"
+    assert tables["live_event_matches"][0]["score_t1"] == 7
+
+
 def test_admin_match_log_social_update_rejects_blank_event_name(monkeypatch):
     tables = fake_tables()
     supabase = FakeSupabase(tables)
@@ -275,7 +332,7 @@ def test_admin_match_log_social_update_rejects_blank_event_name(monkeypatch):
     response = TestClient(app).patch(
         "/admin/clubs/club/match-log/social/social-1",
         headers={"Authorization": "Bearer local"},
-        json={"event_name": " \u00a0 "},
+        json={"event_name": " \u00a0 ", **_social_guard({"event_name": "Friday Social"}, key="social-edit-blank")},
     )
 
     assert response.status_code == 400
@@ -294,7 +351,7 @@ def test_admin_match_log_social_update_rejects_mixed_table_delta(monkeypatch):
     response = TestClient(app).patch(
         "/admin/clubs/club/match-log/social/social-1",
         headers={"Authorization": "Bearer local"},
-        json={"event_name": "Friday Social Updated", "score_t1": 8},
+        json={"event_name": "Friday Social Updated", "score_t1": 8, **_social_guard({"event_name": "Friday Social", "score_t1": 7}, key="social-edit-mixed")},
     )
 
     assert response.status_code == 400
@@ -305,7 +362,7 @@ def test_admin_match_log_social_update_rejects_mixed_table_delta(monkeypatch):
     assert supabase.operations == []
 
 
-def test_admin_match_log_social_update_strict_audit_failure_rolls_back(monkeypatch):
+def test_admin_match_log_social_update_strict_audit_failure_stops_before_write(monkeypatch):
     tables = fake_tables()
     tables["__failed_insert_tables__"] = {"admin_activity_log"}
     supabase = FakeSupabase(tables)
@@ -316,22 +373,17 @@ def test_admin_match_log_social_update_strict_audit_failure_rolls_back(monkeypat
     response = TestClient(app).patch(
         "/admin/clubs/club/match-log/social/social-1",
         headers={"Authorization": "Bearer local"},
-        json={"score_t1": 8},
+        json={"score_t1": 8, **_social_guard({"score_t1": 7}, key="social-edit-strict")},
     )
 
-    assert response.status_code == 500
-    assert response.json()["detail"] == (
-        "Audit log write required but unavailable; the Club Social update was rolled back."
-    )
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "DURABLE_INTENT_UNAVAILABLE"
     assert tables["live_event_matches"][0]["score_t1"] == 7
     assert tables["admin_activity_log"] == []
-    assert [operation["payload"] for operation in supabase.operations] == [
-        {"score_t1": 8},
-        {"score_t1": 7},
-    ]
+    assert supabase.operations == []
 
 
-def test_admin_match_log_social_update_non_strict_audit_failure_warns(monkeypatch):
+def test_admin_match_log_social_update_non_strict_audit_failure_still_fails_closed(monkeypatch):
     tables = fake_tables()
     tables["__failed_insert_tables__"] = {"admin_activity_log"}
     supabase = FakeSupabase(tables)
@@ -342,16 +394,166 @@ def test_admin_match_log_social_update_non_strict_audit_failure_warns(monkeypatc
     response = TestClient(app).patch(
         "/admin/clubs/club/match-log/social/social-1",
         headers={"Authorization": "Bearer local"},
-        json={"score_t1": 8},
+        json={"score_t1": 8, **_social_guard({"score_t1": 7}, key="social-edit-warning")},
     )
 
-    assert response.status_code == 200
-    assert response.json()["warnings"] == ["Admin activity log write failed."]
-    assert tables["live_event_matches"][0]["score_t1"] == 8
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "DURABLE_INTENT_UNAVAILABLE"
+    assert tables["live_event_matches"][0]["score_t1"] == 7
     assert tables["admin_activity_log"] == []
 
 
-def test_admin_match_log_social_update_reports_critical_rollback_failure(monkeypatch):
+def _fail_only_social_completion_audit(monkeypatch):
+    from services.api import admin_match_log_routes
+
+    real_write = admin_match_log_routes.write_admin_activity_log
+
+    def fail_completion(supabase, payload):
+        if payload.get("action_type") == "social_match_log_update":
+            return SimpleNamespace(ok=False, warning="completion audit failed")
+        return real_write(supabase, payload)
+
+    monkeypatch.setattr(admin_match_log_routes, "write_admin_activity_log", fail_completion)
+
+
+def test_admin_match_log_social_completion_audit_failure_rolls_back_cas(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+    _fail_only_social_completion_audit(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json={"score_t1": 8, **_social_guard({"score_t1": 7}, key="social-completion-rollback")},
+    )
+
+    assert response.status_code == 500
+    assert "rolled back" in response.json()["detail"]
+    assert tables["live_event_matches"][0]["score_t1"] == 7
+    assert tables["admin_guarded_operations"][0]["status"] == "failed"
+    assert tables["admin_guarded_operations"][0]["result_json"] == {"rolled_back": True}
+
+
+def test_admin_match_log_social_completion_audit_rollback_failure_is_recovery(monkeypatch):
+    from services.api import admin_match_log_routes
+
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+    _fail_only_social_completion_audit(monkeypatch)
+    real_update = admin_match_log_routes.update_social_match_row
+    calls = {"count": 0}
+
+    def fail_rollback(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise TimeoutError("rollback response lost")
+        return real_update(*args, **kwargs)
+
+    monkeypatch.setattr(admin_match_log_routes, "update_social_match_row", fail_rollback)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json={"score_t1": 8, **_social_guard({"score_t1": 7}, key="social-rollback-uncertain")},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "RECOVERY_REQUIRED"
+    assert response.json()["detail"]["operation_key"] == "social-rollback-uncertain"
+    assert tables["admin_guarded_operations"][0]["status"] == "recovery_required"
+    assert tables["live_event_matches"][0]["score_t1"] == 8
+
+    reconciled = TestClient(app).post(
+        "/admin/clubs/club/match-log/social/operations/social-rollback-uncertain/reconcile",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "RECONCILE SOCIAL MATCH", "source": "test"},
+    )
+
+    assert reconciled.status_code == 200
+    assert reconciled.json()["reconciled"] is True
+    assert tables["admin_guarded_operations"][0]["status"] == "completed"
+    assert any(row["action_type"] == "reconcile_social_match_log_update" for row in tables["admin_activity_log"])
+
+
+def test_admin_match_log_social_completion_rollback_preserves_concurrent_value(monkeypatch):
+    from services.api import admin_match_log_routes
+
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+    _fail_only_social_completion_audit(monkeypatch)
+    real_update = admin_match_log_routes.update_social_match_row
+    calls = {"count": 0}
+
+    def concurrent_before_rollback(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            tables["live_event_matches"][0]["score_t1"] = 9
+        return real_update(*args, **kwargs)
+
+    monkeypatch.setattr(admin_match_log_routes, "update_social_match_row", concurrent_before_rollback)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json={"score_t1": 8, **_social_guard({"score_t1": 7}, key="social-rollback-concurrent")},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "RECOVERY_REQUIRED"
+    assert tables["live_event_matches"][0]["score_t1"] == 9
+    assert tables["admin_guarded_operations"][0]["status"] == "recovery_required"
+
+
+def test_admin_match_log_social_rollback_and_ledger_failure_still_structured(monkeypatch):
+    from services.api import admin_match_log_routes
+
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+    _fail_only_social_completion_audit(monkeypatch)
+    real_update = admin_match_log_routes.update_social_match_row
+    calls = {"count": 0}
+
+    def fail_rollback(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise TimeoutError("rollback response lost")
+        return real_update(*args, **kwargs)
+
+    monkeypatch.setattr(admin_match_log_routes, "update_social_match_row", fail_rollback)
+    monkeypatch.setattr(
+        admin_match_log_routes,
+        "update_guarded_operation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            admin_match_log_routes.GuardedWriteRecoveryRequired("social-ledger-lost", "ledger unavailable")
+        ),
+    )
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json={"score_t1": 8, **_social_guard({"score_t1": 7}, key="social-ledger-lost")},
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "RECOVERY_REQUIRED"
+    assert detail["kind"] == "uncertain"
+    assert detail["operation_key"] == "social-ledger-lost"
+
+
+def test_admin_match_log_social_update_does_not_reach_mutator_without_intent(monkeypatch):
     from services.api import admin_match_log_routes
 
     tables = fake_tables()
@@ -374,19 +576,17 @@ def test_admin_match_log_social_update_reports_critical_rollback_failure(monkeyp
     response = TestClient(app).patch(
         "/admin/clubs/club/match-log/social/social-1",
         headers={"Authorization": "Bearer local"},
-        json={"score_t1": 8},
+        json={"score_t1": 8, **_social_guard({"score_t1": 7}, key="social-edit-critical")},
     )
 
-    assert response.status_code == 500
-    assert response.json()["detail"] == (
-        "Critical: audit log write failed and the Club Social update could not be rolled back. "
-        "Manual review is required."
-    )
-    assert tables["live_event_matches"][0]["score_t1"] == 8
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "DURABLE_INTENT_UNAVAILABLE"
+    assert calls["count"] == 0
+    assert tables["live_event_matches"][0]["score_t1"] == 7
     assert tables["admin_activity_log"] == []
 
 
-def test_admin_match_log_social_update_rollback_preserves_concurrent_newer_value(monkeypatch):
+def test_admin_match_log_social_update_cannot_create_concurrent_rollback_gap_without_intent(monkeypatch):
     from services.api import admin_match_log_routes
 
     tables = fake_tables()
@@ -409,17 +609,15 @@ def test_admin_match_log_social_update_rollback_preserves_concurrent_newer_value
     response = TestClient(app).patch(
         "/admin/clubs/club/match-log/social/social-1",
         headers={"Authorization": "Bearer local"},
-        json={"score_t1": 8},
+        json={"score_t1": 8, **_social_guard({"score_t1": 7}, key="social-edit-concurrent")},
     )
 
-    assert response.status_code == 500
-    assert response.json()["detail"] == (
-        "Critical: audit log write failed and the Club Social update could not be rolled back. "
-        "Manual review is required."
-    )
-    assert tables["live_event_matches"][0]["score_t1"] == 9
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "DURABLE_INTENT_UNAVAILABLE"
+    assert calls["count"] == 0
+    assert tables["live_event_matches"][0]["score_t1"] == 7
     assert tables["admin_activity_log"] == []
-    assert [operation["payload"] for operation in supabase.operations] == [{"score_t1": 8}]
+    assert supabase.operations == []
 
 
 def test_admin_match_log_social_update_rejects_true_noop_without_audit(monkeypatch):
@@ -436,6 +634,7 @@ def test_admin_match_log_social_update_rejects_true_noop_without_audit(monkeypat
             "score_t1": 7,
             "score_t2": 11,
             "round_number": 1,
+            **_social_guard({"event_name": "Friday Social", "score_t1": 7, "score_t2": 11, "round_number": 1}, key="social-edit-noop"),
         },
     )
 

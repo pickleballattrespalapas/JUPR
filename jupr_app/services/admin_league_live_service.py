@@ -12,6 +12,12 @@ from jupr_app.domain.league_live_orchestration import (
     build_league_live_round_plan,
     normalize_league_live_roster,
 )
+from jupr_app.services.admin_guarded_write_service import (
+    GuardedWriteRecoveryRequired,
+    canonical_fingerprint,
+    operation_result,
+    update_guarded_operation,
+)
 from jupr_app.services.admin_league_manager_service import is_admin_league_manager_enabled
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
@@ -705,6 +711,216 @@ def build_admin_league_live_round_plan(
     )
 
 
+def prepare_admin_league_live_session_create(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_id: str,
+    league_name: str,
+    week_tag: str,
+    total_rounds: int,
+    current_round: int = 1,
+    roster: list[dict[str, Any]] | None = None,
+    courts: list[dict[str, Any]] | None = None,
+    bench_player_ids: list[Any] | None = None,
+    bench_override_reason: str | None = None,
+    notes: str | None = None,
+    actor_email: str,
+) -> dict[str, Any]:
+    """Build the exact create payload before the first domain mutation."""
+    _ensure_live_domain_enabled()
+    clean_league = _clean_text(league_name, limit=120)
+    if not clean_league:
+        raise ValueError("league_name is required")
+    safe_total_rounds = max(1, min(_safe_int(total_rounds, 1) or 1, 50))
+    safe_current_round = max(1, min(_safe_int(current_round, 1) or 1, safe_total_rounds))
+    canonical_roster = _verified_club_roster(
+        supabase,
+        club_id=str(club_id),
+        roster=list(roster or []),
+    )
+    roster_plan = _normalize_roster_and_courts(
+        roster=canonical_roster,
+        courts=list(courts or []),
+        round_number=safe_current_round,
+        bench_player_ids=bench_player_ids,
+        bench_override_reason=bench_override_reason,
+    )
+    normalized_courts = list(roster_plan["courts"])
+    now = _now_iso()
+    return {
+        "session_payload": {
+            "id": str(session_id),
+            "club_id": str(club_id),
+            "league_name": clean_league,
+            "week_tag": _clean_text(week_tag, limit=80),
+            "status": "active",
+            "total_rounds": safe_total_rounds,
+            "current_round": safe_current_round,
+            "roster_json": list(roster_plan["roster"]),
+            "current_court_state_json": normalized_courts,
+            "notes": _clean_text(notes, limit=1000) or None,
+            "created_by": str(actor_email or ""),
+            "updated_by": str(actor_email or ""),
+            "started_at": now,
+            "created_at": now,
+            "updated_at": now,
+        },
+        "courts": normalized_courts,
+        "roster_suggestion": roster_plan,
+    }
+
+
+def _semantic_court_rows(courts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "round_number": _safe_int(row.get("round_number"), 1) or 1,
+            "court_number": _safe_int(row.get("court_number"), 1) or 1,
+            "format_type": str(row.get("format_type") or "4-Player"),
+            "player_names": _as_list(row.get("player_names")),
+            "players_json": _as_list(row.get("players_json")),
+        }
+        for row in sorted(
+            (dict(item) for item in courts if isinstance(item, dict)),
+            key=lambda item: (_safe_int(item.get("round_number"), 1) or 1, _safe_int(item.get("court_number"), 1) or 1),
+        )
+    ]
+
+
+def reconcile_admin_league_live_session_create(
+    supabase: Any,
+    *,
+    operation: dict[str, Any],
+    club_id: str,
+    operation_key: str,
+    confirmation_text: str,
+    actor_email: str,
+    actor_role: str,
+    source: str = "next_league_live_operation_reconcile",
+) -> dict[str, Any]:
+    """Resolve an uncertain create only from exact preflight and authoritative storage."""
+    _ensure_live_domain_enabled()
+    if _clean_text(confirmation_text, limit=80).upper() != "RECONCILE LIVE SESSION":
+        raise ValueError("Type RECONCILE LIVE SESSION to reconcile this exact create.")
+    status = str(operation.get("status") or "")
+    if status == "completed":
+        return operation_result(operation)
+    if status not in {"intent_recorded", "recovery_required"}:
+        raise ValueError(f"League Live create operation is {status or 'unknown'} and cannot be reconciled.")
+    evidence = operation.get("result_json") or {}
+    planned = evidence.get("planned") if isinstance(evidence, dict) else None
+    expected_session = planned.get("session_payload") if isinstance(planned, dict) else None
+    expected_courts = planned.get("courts") if isinstance(planned, dict) else None
+    roster_suggestion = planned.get("roster_suggestion") if isinstance(planned, dict) else None
+    if not isinstance(expected_session, dict) or not isinstance(expected_courts, list) or not isinstance(roster_suggestion, dict):
+        raise GuardedWriteRecoveryRequired(
+            str(operation_key),
+            "This League Live create predates exact preflight evidence and requires manual inspection.",
+        )
+    session_id = str(expected_session.get("id") or "")
+    authoritative_row = _fetch_session_row(supabase, club_id=str(club_id), session_id=session_id)
+    authoritative_courts = _fetch_courts(supabase, club_id=str(club_id), session_id=session_id)
+    if authoritative_row is None and not authoritative_courts:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=str(operation_key),
+            status="failed",
+            result_json={"reconciled": True, "proof": "session_and_courts_absent", "session_id": session_id},
+            error_text="Authoritative readback proves the League Live create did not commit.",
+        )
+        return {
+            "ok": False,
+            "mode": "league_live_session_create_reconciled_failed",
+            "operation_key": str(operation_key),
+            "status": "failed",
+            "recovery_required": False,
+            "session_id": session_id,
+        }
+    actual_session = _session_payload(authoritative_row or {}) if authoritative_row else None
+    comparable_fields = (
+        "id", "club_id", "league_name", "week_tag", "status", "total_rounds", "current_round",
+        "roster_json", "current_court_state_json", "notes", "created_by", "updated_by", "started_at",
+        "created_at", "updated_at",
+    )
+    expected_comparable = {field: expected_session.get(field) for field in comparable_fields}
+    actual_comparable = {field: (actual_session or {}).get(field) for field in comparable_fields}
+    session_proven = actual_session is not None and canonical_fingerprint(actual_comparable) == canonical_fingerprint(expected_comparable)
+    courts_proven = canonical_fingerprint(_semantic_court_rows(authoritative_courts)) == canonical_fingerprint(_semantic_court_rows(expected_courts))
+    if not session_proven or not courts_proven:
+        raise GuardedWriteRecoveryRequired(
+            str(operation_key),
+            "Authoritative League Live state does not exactly prove the reviewed session and court create.",
+        )
+    try:
+        audit_write = write_admin_activity_log(
+            supabase,
+            build_activity_payload(
+                club_id=str(club_id),
+                actor_email=str(actor_email or ""),
+                actor_role=str(actor_role or ""),
+                action_type="reconcile_league_live_session_create",
+                entity_type="league_live_session",
+                entity_id=session_id,
+                before_json=operation.get("before_json") or {},
+                after_json={
+                    "source_client": "fastapi/nextjs",
+                    "source_page": source,
+                    "operation_key": str(operation_key),
+                    "proof": "authoritative_session_and_court_readback",
+                    "session": actual_session,
+                    "court_count": len(authoritative_courts),
+                },
+                source_page=source,
+                flagged_for_review=True,
+            ),
+        )
+        if not audit_write.ok:
+            raise RuntimeError("League Live reconciliation audit did not persist.")
+        warnings = [audit_write.warning] if audit_write.warning else []
+    except Exception as exc:
+        try:
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=str(operation_key),
+                status="recovery_required",
+                result_json={**evidence, "reconcile_audit_failed": True},
+                error_text="Authoritative League Live proof succeeded, but reconciliation audit did not persist.",
+            )
+        except GuardedWriteRecoveryRequired:
+            pass
+        raise GuardedWriteRecoveryRequired(
+            str(operation_key),
+            "League Live proof succeeded, but its reconciliation audit is unavailable.",
+        ) from exc
+    result = {
+        "ok": True,
+        "mode": "league_live_session_create",
+        "session": actual_session,
+        "courts": authoritative_courts,
+        "roster_suggestion": roster_suggestion,
+        "operation_key": str(operation_key),
+        "idempotent_replay": True,
+        "reconciled": True,
+        "recovery": {
+            "streamlit_fallback": "league_manager",
+            "session_detail": f"/admin/clubs/{{club_id}}/league-manager/live-sessions/{session_id}",
+            "operator_rule": "This create was finalized from authoritative session and court readback plus a reconciliation audit.",
+        },
+        "warnings": warnings,
+    }
+    update_guarded_operation(
+        supabase,
+        operation_id=operation.get("id"),
+        operation_key=str(operation_key),
+        status="completed",
+        after_json={"session": actual_session, "courts": authoritative_courts, "reconciled": True},
+        result_json=result,
+    )
+    return result
+
+
 def create_admin_league_live_session(
     supabase: Any,
     *,
@@ -722,6 +938,8 @@ def create_admin_league_live_session(
     actor_role: str,
     confirmation_text: str,
     source: str = "next_league_live_session_create",
+    session_id: str | None = None,
+    prepared_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _ensure_live_domain_enabled()
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_CREATE_SESSION:
@@ -731,38 +949,28 @@ def create_admin_league_live_session(
         raise ValueError("league_name is required")
     safe_total_rounds = max(1, min(_safe_int(total_rounds, 1) or 1, 50))
     safe_current_round = max(1, min(_safe_int(current_round, 1) or 1, safe_total_rounds))
-    session_id = str(uuid4())
-    now = _now_iso()
-    canonical_roster = _verified_club_roster(
-        supabase,
-        club_id=str(club_id),
-        roster=list(roster or []),
-    )
-    roster_plan = _normalize_roster_and_courts(
-        roster=canonical_roster,
-        courts=list(courts or []),
-        round_number=safe_current_round,
-        bench_player_ids=bench_player_ids,
-        bench_override_reason=bench_override_reason,
-    )
-    normalized_courts = list(roster_plan["courts"])
-    payload = {
-        "id": session_id,
-        "club_id": str(club_id),
-        "league_name": clean_league,
-        "week_tag": _clean_text(week_tag, limit=80),
-        "status": "active",
-        "total_rounds": safe_total_rounds,
-        "current_round": safe_current_round,
-        "roster_json": list(roster_plan["roster"]),
-        "current_court_state_json": normalized_courts,
-        "notes": _clean_text(notes, limit=1000) or None,
-        "created_by": str(actor_email or ""),
-        "updated_by": str(actor_email or ""),
-        "started_at": now,
-        "created_at": now,
-        "updated_at": now,
-    }
+    if prepared_plan is None:
+        prepared_plan = prepare_admin_league_live_session_create(
+            supabase,
+            club_id=str(club_id),
+            session_id=str(session_id or uuid4()),
+            league_name=clean_league,
+            week_tag=week_tag,
+            total_rounds=safe_total_rounds,
+            current_round=safe_current_round,
+            roster=list(roster or []),
+            courts=list(courts or []),
+            bench_player_ids=bench_player_ids,
+            bench_override_reason=bench_override_reason,
+            notes=notes,
+            actor_email=actor_email,
+        )
+    payload = dict(prepared_plan.get("session_payload") or {})
+    roster_plan = dict(prepared_plan.get("roster_suggestion") or {})
+    normalized_courts = list(prepared_plan.get("courts") or [])
+    session_id = str(payload.get("id") or "")
+    if not session_id or str(payload.get("club_id") or "") != str(club_id):
+        raise ValueError("Prepared League Live create evidence is invalid.")
     inserted = _first_row(supabase.table("league_live_sessions").insert(payload).execute())
     if inserted is None:
         raise LeagueLivePersistenceError("League Live session did not persist.")

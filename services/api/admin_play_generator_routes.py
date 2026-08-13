@@ -101,11 +101,13 @@ class GeneratorRosterRequest(GeneratorDurableRequest):
 
 
 class GeneratorCompleteRequest(GeneratorDurableRequest):
+    confirmation_text: str = Field(default="", max_length=80)
     source: str = "next_play_generator_complete"
 
 
 class GeneratorPublishRequest(GeneratorDurableRequest):
     match_date: str | None = Field(default=None, max_length=80)
+    confirmation_text: str = Field(default="", max_length=80)
     source: str = "next_play_generator_publish"
 
 
@@ -672,6 +674,11 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         _require_write_gate()
+        if str(payload.confirmation_text or "").strip().upper() != "COMPLETE SESSION":
+            raise HTTPException(
+                status_code=400,
+                detail="Type COMPLETE SESSION to complete this play session.",
+            )
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(
             supabase=supabase,
@@ -733,6 +740,11 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         _require_write_gate()
+        if str(payload.confirmation_text or "").strip().upper() != "PUBLISH MATCHES":
+            raise HTTPException(
+                status_code=400,
+                detail="Type PUBLISH MATCHES to publish official matches.",
+            )
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(
             supabase=supabase,

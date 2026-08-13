@@ -186,5 +186,6 @@ def test_replay_ui_exposes_durable_job_identity_and_history() -> None:
     assert "data.recent_jobs" not in page
     assert "singles_replay_supported === true" in form
     assert 'result.mode === "replay_incomplete"' in form
-    assert "if ((payload as AdminReplayResultResponse).ok) setIdempotencyKey" in form
+    assert "if (!replayResult.ok) throw new Error(completionMessage);" in form
+    assert "setIdempotencyKey(requestKey());" in form
     assert 'result.target_reset !== "ALL (Full System Reset)"' in form

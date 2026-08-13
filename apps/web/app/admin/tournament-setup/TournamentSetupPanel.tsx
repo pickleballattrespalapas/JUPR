@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, actionUncertain } from "@/components/interaction";
+import type { ActionCompletion } from "@/components/interaction";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import { TournamentSetupBuilder } from "./TournamentSetupBuilder";
@@ -235,14 +237,14 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
     persistCreateCommand(null);
   }
 
-  async function createTournament(confirmationText: string) {
+  async function createTournament(confirmationText: string, explicitCommand?: CreateCommand): Promise<ActionCompletion> {
     const name = createName.trim();
-    if (!name) { setMessage("Tournament name is required."); return; }
+    if (!name) { const text = "Tournament name is required."; setMessage(text); throw new Error(text); }
     if (createStartDate && createEndDate && createEndDate < createStartDate) {
       setMessage("Tournament end date cannot be before its start date.");
-      return;
+      throw new Error("Tournament end date cannot be before its start date.");
     }
-    const command = createCommand || {
+    const command = explicitCommand || createCommand || {
       clubId,
       tournamentId: globalThis.crypto.randomUUID(),
       idempotencyKey: globalThis.crypto.randomUUID(),
@@ -271,8 +273,9 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
           })
         }
       );
-      if (!operationRequest.isCurrent(generation)) return;
       const createdId = safeString(payload.tournament?.id) || command.tournamentId;
+      const completion = actionSuccess("Tournament shell created", `${command.name} was created as a draft tournament shell.`);
+      if (!operationRequest.isCurrent(generation)) return completion;
       const loaded = await loadTournaments(createdId);
       if (operationRequest.isCurrent(generation)) {
         setLastResult(payload);
@@ -285,77 +288,94 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
           setMessage(payload.idempotent_replay ? "Tournament creation was safely reconciled and loaded." : "Tournament shell created and loaded. Continue with registration settings.");
         }
       }
+      return completion;
     } catch (error) {
       if (operationRequest.isCurrent(generation)) {
         setMessage(`${error instanceof Error ? error.message : "Unable to create tournament."} Retry keeps the same protected request.`);
       }
+      return actionUncertain(
+        "Tournament creation needs verification",
+        "The request ended without a confirmed result. Retry the exact protected request to recover its durable response.",
+        command.idempotencyKey,
+        "Retry exact request",
+        () => createTournament(confirmationText, command)
+      );
     } finally {
       if (operationRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function saveSettings(confirmationText: string) {
-    if (!detail || loadedDetailId !== selectedId) { setMessage("Reload the selected tournament before saving settings."); return; }
+    if (!detail || loadedDetailId !== selectedId) { const text = "Reload the selected tournament before saving settings."; setMessage(text); throw new Error(text); }
     const generation = operationRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/settings`, { method: "PATCH", body: JSON.stringify({ ...settings, expected_state_fingerprint: detail?.state_fingerprint, confirmation_text: confirmationText }) });
-      if (!operationRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Tournament settings saved", "The registration settings were saved successfully.");
+      if (!operationRequest.isCurrent(generation)) return completion;
       const reloaded = await loadDetail(selectedId);
       if (operationRequest.isCurrent(generation)) {
         setLastResult(payload);
         if (reloaded) setMessage(payload.idempotent_replay ? "Settings response reconciled from the durable operation." : "Tournament setup settings saved.");
       }
+      return completion;
     } catch (error) {
       if (operationRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save settings.");
+      throw error;
     } finally {
       if (operationRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function saveDraft(confirmationText: string) {
-    if (!detail || loadedDetailId !== selectedId) { setMessage("Reload the selected tournament before saving its draft."); return; }
+    if (!detail || loadedDetailId !== selectedId) { const text = "Reload the selected tournament before saving its draft."; setMessage(text); throw new Error(text); }
     const generation = operationRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const draft = configurationPayload(configuration);
       const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/draft`, { method: "PUT", body: JSON.stringify({ ...draft, expected_state_fingerprint: detail?.state_fingerprint, confirmation_text: confirmationText }) });
-      if (!operationRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Tournament draft saved", "The reviewed days, event defaults, and divisions were saved to the builder draft.");
+      if (!operationRequest.isCurrent(generation)) return completion;
       const reloaded = await loadDetail(selectedId);
       if (operationRequest.isCurrent(generation)) {
         setLastResult(payload);
         if (reloaded) setMessage(payload.idempotent_replay ? "Draft response reconciled from the durable operation." : "Tournament setup draft saved.");
       }
+      return completion;
     } catch (error) {
       if (operationRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save draft.");
+      throw error;
     } finally {
       if (operationRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function publishSetup(confirmationText: string) {
-    if (!detail || loadedDetailId !== selectedId) { setMessage("Reload the selected tournament before publishing its setup."); return; }
+    if (!detail || loadedDetailId !== selectedId) { const text = "Reload the selected tournament before publishing its setup."; setMessage(text); throw new Error(text); }
     const generation = operationRequest.begin();
     setBusy(true); setMessage(null);
     try {
       const draft = publishConfigurationPayload(configuration);
       if (!impactReview || reviewedDraftSignature !== draftSignature(configuration)) throw new Error("Review publish impact for the current draft before publishing.");
       const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(selectedId)}/publish`, { method: "POST", body: JSON.stringify({ days: draft.days, event_options: draft.event_options, expected_state_fingerprint: detail?.state_fingerprint, reviewed_impact_fingerprint: impactReview.impact_fingerprint, confirmation_text: confirmationText }) });
-      if (!operationRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Tournament setup published", "The exact reviewed setup is now the published tournament configuration.");
+      if (!operationRequest.isCurrent(generation)) return completion;
       const reloaded = await loadDetail(selectedId);
       if (operationRequest.isCurrent(generation)) {
         setLastResult(payload);
         if (reloaded) setMessage(payload.idempotent_replay ? "Publish response reconciled without republishing." : "Tournament setup published.");
       }
+      return completion;
     } catch (error) {
       if (operationRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to publish setup.");
+      throw error;
     } finally {
       if (operationRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   function seedFromPublished() {
-    if (!detail) return;
+    if (!detail) throw new Error("Reload the tournament before seeding from its published configuration.");
     setConfiguration({
       days: wrapBuilderRows(detail.days || [], "day"),
       eventFamilies: [],
@@ -367,7 +387,7 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
 
   function seedStandardEvents() {
     const template = detail?.templates?.find((row) => row.key === "standard_doubles_singles");
-    if (!template) { setMessage("The Python setup template is unavailable. Reload before continuing."); return; }
+    if (!template) { const text = "The Python setup template is unavailable. Reload before continuing."; setMessage(text); throw new Error(text); }
     setConfiguration({
       days: wrapBuilderRows(template.days, "day"),
       eventFamilies: wrapBuilderRows(template.event_families, "family"),
@@ -464,7 +484,10 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
             confirmationText=""
             disabled={!detailIsCurrent}
             busy={busy}
-            onConfirm={seedFromPublished}
+            onConfirm={async () => {
+              seedFromPublished();
+              return actionSuccess("Local draft replaced", "The local draft now matches the published registration configuration.");
+            }}
           />
           <ConfirmAction
             triggerLabel="Generate standard divisions"
@@ -474,7 +497,10 @@ export default function TournamentSetupPanel({ apiBase, clubId, status }: Props)
             confirmationText=""
             disabled={!detailIsCurrent}
             busy={busy}
-            onConfirm={seedStandardEvents}
+            onConfirm={async () => {
+              seedStandardEvents();
+              return actionSuccess("Standard divisions generated", "The local draft now uses the standard doubles and singles template.");
+            }}
           />
         </div>
         <TournamentSetupBuilder

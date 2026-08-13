@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, actionUncertain } from "@/components/interaction";
+import type { ActionCompletion } from "@/components/interaction";
 import type {
   AdminTournament,
   AdminTournamentDraw,
@@ -364,7 +366,7 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
     setPendingCommand(command);
   }
 
-  async function executePending(command: PendingCommand, replay: boolean) {
+  async function executePending(command: PendingCommand, replay: boolean): Promise<ActionCompletion> {
     const generation = actionRequest.begin();
     setBusy(true);
     setNotice(null);
@@ -373,36 +375,49 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
         method: "POST",
         body: JSON.stringify(command.body)
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const completionText = result.reconciled
+        ? `Operation ${compactKey(result.operation_key)} reconciled without repeating the domain write.`
+        : result.idempotent_replay
+          ? `Operation ${compactKey(result.operation_key)} returned its durable stored result.`
+          : replay
+            ? `Exact request ${compactKey(result.operation_key)} completed.`
+            : `Tournament Live command completed as operation ${compactKey(result.operation_key)}.`;
+      const completion = actionSuccess("Tournament Live command complete", completionText);
+      if (!actionRequest.isCurrent(generation)) return completion;
       persistPending(null);
       setLastResult(result);
-      const board = await fetchBoard(command.tournamentId, command.drawId);
-      if (!actionRequest.isCurrent(generation)) return;
-      hydrateBoard(board, command.tournamentId, command.drawId);
-      setNotice({
-        tone: "success",
-        text: result.reconciled
-          ? `Operation ${compactKey(result.operation_key)} reconciled without repeating the domain write.`
-          : result.idempotent_replay
-            ? `Operation ${compactKey(result.operation_key)} returned its durable stored result.`
-            : replay
-              ? `Exact request ${compactKey(result.operation_key)} completed.`
-              : `Tournament Live command completed as operation ${compactKey(result.operation_key)}.`
-      });
-    } catch (error) {
-      if (!actionRequest.isCurrent(generation)) return;
       try {
         const board = await fetchBoard(command.tournamentId, command.drawId);
-        if (!actionRequest.isCurrent(generation)) return;
+        if (actionRequest.isCurrent(generation)) hydrateBoard(board, command.tournamentId, command.drawId);
+      } catch {
+        // The authoritative command response proves completion even when the follow-up board refresh fails.
+      }
+      if (actionRequest.isCurrent(generation)) setNotice({ tone: "success", text: completionText });
+      return completion;
+    } catch (error) {
+      if (!actionRequest.isCurrent(generation)) {
+        return actionUncertain("Tournament Live command needs verification", `Operation ${command.body.idempotency_key} needs reconciliation before retrying.`, command.body.idempotency_key, "Retry exact request", () => executePending(command, true));
+      }
+      try {
+        const board = await fetchBoard(command.tournamentId, command.drawId);
+        if (!actionRequest.isCurrent(generation)) return actionUncertain("Tournament Live command needs verification", `Operation ${command.body.idempotency_key} needs reconciliation before retrying.`, command.body.idempotency_key, "Retry exact request", () => executePending(command, true));
         hydrateBoard(board, command.tournamentId, command.drawId);
       } catch {
         // Preserve the exact local request even when the recovery read is unavailable.
       }
-      if (!actionRequest.isCurrent(generation)) return;
+      const uncertain = actionUncertain(
+        "Tournament Live command needs verification",
+        `The exact request is retained as operation ${command.body.idempotency_key}. Retry that exact request to recover its durable result.`,
+        command.body.idempotency_key,
+        "Retry exact request",
+        () => executePending(command, true)
+      );
+      if (!actionRequest.isCurrent(generation)) return uncertain;
       setNotice({
         tone: "error",
         text: `${error instanceof Error ? error.message : "Tournament Live command failed."} The exact request is retained below; do not create a replacement command until its operation state is known.`
       });
+      return uncertain;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -425,17 +440,17 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
   ) {
     if (!snapshot?.state_fingerprint || !selectedTournamentId || !selectedDrawId) {
       setNotice({ tone: "error", text: "Reload the selected draw before submitting a command." });
-      return;
+      throw new Error("Reload the selected draw before submitting a command.");
     }
     const readiness = commandReadiness(command);
     if (!readiness.ready) {
       setNotice({ tone: "error", text: `Python preflight blocks this command: ${readiness.blockers.join(" ")}` });
-      return;
+      throw new Error(`Python preflight blocks this command: ${readiness.blockers.join(" ")}`);
     }
     const reviewedDraw = snapshot.draws.find((draw) => String(draw.id || "") === selectedDrawId);
     if (!reviewedDraw?.updated_at) {
       setNotice({ tone: "error", text: "The draw has no reviewed version. Reload before submitting a command." });
-      return;
+      throw new Error("The draw has no reviewed version. Reload before submitting a command.");
     }
     const versionRows = (rows: Array<{ id?: unknown; updated_at?: unknown }>): ReviewedRowVersion[] | null => {
       const versions = rows.map((row) => ({ id: String(row.id || ""), updated_at: String(row.updated_at || "") }));
@@ -455,21 +470,21 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
       const game = snapshot.games.find((row) => String(row.id || "") === String(fields.game_id || ""));
       if (!game?.updated_at) {
         setNotice({ tone: "error", text: "The selected game has no reviewed version. Reload before saving." });
-        return;
+        throw new Error("The selected game has no reviewed version. Reload before saving.");
       }
       body.expected_game_updated_at = String(game.updated_at);
     } else {
       const teamVersions = versionRows(snapshot.teams);
       if (!teamVersions?.length) {
         setNotice({ tone: "error", text: "The reviewed team version set is incomplete. Reload before submitting." });
-        return;
+        throw new Error("The reviewed team version set is incomplete. Reload before submitting.");
       }
       body.expected_team_versions = teamVersions;
       if (command !== "generate_round_robin") {
         const gameVersions = versionRows(snapshot.games);
         if (!gameVersions?.length) {
           setNotice({ tone: "error", text: "The reviewed game version set is incomplete. Reload before submitting." });
-          return;
+          throw new Error("The reviewed game version set is incomplete. Reload before submitting.");
         }
         body.expected_source_game_versions = gameVersions;
       }
@@ -482,25 +497,25 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
       body
     };
     persistPending(pending);
-    void executePending(pending, false);
+    return executePending(pending, false);
   }
 
   function saveScore(confirmationText: string) {
     if (!selectedGame) {
       setNotice({ tone: "error", text: "Select a game before saving a score." });
-      return;
+      throw new Error("Select a game before saving a score.");
     }
     const a = Number(scoreA);
     const b = Number(scoreB);
     if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0 || a === b) {
       setNotice({ tone: "error", text: "Enter two non-tied, non-negative whole-number scores." });
-      return;
+      throw new Error("Enter two non-tied, non-negative whole-number scores.");
     }
-    submitCommand("save_score", confirmationText, { game_id: String(selectedGame.id || ""), score_a: a, score_b: b });
+    return submitCommand("save_score", confirmationText, { game_id: String(selectedGame.id || ""), score_a: a, score_b: b });
   }
 
   async function reconcileOperation(operation: AdminTournamentLiveOperation, confirmationText: string) {
-    if (!selectedTournamentId || !selectedDrawId) return;
+    if (!selectedTournamentId || !selectedDrawId) throw new Error("Select a tournament draw before reconciling an operation.");
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
     const drawId = selectedDrawId;
@@ -511,28 +526,39 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
         `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/operations/${encodeURIComponent(operation.operation_key)}/reconcile`,
         { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText }) }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const completionText = result.recovery_disposition === "not_applied"
+        ? "Authoritative evidence proved the operation never changed draw state; its lock is closed. Reload and review before a new command."
+        : "Authoritative evidence proved the operation completed; recovery was audited without repeating the mutation.";
+      const completion = actionSuccess("Tournament Live operation reconciled", completionText);
+      if (!actionRequest.isCurrent(generation)) return completion;
       setLastResult(result);
       if (pendingCommand?.body.idempotency_key === operation.client_idempotency_key) persistPending(null);
       const board = await fetchBoard(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       hydrateBoard(board, tournamentId, drawId);
       setNotice({
         tone: "success",
-        text: result.recovery_disposition === "not_applied"
-          ? "Authoritative evidence proved the operation never changed draw state; its lock is closed. Reload and review before a new command."
-          : "Authoritative evidence proved the operation completed; recovery was audited without repeating the mutation."
+        text: completionText
       });
+      return completion;
     } catch (error) {
-      if (!actionRequest.isCurrent(generation)) return;
+      const uncertain = actionUncertain(
+        "Tournament Live recovery needs verification",
+        `Operation ${operation.operation_key} still needs authoritative reconciliation.`,
+        operation.operation_key,
+        "Reconcile again",
+        () => reconcileOperation(operation, confirmationText)
+      );
+      if (!actionRequest.isCurrent(generation)) return uncertain;
       try {
         const board = await fetchBoard(tournamentId, drawId);
-        if (!actionRequest.isCurrent(generation)) return;
+        if (!actionRequest.isCurrent(generation)) return uncertain;
         hydrateBoard(board, tournamentId, drawId);
       } catch {
         // Keep the original recovery error as the operator-facing result.
       }
       if (actionRequest.isCurrent(generation)) setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to reconcile this Tournament Live operation." });
+      return uncertain;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }

@@ -49,7 +49,8 @@ export default defineConfig({
         timeout: 180_000,
         env: {
           ...process.env,
-          VERCEL_ENV: "preview"
+          VERCEL_ENV: "preview",
+          JUPR_INTERACTION_TEST_HARNESS: "1"
         }
       }
 });

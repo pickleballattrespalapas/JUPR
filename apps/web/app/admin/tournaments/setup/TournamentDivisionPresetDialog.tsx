@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { FormDialog, InteractionActionError, type ActionCompletion } from "@/components/interaction";
 import {
   cleanString,
   eventDayReferences,
@@ -57,7 +58,8 @@ type Props = {
   family: BuilderRow | null;
   configuration: SetupConfiguration;
   onCancel: () => void;
-  onConfirm: (values: SetupRecord[]) => void | Promise<void>;
+  onConfirm: (values: SetupRecord[]) => Promise<ActionCompletion>;
+  onAcknowledge?: () => void;
 };
 
 const inputStyle: CSSProperties = {
@@ -299,7 +301,8 @@ export default function TournamentDivisionPresetDialog({
   family,
   configuration,
   onCancel,
-  onConfirm
+  onConfirm,
+  onAcknowledge
 }: Props) {
   const [eligibilityMode, setEligibilityMode] = useState<EligibilityMode>("STANDARD");
   const [skills, setSkills] = useState<string[]>(["3.0", "3.5", "4.0", "4.5"]);
@@ -311,7 +314,6 @@ export default function TournamentDivisionPresetDialog({
   const [genders, setGenders] = useState<GenderPreset[]>([]);
   const [ageMode, setAgeMode] = useState<"INHERIT" | "BRACKETS">("INHERIT");
   const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
 
   const selectedFamily = family;
@@ -372,8 +374,7 @@ export default function TournamentDivisionPresetDialog({
     setAgeMode("INHERIT");
     setProposals([]);
     setMessage("");
-    setSubmitting(false);
-  }, [open, selectedFamily?.key]);
+  }, [open, selectedFamily]);
 
   useEffect(() => {
     if (!open || !selectedFamily) return;
@@ -404,6 +405,22 @@ export default function TournamentDivisionPresetDialog({
 
   if (!open || !selectedFamily) return null;
   const activeFamily = selectedFamily;
+  const defaultGenders = genderOptions(activeFamily.value);
+  const presetDirty = eligibilityMode !== "STANDARD"
+    || JSON.stringify(skills) !== JSON.stringify(["3.0", "3.5", "4.0", "4.5"])
+    || customSkillEnabled
+    || customSkill !== ""
+    || JSON.stringify(combinedCaps) !== JSON.stringify([7, 7.5, 8])
+    || customCapEnabled
+    || customCap !== "8.25"
+    || JSON.stringify(genders) !== JSON.stringify(defaultGenders)
+    || ageMode !== "INHERIT"
+    || proposals.some((row) => {
+      const generatedRow = generated.find((candidate) => candidate.key === row.key);
+      return !generatedRow
+        || row.selected !== generatedRow.selected
+        || eventDivisionName(row.value) !== eventDivisionName(generatedRow.value);
+    });
 
   function toggleSkill(skill: string) {
     setSkills((current) => current.includes(skill) ? current.filter((value) => value !== skill) : [...current, skill]);
@@ -417,15 +434,13 @@ export default function TournamentDivisionPresetDialog({
     setGenders((current) => current.includes(gender) ? current.filter((value) => value !== gender) : [...current, gender]);
   }
 
-  async function submit() {
+  async function submit(): Promise<ActionCompletion> {
     if (customSkillEnabled && parsedSkillAnchor(customSkill) == null) {
-      setMessage("Custom skill must be a numeric rating between 1.0 and 7.0.");
-      return;
+      throw new InteractionActionError("Custom skill must be a numeric rating between 1.0 and 7.0.", { kind: "validation", fieldErrors: { "Custom skill": "Enter a numeric rating between 1.0 and 7.0." } });
     }
     const selectedProposals = proposals.filter((row) => row.selected);
     if (!selectedProposals.length) {
-      setMessage("Choose at least one new division.");
-      return;
+      throw new InteractionActionError("Choose at least one new division.", { kind: "validation", fieldErrors: { "Proposed divisions": "Select at least one new division." } });
     }
 
     const familyName = eventFamilyName(activeFamily.value).toLowerCase();
@@ -460,29 +475,13 @@ export default function TournamentDivisionPresetDialog({
         const issue = issues.get(row.key);
         return issue ? { ...row, duplicate: true, selected: false, issue } : row;
       }));
-      setMessage("Resolve the highlighted division names, then select them again.");
-      return;
+      throw new InteractionActionError("Resolve the highlighted division names, then select them again.", { kind: "validation", fieldErrors: { "Division names": "Every selected division must have a unique name." } });
     }
-
-    setSubmitting(true);
-    try {
-      await onConfirm(selectedProposals.map((row) => row.value));
-    } finally {
-      setSubmitting(false);
-    }
+    return onConfirm(selectedProposals.map((row) => row.value));
   }
 
   return (
-    <div
-      role="presentation"
-      style={{ position: "fixed", inset: 0, zIndex: 1100, display: "grid", placeItems: "center", padding: "1rem", background: "rgba(15, 23, 42, 0.62)" }}
-      onMouseDown={(event) => { if (event.target === event.currentTarget && !submitting) onCancel(); }}
-    >
-      <section role="dialog" aria-modal="true" aria-labelledby="division-preset-title" style={{ width: "min(1120px, 100%)", maxHeight: "calc(100vh - 2rem)", overflowY: "auto", padding: "1.1rem", borderRadius: "16px", background: "white", boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)" }}>
-        <h2 id="division-preset-title" style={{ marginTop: 0 }}>Generate divisions for {eventFamilyName(activeFamily.value)}</h2>
-        <p style={{ color: "#475569" }}>
-          Select common eligibility, gender, and age combinations once. The preview updates automatically, existing divisions are detected, and generated rows inherit Event defaults.
-        </p>
+    <FormDialog open={open} mode="bulk" size="xwide" title={`Generate divisions for ${eventFamilyName(activeFamily.value)}`} description="Select common eligibility, gender, and age combinations once. The preview updates automatically, existing divisions are detected, and generated rows inherit Event defaults." dirty={presetDirty} submitLabel="Save selected divisions" submitDisabled={!proposals.some((row) => row.selected && !row.duplicate)} workingLabel="Saving divisions…" onSubmit={submit} onCancel={onCancel} onAcknowledge={onAcknowledge}>
 
         <fieldset style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.75rem", marginBottom: "0.85rem" }}>
           <legend style={{ fontWeight: 800 }}>Skill eligibility</legend>
@@ -568,8 +567,8 @@ export default function TournamentDivisionPresetDialog({
               {proposals.map((proposal, index) => (
                 <article key={proposal.key} style={{ border: `1px solid ${proposal.duplicate ? "#fde68a" : "#e2e8f0"}`, borderRadius: "12px", padding: "0.7rem", background: proposal.duplicate ? "#fffbeb" : "#f8fafc" }}>
                   <div style={{ display: "grid", gridTemplateColumns: "auto minmax(220px, 2fr) minmax(140px, 1fr) minmax(120px, 1fr)", gap: "0.6rem", alignItems: "end" }}>
-                    <input type="checkbox" aria-label={`Select proposal ${index + 1}`} checked={proposal.selected} disabled={submitting || proposal.duplicate} onChange={(event) => setProposals((current) => current.map((row) => row.key === proposal.key ? { ...row, selected: event.target.checked } : row))} />
-                    <label><strong>Division name</strong><br /><input value={eventDivisionName(proposal.value)} disabled={submitting} style={inputStyle} onChange={(event) => setProposals((current) => current.map((row) => row.key === proposal.key ? {
+                    <input type="checkbox" aria-label={`Select proposal ${index + 1}`} checked={proposal.selected} disabled={proposal.duplicate} onChange={(event) => setProposals((current) => current.map((row) => row.key === proposal.key ? { ...row, selected: event.target.checked } : row))} />
+                    <label><strong>Division name</strong><br /><input value={eventDivisionName(proposal.value)} style={inputStyle} onChange={(event) => setProposals((current) => current.map((row) => row.key === proposal.key ? {
                       ...row,
                       duplicate: false,
                       issue: undefined,
@@ -588,13 +587,6 @@ export default function TournamentDivisionPresetDialog({
         </div>
 
         {message ? <p role="status" style={{ color: /required|choose|resolve/i.test(message) ? "#b91c1c" : "#475569" }}>{message}</p> : null}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.65rem", flexWrap: "wrap", marginTop: "1rem" }}>
-          <button type="button" disabled={submitting} onClick={onCancel} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #64748b", background: "white", color: "#0f172a", fontWeight: 800, cursor: "pointer" }}>Cancel</button>
-          <button type="button" disabled={submitting || !proposals.some((row) => row.selected && !row.duplicate)} onClick={() => void submit()} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800, cursor: "pointer" }}>
-            {submitting ? "Saving divisions…" : "Save selected divisions"}
-          </button>
-        </div>
-      </section>
-    </div>
+    </FormDialog>
   );
 }

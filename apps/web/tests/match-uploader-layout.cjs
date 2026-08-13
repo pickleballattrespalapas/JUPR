@@ -55,6 +55,17 @@ assert.match(form, /Choose matches to edit/, "multi-match manual uploads must pr
 assert.match(form, /\/admin\/match-log\/bulk/, "multi-match results must route to Bulk edit");
 assert.match(form, /params\.set\("match_ids"/, "bulk handoff must filter all created match IDs");
 assert.match(form, /params\.set\("selected_ids"/, "bulk handoff must preselect created match IDs");
+assert.match(form, /Check exact operation/, "uncertain player creation must expose exact-operation readback");
+assert.match(form, /player_operation_endpoint/, "player-operation readback must honor the advertised API endpoint");
+assert.match(form, /Authorization: `Bearer \$\{accessToken\}`/, "player-operation readback must use the authenticated admin session");
+assert.match(form, /clearDirectMatchIdempotencyKey\(recovery\.operationScope, recovery\.operationKey\)/, "completed player operations must clear the retained exact key");
+assert.match(form, /mergePlayers\(current, recoveredResult\.players/, "completed player-operation readback must merge the authoritative players");
+assert.match(form, /operationStatus === "failed"[\s\S]*clearPlayerBatchRecovery\(\)/, "proven failed operations must release their retained key after inspection");
+assert.match(form, /detailRecord\.message/, "structured API recovery messages must remain human-readable");
+assert.match(form, /sessionStorage\?\.setItem\([\s\S]*operationScope/, "uncertain player-operation key and scope must survive a page reload");
+assert.match(form, /playerOperationPath\(recovery\.operationKey\)\}\/reconcile/, "recovery-required player batches must call the exact reconcile endpoint");
+assert.match(form, /confirmation_text: "RECONCILE PLAYER BATCH"/, "player-batch reconciliation must carry explicit reviewed intent");
+assert.doesNotMatch(form, /retry it unchanged to reconcile safely/, "uncertain player creation must require status inspection before retry");
 assert.match(matchLogWorkspace, /match_ids\?: string/, "Match Log search params must support multiple IDs");
 assert.match(matchLogWorkspace, /name="match_ids"/, "Match Log filter must accept multiple IDs");
 assert.match(matchLogWorkspace, /initialSelectedIds=\{initialSelectedIds\}/, "Bulk edit must receive the uploaded match selection");

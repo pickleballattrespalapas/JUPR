@@ -2,6 +2,7 @@
 
 import { useId } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import {
   FACILITY_COURT_LIMIT,
   cleanString,
@@ -89,7 +90,10 @@ export function TournamentSetupDayCard({
             confirmationText=""
             tone="danger"
             disabled={disabled || !onRemove}
-            onConfirm={() => onRemove?.()}
+            onConfirm={async () => {
+              onRemove?.();
+              return actionSuccess("Day removed", "The day was removed from the unpublished local draft.");
+            }}
           />
         </div>
       ) : null}

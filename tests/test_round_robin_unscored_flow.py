@@ -180,12 +180,12 @@ def test_public_and_staff_component_navigation_contracts() -> None:
     admin_ui = _function_block(
         admin_runner,
         "  async function markRoundPlayed",
-        "  async function skipRound",
+        "  async function executeSkipRound",
     )
     public_ui = _function_block(
         public_runner,
         "  async function markRoundPlayed",
-        "  async function skipRound",
+        "  async function executeSkipRound",
     )
     for block in (admin_ui, public_ui):
         assert "/played" in block

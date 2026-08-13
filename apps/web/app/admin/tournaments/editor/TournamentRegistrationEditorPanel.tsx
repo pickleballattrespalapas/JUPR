@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import type {
   AdminTournamentDetailResponse,
   AdminTournamentRegistration,
@@ -156,7 +157,7 @@ export default function TournamentRegistrationEditorPanel({ apiBase, clubId, sta
   async function saveRegistration(confirmationText: string) {
     if (!selectedRegistration?.updated_at) {
       setMessage("Reload this registration before saving.");
-      return;
+      throw new Error("Reload this registration before saving.");
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -176,11 +177,14 @@ export default function TournamentRegistrationEditorPanel({ apiBase, clubId, sta
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Registration saved", `${selectedRegistration.display_name}'s registration and payment status were updated.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadDetail(selectedRegistration.id, selectedSelectionId);
       if (actionRequest.isCurrent(generation)) setMessage("Registration saved.");
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save registration.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -189,7 +193,7 @@ export default function TournamentRegistrationEditorPanel({ apiBase, clubId, sta
   async function saveSelection(confirmationText: string) {
     if (!selectedSelection?.updated_at) {
       setMessage("Reload this event entry before saving.");
-      return;
+      throw new Error("Reload this event entry before saving.");
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -209,11 +213,14 @@ export default function TournamentRegistrationEditorPanel({ apiBase, clubId, sta
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Event entry saved", "The selected division and partner-board state were updated.");
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadDetail(selectedRegistrationId, selectedSelection.id);
       if (actionRequest.isCurrent(generation)) setMessage("Event entry saved.");
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save event entry.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }

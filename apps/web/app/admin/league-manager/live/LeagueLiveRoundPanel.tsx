@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
 import type { AdminLeagueLiveStatusResponse, AdminLeagueManagerDetailResponse, AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
 import type { AdminMatchUploaderRoundRobinCourt, AdminMatchUploaderRoundRobinPreview, AdminMatchUploaderStatusResponse } from "@/lib/adminMatchUploaderApi";
 import type { PublicPlayer } from "@/lib/api";
@@ -46,6 +47,10 @@ type LeagueLiveRosterSuggestion = { ok: boolean; roster: LeagueLiveRosterRow[]; 
 type LeagueLiveRoundPlan = { ok: boolean; operation_key: string; session_updated_at: string; round_number: number; next_round: number; ready_to_save: boolean; scored_match_count: number; warnings: string[]; movement: LeagueMovementPayload; next_roster: LeagueLiveRosterRow[]; next_courts: LeagueLiveCourt[]; bench: LeagueLiveRosterRow[]; bench_player_ids: number[] };
 type LeagueLiveGuestResponse = { ok: boolean; idempotent_replay: boolean; player: { id: number; name: string; rating?: number | null; rating_jupr?: number | null }; guest_operation_id: string };
 type LeagueLiveExportResponse = { ok: boolean; kind: string; filename: string; content_type: string; row_count: number; csv_text: string };
+type LeagueLiveCreateRecovery = { operationKey: string; status: string; message: string };
+type StoredLeagueLiveCreateRecovery = LeagueLiveCreateRecovery & { version: 1 };
+type LeagueLiveCreateOperationResponse = { ok: boolean; operation_key: string; status: string; result?: LeagueLiveWriteResponse | null; error?: string | null; recovery_required?: boolean; updated_at?: string | null };
+type LeagueLiveCreateReconcileResponse = Partial<LeagueLiveWriteResponse> & { ok: boolean; status?: string; recovery_required?: boolean; error?: string | null };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
@@ -68,6 +73,24 @@ function scoreIsValid(score: ScoreDraft): boolean {
   const a = Number(score.scoreT1);
   const b = Number(score.scoreT2);
   return Number.isInteger(a) && Number.isInteger(b) && a >= 0 && b >= 0 && a !== b && a + b > 0;
+}
+
+class LeagueLiveRequestError extends Error {
+  readonly status: number;
+  readonly uncertain: boolean;
+  readonly operationKey: string | null;
+
+  constructor(message: string, status: number, uncertain = false, operationKey: string | null = null) {
+    super(message);
+    this.name = "LeagueLiveRequestError";
+    this.status = status;
+    this.uncertain = uncertain;
+    this.operationKey = operationKey;
+  }
+}
+
+function leagueLiveWriteIsUncertain(error: unknown): boolean {
+  return !(error instanceof LeagueLiveRequestError) || error.uncertain;
 }
 
 function courtsToPayload(courts: CourtDraft[], currentRound: number) {
@@ -157,11 +180,51 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [loadingLeagueName, setLoadingLeagueName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [createRecovery, setCreateRecovery] = useState<LeagueLiveCreateRecovery | null>(null);
+  const [checkingCreateRecovery, setCheckingCreateRecovery] = useState(false);
+  const createSessionOperationRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const leagueListRequest = useLatestRequestGuard(accessToken, clearProtectedLiveWorkspace);
   const leagueDetailRequest = useLatestRequestGuard(accessToken);
   const sessionListRequest = useLatestRequestGuard(accessToken);
   const sessionDetailRequest = useLatestRequestGuard(accessToken);
   const actionRequest = useLatestRequestGuard(accessToken);
+  const createRecoveryStorageKey = `jupr-league-live-create-recovery:${clubId}`;
+
+  useEffect(() => {
+    setCreateRecovery(null);
+    try {
+      const raw = globalThis.sessionStorage?.getItem(createRecoveryStorageKey);
+      if (!raw) return;
+      const stored = JSON.parse(raw) as Partial<StoredLeagueLiveCreateRecovery>;
+      if (stored.version === 1 && typeof stored.operationKey === "string" && typeof stored.status === "string" && typeof stored.message === "string") {
+        setCreateRecovery(stored as StoredLeagueLiveCreateRecovery);
+      }
+    } catch {
+      // The in-memory guard remains available when session storage is blocked.
+    }
+  }, [createRecoveryStorageKey]);
+
+  function retainCreateRecovery(recovery: LeagueLiveCreateRecovery) {
+    setCreateRecovery(recovery);
+    try {
+      globalThis.sessionStorage?.setItem(
+        createRecoveryStorageKey,
+        JSON.stringify({ version: 1, ...recovery } satisfies StoredLeagueLiveCreateRecovery),
+      );
+    } catch {
+      // The in-memory state still blocks another session create in this page session.
+    }
+  }
+
+  function clearCreateRecovery() {
+    setCreateRecovery(null);
+    createSessionOperationRef.current = null;
+    try {
+      globalThis.sessionStorage?.removeItem(createRecoveryStorageKey);
+    } catch {
+      // A conclusive server result remains authoritative if cleanup is blocked.
+    }
+  }
 
   const currentRound = Math.max(1, Number(roundNumber) || 1);
   const safeTotalRounds = Math.max(currentRound, Number(totalRounds) || currentRound);
@@ -194,7 +257,19 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     if (options?.body) headers.set("Content-Type", "application/json");
     const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+    if (!response.ok) {
+      const detail = payload?.detail;
+      const detailRecord = detail && typeof detail === "object" ? detail as Record<string, unknown> : null;
+      const errorMessage = typeof detail === "string" ? detail : String(detailRecord?.message || `API error (${response.status})`);
+      const explicitlyFailed = detailRecord?.kind === "failed" && detailRecord?.recovery_required !== true;
+      const uncertainStatus = response.status >= 500 || [408, 425, 429].includes(response.status);
+      throw new LeagueLiveRequestError(
+        errorMessage,
+        response.status,
+        detailRecord?.kind === "uncertain" || detailRecord?.recovery_required === true || (!explicitlyFailed && uncertainStatus),
+        typeof detailRecord?.operation_key === "string" ? detailRecord.operation_key : null,
+      );
+    }
     return payload as T;
   }
 
@@ -460,39 +535,142 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  async function createSession(confirmationText: string) {
+  async function applyRecoveredLiveSession(recovered: LeagueLiveCreateReconcileResponse) {
+    if (!recovered.session) throw new Error("The completed operation did not include an authoritative League Live session.");
+    applySession(recovered.session, recovered.courts || [], recovered.rounds || []);
+    setLiveSessions((current) => [
+      ...current.filter((row) => row.id !== recovered.session?.id),
+      recovered.session as LeagueLiveSession,
+    ].sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || ""))));
+  }
+
+  async function reconcileCreateSession(
+    retainedRecovery: LeagueLiveCreateRecovery | null = createRecovery,
+  ): Promise<ActionCompletion> {
+    if (!retainedRecovery) throw new Error("No League Live create operation is waiting for recovery.");
+    const path = `/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-operations/${encodeURIComponent(retainedRecovery.operationKey)}`;
+    setCheckingCreateRecovery(true);
+    setMessage(null);
+    try {
+      const operation = await requestJson<LeagueLiveCreateOperationResponse>(path);
+      let operationStatus = String(operation.status || "unknown");
+      let recoveryRequired = operation.recovery_required === true;
+      let recovered: LeagueLiveCreateReconcileResponse | null = operation.result || null;
+
+      if (operationStatus !== "completed" && operationStatus !== "failed") {
+        recovered = await requestJson<LeagueLiveCreateReconcileResponse>(`${path}/reconcile`, {
+          method: "POST",
+          body: JSON.stringify({
+            confirmation_text: "RECONCILE LIVE SESSION",
+            source: "next_league_live_session_create_reconcile",
+          }),
+        });
+        operationStatus = recovered.ok === false ? String(recovered.status || "failed") : "completed";
+        recoveryRequired = recovered.recovery_required === true;
+      }
+
+      if (operationStatus === "completed" && recovered?.ok !== false) {
+        await applyRecoveredLiveSession(recovered || { ok: true });
+        clearCreateRecovery();
+        const successMessage = `Exact League Live operation ${retainedRecovery.operationKey} completed. Its authoritative session is now loaded.`;
+        setMessage(successMessage);
+        return actionSuccess("League Live session reconciled", successMessage);
+      }
+
+      if (operationStatus === "failed" && !recoveryRequired) {
+        clearCreateRecovery();
+        const failedMessage = `Exact League Live operation ${retainedRecovery.operationKey} is proven failed. Review current sessions before starting a new create request.`;
+        setMessage(failedMessage);
+        return actionSuccess("League Live operation checked", failedMessage);
+      }
+
+      const pending = { ...retainedRecovery, status: operationStatus, message: operation.error || retainedRecovery.message };
+      retainCreateRecovery(pending);
+      return actionUncertain(
+        "League Live session still needs verification",
+        `Operation ${retainedRecovery.operationKey} is ${operationStatus.replace(/_/g, " ")}. Creating another session remains blocked.`,
+        retainedRecovery.operationKey,
+        "Check and reconcile exact operation",
+        () => reconcileCreateSession(pending),
+      );
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unable to reconcile the League Live session create.";
+      const pending = { ...retainedRecovery, status: "recovery_required", message: errorMessage };
+      retainCreateRecovery(pending);
+      setMessage(`${errorMessage} Operation ${retainedRecovery.operationKey} remains retained; do not create another session.`);
+      return actionUncertain(
+        "League Live session still needs verification",
+        `${errorMessage} The exact operation reference remains retained.`,
+        retainedRecovery.operationKey,
+        "Check and reconcile exact operation",
+        () => reconcileCreateSession(pending),
+      );
+    } finally {
+      setCheckingCreateRecovery(false);
+    }
+  }
+
+  async function createSession(confirmationText: string): Promise<ActionCompletion> {
+    if (createRecovery) throw new Error(`Resolve exact operation ${createRecovery.operationKey} before creating another League Live session.`);
     if (!leagueName || !detail || loadedLeagueName !== leagueName || !rosterSuggestion || !sessionRoster.length) {
-      setMessage("Load the selected league roster and Python court suggestion before creating a persisted session.");
-      return;
+      const error = new Error("Load the selected league roster and Python court suggestion before creating a persisted session.");
+      setMessage(error.message);
+      throw error;
     }
     const generation = actionRequest.begin();
+    const request = {
+      league_name: leagueName,
+      week_tag: weekTag,
+      total_rounds: safeTotalRounds,
+      current_round: currentRound,
+      roster: rosterForWrite(),
+      courts: courtsToPayload(courts, currentRound),
+      bench_player_ids: benchOverrideIds,
+      bench_override_reason: benchOverrideReason || null,
+      notes: sessionNotes,
+      confirmation_text: confirmationText,
+      source: "next_league_live_session_create"
+    };
+    const requestFingerprint = JSON.stringify(request);
+    const idempotencyKey = createSessionOperationRef.current?.fingerprint === requestFingerprint
+      ? createSessionOperationRef.current.key
+      : `league-live:${globalThis.crypto.randomUUID()}`;
+    createSessionOperationRef.current = { fingerprint: requestFingerprint, key: idempotencyKey };
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions`, {
         method: "POST",
-        body: JSON.stringify({
-          league_name: leagueName,
-          week_tag: weekTag,
-          total_rounds: safeTotalRounds,
-          current_round: currentRound,
-          roster: rosterForWrite(),
-          courts: courtsToPayload(courts, currentRound),
-          bench_player_ids: benchOverrideIds,
-          bench_override_reason: benchOverrideReason || null,
-          notes: sessionNotes,
-          confirmation_text: confirmationText,
-          source: "next_league_live_session_create"
-        })
+        body: JSON.stringify({ ...request, idempotency_key: idempotencyKey })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      createSessionOperationRef.current = null;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the League Live creation response was applied.");
       applySession(payload.session, payload.courts || [], []);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before League Live sessions could be refreshed.");
       await loadSessions();
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the created session was confirmed.");
       setMessage("Persisted League Live session created. You can now resume it later from this page.");
+      return actionSuccess("League Live session created", "The persisted session was created and can be resumed later from this page.");
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to create persisted session.");
+      if (leagueLiveWriteIsUncertain(error)) {
+        const operationKey = error instanceof LeagueLiveRequestError && error.operationKey ? error.operationKey : idempotencyKey;
+        const recovery: LeagueLiveCreateRecovery = {
+          operationKey,
+          status: "uncertain",
+          message: error instanceof Error ? error.message : "Unable to confirm League Live session creation.",
+        };
+        retainCreateRecovery(recovery);
+        return actionUncertain(
+          "League Live session outcome needs checking",
+          "The request was sent, but its durable result could not be confirmed. Check and reconcile the retained operation before creating another session.",
+          operationKey,
+          "Check and reconcile exact operation",
+          () => reconcileCreateSession(recovery)
+        );
+      }
+      createSessionOperationRef.current = null;
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -528,8 +706,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  async function saveSessionSnapshot(confirmationText: string) {
-    if (!requireCurrentSession("saving a snapshot")) return;
+  async function saveSessionSnapshot(confirmationText: string): Promise<ActionCompletion> {
+    if (!requireCurrentSession("saving a snapshot")) throw new Error("Resume the current persisted session before saving a snapshot.");
     const generation = actionRequest.begin();
     const requestedSessionId = loadedSessionId;
     setBusy(true);
@@ -552,11 +730,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           source: "next_league_live_session_snapshot"
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the saved snapshot response was applied.");
       applySession(payload.session, payload.courts || [], roundHistory);
       setMessage("League Live session snapshot saved.");
+      return actionSuccess("Session snapshot saved", "The League Live session snapshot was saved.");
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save session snapshot.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -685,19 +865,22 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  async function submitRound(confirmationText: string) {
-    if (!requireCurrentSession("submitting official scores")) return;
+  async function submitRound(confirmationText: string): Promise<ActionCompletion> {
+    if (!requireCurrentSession("submitting official scores")) throw new Error("Resume the current persisted session before submitting official scores.");
     const matches = buildScoredMatches();
     if (!matches.length || matches.length !== allPreviewMatches.length) {
-      setMessage(`Score every generated match before publishing (${matches.length} of ${allPreviewMatches.length} complete).`);
-      return;
+      const error = new Error(`Score every generated match before publishing (${matches.length} of ${allPreviewMatches.length} complete).`);
+      setMessage(error.message);
+      throw error;
     }
     if (!movementPlan || movementPlanStale) {
-      setMessage("Preview the current Python movement plan before submitting. Any score, roster, bench, or override change makes the previous plan stale.");
-      return;
+      const error = new Error("Preview the current Python movement plan before submitting. Any score, roster, bench, or override change makes the previous plan stale.");
+      setMessage(error.message);
+      throw error;
     }
     const generation = actionRequest.begin();
     const requestedSessionId = loadedSessionId;
+    const roundOperationKey = movementPlan.operation_key;
     setBusy(true);
     setMessage(null);
     try {
@@ -716,14 +899,14 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           bench_player_ids: benchOverrideIds,
           bench_override_reason: benchOverrideReason || null,
           expected_updated_at: sessionUpdatedAt,
-          expected_operation_key: movementPlan.operation_key,
-          idempotency_key: movementPlan.operation_key,
+          expected_operation_key: roundOperationKey,
+          idempotency_key: roundOperationKey,
           courts: courtsToPayload(courts, currentRound),
           confirmation_text: confirmationText,
           source: "next_league_live_round_submit"
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the submitted round response was applied.");
       if (payload.session) {
         applySession(payload.session, payload.courts || [], payload.rounds || [...roundHistory, ...(payload.round ? [payload.round] : [])]);
         setRoundNumber(String(payload.session.current_round || currentRound));
@@ -733,26 +916,38 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       setScores({});
       if (requestedSessionId) {
         await loadSessionDetail(requestedSessionId);
-        if (!actionRequest.isCurrent(generation)) return;
+        if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the published round could be refreshed.");
       }
       setRatingReview(payload.rating_review || null);
       const movementText = plannedMovement?.applied ? ` Applied ${plannedMovement.rows.filter((row) => row.direction !== "stay").length} court movement(s) for the next round.` : " No court movement was required.";
-      setMessage(`${payload.idempotent_replay ? "Reconciled" : "Published"} ${payload.published_match_ids?.length ?? matches.length} league match(es) through one durable Python operation.${movementText}`);
+      const successMessage = `${payload.idempotent_replay ? "Reconciled" : "Published"} ${payload.published_match_ids?.length ?? matches.length} league match(es) through one durable Python operation.${movementText}`;
+      setMessage(successMessage);
+      return actionSuccess(payload.idempotent_replay ? "League round reconciled" : "League round published", successMessage);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to submit league round.");
+      if (leagueLiveWriteIsUncertain(error)) {
+        return actionUncertain(
+          "League round publish needs verification",
+          "The durable publish may have completed. Retry with the same movement-plan operation reference to reconcile without duplicating matches.",
+          roundOperationKey,
+          "Retry exact league-round publish",
+          () => submitRound(confirmationText)
+        );
+      }
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function createGuest(confirmationText: string) {
-    if (!requireCurrentSession("creating a guest")) return;
+  async function createGuest(confirmationText: string): Promise<ActionCompletion> {
+    if (!requireCurrentSession("creating a guest")) throw new Error("Resume the current persisted session before creating a guest.");
     const generation = actionRequest.begin();
     const requestedSessionId = loadedSessionId;
+    const idempotencyKey = `guest:${requestedSessionId}:${guestName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60)}`;
     setBusy(true);
     setMessage(null);
     try {
-      const idempotencyKey = `guest:${requestedSessionId}:${guestName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60)}`;
       const payload = await requestJson<LeagueLiveGuestResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/guests`, {
         method: "POST",
         body: JSON.stringify({
@@ -765,23 +960,35 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           source: "next_league_live_guest_create"
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the guest response was applied.");
       const guest = { id: Number(payload.player.id), name: payload.player.name, rating: payload.player.rating };
       setGuestPlayers((current) => current.some((row) => row.id === guest.id) ? current : [...current, guest]);
       setIncomingPlayerId(String(guest.id));
       setGuestName("");
       setGuestReason("");
       markPlanStale();
-      setMessage(`${payload.idempotent_replay ? "Recovered" : "Created"} guest ${guest.name}. Select add or substitute, then preview Python movement again.`);
+      const successMessage = `${payload.idempotent_replay ? "Recovered" : "Created"} guest ${guest.name}. Select add or substitute, then preview Python movement again.`;
+      setMessage(successMessage);
+      return actionSuccess(payload.idempotent_replay ? "Guest recovered" : "Guest created", successMessage);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to create League Live guest.");
+      if (leagueLiveWriteIsUncertain(error)) {
+        return actionUncertain(
+          "Guest creation needs verification",
+          "The guest request may have completed. Retry the exact retained request to reconcile before adding the guest again.",
+          idempotencyKey,
+          "Retry exact guest creation",
+          () => createGuest(confirmationText)
+        );
+      }
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function reconcileRound(round: number, confirmationText: string) {
-    if (!requireCurrentSession("reconciling a round")) return;
+  async function reconcileRound(round: number, confirmationText: string): Promise<ActionCompletion> {
+    if (!requireCurrentSession("reconciling a round")) throw new Error("Resume the current persisted session before reconciling a round.");
     const generation = actionRequest.begin();
     const requestedSessionId = loadedSessionId;
     setBusy(true);
@@ -791,20 +998,22 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         method: "POST",
         body: JSON.stringify({ confirmation_text: confirmationText, source: "next_league_live_round_reconcile" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the round reconciliation response was applied.");
       await loadSessionDetail(requestedSessionId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the reconciled round could be refreshed.");
       setRatingReview(payload.rating_review || null);
       setMessage(`Round ${round} publish and League Live snapshot are reconciled. No match was republished.`);
+      return actionSuccess("League round reconciled", `Round ${round} and its League Live snapshot were reconciled without republishing a match.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to reconcile League Live round.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function verifyCompensation(round: number, confirmationText: string) {
-    if (!requireCurrentSession("verifying compensation")) return;
+  async function verifyCompensation(round: number, confirmationText: string): Promise<ActionCompletion> {
+    if (!requireCurrentSession("verifying compensation")) throw new Error("Resume the current persisted session before verifying compensation.");
     const generation = actionRequest.begin();
     const requestedSessionId = loadedSessionId;
     setBusy(true);
@@ -819,14 +1028,16 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           source: "next_league_live_round_compensate"
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the compensation response was applied.");
       setCompensationReference("");
       setCompensationReason("");
       await loadSessionDetail(requestedSessionId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the compensated round could be refreshed.");
       setMessage(`Round ${round} recovery is recorded as compensated. No active deterministic match context remained.`);
+      return actionSuccess("Round compensation verified", `Round ${round} recovery was recorded as compensated.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to verify League Live compensation.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -884,6 +1095,18 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         {sessionMessage ? <p style={{ color: "#64748b" }}>{sessionMessage}</p> : null}
       </article>
 
+      {createRecovery ? (
+        <article aria-live="polite" style={{ ...cardStyle, background: "#fffbeb", borderColor: "#f59e0b" }}>
+          <h2 style={{ marginTop: 0 }}>Session create needs exact-operation recovery</h2>
+          <p style={{ color: "#92400e" }}>Do not create another persisted League Live session until this exact operation is reconciled.</p>
+          <p><strong>Operation key:</strong> <code style={{ overflowWrap: "anywhere" }}>{createRecovery.operationKey}</code><br /><strong>Last known status:</strong> {createRecovery.status.replace(/_/g, " ")}</p>
+          <p>{createRecovery.message}</p>
+          <button type="button" onClick={() => void reconcileCreateSession()} disabled={checkingCreateRecovery || !accessToken} style={ghostButtonStyle}>
+            {checkingCreateRecovery ? "Checking and reconciling…" : "Check and reconcile exact operation"}
+          </button>
+        </article>
+      ) : null}
+
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>1. League and persisted session</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
@@ -916,7 +1139,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
             description="This saves the current league, roster, bench, court, and round settings as a resumable session."
             confirmLabel="Yes, create session"
             confirmationText="CREATE LIVE SESSION"
-            disabled={busy || !leagueName || !detail || loadedLeagueName !== leagueName || !rosterSuggestion || !sessionRoster.length}
+            disabled={busy || Boolean(createRecovery) || !leagueName || !detail || loadedLeagueName !== leagueName || !rosterSuggestion || !sessionRoster.length}
             busy={busy}
             onConfirm={createSession}
           />

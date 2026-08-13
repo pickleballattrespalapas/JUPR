@@ -78,6 +78,11 @@ class PublicTournamentRegistrationEditLinkRequest(BaseModel):
     registration_slug: str | None = None
     email: str
     website: str | None = None
+    idempotency_key: str = Field(
+        min_length=8,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
 
 
 class PublicTournamentRegistrationProfileResolutionRequest(BaseModel):
@@ -167,6 +172,7 @@ def install_public_tournament_registration_routes(
                 tournament_id=payload.tournament_id,
                 registration_slug=payload.registration_slug,
                 website=payload.website,
+                idempotency_key=payload.idempotency_key,
             )
         except PublicRegistrationEditUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc

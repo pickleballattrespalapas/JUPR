@@ -205,7 +205,7 @@ def test_admin_tools_scopes_reads_independently_and_guards_every_secondary_actio
     assert "const socialQueueRequest = useLatestRequestGuard(accessToken);" in source
     assert "const actionRequest = useLatestRequestGuard(accessToken);" in source
     assert source.count("const generation = actionRequest.begin();") >= 9
-    assert source.count("if (!actionRequest.isCurrent(generation)) return;") >= 9
+    assert source.count("if (!actionRequest.isCurrent(generation)) return") >= 9
     assert "overviewMessage" in source
     assert "socialQueueMessage" in source
 
@@ -217,8 +217,8 @@ def test_player_updates_auto_loads_date_ranges_and_ignores_old_session_responses
     assert "const workspaceRequest = useLatestRequestGuard(workspaceScope, clearProtectedWorkspace);" in source
     assert "const actionRequest = useLatestRequestGuard(accessToken);" in source
     assert "useAuthenticatedAutoLoad(" in source
-    assert "if (!workspaceRequest.isCurrent(generation)) return;" in source
-    assert "if (!actionRequest.isCurrent(generation)) return;" in source
+    assert "if (!workspaceRequest.isCurrent(generation)) return" in source
+    assert "if (!actionRequest.isCurrent(generation)) return" in source
     assert "Loading the selected date range…" in source
     assert "Refresh workspace" in source
     assert "Reload workspace" not in source
@@ -247,7 +247,7 @@ def test_replay_history_ignores_old_token_responses_and_clears_protected_results
     assert "setResult(null);" in source
     assert "setIdempotencyKey(requestKey());" in source
     assert "const generation = replayRequest.begin();" in source
-    assert "if (!replayRequest.isCurrent(generation)) return;" in source
+    assert "if (replayRequest.isCurrent(generation)) {" in source
     assert "if (replayRequest.isCurrent(generation)) setPending(false);" in source
     assert "disabled={pending}" in source
 
@@ -304,7 +304,7 @@ def test_secondary_reports_actions_and_recap_writes_ignore_old_token_responses()
     assert awards.count("if (!actionRequest.isCurrent(generation)) return;") >= 2
     assert "const writeRequest = useLatestRequestGuard(accessToken);" in recap
     assert recap.count("const generation = writeRequest.begin();") >= 3
-    assert recap.count("if (!writeRequest.isCurrent(generation)) return;") >= 5
+    assert recap.count("if (!writeRequest.isCurrent(generation)) return") >= 5
 
 
 def test_league_awards_browser_flow_uses_accessible_confirmation_dialogs() -> None:

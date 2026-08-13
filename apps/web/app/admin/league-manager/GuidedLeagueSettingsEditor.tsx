@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type {
   AdminLeagueManagerDetailResponse,
   AdminLeagueManagerSchedulePreviewResponse,
@@ -304,13 +305,18 @@ export function GuidedLeagueSettingsEditor({ detail, saving, canWrite, onSave, o
     }
   }
 
-  async function saveSettings(confirmationText: string) {
+  async function saveSettings(confirmationText: string): Promise<ActionCompletion> {
     setLocalMessage(null);
     try {
       const patch = isDraft ? buildDraftPatch(form, detail) : { description: form.description };
-      await onSave(patch, confirmationText);
+      const saved = await onSave(patch, confirmationText);
+      if (!saved) throw new Error("The league settings were not saved. Review the page message and try again.");
+      const successMessage = isDraft ? "The structured league draft was saved." : "The league description was saved.";
+      setLocalMessage(successMessage);
+      return actionSuccess(isDraft ? "League draft saved" : "League description saved", successMessage);
     } catch (error) {
       setLocalMessage(error instanceof Error ? error.message : "Unable to validate league settings.");
+      throw error;
     }
   }
 

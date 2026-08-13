@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import type { AdminTournament, AdminTournamentDetailResponse, AdminTournamentListResponse, AdminTournamentStatusResponse, AdminTournamentWriteResponse } from "@/lib/adminTournamentApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
@@ -123,15 +124,15 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
   async function saveBulkUpdate(confirmationText: string) {
     if (!detail) {
       setMessage("Select a tournament first.");
-      return;
+      throw new Error("Select a tournament first.");
     }
     if (!selectedIds.length) {
       setMessage("Select at least one registration.");
-      return;
+      throw new Error("Select at least one registration.");
     }
     if (!registrationStatus && !paymentStatus && !appendNote.trim()) {
       setMessage("Choose a status/payment change or note to append.");
-      return;
+      throw new Error("Choose a status/payment change or note to append.");
     }
     const generation = actionRequest.begin();
     const requestedTournamentId = detail.tournament.id;
@@ -154,14 +155,18 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const updatedCount = payload.updated_count ?? payload.registration_ids?.length ?? 0;
+      const completion = actionSuccess("Registrations updated", `${updatedCount} registration${updatedCount === 1 ? "" : "s"} updated successfully.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       const refreshed = await requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(requestedTournamentId)}`);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setDetail(refreshed);
       setSelectedIds([]);
       setMessage(payload.idempotent_replay ? "Bulk response reconciled from the durable operation." : `Updated ${payload.updated_count ?? payload.registration_ids?.length ?? 0} registration(s).`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to update registrations.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
