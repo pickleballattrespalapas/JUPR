@@ -18,6 +18,7 @@ import { useAdminSession } from "@/lib/useAdminSession";
 import TournamentCommercePanel from "../commerce/TournamentCommercePanel";
 import {
   appendBuilderRow,
+  comparablePublishedConfigurationPayload,
   configurationPayload,
   dayLabel,
   dayReference,
@@ -42,6 +43,7 @@ import {
   setRecordString,
   sortDivisionsByEventAndName,
   sortEventFamiliesByTournamentDay,
+  stableSetupJsonStringify,
   syncTournamentDays,
   validateSetupConfiguration,
   withDefaultDayCourts,
@@ -316,9 +318,15 @@ function basicsDraftPayload(basics: BasicsDraft): Record<string, unknown> {
 function settingsDraftPayload(settings: Record<string, unknown>): Record<string, unknown> {
   const courts = normalizeVenueCourts(settings);
   const normalized = settingsWithVenueCourts(settings, courts);
+  const registrationSlug = safeString(settings.registration_slug)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "");
   return {
-    registration_slug: safeString(settings.registration_slug).trim(),
-    locale: safeString(settings.locale) || "en",
+    registration_slug: registrationSlug,
+    locale: safeString(settings.locale).trim() || "en",
     registration_status: safeString(settings.registration_status) || "draft",
     registration_open_at: settings.registration_open_at || null,
     registration_close_at: settings.registration_close_at || null,
@@ -328,11 +336,12 @@ function settingsDraftPayload(settings: Record<string, unknown>): Record<string,
     refund_policy_markdown: safeString(settings.refund_policy_markdown),
     weather_policy_markdown: safeString(settings.weather_policy_markdown),
     sponsor_markdown: safeString(settings.sponsor_markdown),
-    venue_address: safeString(settings.venue_address),
-    venue_directions: safeString(settings.venue_directions),
+    venue_address: safeString(settings.venue_address).trim(),
+    venue_directions: safeString(settings.venue_directions).trim(),
     venue_courts_json: normalized.venue_courts_json,
     venue_court_count: normalized.venue_court_count,
     venue_court_labels: normalized.venue_court_labels,
+    timezone: safeString(settings.timezone).trim() || "America/Mazatlan",
     forced_change_resolutions: objectValue(settings.forced_change_resolutions),
     communication_change_acknowledgements: objectValue(settings.communication_change_acknowledgements)
   };
@@ -396,19 +405,14 @@ function comparablePublishedStateSignature(
   // must not make an otherwise published setup look like an unpublished draft.
   delete comparableSettings.registration_status;
   const normalized = configurationWithVenue(configuration, settings);
-  const publishable = publishConfigurationPayload(normalized);
+  const comparableConfiguration = comparablePublishedConfigurationPayload(normalized);
   const builder = configurationPayload(normalized);
-  const comparableEventOptions = publishable.event_options.map((event) => {
-    const comparableEvent = { ...event };
-    delete comparableEvent.status;
-    return comparableEvent;
-  });
-  return JSON.stringify({
+  return stableSetupJsonStringify({
     basics: basicsDraftPayload(basics),
     settings: comparableSettings,
-    days: publishable.days,
+    days: comparableConfiguration.days,
     event_families: builder.event_families,
-    event_options: comparableEventOptions
+    event_options: comparableConfiguration.event_options
   });
 }
 
