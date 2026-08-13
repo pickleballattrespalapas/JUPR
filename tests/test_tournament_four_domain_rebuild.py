@@ -13,7 +13,14 @@ from jupr_app.domain.tournament_registration_repo import (
 )
 from jupr_app.domain.tournament_age_policy import (
     build_age_split_preview,
+    evaluate_age_eligibility,
     normalize_age_policy,
+)
+from jupr_app.domain.tournament_registration_compiler import (
+    evaluate_selection_gender_eligibility,
+)
+from jupr_app.services.admin_tournament_setup_service import (
+    preview_admin_tournament_age_split,
 )
 
 
@@ -386,8 +393,239 @@ def test_age_policy_preview_groups_entries_without_writes(monkeypatch) -> None:
 
     assert [row["count"] for row in result["brackets"]] == [1, 1, 1]
     assert all(row["viable"] for row in result["brackets"])
+    assert result["pending_entries"] == []
     assert result["unassigned_entries"] == []
     assert storage == before
+
+
+def test_age_preview_provisionally_groups_needs_partner_then_regroups() -> None:
+    policy = {
+        "mode": "AUTO_AGE_SPLIT",
+        "min_teams_per_age_group": 1,
+        "team_age_rule": "YOUNGER",
+        "brackets": [
+            {"id": "under-50", "label": "Under 50", "max_age": 49},
+            {"id": "50-64", "label": "50–64", "min_age": 50, "max_age": 64},
+            {"id": "65-plus", "label": "65+", "min_age": 65},
+        ],
+    }
+    registrations = {
+        "r1": {"id": "r1", "display_name": "Pending Partner", "age": 67},
+    }
+
+    provisional = build_age_split_preview(
+        policy=policy,
+        registrations=registrations,
+        selections=[
+            {
+                "id": "s1",
+                "registration_id": "r1",
+                "partner_mode": "NEEDS_PARTNER",
+                "partner_age": 44,
+            },
+        ],
+        participant_type="GENDER_DOUBLES",
+    )
+    provisional_entry = provisional["brackets"][2]["entries"][0]
+    assert provisional_entry["preferred_age_group"] == "65+"
+    assert provisional_entry["effective_age"] == 67
+    assert provisional_entry["partner_age"] is None
+    assert provisional_entry["pending_partner"] is True
+    assert provisional_entry["provisional"] is True
+    assert provisional["brackets"][2]["provisional_count"] == 1
+    assert provisional["pending_entries"] == []
+    assert provisional["unassigned_entries"] == []
+
+    paired = build_age_split_preview(
+        policy=policy,
+        registrations=registrations,
+        selections=[
+            {
+                "id": "s1",
+                "registration_id": "r1",
+                "partner_mode": "HAS_PARTNER",
+                "partner_age": 44,
+            },
+        ],
+        participant_type="GENDER_DOUBLES",
+    )
+    paired_entry = paired["brackets"][0]["entries"][0]
+    assert paired_entry["preferred_age_group"] == "Under 50"
+    assert paired_entry["effective_age"] == 44
+    assert paired_entry["pending_partner"] is False
+    assert paired_entry["provisional"] is False
+
+    split_age = build_age_split_preview(
+        policy={"mode": "SPLIT_AGE", "split_age_threshold": 50},
+        registrations=registrations,
+        selections=[
+            {"id": "s1", "registration_id": "r1", "partner_mode": "NEEDS_PARTNER"},
+        ],
+        participant_type="GENDER_DOUBLES",
+    )
+    assert split_age["brackets"][0]["entries"] == []
+    assert split_age["pending_entries"][0]["registration_id"] == "r1"
+    assert split_age["pending_entries"][0]["provisional"] is True
+    assert split_age["unassigned_entries"] == []
+
+
+def test_pending_partner_age_metadata_requires_a_successful_provisional_result() -> None:
+    auto_policy = {
+        "mode": "AUTO_AGE_SPLIT",
+        "brackets": [
+            {"id": "under-50", "label": "Under 50", "max_age": 49},
+            {"id": "50-plus", "label": "50+", "min_age": 50},
+        ],
+    }
+    missing_player = evaluate_age_eligibility(
+        policy=auto_policy,
+        player_age=None,
+        partner_age=None,
+        participant_type="GENDER_DOUBLES",
+        allow_missing_partner_for_preview=True,
+    )
+    assert missing_player["status"] == "MISSING_DATA"
+    assert missing_player["provisional"] is False
+    assert missing_player["recompute_when_partner_assigned"] is False
+
+    for team_age_rule in ("OLDER", "AVERAGE"):
+        pending = evaluate_age_eligibility(
+            policy={
+                "mode": "FIXED_AGE_BRACKET",
+                "label": "50+",
+                "min_age": 50,
+                "team_age_rule": team_age_rule,
+            },
+            player_age=44,
+            partner_age=None,
+            participant_type="GENDER_DOUBLES",
+            allow_missing_partner_for_preview=True,
+        )
+        assert pending["status"] == "ELIGIBLE"
+        assert pending["preferred_age_group"] is None
+        assert pending["effective_age"] == 44
+        assert pending["provisional"] is True
+
+        fixed_preview = build_age_split_preview(
+            policy={
+                "mode": "FIXED_AGE_BRACKET",
+                "label": "50+",
+                "min_age": 50,
+                "team_age_rule": team_age_rule,
+                "min_teams_per_age_group": 1,
+            },
+            registrations={
+                "r1": {"id": "r1", "display_name": "Pending Partner", "age": 44},
+            },
+            selections=[
+                {"id": "s1", "registration_id": "r1", "partner_mode": "NEEDS_PARTNER"},
+            ],
+            participant_type="GENDER_DOUBLES",
+        )
+        assert fixed_preview["brackets"][0]["count"] == 0
+        assert fixed_preview["pending_entries"][0]["registration_id"] == "r1"
+        assert fixed_preview["pending_entries"][0]["provisional"] is True
+        assert fixed_preview["unassigned_entries"] == []
+        assert not any("Resolve" in row for row in fixed_preview["recommendations"])
+
+        multi_bracket_preview = build_age_split_preview(
+            policy={
+                "mode": "AUTO_AGE_SPLIT",
+                "team_age_rule": team_age_rule,
+                "min_teams_per_age_group": 1,
+                "brackets": [
+                    {"id": "50-64", "label": "50–64", "min_age": 50, "max_age": 64},
+                    {"id": "65-plus", "label": "65+", "min_age": 65},
+                ],
+            },
+            registrations={
+                "r1": {"id": "r1", "display_name": "Pending Partner", "age": 44},
+            },
+            selections=[
+                {"id": "s1", "registration_id": "r1", "partner_mode": "NEEDS_PARTNER"},
+            ],
+            participant_type="GENDER_DOUBLES",
+        )
+        assert [row["count"] for row in multi_bracket_preview["brackets"]] == [0, 0]
+        assert multi_bracket_preview["pending_entries"][0]["registration_id"] == "r1"
+        assert multi_bracket_preview["unassigned_entries"] == []
+        assert not any("Resolve" in row for row in multi_bracket_preview["recommendations"])
+
+    deterministic_failure = evaluate_age_eligibility(
+        policy={
+            "mode": "FIXED_AGE_BRACKET",
+            "label": "50+",
+            "min_age": 50,
+            "team_age_rule": "YOUNGER",
+        },
+        player_age=44,
+        partner_age=None,
+        participant_type="GENDER_DOUBLES",
+        allow_missing_partner_for_preview=True,
+    )
+    assert deterministic_failure["status"] == "INELIGIBLE"
+    assert deterministic_failure["provisional"] is False
+
+
+def test_pending_partner_gender_is_provisional_only_when_player_data_qualifies() -> None:
+    pending_selection = {"partner_mode": "NEEDS_PARTNER"}
+
+    men = evaluate_selection_gender_eligibility(
+        event={"event_type": "GENDER_DOUBLES", "gender_restriction": "MEN"},
+        selection=pending_selection,
+        player={"gender": "Men"},
+        allow_missing_partner_for_preview=True,
+    )
+    assert men["status"] == "ELIGIBLE"
+    assert men["pending_partner"] is True
+    assert men["provisional"] is True
+    assert men["recompute_when_partner_assigned"] is True
+
+    mixed = evaluate_selection_gender_eligibility(
+        event={"event_type": "MIXED_DOUBLES", "gender_restriction": "MIXED"},
+        selection=pending_selection,
+        player={"gender": "Women"},
+        allow_missing_partner_for_preview=True,
+    )
+    assert mixed["status"] == "ELIGIBLE"
+    assert mixed["provisional"] is True
+
+    missing_player = evaluate_selection_gender_eligibility(
+        event={"event_type": "GENDER_DOUBLES", "gender_restriction": "MEN"},
+        selection=pending_selection,
+        player={"gender": None},
+        allow_missing_partner_for_preview=True,
+    )
+    assert missing_player["status"] == "MISSING_DATA"
+    assert missing_player["provisional"] is False
+
+    wrong_player = evaluate_selection_gender_eligibility(
+        event={"event_type": "GENDER_DOUBLES", "gender_restriction": "MEN"},
+        selection=pending_selection,
+        player={"gender": "Women"},
+        allow_missing_partner_for_preview=True,
+    )
+    assert wrong_player["status"] == "INELIGIBLE"
+    assert wrong_player["provisional"] is False
+
+    paired_missing = evaluate_selection_gender_eligibility(
+        event={"event_type": "GENDER_DOUBLES", "gender_restriction": "MEN"},
+        selection={"partner_mode": "HAS_PARTNER"},
+        player={"gender": "Men"},
+        allow_missing_partner_for_preview=True,
+    )
+    assert paired_missing["status"] == "MISSING_DATA"
+    assert paired_missing["provisional"] is False
+
+    paired_wrong = evaluate_selection_gender_eligibility(
+        event={"event_type": "GENDER_DOUBLES", "gender_restriction": "MEN"},
+        selection={"partner_mode": "HAS_PARTNER"},
+        player={"gender": "Men"},
+        partner={"gender": "Women"},
+        allow_missing_partner_for_preview=True,
+    )
+    assert paired_wrong["status"] == "INELIGIBLE"
+    assert paired_wrong["provisional"] is False
 
 
 def test_split_age_partner_rule_requires_one_under_and_one_at_or_above() -> None:
@@ -489,6 +727,10 @@ def test_review_reverts_only_blocked_fields_and_requires_explicit_completion() -
     assert "I completed and verified this registration action" in panel
     assert "Schedule change — no registration conflict" in panel
     assert "Age-grouping change — no registration conflict" in panel
+    assert "Provisional age group:" in panel
+    assert "recalculated when a partner is assigned." in panel
+    assert "effectiveAgeValue == null" in panel
+    assert "Entries awaiting partner-based placement" in panel
     assert "Required eligibility information" in panel
     assert "Complete the required eligibility information before acknowledging this impact" in panel
     assert "I completed and verified this communication action" in panel
@@ -506,8 +748,75 @@ def test_age_preview_uses_only_canonical_tournament_event_ids() -> None:
 
     assert "canonical_event_ids" in preview
     assert "list_event_options(supabase, str(tournament_id))" in preview
+    assert "list_partner_team_links(supabase, str(tournament_id))" in preview
+    assert "linked_partner_registration_lookup(" in preview
     assert "in canonical_event_ids" in preview
     assert 'str(row.get("event_option_id") or "").strip() in event_ids' in preview
+
+
+def test_admin_age_preview_uses_canonical_partner_link_without_writes(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    storage = base_storage()
+    storage["tournament_registrations"] = [
+        {"id": "r1", "tournament_id": "t1", "display_name": "Older", "age": 67},
+        {"id": "r2", "tournament_id": "t1", "display_name": "Younger", "age": 44},
+    ]
+    storage["tournament_registration_selections"] = [
+        {
+            "id": "s1",
+            "tournament_id": "t1",
+            "registration_id": "r1",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_mode": "NEEDS_PARTNER",
+        },
+        {
+            "id": "s2",
+            "tournament_id": "t1",
+            "registration_id": "r2",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_mode": "NEEDS_PARTNER",
+        },
+    ]
+    storage["tournament_registration_team_links"] = [
+        {
+            "id": "link-1",
+            "tournament_id": "t1",
+            "event_option_id": "event1",
+            "selection1_id": "s1",
+            "selection2_id": "s2",
+            "registration1_id": "r1",
+            "registration2_id": "r2",
+            "status": "CONFIRMED",
+        }
+    ]
+    before = deepcopy(storage)
+
+    result = preview_admin_tournament_age_split(
+        FakeSupabase(storage),
+        club_id="club",
+        tournament_id="t1",
+        event_family="Gender Doubles",
+        participant_type="GENDER_DOUBLES",
+        policy={
+            "mode": "AUTO_AGE_SPLIT",
+            "min_teams_per_age_group": 1,
+            "team_age_rule": "YOUNGER",
+            "brackets": [
+                {"id": "under-50", "label": "Under 50", "max_age": 49},
+                {"id": "50-64", "label": "50–64", "min_age": 50, "max_age": 64},
+                {"id": "65-plus", "label": "65+", "min_age": 65},
+            ],
+        },
+        event_options=storage["tournament_event_options"],
+    )
+
+    assert result["write_count"] == 0
+    assert result["total_entries"] == 1
+    assert result["unassigned_entries"] == []
+    assert [entry["effective_age"] for entry in result["brackets"][0]["entries"]] == [44]
+    assert storage == before
 
 
 def test_auto_review_does_not_loop_after_an_error() -> None:
@@ -545,6 +854,8 @@ def test_exhaustive_auto_age_split_is_communication_impact_with_targeted_missing
             "email": "samuel@example.com",
             "status": "confirmed",
             "age": 44,
+            "gender": "Men",
+            "doubles_skill": 3.2,
         },
     ]
     storage["tournament_registration_selections"] = [
@@ -570,6 +881,10 @@ def test_exhaustive_auto_age_split_is_communication_impact_with_targeted_missing
             "registration_id": "r3",
             "registration_day_id": "day1",
             "event_option_id": "event1",
+            "partner_mode": "HAS_PARTNER",
+            "partner_name": "Known Partner",
+            "partner_gender": "Men",
+            "partner_skill": 3.2,
             "partner_age": None,
         },
     ]
@@ -1205,6 +1520,7 @@ def test_upward_open_skill_event_age_regrouping_never_becomes_skill_conflict() -
             "status": "confirmed",
             "doubles_skill": 4.3,
             "age": 67,
+            "gender": "Men",
         },
         {
             "id": "missing",
@@ -1214,6 +1530,7 @@ def test_upward_open_skill_event_age_regrouping_never_becomes_skill_conflict() -
             "status": "confirmed",
             "doubles_skill": 4.4,
             "age": 44,
+            "gender": "Men",
         },
     ]
     storage["tournament_registration_selections"] = [
@@ -1226,6 +1543,7 @@ def test_upward_open_skill_event_age_regrouping_never_becomes_skill_conflict() -
             "partner_mode": "HAS_PARTNER",
             "partner_age": 68,
             "partner_skill": 5.0,
+            "partner_gender": "Men",
         },
         {
             "id": "missing-selection",
@@ -1268,5 +1586,173 @@ def test_upward_open_skill_event_age_regrouping_never_becomes_skill_conflict() -
     }
     assert by_registration["complete"]["preferred_age_group"] == "65+"
     assert by_registration["complete"]["skill_eligibility"]["status"] == "ELIGIBLE"
-    assert by_registration["missing"]["data_completion_required"] is True
-    assert [row["registration_id"] for row in detail["data_completion_registrations"]] == ["missing"]
+    pending = by_registration["missing"]
+    assert detail["requires_data_completion"] is False
+    assert detail["data_completion_registrations"] == []
+    assert pending["preferred_age_group"] == "Under 50"
+    assert pending["age_label"] == "Under 50"
+    assert pending["effective_age"] == 44
+    assert pending["age_eligibility"]["status"] == "ELIGIBLE"
+    assert pending["age_eligibility"]["pending_partner"] is True
+    assert pending["age_eligibility"]["provisional"] is True
+    assert pending["gender_eligibility"]["status"] == "ELIGIBLE"
+    assert pending["data_completion_required"] is False
+
+
+def test_split_age_review_defers_unpaired_entry_without_data_completion_block() -> None:
+    storage = base_storage()
+    storage["tournament_registrations"] = [
+        {
+            "id": "pending",
+            "tournament_id": "t1",
+            "display_name": "Pending Partner",
+            "email": "pending@example.com",
+            "status": "confirmed",
+            "doubles_skill": 3.7,
+            "age": 44,
+            "gender": "Men",
+        },
+    ]
+    storage["tournament_registration_selections"] = [
+        {
+            "id": "pending-selection",
+            "tournament_id": "t1",
+            "registration_id": "pending",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_mode": "NEEDS_PARTNER",
+        },
+    ]
+    proposed = {
+        **storage["tournament_event_options"][0],
+        "age_mode": "SPLIT_AGE",
+        "age_label": "Split age partners",
+        "age_rules": {"mode": "SPLIT_AGE", "split_age_threshold": 50},
+    }
+
+    impact = analyze_registration_publish_impact(
+        FakeSupabase(storage),
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[proposed],
+    )
+
+    assert not [row for row in impact["blocked_details"] if row["field"] == "skill_age_rules"]
+    detail = next(
+        row
+        for row in impact["communication_impact_details"]
+        if row["impact_type"] == "AGE_GROUPING_COMMUNICATION"
+    )
+    assert detail["requires_data_completion"] is False
+    assert detail["data_completion_registrations"] == []
+    assert "partner-pending registration" in detail["message"]
+    assert "recalculated when a partner is assigned" in detail["message"]
+    review = detail["affected_registrations"][0]["proposed_value"]
+    assert review["preferred_age_group"] is None
+    assert review["age_eligibility"]["status"] == "ELIGIBLE"
+    assert review["age_eligibility"]["provisional"] is True
+    assert review["age_eligibility"]["recompute_when_partner_assigned"] is True
+
+
+def test_age_review_regroups_from_canonical_linked_partner() -> None:
+    storage = base_storage()
+    storage["tournament_registrations"] = [
+        {
+            "id": "older",
+            "tournament_id": "t1",
+            "display_name": "Older Player",
+            "email": "older@example.com",
+            "status": "confirmed",
+            "doubles_skill": 3.2,
+            "age": 67,
+            "gender": "Men",
+        },
+        {
+            "id": "younger",
+            "tournament_id": "t1",
+            "display_name": "Younger Partner",
+            "email": "younger@example.com",
+            "status": "confirmed",
+            "doubles_skill": 3.3,
+            "age": 44,
+            "gender": "Men",
+        },
+    ]
+    storage["tournament_registration_selections"] = [
+        {
+            "id": "older-selection",
+            "tournament_id": "t1",
+            "registration_id": "older",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_mode": "NEEDS_PARTNER",
+            "partner_age": 88,
+            "partner_gender": "Women",
+            "partner_skill": 6.5,
+        },
+        {
+            "id": "younger-selection",
+            "tournament_id": "t1",
+            "registration_id": "younger",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_mode": "NEEDS_PARTNER",
+            "partner_age": 21,
+            "partner_gender": "Women",
+            "partner_skill": 6.5,
+        },
+    ]
+    storage["tournament_registration_team_links"] = [
+        {
+            "id": "link-1",
+            "tournament_id": "t1",
+            "event_option_id": "event1",
+            "selection1_id": "older-selection",
+            "selection2_id": "younger-selection",
+            "registration1_id": "older",
+            "registration2_id": "younger",
+            "status": "ADMIN_CONFIRMED",
+        }
+    ]
+    proposed = {
+        **storage["tournament_event_options"][0],
+        "age_mode": "AUTO_AGE_SPLIT",
+        "age_label": "Age groups",
+        "age_rules": {
+            "mode": "AUTO_AGE_SPLIT",
+            "team_age_rule": "YOUNGER",
+            "merge_strategy": "CLOSEST",
+            "min_teams_per_age_group": 1,
+            "brackets": [
+                {"id": "under-50", "label": "Under 50", "max_age": 49},
+                {"id": "50-64", "label": "50–64", "min_age": 50, "max_age": 64},
+                {"id": "65-plus", "label": "65+", "min_age": 65},
+            ],
+        },
+    }
+
+    impact = analyze_registration_publish_impact(
+        FakeSupabase(storage),
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[proposed],
+    )
+
+    detail = next(
+        row
+        for row in impact["communication_impact_details"]
+        if row["impact_type"] == "AGE_GROUPING_COMMUNICATION"
+    )
+    assert detail["requires_data_completion"] is False
+    assert detail["data_completion_registrations"] == []
+    proposed_by_registration = {
+        row["registration_id"]: row["proposed_value"]
+        for row in detail["affected_registrations"]
+    }
+    assert set(proposed_by_registration) == {"older", "younger"}
+    for review in proposed_by_registration.values():
+        assert review["preferred_age_group"] == "Under 50"
+        assert review["effective_age"] == 44
+        assert review["age_eligibility"]["pending_partner"] is False
+        assert review["gender_eligibility"]["status"] == "ELIGIBLE"
+        assert review["skill_eligibility"]["status"] == "ELIGIBLE"

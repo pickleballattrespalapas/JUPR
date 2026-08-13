@@ -394,6 +394,7 @@ def evaluate_selection_gender_eligibility(
     selection: dict[str, Any],
     player: dict[str, Any],
     partner: dict[str, Any] | None = None,
+    allow_missing_partner_for_preview: bool = False,
 ) -> dict[str, Any]:
     """Evaluate gender restrictions without treating missing data as denial."""
 
@@ -407,6 +408,8 @@ def evaluate_selection_gender_eligibility(
         "player_gender": player_gender,
         "partner_gender": partner_gender,
         "pending_partner": team_event and partner_mode == "NEEDS_PARTNER",
+        "provisional": False,
+        "recompute_when_partner_assigned": False,
     }
     if restriction == "ANY":
         return {**base, "status": "ELIGIBLE", "issue_type": None, "issue": None}
@@ -425,6 +428,20 @@ def evaluate_selection_gender_eligibility(
                 "status": "INELIGIBLE",
                 "issue_type": "GENDER_NOT_ELIGIBLE",
                 "issue": f"Player does not meet the proposed {restriction.lower()} restriction.",
+            }
+        if (
+            allow_missing_partner_for_preview
+            and team_event
+            and partner_mode == "NEEDS_PARTNER"
+            and not partner_gender
+        ):
+            return {
+                **base,
+                "status": "ELIGIBLE",
+                "issue_type": None,
+                "issue": None,
+                "provisional": True,
+                "recompute_when_partner_assigned": True,
             }
         if team_event and partner_mode in {"HAS_PARTNER", "NEEDS_PARTNER"}:
             if not partner_gender:
@@ -450,6 +467,19 @@ def evaluate_selection_gender_eligibility(
                 "status": "INELIGIBLE",
                 "issue_type": "GENDER_NOT_ELIGIBLE",
                 "issue": "Player does not meet the proposed Mixed Division rule.",
+            }
+        if (
+            allow_missing_partner_for_preview
+            and partner_mode == "NEEDS_PARTNER"
+            and not partner_gender
+        ):
+            return {
+                **base,
+                "status": "ELIGIBLE",
+                "issue_type": None,
+                "issue": None,
+                "provisional": True,
+                "recompute_when_partner_assigned": True,
             }
         if partner_mode in {"HAS_PARTNER", "NEEDS_PARTNER"}:
             if not partner_gender:
