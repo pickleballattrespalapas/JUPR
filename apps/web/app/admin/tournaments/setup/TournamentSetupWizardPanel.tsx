@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import type { ConfirmActionSuccess } from "@/components/ConfirmAction";
 import TournamentSetupWizardNav, {
   TOURNAMENT_SETUP_STEPS,
   TOURNAMENT_SETUP_DOMAINS,
@@ -2082,18 +2083,23 @@ async function saveResolutionDraft() {
     }
   }
 
-  async function publishSetup(confirmationText: string) {
-    if (!detail) return;
+  async function publishSetup(confirmationText: string): Promise<ConfirmActionSuccess | void> {
+    function rejectPublish(message: string): never {
+      setMessage(message);
+      throw new Error(message);
+    }
+
+    if (!detail) {
+      rejectPublish("Reload the tournament setup before publishing it.");
+    }
     if (
       !impactReview ||
       reviewedDraftSignature !== fullDraftSignature(basics, settings, configuration)
     ) {
-      setMessage("Review the current setup before publishing it.");
-      return;
+      rejectPublish("Review the current setup before publishing it.");
     }
     if (resolutionDraftDirty) {
-      setMessage("Save the Review actions before publishing.");
-      return;
+      rejectPublish("Save the Review actions before publishing.");
     }
     const impact = impactReview.publish_impact || {};
     const rawBlockedDetails = Array.isArray(impact.blocked_details) && impact.blocked_details.length
@@ -2103,8 +2109,7 @@ async function saveResolutionDraft() {
       .map(blockedImpactDetail)
       .filter((item) => !forcedResolutionComplete(item));
     if (unresolved.length) {
-      setMessage(`Resolve ${unresolved.length} blocked change${unresolved.length === 1 ? "" : "s"} before publishing.`);
-      return;
+      rejectPublish(`Resolve ${unresolved.length} blocked change${unresolved.length === 1 ? "" : "s"} before publishing.`);
     }
     const rawCommunicationDetails = Array.isArray(impact.communication_impact_details)
       ? impact.communication_impact_details
@@ -2113,8 +2118,7 @@ async function saveResolutionDraft() {
       .map(communicationImpactDetail)
       .filter((item) => !communicationAcknowledgementComplete(item));
     if (unresolvedCommunications.length) {
-      setMessage(`Acknowledge ${unresolvedCommunications.length} registration-preserving communication impact${unresolvedCommunications.length === 1 ? "" : "s"} before publishing.`);
-      return;
+      rejectPublish(`Acknowledge ${unresolvedCommunications.length} registration-preserving communication impact${unresolvedCommunications.length === 1 ? "" : "s"} before publishing.`);
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -2152,12 +2156,21 @@ async function saveResolutionDraft() {
       await loadDetail();
       if (actionRequest.isCurrent(generation)) {
         setMessage("Tournament setup published. Registration can now be opened.");
+        return {
+          title: "Tournament published",
+          description: (
+            <p role="status" style={{ color: "#166534", fontWeight: 800 }}>
+              The reviewed tournament setup is now published. Registration status was left unchanged.
+            </p>
+          ),
+          closeLabel: "Done"
+        };
       }
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
-        setMessage(
-          error instanceof Error ? error.message : "Unable to publish setup."
-        );
+        const publishError = error instanceof Error ? error : new Error("Unable to publish setup.");
+        setMessage(publishError.message);
+        throw publishError;
       }
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
