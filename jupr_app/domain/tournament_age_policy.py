@@ -218,6 +218,7 @@ def evaluate_age_eligibility(
     player_age: float | None,
     partner_age: float | None,
     participant_type: str,
+    allow_missing_partner_for_preview: bool = False,
 ) -> dict[str, Any]:
     """Evaluate hard age eligibility and preferred placement separately.
 
@@ -233,12 +234,18 @@ def evaluate_age_eligibility(
     mode = str(normalized["mode"])
     player = optional_number(player_age)
     partner = optional_number(partner_age)
+    pending_partner = bool(allow_missing_partner_for_preview and team_event)
+    if pending_partner:
+        partner = None
     base: dict[str, Any] = {
         "mode": mode,
         "team_age_rule": normalized["team_age_rule"],
         "player_age": player,
         "partner_age": partner if team_event else None,
         "brackets": normalized["brackets"],
+        "pending_partner": pending_partner,
+        "provisional": False,
+        "recompute_when_partner_assigned": False,
     }
 
     if mode == "ALL_AGES":
@@ -256,7 +263,7 @@ def evaluate_age_eligibility(
     missing_fields: list[str] = []
     if player is None:
         missing_fields.append("player age")
-    if team_event and partner is None:
+    if team_event and partner is None and not pending_partner:
         missing_fields.append("partner age")
 
     # Missing partner data cannot hide a known directional failure. For the
@@ -301,6 +308,23 @@ def evaluate_age_eligibility(
             "preferred_age_group": None,
         }
 
+    if mode == "SPLIT_AGE" and pending_partner:
+        # A split-age team cannot be placed until its partner is known, but an
+        # explicit partner request is not missing registrant data and must not
+        # block an otherwise valid setup change.
+        return {
+            **base,
+            "status": "ELIGIBLE",
+            "issue_type": None,
+            "issue": None,
+            "effective_age": player,
+            "eligible_age_groups": [],
+            "preferred_age_group": None,
+            "preferred_age_group_id": None,
+            "provisional": True,
+            "recompute_when_partner_assigned": True,
+        }
+
     if mode == "SPLIT_AGE":
         if not team_event:
             return {
@@ -312,6 +336,7 @@ def evaluate_age_eligibility(
                 "preferred_age_group": None,
             }
         split_threshold = optional_number(normalized.get("split_age_threshold"))
+        label = str(normalized["brackets"][0]["label"])
         player_age = player
         partner_age = partner
         matches = (
@@ -323,7 +348,6 @@ def evaluate_age_eligibility(
                 or (partner_age < split_threshold <= player_age)
             )
         )
-        label = str(normalized["brackets"][0]["label"])
         if not matches:
             return {
                 **base,
@@ -347,7 +371,7 @@ def evaluate_age_eligibility(
         }
 
     rule = str(normalized["team_age_rule"])
-    if rule == "BOTH_QUALIFY" and team_event:
+    if rule == "BOTH_QUALIFY" and team_event and not pending_partner:
         eligible = [
             bracket
             for bracket in normalized["brackets"]
@@ -358,12 +382,33 @@ def evaluate_age_eligibility(
         ]
         effective = min(player, partner)
     else:
-        effective = effective_team_age(player, partner if team_event else None, rule)
+        effective = effective_team_age(
+            player,
+            partner if team_event and not pending_partner else None,
+            rule,
+        )
         eligible = [
             bracket
             for bracket in normalized["brackets"]
             if effective is not None and age_in_bracket(effective, bracket)
         ]
+
+    if not eligible and pending_partner and player is not None:
+        # For OLDER and AVERAGE policies, a future partner can make a currently
+        # under-minimum registrant eligible. Keep the setup change nonblocking
+        # without pretending that a preferred group is known yet.
+        return {
+            **base,
+            "status": "ELIGIBLE",
+            "issue_type": None,
+            "issue": None,
+            "effective_age": player,
+            "eligible_age_groups": [],
+            "preferred_age_group": None,
+            "preferred_age_group_id": None,
+            "provisional": True,
+            "recompute_when_partner_assigned": True,
+        }
 
     if not eligible:
         configured_minimums = [
@@ -397,6 +442,8 @@ def evaluate_age_eligibility(
         "eligible_age_groups": [str(bracket.get("label") or "") for bracket in eligible],
         "preferred_age_group": str(preferred.get("label") or ""),
         "preferred_age_group_id": str(preferred.get("id") or ""),
+        "provisional": pending_partner,
+        "recompute_when_partner_assigned": pending_partner,
     }
 
 
@@ -477,12 +524,14 @@ def build_age_split_preview(
         {
             **bracket,
             "count": 0,
+            "provisional_count": 0,
             "viable": False,
             "entries": [],
         }
         for bracket in normalized_policy["brackets"]
     ]
     unassigned: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
     processed = 0
 
     for raw_selection in selections:
@@ -516,17 +565,33 @@ def build_age_split_preview(
             player_age=player_age,
             partner_age=partner_age if team_event else None,
             participant_type=participant,
+            allow_missing_partner_for_preview=(
+                team_event
+                and str(selection.get("partner_mode") or "").strip().upper()
+                == "NEEDS_PARTNER"
+            ),
         )
         entry.update(
             {
                 "effective_age": evaluation.get("effective_age"),
+                "partner_age": evaluation.get("partner_age"),
                 "eligible_age_groups": evaluation.get("eligible_age_groups") or [],
                 "preferred_age_group": evaluation.get("preferred_age_group"),
+                "pending_partner": bool(evaluation.get("pending_partner")),
+                "provisional": bool(evaluation.get("provisional")),
+                "recompute_when_partner_assigned": bool(
+                    evaluation.get("recompute_when_partner_assigned")
+                ),
             }
         )
         if evaluation.get("status") == "ELIGIBLE":
             preferred_id = str(evaluation.get("preferred_age_group_id") or "").strip()
             preferred_label = str(evaluation.get("preferred_age_group") or "").strip()
+            if bool(evaluation.get("provisional")) and not (preferred_id or preferred_label):
+                # A future partner can determine placement, so keep this entry
+                # visible and nonblocking without counting it in a bracket.
+                pending.append(entry)
+                continue
             target = next(
                 (
                     bracket
@@ -534,11 +599,13 @@ def build_age_split_preview(
                     if (preferred_id and str(bracket.get("id") or "") == preferred_id)
                     or (preferred_label and str(bracket.get("label") or "") == preferred_label)
                 ),
-                preview_brackets[0] if len(preview_brackets) == 1 else None,
+                None,
             )
             if target is not None:
                 target["entries"].append(entry)
                 target["count"] += 1
+                if bool(entry.get("provisional")):
+                    target["provisional_count"] += 1
             else:
                 entry["assignment_issue_type"] = "INVALID_AGE_POLICY"
                 entry["assignment_issue"] = "Preferred age group was not found in the configured policy."
@@ -587,5 +654,6 @@ def build_age_split_preview(
         "total_entries": processed,
         "brackets": preview_brackets,
         "recommendations": recommendations,
+        "pending_entries": pending,
         "unassigned_entries": unassigned,
     }

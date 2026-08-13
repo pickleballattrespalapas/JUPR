@@ -20,8 +20,10 @@ from jupr_app.domain.tournament_registration_repo import (
     get_builder_draft,
     get_registration_settings,
     get_tournament_record,
+    linked_partner_registration_lookup,
     list_event_options,
     list_existing_tournaments,
+    list_partner_team_links,
     list_registration_days,
     list_registrations,
     list_registration_selections,
@@ -722,10 +724,49 @@ def preview_admin_tournament_age_split(
         if str(row.get("event_option_id") or "").strip() in event_ids
         and str(row.get("registration_id") or "").strip() in registrations
     ]
+    partner_links = list_partner_team_links(supabase, str(tournament_id))
+    linked_partner_by_selection_id = linked_partner_registration_lookup(
+        partner_links,
+        registrations,
+    )
+    canonical_team_key_by_selection_id: dict[str, str] = {}
+    for link in partner_links:
+        if _clean(link.get("status"), limit=40).upper() not in {
+            "CONFIRMED",
+            "ADMIN_CONFIRMED",
+        }:
+            continue
+        selection_ids = sorted(
+            selection_id
+            for selection_id in (
+                str(link.get("selection1_id") or "").strip(),
+                str(link.get("selection2_id") or "").strip(),
+            )
+            if selection_id
+        )
+        if len(selection_ids) != 2:
+            continue
+        team_key = ":".join(selection_ids)
+        for selection_id in selection_ids:
+            canonical_team_key_by_selection_id[selection_id] = team_key
+
+    preview_selections: list[dict[str, Any]] = []
+    seen_canonical_teams: set[str] = set()
+    for selection in selections:
+        selection_id = str(selection.get("id") or "").strip()
+        partner_registration = linked_partner_by_selection_id.get(selection_id)
+        if partner_registration is not None:
+            team_key = canonical_team_key_by_selection_id.get(selection_id, selection_id)
+            if team_key in seen_canonical_teams:
+                continue
+            seen_canonical_teams.add(team_key)
+            selection["partner_mode"] = "HAS_PARTNER"
+            selection["partner_age"] = partner_registration.get("age")
+        preview_selections.append(selection)
     preview = build_age_split_preview(
         policy=normalized_policy,
         registrations=registrations,
-        selections=selections,
+        selections=preview_selections,
         participant_type=resolved_participant_type,
     )
     return {

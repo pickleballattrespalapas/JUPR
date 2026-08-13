@@ -1216,6 +1216,32 @@ def _selection_with_resolved_partner(
     return resolved
 
 
+def linked_partner_registration_lookup(
+    partner_links: list[dict[str, Any]],
+    registrations_by_id: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Map each selection in an active canonical pair to its partner registration."""
+
+    lookup: dict[str, dict[str, Any]] = {}
+    for link in partner_links:
+        if str(link.get("status") or "").strip().upper() not in {
+            "CONFIRMED",
+            "ADMIN_CONFIRMED",
+        }:
+            continue
+        pairs = (
+            (link.get("selection1_id"), link.get("registration2_id")),
+            (link.get("selection2_id"), link.get("registration1_id")),
+        )
+        for selection_value, partner_registration_value in pairs:
+            selection_id = str(selection_value or "").strip()
+            partner_registration_id = str(partner_registration_value or "").strip()
+            partner_registration = registrations_by_id.get(partner_registration_id)
+            if selection_id and partner_registration:
+                lookup[selection_id] = partner_registration
+    return lookup
+
+
 def _participant_eligibility_review(event: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
     team_event = _team_event(event)
     partner_mode = _selection_partner_mode(selection)
@@ -1257,6 +1283,7 @@ def _gender_eligibility_review(
         selection=selection,
         player=registration,
         partner=partner,
+        allow_missing_partner_for_preview=True,
     )
 
 
@@ -1277,9 +1304,18 @@ def _registration_skill_age_review_value(
     *,
     source_label: str,
     partner_registration: dict[str, Any] | None = None,
+    canonical_partner: bool = False,
 ) -> dict[str, Any]:
     base = _skill_age_rule_review_value(event, source_label=source_label)
     resolved_selection = _selection_with_resolved_partner(selection, partner_registration)
+    if canonical_partner:
+        resolved_selection["partner_mode"] = "HAS_PARTNER"
+        for key in ("partner_skill", "partner_age", "partner_gender"):
+            resolved_selection[key] = None
+        resolved_selection = _selection_with_resolved_partner(
+            resolved_selection,
+            partner_registration,
+        )
     partner = _selection_partner_record(resolved_selection, partner_registration)
     skill_review = evaluate_selection_skill_eligibility(
         event=event,
@@ -1297,6 +1333,9 @@ def _registration_skill_age_review_value(
             player_age=_optional_float(registration.get("age")),
             partner_age=_optional_float(resolved_selection.get("partner_age")),
             participant_type=str(event.get("event_type") or event.get("participant_type") or "GENDER_DOUBLES"),
+            allow_missing_partner_for_preview=(
+                _selection_partner_mode(resolved_selection) == "NEEDS_PARTNER"
+            ),
         )
     except ValueError as exc:
         age_review = {
@@ -1327,6 +1366,10 @@ def _registration_skill_age_review_value(
             "effective_age": age_review.get("effective_age"),
             "assignment_issue_type": age_review.get("issue_type"),
             "assignment_issue": age_review.get("issue"),
+            "age_placement_provisional": bool(age_review.get("provisional")),
+            "recompute_age_when_partner_assigned": bool(
+                age_review.get("recompute_when_partner_assigned")
+            ),
         }
     )
 
@@ -1424,6 +1467,10 @@ def analyze_registration_publish_impact(
         for row in registration_rows
         if _normalize_email(row.get("email"))
     }
+    linked_partner_by_selection_id = linked_partner_registration_lookup(
+        list_partner_team_links(supabase, tournament_id),
+        registrations_by_id,
+    )
     selections_by_event: dict[str, list[dict[str, Any]]] = {}
     for selection in list_registration_selections(supabase, tournament_id):
         event_option_id = str(selection.get("event_option_id") or "").strip()
@@ -1487,9 +1534,12 @@ def analyze_registration_publish_impact(
                     )
                     if part
                 )
-            partner_registration = registrations_by_email.get(
-                _normalize_email(selection.get("partner_email"))
-            )
+            partner_registration = linked_partner_by_selection_id.get(selection_id)
+            canonical_partner = partner_registration is not None
+            if partner_registration is None:
+                partner_registration = registrations_by_email.get(
+                    _normalize_email(selection.get("partner_email"))
+                )
             registration_current_value = current_value
             registration_proposed_value = proposed_value
             if field in {"skill_age_rules", "gender_restriction", "event_type"} and current_event is not None and proposed_event is not None:
@@ -1499,6 +1549,7 @@ def analyze_registration_publish_impact(
                     selection,
                     source_label=current_source,
                     partner_registration=partner_registration,
+                    canonical_partner=canonical_partner,
                 )
                 registration_proposed_value = _registration_skill_age_review_value(
                     proposed_event,
@@ -1506,6 +1557,7 @@ def analyze_registration_publish_impact(
                     selection,
                     source_label=proposed_source,
                     partner_registration=partner_registration,
+                    canonical_partner=canonical_partner,
                 )
             affected.append(
                 {
@@ -1784,9 +1836,12 @@ def analyze_registration_publish_impact(
                 selection_id = str(selection.get("id") or "").strip()
                 registration_id = str(selection.get("registration_id") or "").strip()
                 registration = registrations_by_id.get(registration_id, {})
-                partner_registration = registrations_by_email.get(
-                    _normalize_email(selection.get("partner_email"))
-                )
+                partner_registration = linked_partner_by_selection_id.get(selection_id)
+                canonical_partner = partner_registration is not None
+                if partner_registration is None:
+                    partner_registration = registrations_by_email.get(
+                        _normalize_email(selection.get("partner_email"))
+                    )
                 if selection_id:
                     proposed_review_by_selection[selection_id] = _registration_skill_age_review_value(
                         proposed_event_for_review,
@@ -1794,6 +1849,7 @@ def analyze_registration_publish_impact(
                         selection,
                         source_label=proposed_source,
                         partner_registration=partner_registration,
+                        canonical_partner=canonical_partner,
                     )
 
             def component_selection_ids(component: str) -> tuple[set[str], set[str], set[str]]:
@@ -1959,15 +2015,33 @@ def analyze_registration_publish_impact(
                     preserving_ids = all_selection_ids.difference(invalid_ids)
                     if age_policy_changed and preserving_ids:
                         missing_count = len(missing_ids)
+                        pending_partner_count = sum(
+                            1
+                            for selection_id in preserving_ids
+                            if bool(
+                                (
+                                    proposed_review_by_selection.get(selection_id, {}).get(
+                                        "age_eligibility"
+                                    )
+                                    or {}
+                                ).get("provisional")
+                            )
+                        )
                         data_message = (
                             f" Complete eligibility information for {missing_count} registration"
                             f"{'s' if missing_count != 1 else ''} before final preferred age-group placement."
                             if missing_count
                             else ""
                         )
+                        placement_message = (
+                            f" {pending_partner_count} partner-pending registration"
+                            f"{'s use' if pending_partner_count != 1 else ' uses'} the known player age for provisional placement when possible and will be recalculated when a partner is assigned."
+                            if pending_partner_count
+                            else " Older players may play in younger groups; each team is assigned to its oldest eligible preferred group."
+                        )
                         communication_event(
-                            f"Age grouping for populated division '{label}' changes, but the affected registrations remain eligible under the proposed minimum-age rules."
-                            f" Older players may play in younger groups; each team is assigned to its oldest eligible preferred group.{data_message}",
+                            f"Age grouping for populated division '{label}' changes, but no known registration is ineligible under the proposed age policy."
+                            f"{placement_message}{data_message}",
                             event_id=event_id,
                             label=label,
                             field="skill_age_rules",

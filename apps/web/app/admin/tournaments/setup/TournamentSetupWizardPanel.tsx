@@ -138,10 +138,12 @@ type AgeSplitPreviewResponse = {
     id: string;
     label: string;
     count: number;
+    provisional_count: number;
     viable: boolean;
     entries: Array<{ registration_id: string; selection_id?: string | null; display_name: string; age?: number | null; partner_age?: number | null; effective_age?: number | null }>;
   }>;
   recommendations: string[];
+  pending_entries?: Array<Record<string, unknown>>;
   unassigned_entries: Array<Record<string, unknown>>;
 };
 
@@ -741,23 +743,51 @@ function affectedRegistrationImpactSummary(
   const proposed = objectValue(registration.proposed_value);
   const impactType = item.impact_type.toUpperCase();
   if (["AGE_GROUPING_COMMUNICATION", "ELIGIBILITY_COMMUNICATION"].includes(impactType)) {
-    const ageLabel = safeString(proposed.preferred_age_group || proposed.age_label);
-    const effectiveAge = Number(proposed.effective_age);
-    const eligibilityStatus = safeString(proposed.eligibility_status);
+    const age = objectValue(proposed.age_eligibility);
+    const ageGroupingImpact = impactType === "AGE_GROUPING_COMMUNICATION";
+    const preferredAgeLabel = safeString(proposed.preferred_age_group);
+    const ageLabel = safeString(preferredAgeLabel || proposed.age_label);
+    const effectiveAgeValue = proposed.effective_age;
+    const effectiveAge = effectiveAgeValue == null || effectiveAgeValue === ""
+      ? Number.NaN
+      : Number(effectiveAgeValue);
+    const playerAgeValue = age.player_age ?? proposed.player_age;
+    const playerAge = playerAgeValue == null || playerAgeValue === ""
+      ? Number.NaN
+      : Number(playerAgeValue);
+    const provisionalAgePlacement = ageGroupingImpact && Boolean(
+      age.provisional
+      || proposed.age_placement_provisional
+    );
+    const eligibilityStatus = safeString(
+      ageGroupingImpact ? age.status : proposed.eligibility_status
+    );
     const skill = objectValue(proposed.skill_eligibility);
     const skillStatus = safeString(skill.status);
     const ceiling = Number(skill.skill_ceiling_exclusive);
     const controllingRating = Number(skill.controlling_rating);
     const combinedRating = Number(skill.combined_rating);
     const combinedCap = Number(skill.combined_rating_cap);
-    const issues = Array.isArray(proposed.eligibility_issues)
-      ? proposed.eligibility_issues.map((value) => safeString(value)).filter(Boolean)
-      : [];
-    const assignmentIssue = safeString(proposed.assignment_issue);
+    const issues = ageGroupingImpact
+      ? [safeString(age.issue)].filter(Boolean)
+      : Array.isArray(proposed.eligibility_issues)
+        ? proposed.eligibility_issues.map((value) => safeString(value)).filter(Boolean)
+        : [];
+    const assignmentIssue = ageGroupingImpact ? "" : safeString(proposed.assignment_issue);
     const parts: string[] = [];
-    if (eligibilityStatus) parts.push(eligibilityStatus === "ELIGIBLE" ? "Eligible" : eligibilityStatus.replaceAll("_", " "));
-    if (ageLabel && ageLabel !== "All ages") parts.push(`Preferred age group: ${ageLabel}`);
-    if (Number.isFinite(effectiveAge)) parts.push(`team age ${Number.isInteger(effectiveAge) ? effectiveAge.toFixed(0) : effectiveAge.toFixed(1)}`);
+    if (provisionalAgePlacement) {
+      const registrantAge = Number.isFinite(playerAge)
+        ? ` using registrant age ${Number.isInteger(playerAge) ? playerAge.toFixed(0) : playerAge.toFixed(1)}`
+        : "";
+      parts.push(preferredAgeLabel
+        ? `Provisional age group: ${preferredAgeLabel}${registrantAge}; recalculated when a partner is assigned.`
+        : `Partner-based age placement is pending${registrantAge}; recalculated when a partner is assigned.`
+      );
+    } else {
+      if (eligibilityStatus) parts.push(eligibilityStatus === "ELIGIBLE" ? "Eligible" : eligibilityStatus.replaceAll("_", " "));
+      if (ageLabel && ageLabel !== "All ages") parts.push(`Preferred age group: ${ageLabel}`);
+      if (Number.isFinite(effectiveAge)) parts.push(`team age ${Number.isInteger(effectiveAge) ? effectiveAge.toFixed(0) : effectiveAge.toFixed(1)}`);
+    }
     if (skillStatus === "ELIGIBLE" && Number.isFinite(ceiling)) {
       parts.push(`skill eligible below ${ceiling.toFixed(2)}`);
     }
@@ -2393,7 +2423,9 @@ function renderEvents() {
                       {preview.brackets.map((bracket) => (
                         <article key={bracket.id} style={{ border: `1px solid ${bracket.viable ? "#bbf7d0" : "#fde68a"}`, borderRadius: "10px", padding: "0.65rem", background: bracket.viable ? "#f0fdf4" : "#fffbeb" }}>
                           <strong>{bracket.label}</strong><br />
-                          {bracket.count} entr{bracket.count === 1 ? "y" : "ies"} · {bracket.viable ? "Create" : "Below minimum"}
+                          {bracket.count} entr{bracket.count === 1 ? "y" : "ies"}
+                          {bracket.provisional_count ? ` (${bracket.provisional_count} provisional)` : ""}
+                          {` · ${bracket.viable ? "Create" : "Below minimum"}`}
                         </article>
                       ))}
                     </div>
@@ -2401,6 +2433,19 @@ function renderEvents() {
                       <ul>
                         {preview.recommendations.map((recommendation) => <li key={recommendation}>{recommendation}</li>)}
                       </ul>
+                    ) : null}
+                    {preview.pending_entries?.length ? (
+                      <div style={{ marginTop: "0.65rem", padding: "0.65rem", border: "1px solid #bfdbfe", borderRadius: "10px", background: "#eff6ff" }}>
+                        <strong>Entries awaiting partner-based placement</strong>
+                        <ul style={{ marginBottom: 0 }}>
+                          {preview.pending_entries.map((entry, index) => (
+                            <li key={safeString(entry.selection_id) || safeString(entry.registration_id) || index}>
+                              {safeString(entry.display_name) || `Entry ${index + 1}`}
+                              {" — placement remains open and will be recalculated when a partner is assigned"}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
                     ) : null}
                     {preview.unassigned_entries.length ? (
                       <div style={{ marginTop: "0.65rem", padding: "0.65rem", border: "1px solid #fecaca", borderRadius: "10px", background: "#fef2f2" }}>
