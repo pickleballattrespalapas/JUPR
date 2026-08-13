@@ -392,18 +392,23 @@ function comparablePublishedStateSignature(
   const comparableSettings = settingsDraftPayload(settings);
   delete comparableSettings.forced_change_resolutions;
   delete comparableSettings.communication_change_acknowledgements;
-  const normalized = configurationWithGlobalStatus(
-    configurationWithVenue(configuration, settings),
-    settings.registration_status
-  );
+  // Registration status is controlled by the separate Open/Close action. It
+  // must not make an otherwise published setup look like an unpublished draft.
+  delete comparableSettings.registration_status;
+  const normalized = configurationWithVenue(configuration, settings);
   const publishable = publishConfigurationPayload(normalized);
   const builder = configurationPayload(normalized);
+  const comparableEventOptions = publishable.event_options.map((event) => {
+    const comparableEvent = { ...event };
+    delete comparableEvent.status;
+    return comparableEvent;
+  });
   return JSON.stringify({
     basics: basicsDraftPayload(basics),
     settings: comparableSettings,
     days: publishable.days,
     event_families: builder.event_families,
-    event_options: publishable.event_options
+    event_options: comparableEventOptions
   });
 }
 
@@ -935,6 +940,9 @@ export default function TournamentSetupWizardPanel({
       ...publishedSettingsValue,
       ...objectValue(draft.settings)
     });
+    // Open/Close Registration is authoritative outside the setup draft. An
+    // older draft snapshot must never override the current registration state.
+    draftSettingsValue.registration_status = publishedSettingsValue.registration_status;
 
     const publishedDays = (payload.days || []).map(withDefaultDayCourts);
     const publishedCourts = normalizeVenueCourts(publishedSettingsValue, publishedDays);
@@ -2252,7 +2260,7 @@ async function saveResolutionDraft() {
       !hasUnpublishedChanges &&
       publishedSetupReady
   );
-  const registrationStatus = safeString(settings.registration_status || "draft");
+  const registrationStatus = safeString(publishedSettings.registration_status || "draft");
   const settingsConfirmation =
     status?.confirmation_text?.settings || "SAVE SETUP";
   const draftConfirmation =
