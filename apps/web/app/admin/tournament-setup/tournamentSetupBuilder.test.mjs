@@ -11,6 +11,7 @@ const builderModuleUrl = compiledModulePath
 const {
   ageRuleValue,
   appendBuilderRow,
+  comparablePublishedConfigurationPayload,
   configurationPayload,
   draftSignature,
   effectiveGenderRestriction,
@@ -24,6 +25,7 @@ const {
   setAgeRuleNumber,
   setEventAgeMode,
   setRecordString,
+  stableSetupJsonStringify,
   validateSetupConfiguration,
   wrapBuilderRows
 } = await import(builderModuleUrl);
@@ -707,4 +709,86 @@ test("draft signatures change after guided edits and remain stable otherwise", (
   assert.equal(initial, draftSignature(configuration));
   configuration.eventOptions[0].value.division_name = "Mixed 4.0";
   assert.notEqual(initial, draftSignature(configuration));
+});
+
+test("published comparison ignores representation noise but detects semantic changes", () => {
+  const legacy = validConfiguration();
+  legacy.eventOptions = wrapBuilderRows([{
+    id: "event-1",
+    assigned_day: "Friday",
+    event_family: "Mixed Doubles",
+    division_name: "Mixed Open",
+    label: "Mixed Open",
+    event_type: "MIXED_DOUBLES",
+    gender_restriction: "MIXED",
+    skill_label: "Open",
+    skill_mode: "open",
+    age_label: "All Ages",
+    age_mode: "ALL_AGES",
+    age_rules: { mode: "ALL_AGES", team_age_rule: "YOUNGER" },
+    partner_required: true,
+    capacity_teams: "16",
+    public_partner_board: true,
+    price_usd: "40",
+    event_format_default: "ROUND_ROBIN_PLUS_PLAYOFF",
+    scoring_default: "GAME_TO_15",
+    waitlist_enabled: true,
+    partner_board_enabled: true,
+    enabled: true,
+    sort_order: 1
+  }], "legacy-event");
+
+  const canonical = validConfiguration();
+  canonical.eventOptions = wrapBuilderRows([{
+    id: "event-1",
+    tournament_id: "ignored-tournament-id",
+    registration_day_id: "day-1",
+    scheduled_day_ids: ["day-1", "day-1"],
+    event_family_label: "Mixed Doubles",
+    division_name: "Mixed Open",
+    label: "Mixed Open",
+    event_type: "MIXED_DOUBLES",
+    gender_restriction: "MIXED",
+    skill_label: "Open",
+    skill_mode: "OPEN",
+    eligibility_mode: "OPEN",
+    skill_min_rating: null,
+    skill_max_rating: null,
+    combined_rating_cap: null,
+    age_label: "All Ages",
+    age_mode: "ALL_AGES",
+    age_rules: '{"younger_player_controls_age":true,"team_age_rule":"YOUNGER","mode":"ALL_AGES","higher_skill_player_controls_skill":true,"age_label":"All Ages"}',
+    partner_required: true,
+    capacity_teams: 16,
+    public_partner_board: true,
+    price_usd: 40,
+    event_format_default: "ROUND_ROBIN_PLUS_PLAYOFF",
+    scoring_default: "GAME_TO_15",
+    event_format_override: null,
+    scoring_override: null,
+    competition_format: "STANDARD",
+    team_roster_size: 2,
+    team_gender_rule: "NONE",
+    team_tiebreak_mode: "SINGLES",
+    team_playoff_format: "NONE",
+    team_allow_substitutes: false,
+    waitlist_enabled: true,
+    partner_board_enabled: true,
+    status: "draft",
+    enabled: true,
+    sort_order: 1
+  }], "canonical-event");
+
+  const legacyComparable = comparablePublishedConfigurationPayload(legacy);
+  const canonicalComparable = comparablePublishedConfigurationPayload(canonical);
+  assert.equal(
+    stableSetupJsonStringify(legacyComparable),
+    stableSetupJsonStringify(canonicalComparable)
+  );
+
+  canonical.eventOptions[0].value.capacity_teams = 18;
+  assert.notEqual(
+    stableSetupJsonStringify(legacyComparable),
+    stableSetupJsonStringify(comparablePublishedConfigurationPayload(canonical))
+  );
 });
