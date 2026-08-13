@@ -1035,6 +1035,120 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
   return { days, event_options: eventOptions };
 }
 
+function stableSetupJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableSetupJsonValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as SetupRecord)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, stableSetupJsonValue(item)])
+  );
+}
+
+export function stableSetupJsonStringify(value: unknown): string {
+  return JSON.stringify(stableSetupJsonValue(value));
+}
+
+function comparableNumber(value: unknown, fallback: number | null = null): number | null {
+  return finiteNumber(value) ?? fallback;
+}
+
+function comparableJsonValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      return stableSetupJsonValue(JSON.parse(trimmed));
+    } catch {
+      return trimmed;
+    }
+  }
+  return stableSetupJsonValue(value ?? null);
+}
+
+function comparablePublishedDay(day: SetupRecord, index: number): SetupRecord {
+  const eventDate = cleanString(day.event_date || day.date || day.start_date).slice(0, 10);
+  return {
+    id: cleanString(day.id),
+    label: cleanString(day.label),
+    event_date: eventDate || null,
+    court_count: comparableNumber(day.court_count),
+    court_labels: Array.isArray(day.court_labels)
+      ? day.court_labels.map(cleanString)
+      : [],
+    available_court_ids: Array.isArray(day.available_court_ids)
+      ? [...new Set(day.available_court_ids.map(cleanString).filter(Boolean))]
+      : [],
+    court_open_time: cleanString(day.court_open_time) || null,
+    court_close_time: cleanString(day.court_close_time) || null,
+    court_notes: cleanString(day.court_notes),
+    enabled: recordBoolean(day.enabled, true),
+    sort_order: comparableNumber(day.sort_order, index + 1)
+  };
+}
+
+function comparablePublishedEvent(event: SetupRecord, index: number): SetupRecord {
+  const eventType = cleanString(event.event_type).toUpperCase();
+  const registrationDayId = cleanString(event.registration_day_id);
+  const scheduledDayIds = Array.isArray(event.scheduled_day_ids)
+    ? [...new Set(event.scheduled_day_ids.map(cleanString).filter(Boolean))]
+    : [];
+  const partnerBoardEnabled = recordBoolean(event.partner_board_enabled, true);
+  const competitionFormat = cleanString(event.competition_format).toUpperCase() || "STANDARD";
+  const fourPlayerTeam = competitionFormat === "FOUR_PLAYER_TEAM";
+  return {
+    id: cleanString(event.id),
+    registration_day_id: registrationDayId,
+    scheduled_day_ids: scheduledDayIds.length
+      ? scheduledDayIds
+      : (registrationDayId ? [registrationDayId] : []),
+    sort_order: comparableNumber(event.sort_order, index + 1),
+    label: cleanString(event.label || event.division_name || event.event_family_label),
+    event_type: eventType,
+    gender_restriction: cleanString(event.gender_restriction).toUpperCase() || "ANY",
+    skill_label: cleanString(event.skill_label),
+    age_label: cleanString(event.age_label),
+    partner_required: recordBoolean(event.partner_required, eventType !== "SINGLES"),
+    capacity_teams: comparableNumber(event.capacity_teams),
+    public_partner_board: recordBoolean(event.public_partner_board, partnerBoardEnabled),
+    price_usd: comparableNumber(event.price_usd),
+    event_family_label: cleanString(event.event_family_label),
+    division_name: cleanString(event.division_name),
+    event_format_default: cleanString(event.event_format_default).toUpperCase(),
+    scoring_default: cleanString(event.scoring_default).toUpperCase(),
+    event_format_override: cleanString(event.event_format_override).toUpperCase() || null,
+    scoring_override: cleanString(event.scoring_override).toUpperCase() || null,
+    skill_mode: cleanString(event.skill_mode).toUpperCase(),
+    skill_min_rating: comparableNumber(event.skill_min_rating),
+    skill_max_rating: comparableNumber(event.skill_max_rating),
+    age_mode: cleanString(event.age_mode).toUpperCase(),
+    age_rules: comparableJsonValue(event.age_rules),
+    eligibility_mode: cleanString(event.eligibility_mode).toUpperCase(),
+    combined_rating_cap: comparableNumber(event.combined_rating_cap),
+    competition_format: competitionFormat,
+    team_roster_size: comparableNumber(event.team_roster_size, fourPlayerTeam ? 4 : 2),
+    team_gender_rule: cleanString(event.team_gender_rule).toUpperCase()
+      || (fourPlayerTeam ? "TWO_MEN_TWO_WOMEN" : "NONE"),
+    team_tiebreak_mode: cleanString(event.team_tiebreak_mode).toUpperCase() || "SINGLES",
+    team_playoff_format: cleanString(event.team_playoff_format).toUpperCase() || "NONE",
+    team_allow_substitutes: recordBoolean(event.team_allow_substitutes, false),
+    waitlist_enabled: recordBoolean(event.waitlist_enabled, true),
+    partner_board_enabled: partnerBoardEnabled,
+    enabled: recordBoolean(event.enabled, true)
+  };
+}
+
+export function comparablePublishedConfigurationPayload(
+  configuration: SetupConfiguration
+): SetupPublishPayload {
+  const publishable = publishConfigurationPayload(configuration);
+  return {
+    days: publishable.days.map(comparablePublishedDay),
+    event_options: publishable.event_options.map(comparablePublishedEvent)
+  };
+}
+
 export function validateSetupConfiguration(configuration: SetupConfiguration): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const days = rowsToPayload(configuration.days);
