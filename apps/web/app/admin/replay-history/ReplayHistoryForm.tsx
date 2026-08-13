@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import {
   getAdminReplayStatus,
   type AdminReplayJob,
@@ -105,11 +106,11 @@ export default function ReplayHistoryForm({ apiBase, clubId, enabled, options, d
     setResult(null);
     if (!apiBase) {
       setMessage("API base URL is not configured.");
-      return;
+      throw new Error("API base URL is not configured.");
     }
     if (!accessToken) {
       setMessage("Sign in at /admin/login before running Replay History.");
-      return;
+      throw new Error("Sign in at /admin/login before running Replay History.");
     }
     const generation = replayRequest.begin();
     setPending(true);
@@ -128,14 +129,20 @@ export default function ReplayHistoryForm({ apiBase, clubId, enabled, options, d
         })
       });
       const payload = await response.json().catch(() => null);
-      if (!replayRequest.isCurrent(generation)) return;
       if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
-      setResult(payload as AdminReplayResultResponse);
-      setMessage(resultMessage(payload as AdminReplayResultResponse));
-      if ((payload as AdminReplayResultResponse).ok) setIdempotencyKey(requestKey());
-      void loadJobHistory();
+      const replayResult = payload as AdminReplayResultResponse;
+      const completionMessage = resultMessage(replayResult) || "Replay completed.";
+      if (!replayResult.ok) throw new Error(completionMessage);
+      if (replayRequest.isCurrent(generation)) {
+        setResult(replayResult);
+        setMessage(completionMessage);
+        setIdempotencyKey(requestKey());
+        void loadJobHistory();
+      }
+      return actionSuccess("Replay complete", completionMessage);
     } catch (error) {
       if (replayRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to run replay.");
+      throw error;
     } finally {
       if (replayRequest.isCurrent(generation)) setPending(false);
     }

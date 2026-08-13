@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { FormDialog, InteractionActionError, type ActionCompletion } from "@/components/interaction";
 import {
   COMPETITION_FORMATS,
   GENDER_RESTRICTIONS,
@@ -115,7 +116,8 @@ type Props = {
   initialValue: SetupRecord;
   days: BuilderRow[];
   onCancel: () => void;
-  onConfirm: (value: SetupRecord) => void | Promise<void>;
+  onConfirm: (value: SetupRecord) => Promise<ActionCompletion>;
+  onAcknowledge?: () => void;
 };
 
 export default function TournamentSetupEventFamilyDialog({
@@ -124,18 +126,25 @@ export default function TournamentSetupEventFamilyDialog({
   initialValue,
   days,
   onCancel,
-  onConfirm
+  onConfirm,
+  onAcknowledge
 }: Props) {
   const [draft, setDraft] = useState<SetupRecord>(initialValue);
-  const [message, setMessage] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [baseline, setBaseline] = useState("");
+  const nameRef = useRef<HTMLInputElement>(null);
+  const daysRef = useRef<HTMLFieldSetElement>(null);
+  const capacityRef = useRef<HTMLInputElement>(null);
+  const priceRef = useRef<HTMLInputElement>(null);
+  const agePolicyRef = useRef<HTMLDivElement>(null);
+  const invalidFieldRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
     const structure = eventStructure(initialValue);
-    setDraft(applyEventStructureWithAge({ ...initialValue }, structure));
-    setMessage("");
-    setSubmitting(false);
+    const prepared = applyEventStructureWithAge({ ...initialValue }, structure);
+    setDraft(prepared);
+    setBaseline(JSON.stringify(prepared));
+    invalidFieldRef.current = null;
   }, [open, initialValue]);
 
   if (!open) return null;
@@ -156,79 +165,54 @@ export default function TournamentSetupEventFamilyDialog({
     enabled: recordBoolean(day.value.enabled, true)
   }));
 
-  async function submit() {
+  function validationError(message: string, field: string, target: HTMLElement | null): never {
+    invalidFieldRef.current = target;
+    throw new InteractionActionError(message, { kind: "validation", fieldErrors: { [field]: message } });
+  }
+
+  async function submit(): Promise<ActionCompletion> {
     if (!name) {
-      setMessage("Event name is required.");
-      return;
+      validationError("Event name is required.", "Event name", nameRef.current);
     }
     if (!currentDays.length) {
-      setMessage("Choose at least one tournament day for this event.");
-      return;
+      validationError("Choose at least one tournament day for this event.", "Tournament days", daysRef.current);
     }
     const capacity = Number(draft.default_capacity_teams);
     if (!Number.isInteger(capacity) || capacity < 1) {
-      setMessage("Default capacity must be a whole number of at least 1.");
-      return;
+      validationError("Default capacity must be a whole number of at least 1.", "Default capacity", capacityRef.current);
     }
     const price = Number(draft.default_price_usd);
     if (!Number.isFinite(price) || price < 0) {
-      setMessage("Default entry fee cannot be negative.");
-      return;
+      validationError("Default entry fee cannot be negative.", "Default entry fee", priceRef.current);
     }
     const ageIssues = validateAgePolicy(agePolicy, participantType);
     if (ageIssues.length) {
-      setMessage(ageIssues[0]);
-      return;
+      validationError(ageIssues[0], "Event age policy", agePolicyRef.current);
     }
-    setSubmitting(true);
-    try {
-      await onConfirm({
-        ...draft,
-        gender_restriction: gender,
-        default_partner_board:
-          participantType === "SINGLES" ? false : recordBoolean(draft.default_partner_board, true)
-      });
-    } finally {
-      setSubmitting(false);
-    }
+    return onConfirm({
+      ...draft,
+      gender_restriction: gender,
+      default_partner_board:
+        participantType === "SINGLES" ? false : recordBoolean(draft.default_partner_board, true)
+    });
   }
 
   return (
-    <div
-      role="presentation"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        display: "grid",
-        placeItems: "center",
-        padding: "1rem",
-        background: "rgba(15, 23, 42, 0.58)"
-      }}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onCancel();
-      }}
+    <FormDialog
+      open={open}
+      mode={mode === "add" ? "create" : "edit"}
+      size="wide"
+      title={mode === "add" ? "Add event" : `Edit ${name || "event"}`}
+      description="Define the event structure and policy once. Divisions inherit these defaults unless an organizer deliberately overrides them. Saving returns a compact, read-only event card; published data stays unchanged until Review."
+      dirty={Boolean(baseline) && JSON.stringify(draft) !== baseline}
+      submitLabel={mode === "add" ? "Add event" : "Save event"}
+      workingLabel="Saving event…"
+      initialFocusRef={nameRef}
+      getFirstInvalidField={() => invalidFieldRef.current}
+      onSubmit={submit}
+      onCancel={onCancel}
+      onAcknowledge={onAcknowledge}
     >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="event-dialog-title"
-        style={{
-          width: "min(920px, 100%)",
-          maxHeight: "calc(100vh - 2rem)",
-          overflowY: "auto",
-          padding: "1.1rem",
-          borderRadius: "16px",
-          background: "white",
-          boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)"
-        }}
-      >
-        <h2 id="event-dialog-title" style={{ marginTop: 0 }}>
-          {mode === "add" ? "Add event" : `Edit ${name || "event"}`}
-        </h2>
-        <p style={{ color: "#475569" }}>
-          Define the event structure and policy once. Divisions inherit these defaults unless an organizer deliberately overrides them. Saving returns a compact, read-only event card; published data stays unchanged until Review.
-        </p>
         <div
           style={{
             display: "grid",
@@ -239,6 +223,7 @@ export default function TournamentSetupEventFamilyDialog({
           <label style={{ gridColumn: "1 / -1" }}>
             <strong>Event name</strong><br />
             <input
+              ref={nameRef}
               value={name}
               style={inputStyle}
               placeholder="Gender Doubles"
@@ -285,7 +270,7 @@ export default function TournamentSetupEventFamilyDialog({
             ) : null}
           </label>
 
-          <fieldset style={{ gridColumn: "1 / -1", padding: "0.8rem", border: "1px solid #cbd5e1", borderRadius: "12px" }}>
+          <fieldset ref={daysRef} tabIndex={-1} style={{ gridColumn: "1 / -1", padding: "0.8rem", border: "1px solid #cbd5e1", borderRadius: "12px" }}>
             <legend style={{ fontWeight: 800 }}>Tournament days</legend>
             <p style={{ color: "#64748b", marginTop: 0 }}>
               Select every day on which this event may be played. Event cards sort automatically by their earliest selected day.
@@ -329,6 +314,7 @@ export default function TournamentSetupEventFamilyDialog({
           <label>
             <strong>Default capacity</strong><br />
             <input
+              ref={capacityRef}
               type="number"
               min="1"
               step="1"
@@ -340,6 +326,7 @@ export default function TournamentSetupEventFamilyDialog({
           <label>
             <strong>Default entry fee (USD)</strong><br />
             <input
+              ref={priceRef}
               type="number"
               min="0"
               step="0.01"
@@ -394,12 +381,14 @@ export default function TournamentSetupEventFamilyDialog({
             </fieldset>
           ) : null}
 
-          <TournamentAgePolicyEditor
-            policy={agePolicy}
-            participantType={participantType}
-            onChange={(policy) => setDraft((current) => writeAgePolicy(current, EVENT_AGE_POLICY_FIELDS, policy))}
-            title="Event age policy"
-          />
+          <div ref={agePolicyRef} tabIndex={-1} style={{ gridColumn: "1 / -1" }}>
+            <TournamentAgePolicyEditor
+              policy={agePolicy}
+              participantType={participantType}
+              onChange={(policy) => setDraft((current) => writeAgePolicy(current, EVENT_AGE_POLICY_FIELDS, policy))}
+              title="Event age policy"
+            />
+          </div>
 
           <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
             <input
@@ -419,16 +408,6 @@ export default function TournamentSetupEventFamilyDialog({
             Partner Board enabled by default
           </label>
         </div>
-        {message ? <p role="alert" style={{ color: "#b91c1c" }}>{message}</p> : null}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.65rem", flexWrap: "wrap", marginTop: "1rem" }}>
-          <button type="button" disabled={submitting} onClick={onCancel} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #64748b", background: "white", color: "#0f172a", fontWeight: 800, cursor: "pointer" }}>
-            Cancel
-          </button>
-          <button type="button" disabled={submitting} onClick={() => void submit()} style={{ padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800, cursor: "pointer" }}>
-            {submitting ? "Saving…" : mode === "add" ? "Add event" : "Save event"}
-          </button>
-        </div>
-      </section>
-    </div>
+    </FormDialog>
   );
 }

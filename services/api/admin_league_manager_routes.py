@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException, Query
 from pydantic import BaseModel, Field
@@ -29,6 +30,8 @@ from jupr_app.services.admin_league_live_service import (
     get_admin_league_live_session,
     is_admin_league_live_submit_enabled,
     list_admin_league_live_sessions,
+    prepare_admin_league_live_session_create,
+    reconcile_admin_league_live_session_create,
     save_admin_league_live_round,
     suggest_admin_league_live_roster,
     update_admin_league_live_session_snapshot,
@@ -64,6 +67,13 @@ from jupr_app.services.admin_league_manager_service import (
 from jupr_app.services.admin_league_manager_update_service import (
     normalize_admin_league_schedule_config,
     update_admin_league_manager_settings,
+)
+from jupr_app.services.admin_guarded_write_service import (
+    GuardedWriteRecoveryRequired,
+    begin_guarded_operation,
+    get_guarded_operation,
+    operation_result,
+    update_guarded_operation,
 )
 from services.api.auth import authenticate_bearer, auth_header
 from services.api.staging_write_guard import require_league_manager_write_or_403
@@ -172,8 +182,18 @@ class AdminLeagueLiveSessionCreateRequest(BaseModel):
     bench_player_ids: list[int] = Field(default_factory=list)
     bench_override_reason: str | None = Field(default=None, max_length=500)
     notes: str | None = None
+    idempotency_key: str = Field(
+        min_length=8,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
     confirmation_text: str = ""
     source: str = "next_league_live_session_create"
+
+
+class AdminLeagueLiveCreateReconcileRequest(BaseModel):
+    confirmation_text: str = Field(default="", max_length=80)
+    source: str = "next_league_live_operation_reconcile"
 
 
 class AdminLeagueLiveSessionSnapshotRequest(BaseModel):
@@ -313,6 +333,17 @@ def _require_league_live_service_role_or_503() -> None:
 
 
 def _handle_common(exc: Exception) -> None:
+    if isinstance(exc, GuardedWriteRecoveryRequired):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RECOVERY_REQUIRED",
+                "kind": "uncertain",
+                "message": str(exc),
+                "operation_key": exc.operation_key,
+                "recovery_required": True,
+            },
+        ) from exc
     if isinstance(exc, LeagueLiveConflictError):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, PermissionError):
@@ -425,8 +456,52 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         _require_league_live_service_role_or_503()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_league_manager_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        operation: dict[str, Any] | None = None
+        idempotent = False
+        mutation_started = False
         try:
-            return create_admin_league_live_session(
+            if str(payload.confirmation_text or "").strip().upper() != "CREATE LIVE SESSION":
+                raise ValueError("Type CREATE LIVE SESSION to create a persisted league live session.")
+            request_payload = _dump_model(payload)
+            session_id = str(uuid5(NAMESPACE_URL, f"jupr:league-live:{club_id}:{payload.idempotency_key}"))
+            prepared_plan = prepare_admin_league_live_session_create(
+                supabase,
+                club_id=str(club_id),
+                session_id=session_id,
+                league_name=payload.league_name,
+                week_tag=payload.week_tag,
+                total_rounds=payload.total_rounds,
+                current_round=payload.current_round,
+                roster=payload.roster,
+                courts=payload.courts,
+                bench_player_ids=payload.bench_player_ids,
+                bench_override_reason=payload.bench_override_reason,
+                notes=payload.notes,
+                actor_email=actor_email,
+            )
+            operation, idempotent = begin_guarded_operation(
+                supabase,
+                club_id=str(club_id),
+                workflow="league_live_session_create",
+                action="create_league_live_session",
+                operation_key=payload.idempotency_key,
+                request_payload=request_payload,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+                before_json={"league_name": payload.league_name, "week_tag": payload.week_tag},
+            )
+            if idempotent:
+                return operation_result(operation)
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=payload.idempotency_key,
+                status="intent_recorded",
+                result_json={"phase": "preflight", "planned": prepared_plan},
+            )
+            mutation_started = True
+            result = create_admin_league_live_session(
                 supabase,
                 club_id=str(club_id),
                 league_name=payload.league_name,
@@ -441,6 +516,141 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
+                source=payload.source,
+                session_id=session_id,
+                prepared_plan=prepared_plan,
+            )
+            guarded_result = {
+                **result,
+                "operation_key": payload.idempotency_key,
+                "idempotent_replay": False,
+                "recovery": {
+                    **dict(result.get("recovery") or {}),
+                    "operation_status": f"/admin/clubs/{{club_id}}/league-manager/live-operations/{payload.idempotency_key}",
+                    "operator_rule": "Retry the exact unchanged request with the same idempotency key after an interrupted response.",
+                },
+            }
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=payload.idempotency_key,
+                status="completed",
+                after_json={"session": result.get("session"), "courts": result.get("courts")},
+                result_json=guarded_result,
+            )
+            return guarded_result
+        except GuardedWriteRecoveryRequired as exc:
+            _handle_common(exc)
+        except Exception as exc:
+            if operation is None and isinstance(exc, RuntimeError):
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "code": "DURABLE_INTENT_UNAVAILABLE",
+                        "kind": "failed",
+                        "message": "League Live session creation did not start because its durable intent could not be recorded.",
+                        "operation_key": payload.idempotency_key,
+                        "recovery_required": False,
+                    },
+                ) from exc
+            try:
+                if operation is not None and not idempotent and mutation_started:
+                    try:
+                        update_guarded_operation(
+                            supabase,
+                            operation_id=operation.get("id"),
+                            operation_key=payload.idempotency_key,
+                            status="recovery_required",
+                            error_text=str(exc),
+                        )
+                    except Exception:
+                        # The durable intent and exact preflight already exist.
+                        # Preserve the key even when the ledger status cannot be advanced.
+                        pass
+                    raise GuardedWriteRecoveryRequired(
+                        payload.idempotency_key,
+                        "League Live session creation did not finish cleanly. Inspect the operation before retrying.",
+                    ) from exc
+                if operation is not None and not idempotent and not mutation_started:
+                    update_guarded_operation(
+                        supabase,
+                        operation_id=operation.get("id"),
+                        operation_key=payload.idempotency_key,
+                        status="failed",
+                        error_text="League Live create stopped before the domain mutation began.",
+                    )
+            except GuardedWriteRecoveryRequired as recovery_exc:
+                _handle_common(recovery_exc)
+            _handle_common(exc)
+
+    @app.get("/admin/clubs/{club_id}/league-manager/live-operations/{operation_key}")
+    def get_admin_league_live_create_operation(
+        club_id: str,
+        operation_key: str,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_service_role_or_503()
+        supabase = get_supabase_client()
+        _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_league_live_session_create_recovery",
+        )
+        operation = get_guarded_operation(
+            supabase,
+            club_id=str(club_id),
+            workflow="league_live_session_create",
+            operation_key=str(operation_key),
+        )
+        if operation is None:
+            raise HTTPException(status_code=404, detail="League Live creation operation was not found.")
+        result_json = operation.get("result_json") or {}
+        error_text = operation.get("error_text")
+        return {
+            "ok": True,
+            "operation_key": operation.get("operation_key"),
+            "status": operation.get("status"),
+            "result_json": result_json,
+            "error_text": error_text,
+            "result": result_json,
+            "error": error_text,
+            "recovery_required": operation.get("status") in {"intent_recorded", "recovery_required"},
+            "updated_at": operation.get("updated_at"),
+        }
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live-operations/{operation_key}/reconcile")
+    def post_admin_league_live_create_reconcile(
+        club_id: str,
+        operation_key: str,
+        payload: AdminLeagueLiveCreateReconcileRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_service_role_or_503()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        operation = get_guarded_operation(
+            supabase,
+            club_id=str(club_id),
+            workflow="league_live_session_create",
+            operation_key=str(operation_key),
+        )
+        if operation is None:
+            raise HTTPException(status_code=404, detail="League Live creation operation was not found.")
+        try:
+            return reconcile_admin_league_live_session_create(
+                supabase,
+                operation=operation,
+                club_id=str(club_id),
+                operation_key=str(operation_key),
+                confirmation_text=payload.confirmation_text,
+                actor_email=actor_email,
+                actor_role=actor_role,
                 source=payload.source,
             )
         except Exception as exc:

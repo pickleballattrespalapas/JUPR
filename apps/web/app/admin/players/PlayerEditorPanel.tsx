@@ -1,13 +1,23 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import type { AdminPlayerEditorDetailResponse, AdminPlayerEditorLeagueRating, AdminPlayerEditorListResponse, AdminPlayerEditorPlayer, AdminPlayerEditorStatusResponse, AdminPlayerEditorWriteResponse, AdminPlayerMergePreview, AdminPlayerSocialIdentity, AdminPlayerSocialIdentityListResponse } from "@/lib/adminPlayerEditorApi";
+import { InteractionDialog, StaticActionFeedback, actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
+import type { AdminPlayerEditorDetailResponse, AdminPlayerEditorLeagueRating, AdminPlayerEditorListResponse, AdminPlayerEditorOperationResponse, AdminPlayerEditorPlayer, AdminPlayerEditorStatusResponse, AdminPlayerEditorWriteResponse, AdminPlayerMergePreview, AdminPlayerSocialIdentity, AdminPlayerSocialIdentityListResponse } from "@/lib/adminPlayerEditorApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminPlayerEditorStatusResponse };
+type PlayerWriteRecovery = {
+  operationKey: string;
+  scope: string;
+  workflow: "create" | "update" | "league-rating";
+  entityId?: string;
+  message: string;
+  status: string;
+};
+type StoredPlayerWriteRecovery = PlayerWriteRecovery & { version: 1 };
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.5rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
@@ -22,6 +32,24 @@ function isErrorMessage(message: string): boolean {
   return /\b(unable|required|sign in|error|missing|invalid|unknown|not found|blocked|unavailable|failed|must|cannot)\b/i.test(message);
 }
 
+class PlayerEditorRequestError extends Error {
+  readonly status: number;
+  readonly uncertain: boolean;
+  readonly operationKey: string | null;
+
+  constructor(message: string, status: number, uncertain = false, operationKey: string | null = null) {
+    super(message);
+    this.name = "PlayerEditorRequestError";
+    this.status = status;
+    this.uncertain = uncertain;
+    this.operationKey = operationKey;
+  }
+}
+
+function playerEditorWriteIsUncertain(error: unknown): boolean {
+  return !(error instanceof PlayerEditorRequestError) || error.uncertain;
+}
+
 export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [players, setPlayers] = useState<AdminPlayerEditorPlayer[]>([]);
@@ -34,14 +62,79 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
   const [mergeSourceId, setMergeSourceId] = useState(""); const [mergeTargetId, setMergeTargetId] = useState(""); const [mergePreview, setMergePreview] = useState<AdminPlayerMergePreview | null>(null);
   const [mergeOperationId, setMergeOperationId] = useState(""); const [mergeAttempted, setMergeAttempted] = useState(false); const [mergeRecovery, setMergeRecovery] = useState<AdminPlayerEditorWriteResponse | null>(null); const [replayJobId, setReplayJobId] = useState("");
   const [saving, setSaving] = useState(false); const [message, setMessage] = useState<string | null>(null); const [resultDialog, setResultDialog] = useState<string | null>(null);
+  const [writeRecovery, setWriteRecovery] = useState<PlayerWriteRecovery | null>(null);
+  const [checkingWriteRecovery, setCheckingWriteRecovery] = useState(false);
+  const operationKeysRef = useRef(new Map<string, string>());
   const workspaceRequest = useLatestRequestGuard(accessToken, clearProtectedPlayerState);
   const playersRequest = useLatestRequestGuard(accessToken);
   const detailRequest = useLatestRequestGuard(accessToken);
   const socialRequest = useLatestRequestGuard(accessToken);
   const actionRequest = useLatestRequestGuard(accessToken);
+  const writeRecoveryStorageKey = `jupr-player-editor-write-recovery:${clubId}`;
+
+  useEffect(() => {
+    setWriteRecovery(null);
+    try {
+      const raw = globalThis.sessionStorage?.getItem(writeRecoveryStorageKey);
+      if (!raw) return;
+      const stored = JSON.parse(raw) as Partial<StoredPlayerWriteRecovery>;
+      if (
+        stored.version === 1
+        && typeof stored.operationKey === "string"
+        && typeof stored.scope === "string"
+        && ["create", "update", "league-rating"].includes(String(stored.workflow))
+        && typeof stored.message === "string"
+        && typeof stored.status === "string"
+      ) {
+        setWriteRecovery(stored as StoredPlayerWriteRecovery);
+      }
+    } catch {
+      // The in-memory write guard remains available if session storage is blocked.
+    }
+  }, [writeRecoveryStorageKey]);
+
+  function retainWriteRecovery(recovery: PlayerWriteRecovery) {
+    setWriteRecovery(recovery);
+    try {
+      globalThis.sessionStorage?.setItem(
+        writeRecoveryStorageKey,
+        JSON.stringify({ version: 1, ...recovery } satisfies StoredPlayerWriteRecovery),
+      );
+    } catch {
+      // The in-memory state still blocks additional writes in this page session.
+    }
+  }
+
+  function clearWriteRecovery() {
+    setWriteRecovery(null);
+    try {
+      globalThis.sessionStorage?.removeItem(writeRecoveryStorageKey);
+    } catch {
+      // A conclusive server status remains authoritative if cleanup is blocked.
+    }
+  }
+
+  function mutationOperationKey(scope: string, request: Record<string, unknown>): string {
+    const fingerprint = `${scope}:${JSON.stringify(request)}`;
+    const existing = operationKeysRef.current.get(fingerprint);
+    if (existing) return existing;
+    const idempotencyKey = `player-editor:${globalThis.crypto.randomUUID()}`;
+    operationKeysRef.current.set(fingerprint, idempotencyKey);
+    return idempotencyKey;
+  }
+
+  function clearMutationOperationKey(scope: string, request: Record<string, unknown>) {
+    operationKeysRef.current.delete(`${scope}:${JSON.stringify(request)}`);
+  }
+
+  function forgetMutationOperationKey(operationKey: string) {
+    for (const [fingerprint, retainedKey] of operationKeysRef.current.entries()) {
+      if (retainedKey === operationKey) operationKeysRef.current.delete(fingerprint);
+    }
+  }
 
   function requireReady(): boolean { if (!apiBase) { setMessage("API base URL is not configured."); return false; } if (!accessToken) { setMessage("Sign in at /admin/login before using the Player Editor."); return false; } if (!status.enabled) { setMessage("Next Player Editor is disabled on the API."); return false; } return true; }
-  async function requestJson<T>(path: string, options?: RequestInit): Promise<T> { if (!apiBase) throw new Error("API base URL is not configured."); if (!accessToken) throw new Error("Sign in at /admin/login before using the Player Editor."); const headers = new Headers(options?.headers); headers.set("Content-Type", "application/json"); headers.set("Authorization", `Bearer ${accessToken}`); const response = await fetch(apiUrl(apiBase, path), { ...options, headers }); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`)); return payload as T; }
+  async function requestJson<T>(path: string, options?: RequestInit): Promise<T> { if (!apiBase) throw new Error("API base URL is not configured."); if (!accessToken) throw new Error("Sign in at /admin/login before using the Player Editor."); const headers = new Headers(options?.headers); if (options?.body !== undefined) headers.set("Content-Type", "application/json"); headers.set("Authorization", `Bearer ${accessToken}`); const response = await fetch(apiUrl(apiBase, path), { ...options, headers }); const payload = await response.json().catch(() => null); if (!response.ok) { const detail = payload?.detail; const detailRecord = detail && typeof detail === "object" ? detail as Record<string, unknown> : null; const errorMessage = typeof detail === "string" ? detail : String(detailRecord?.message || `API error (${response.status})`); const explicitlyFailed = detailRecord?.kind === "failed" && detailRecord?.recovery_required !== true; const uncertainStatus = response.status >= 500 || [408, 425, 429].includes(response.status); throw new PlayerEditorRequestError(errorMessage, response.status, detailRecord?.kind === "uncertain" || detailRecord?.recovery_required === true || (!explicitlyFailed && uncertainStatus), typeof detailRecord?.operation_key === "string" ? detailRecord.operation_key : null); } return payload as T; }
   function seedEditForm(player: AdminPlayerEditorPlayer) { setEditName(player.name || ""); setEditRating(String(player.rating_jupr ?? 3.5)); setEditStartingRating(String(player.starting_jupr ?? player.rating_jupr ?? 3.5)); setEditActive(player.active !== false); }
   function seedLeagueRatingForm(row: AdminPlayerEditorLeagueRating | null) { setSelectedLeagueRatingId(row ? String(row.id) : ""); setEditLeagueRating(String(row?.rating_jupr ?? 3.5)); setEditLeagueStartingRating(String(row?.starting_jupr ?? row?.rating_jupr ?? 3.5)); setEditLeagueActive(row?.is_active !== false); }
   function seedSocialForm(row: AdminPlayerSocialIdentity | null) { setSelectedSocialId(row?.id || ""); setSocialDisplayName(row?.display_name || ""); setSocialLinkedPlayerId(row?.linked_player_id == null ? "" : String(row.linked_player_id)); }
@@ -92,16 +185,124 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
       if (workspaceRequest.isCurrent(generation)) setSaving(false);
     }
   }
+
+  function playerOperationPath(operationKey: string): string {
+    const template = status.operation_endpoint
+      || "/admin/clubs/{club_id}/players/editor/operations/{operation_key}";
+    return template
+      .replace("{club_id}", encodeURIComponent(clubId))
+      .replace("{operation_key}", encodeURIComponent(operationKey));
+  }
+
+  async function applyRecoveredPlayerWrite(
+    recovered: AdminPlayerEditorWriteResponse,
+    recovery: PlayerWriteRecovery,
+  ) {
+    if (recovered.player) {
+      const recoveredPlayer = recovered.player;
+      setPlayers((current) => [
+        ...current.filter((player) => player.id !== recoveredPlayer.id),
+        recoveredPlayer,
+      ].sort((left, right) => left.name.localeCompare(right.name)));
+      setSelectedId(String(recoveredPlayer.id));
+      await loadDetail(String(recoveredPlayer.id));
+    } else if (recovery.entityId) {
+      await loadDetail(recovery.entityId);
+    } else {
+      await loadPlayers();
+    }
+  }
+
+  async function reconcilePlayerWrite(
+    retainedRecovery: PlayerWriteRecovery | null = writeRecovery,
+  ): Promise<ActionCompletion> {
+    const recovery = retainedRecovery;
+    if (!recovery) throw new Error("No Player Editor operation is waiting for recovery.");
+    if (!requireReady()) throw new Error("Player Editor is not ready to inspect the retained operation.");
+    setCheckingWriteRecovery(true);
+    setMessage(null);
+    try {
+      const path = playerOperationPath(recovery.operationKey);
+      const operation = await requestJson<AdminPlayerEditorOperationResponse>(path);
+      let recovered = operation.result || null;
+      let operationStatus = String(operation.status || "unknown");
+      let recoveryRequired = operation.recovery_required === true;
+
+      if (operationStatus !== "completed" && operationStatus !== "failed") {
+        recovered = await requestJson<AdminPlayerEditorWriteResponse>(`${path}/reconcile`, {
+          method: "POST",
+          body: JSON.stringify({
+            confirmation_text: "RECONCILE PLAYER OPERATION",
+            source: "next_player_editor_operation_reconcile",
+          }),
+        });
+        operationStatus = recovered.ok === false
+          ? String(recovered.status || "failed")
+          : "completed";
+        recoveryRequired = recovered.recovery_required === true;
+      }
+
+      if (operationStatus === "completed" && recovered?.ok !== false) {
+        await applyRecoveredPlayerWrite(recovered || { ok: true }, recovery);
+        forgetMutationOperationKey(recovery.operationKey);
+        clearWriteRecovery();
+        const successMessage = `Exact Player Editor operation ${recovery.operationKey} completed and its authoritative result was applied.`;
+        setMessage(successMessage);
+        return actionSuccess("Player operation reconciled", successMessage);
+      }
+
+      if (operationStatus === "failed" && !recoveryRequired) {
+        forgetMutationOperationKey(recovery.operationKey);
+        clearWriteRecovery();
+        const failedMessage = `Exact Player Editor operation ${recovery.operationKey} is proven failed. Review current data before starting a new request.`;
+        setMessage(failedMessage);
+        return actionSuccess("Player operation checked", failedMessage);
+      }
+
+      const pendingMessage = operation.error || recovery.message;
+      const pending = { ...recovery, status: operationStatus, message: pendingMessage };
+      retainWriteRecovery(pending);
+      return actionUncertain(
+        "Player operation still needs verification",
+        `Operation ${recovery.operationKey} is ${operationStatus.replace(/_/g, " ")}. New Player Editor writes remain blocked.`,
+        recovery.operationKey,
+        "Check and reconcile exact operation",
+        () => reconcilePlayerWrite(pending),
+      );
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unable to reconcile the Player Editor operation.";
+      retainWriteRecovery({ ...recovery, status: "recovery_required", message: errorMessage });
+      setMessage(`${errorMessage} Operation ${recovery.operationKey} remains retained; do not submit another write.`);
+      return actionUncertain(
+        "Player operation still needs verification",
+        `${errorMessage} The exact operation reference remains retained.`,
+        recovery.operationKey,
+        "Check and reconcile exact operation",
+        () => reconcilePlayerWrite({ ...recovery, status: "recovery_required", message: errorMessage }),
+      );
+    } finally {
+      setCheckingWriteRecovery(false);
+    }
+  }
+
   async function createPlayer() {
     setMessage(null);
     if (!requireReady()) return;
+    if (writeRecovery) {
+      setMessage(`Resolve exact operation ${writeRecovery.operationKey} before creating another player.`);
+      return;
+    }
     const name = newName.trim();
     const starting = Number(newStartingJupr);
     if (!name || !Number.isFinite(starting) || starting < 1 || starting > 7) { setMessage("Enter a name and a Starting JUPR between 1.0 and 7.0."); return; }
     const generation = actionRequest.begin();
+    const request = { name, starting_jupr: starting, source: "next_player_editor_create" };
+    const operationScope = `create:${clubId}`;
+    const idempotencyKey = mutationOperationKey(operationScope, request);
     setSaving(true);
     try {
-      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players`, { method: "POST", body: JSON.stringify({ name, starting_jupr: starting, source: "next_player_editor_create" }) });
+      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players`, { method: "POST", body: JSON.stringify({ ...request, idempotency_key: idempotencyKey }) });
+      clearMutationOperationKey(operationScope, request);
       if (!actionRequest.isCurrent(generation)) return;
       if (payload.player) {
         setPlayers((current) => [...current.filter((player) => player.id !== payload.player?.id), payload.player as AdminPlayerEditorPlayer].sort((left, right) => left.name.localeCompare(right.name)));
@@ -111,7 +312,14 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
       }
       setNewName(""); setNewStartingJupr("3.5"); setMessage("Player created or confirmed.");
     } catch (error) {
-      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to create player.");
+      const uncertain = playerEditorWriteIsUncertain(error);
+      if (uncertain) {
+        const operationKey = error instanceof PlayerEditorRequestError && error.operationKey ? error.operationKey : idempotencyKey;
+        retainWriteRecovery({ operationKey, scope: operationScope, workflow: "create", message: error instanceof Error ? error.message : "Unable to confirm player creation.", status: "uncertain" });
+      } else {
+        clearMutationOperationKey(operationScope, request);
+      }
+      if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Unable to create player."}${uncertain ? ` The exact create operation is retained as ${error instanceof PlayerEditorRequestError && error.operationKey ? error.operationKey : idempotencyKey}; check it before making another write.` : ""}`);
     } finally {
       if (actionRequest.isCurrent(generation)) setSaving(false);
     }
@@ -120,14 +328,23 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
   async function savePlayer() {
     setMessage(null);
     if (!selectedId || !requireReady()) return;
+    if (writeRecovery) {
+      setMessage(`Resolve exact operation ${writeRecovery.operationKey} before saving another player change.`);
+      return;
+    }
     const rating = Number(editRating);
     const starting = Number(editStartingRating);
     if (!editName.trim() || !Number.isFinite(rating) || !Number.isFinite(starting) || rating < 1 || rating > 7 || starting < 1 || starting > 7) { setMessage("Name, Overall JUPR, and Starting JUPR are required. Ratings must be between 1.0 and 7.0."); return; }
+    if (!detail?.player.state_fingerprint) { setMessage("Reload this player before saving so the current server version can be verified."); return; }
     const generation = actionRequest.begin();
     const requestedPlayerId = selectedId;
+    const request = { name: editName.trim(), rating_jupr: rating, starting_jupr: starting, active: editActive, expected_state_fingerprint: detail.player.state_fingerprint, source: "next_player_editor_update" };
+    const operationScope = `player:${clubId}:${requestedPlayerId}`;
+    const idempotencyKey = mutationOperationKey(operationScope, request);
     setSaving(true);
     try {
-      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${encodeURIComponent(requestedPlayerId)}`, { method: "PATCH", body: JSON.stringify({ name: editName.trim(), rating_jupr: rating, starting_jupr: starting, active: editActive, source: "next_player_editor_update" }) });
+      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${encodeURIComponent(requestedPlayerId)}`, { method: "PATCH", body: JSON.stringify({ ...request, idempotency_key: idempotencyKey }) });
+      clearMutationOperationKey(operationScope, request);
       if (!actionRequest.isCurrent(generation)) return;
       if (payload.player) {
         setPlayers((current) => current.map((player) => player.id === payload.player?.id ? payload.player as AdminPlayerEditorPlayer : player).sort((left, right) => left.name.localeCompare(right.name)));
@@ -136,33 +353,76 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
       }
       setMessage(null); setResultDialog(`Player saved: ${payload.player?.name || editName.trim()}. Use Match Log and Replay History if downstream rating repair is needed.`);
     } catch (error) {
-      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save player.");
+      const uncertain = playerEditorWriteIsUncertain(error);
+      if (uncertain) {
+        const operationKey = error instanceof PlayerEditorRequestError && error.operationKey ? error.operationKey : idempotencyKey;
+        retainWriteRecovery({ operationKey, scope: operationScope, workflow: "update", entityId: requestedPlayerId, message: error instanceof Error ? error.message : "Unable to confirm the player update.", status: "uncertain" });
+      } else {
+        clearMutationOperationKey(operationScope, request);
+      }
+      if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Unable to save player."}${uncertain ? ` The exact player operation is retained as ${error instanceof PlayerEditorRequestError && error.operationKey ? error.operationKey : idempotencyKey}; check it before making another write.` : ""}`);
     } finally {
       if (actionRequest.isCurrent(generation)) setSaving(false);
     }
   }
 
-  async function saveLeagueRating(confirmationText: string) {
+  async function saveLeagueRating(confirmationText: string): Promise<ActionCompletion> {
     setMessage(null);
-    if (!selectedId || !selectedLeagueRatingId || !requireReady()) return;
+    if (!selectedId || !selectedLeagueRatingId || !requireReady()) throw new Error("Select a player and league rating before saving.");
+    if (writeRecovery) throw new Error(`Resolve exact operation ${writeRecovery.operationKey} before saving another league rating.`);
     const rating = Number(editLeagueRating);
     const starting = Number(editLeagueStartingRating);
-    if (!Number.isFinite(rating) || !Number.isFinite(starting) || rating < 1 || rating > 7 || starting < 1 || starting > 7) { setMessage("League JUPR and league Starting JUPR must be between 1.0 and 7.0."); return; }
+    if (!Number.isFinite(rating) || !Number.isFinite(starting) || rating < 1 || rating > 7 || starting < 1 || starting > 7) { const text = "League JUPR and league Starting JUPR must be between 1.0 and 7.0."; setMessage(text); throw new Error(text); }
+    const selectedLeagueRating = detail?.league_ratings.find((row) => String(row.id) === selectedLeagueRatingId);
+    if (!selectedLeagueRating?.state_fingerprint) { const text = "Reload this league rating before saving so the current server version can be verified."; setMessage(text); throw new Error(text); }
     const generation = actionRequest.begin();
     const playerId = selectedId;
     const leagueRatingId = selectedLeagueRatingId;
+    const request = { rating_jupr: rating, starting_jupr: starting, is_active: editLeagueActive, expected_state_fingerprint: selectedLeagueRating.state_fingerprint, confirmation_text: confirmationText, source: "next_player_editor_league_rating" };
+    const operationScope = `league-rating:${clubId}:${playerId}:${leagueRatingId}`;
+    const idempotencyKey = mutationOperationKey(operationScope, request);
     setSaving(true);
     try {
-      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${encodeURIComponent(playerId)}/league-ratings/${encodeURIComponent(leagueRatingId)}`, { method: "PATCH", body: JSON.stringify({ rating_jupr: rating, starting_jupr: starting, is_active: editLeagueActive, confirmation_text: confirmationText, source: "next_player_editor_league_rating" }) });
-      if (!actionRequest.isCurrent(generation)) return;
+      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${encodeURIComponent(playerId)}/league-ratings/${encodeURIComponent(leagueRatingId)}`, { method: "PATCH", body: JSON.stringify({ ...request, idempotency_key: idempotencyKey }) });
+      clearMutationOperationKey(operationScope, request);
+      const completion = actionSuccess("League rating saved", "The targeted league-rating correction was saved and audit-flagged for review.");
+      if (!actionRequest.isCurrent(generation)) return completion;
       if (payload.league_ratings && detail) {
         setDetail({ ...detail, league_ratings: payload.league_ratings });
         const updated = payload.league_ratings.find((row) => String(row.id) === leagueRatingId) || payload.league_ratings[0] || null;
         seedLeagueRatingForm(updated);
       }
       setMessage("League rating saved and audit-flagged for review. Run Replay History if you need to rebuild derived history.");
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save league rating.");
+      if (playerEditorWriteIsUncertain(error)) {
+        const operationKey = error instanceof PlayerEditorRequestError && error.operationKey ? error.operationKey : idempotencyKey;
+        retainWriteRecovery({
+          operationKey,
+          scope: operationScope,
+          workflow: "league-rating",
+          entityId: playerId,
+          message: error instanceof Error ? error.message : "Unable to confirm the league-rating update.",
+          status: "uncertain",
+        });
+        return actionUncertain(
+          "League rating outcome needs checking",
+          "The request was sent, but its durable result could not be confirmed. Check and reconcile the retained operation before making another rating change.",
+          operationKey,
+          "Check and reconcile exact operation",
+          () => reconcilePlayerWrite({
+            operationKey,
+            scope: operationScope,
+            workflow: "league-rating",
+            entityId: playerId,
+            message: error instanceof Error ? error.message : "Unable to confirm the league-rating update.",
+            status: "uncertain",
+          }),
+        );
+      }
+      clearMutationOperationKey(operationScope, request);
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setSaving(false);
     }
@@ -170,16 +430,20 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
 
   async function saveSocialIdentity(confirmationText: string) {
     setMessage(null);
-    if (!selectedSocialId || !requireReady()) return;
+    if (!selectedSocialId || !requireReady()) throw new Error("Select a social identity before saving.");
     const generation = actionRequest.begin();
     const socialId = selectedSocialId;
     setSaving(true);
     try {
       const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities/${encodeURIComponent(socialId)}`, { method: "PATCH", body: JSON.stringify({ display_name: socialDisplayName, linked_player_id: socialLinkedPlayerId ? Number(socialLinkedPlayerId) : null, confirmation_text: confirmationText, source: "next_player_editor_social_identity" }) });
-      if (!actionRequest.isCurrent(generation)) return;
+      const savedName = payload.club_person?.display_name || socialId;
+      const completion = actionSuccess("Social identity saved", `The social identity ${savedName} was saved.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadSocialIdentities(`Saved social identity ${payload.club_person?.display_name || socialId} and refreshed the list.`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save social identity.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setSaving(false);
     }
@@ -187,15 +451,19 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
 
   async function autoLinkSocialIdentities(confirmationText: string) {
     setMessage(null);
-    if (!requireReady()) return;
+    if (!requireReady()) throw new Error("Player Editor is not ready for this action.");
     const generation = actionRequest.begin();
     setSaving(true);
     try {
       const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities/auto-link`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText, source: "next_player_editor_social_auto_link" }) });
-      if (!actionRequest.isCurrent(generation)) return;
+      const linkedCount = payload.linked_count ?? 0;
+      const completion = actionSuccess("Social identities linked", `${linkedCount} exact-name social identit${linkedCount === 1 ? "y was" : "ies were"} linked.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadSocialIdentities(`Auto-linked ${payload.linked_count ?? 0} social identit${payload.linked_count === 1 ? "y" : "ies"}; skipped ${payload.skipped_count ?? 0}. The list is refreshed.`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to auto-link social identities.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setSaving(false);
     }
@@ -222,7 +490,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
   }
   async function executeMerge(confirmationText: string) {
     setMessage(null);
-    if (!mergeSourceId || !mergeTargetId || !mergePreview?.preview_fingerprint || !mergeOperationId || !requireReady()) return;
+    if (!mergeSourceId || !mergeTargetId || !mergePreview?.preview_fingerprint || !mergeOperationId || !requireReady()) throw new Error("Review a valid player merge before continuing.");
     const operationId = mergeOperationId;
     const sourceId = mergeSourceId;
     const targetId = mergeTargetId;
@@ -242,25 +510,40 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
           source: "next_player_editor_merge"
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Player merge recorded", `Player #${payload.source_player_id} was merged into #${payload.target_player_id}. Full Replay History evidence is still required.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMergePreview(null);
       setMergeRecovery(payload);
       await loadPlayers();
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       if (selectedPlayerNeedsReload) {
         detailRequest.invalidate();
         setSelectedId(targetId);
         clearPlayerDetail();
         await loadDetail(targetId);
-        if (!actionRequest.isCurrent(generation)) return;
+        if (!actionRequest.isCurrent(generation)) return completion;
       }
       setMessage(`Merged player #${payload.source_player_id} into #${payload.target_player_id}. Operation ${payload.operation_id || operationId} is pending full replay evidence.`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
         setMergePreview(null);
         setMergeRecovery(null);
         setMessage(`${error instanceof Error ? error.message : "Unable to execute merge."} Outcome unknown for operation ${operationId}; check that operation before retrying.`);
       }
+      return actionUncertain(
+        "Player merge needs verification",
+        `The request ended without a confirmed result. Check merge operation ${operationId} before retrying.`,
+        operationId,
+        "Check merge operation",
+        async () => {
+          const payload = await requestJson<{ operation: { status?: string; source_player_id?: number; target_player_id?: number }; recovery?: AdminPlayerEditorWriteResponse["recovery"] }>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/merge/${encodeURIComponent(operationId)}`);
+          const operationStatus = payload.operation?.status || "unknown";
+          setMergeRecovery({ ok: true, operation_id: operationId, operation_status: operationStatus, source_player_id: payload.operation?.source_player_id, target_player_id: payload.operation?.target_player_id, recovery: payload.recovery });
+          setMessage(`Operation ${operationId} status: ${operationStatus}.`);
+          return actionSuccess("Merge operation checked", `Operation ${operationId} is ${operationStatus}. Review its recovery requirements before continuing.`);
+        }
+      );
     } finally {
       if (actionRequest.isCurrent(generation)) setSaving(false);
     }
@@ -284,17 +567,20 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
 
   async function attachReplayEvidence(confirmationText: string) {
     const operationId = mergeRecovery?.operation_id;
-    if (!operationId || !requireReady()) return;
+    if (!operationId || !requireReady()) throw new Error("No merge operation is ready for Replay History evidence.");
     const generation = actionRequest.begin();
     setSaving(true);
     try {
       const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/merge/${encodeURIComponent(operationId)}/replay-evidence`, { method: "POST", body: JSON.stringify({ replay_job_id: replayJobId.trim(), confirmation_text: confirmationText, source: "next_player_editor_merge_replay_evidence" }) });
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Replay evidence attached", "Full Replay History evidence is attached and merge recovery is complete.");
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMergeRecovery(payload);
       setReplayJobId("");
       setMessage("Succeeded full Replay History evidence attached. Merge recovery is complete.");
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to attach replay evidence.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setSaving(false);
     }
@@ -302,18 +588,21 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
 
   async function compensateMerge(confirmationText: string) {
     const operationId = mergeRecovery?.operation_id;
-    if (!operationId || !requireReady()) return;
+    if (!operationId || !requireReady()) throw new Error("No merge operation is ready to compensate.");
     const generation = actionRequest.begin();
     setSaving(true);
     try {
       const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/merge/${encodeURIComponent(operationId)}/compensate`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText, source: "next_player_editor_merge_compensation" }) });
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Merge compensated", "The pre-merge player, match, league, and social-link state was restored.");
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMergeRecovery(payload);
       await loadPlayers();
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage("Merge compensated: pre-merge player, match, league, and social-link state was restored; timestamps may advance.");
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to compensate merge.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setSaving(false);
     }
@@ -324,15 +613,17 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
   if (!status.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Next Player Editor is disabled</h2><p style={{ color: "#475569" }}>{status.warnings?.[0] || "Enable the Player Editor pilot flag on FastAPI."}</p></article>;
 
   return <section style={{ display: "grid", gap: "1rem" }}>
-    {resultDialog ? (
-      <div role="dialog" aria-modal="true" aria-labelledby="player-save-result-title" style={{ position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: "1rem", background: "rgba(15, 23, 42, 0.55)" }}>
-        <article style={{ ...cardStyle, width: "min(560px, 100%)", boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)" }}>
-          <h2 id="player-save-result-title" style={{ marginTop: 0 }}>Player update complete</h2>
-          <p role="status" style={{ color: "#166534" }}>{resultDialog}</p>
-          <p style={{ textAlign: "right", marginBottom: 0 }}><button type="button" onClick={() => setResultDialog(null)} style={buttonStyle}>OK</button></p>
-        </article>
+    <InteractionDialog
+      open={Boolean(resultDialog)}
+      phase="success"
+      title="Player update complete"
+      onRequestClose={() => setResultDialog(null)}
+      actions={<button type="button" onClick={() => setResultDialog(null)} style={buttonStyle}>OK</button>}
+    >
+      <div tabIndex={-1} data-dialog-focus>
+        <StaticActionFeedback tone="success" title="Player saved" description={resultDialog || "The player update was saved."} />
       </div>
-    ) : null}
+    </InteractionDialog>
     {message ? (
       <div
         role={isErrorMessage(message) ? "alert" : "status"}
@@ -357,11 +648,22 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
         <button type="button" onClick={() => setMessage(null)} aria-label="Dismiss Player Editor message">Dismiss</button>
       </div>
     ) : null}
+    {writeRecovery ? (
+      <article aria-live="polite" style={{ ...cardStyle, background: "#fffbeb", borderColor: "#f59e0b" }}>
+        <h2 style={{ marginTop: 0 }}>Player write needs exact-operation recovery</h2>
+        <p style={{ color: "#92400e" }}>The response was not conclusive. Creating or changing another player or league rating stays blocked until this exact operation is reconciled.</p>
+        <p><strong>Operation key:</strong> <code style={{ overflowWrap: "anywhere" }}>{writeRecovery.operationKey}</code><br /><strong>Last known status:</strong> {writeRecovery.status.replace(/_/g, " ")}</p>
+        <p>{writeRecovery.message}</p>
+        <button type="button" onClick={() => void reconcilePlayerWrite()} disabled={checkingWriteRecovery || !accessToken} style={ghostButtonStyle}>
+          {checkingWriteRecovery ? "Checking and reconciling…" : "Check and reconcile exact operation"}
+        </button>
+      </article>
+    ) : null}
     {mergeAttempted && mergeOperationId && !mergePreview && !mergeRecovery ? <article style={{ ...cardStyle, background: "#fef2f2", borderColor: "#fca5a5" }}><h2 style={{ marginTop: 0 }}>Merge outcome unknown</h2><p>Do not retry with a new operation. Check operation <code>{mergeOperationId}</code> first; an idempotent server retry uses this same ID.</p><button type="button" onClick={lookupMergeOperation} disabled={saving || !accessToken} style={ghostButtonStyle}>Check merge operation</button></article> : null}
     <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Player Editor admin session</h2><p style={{ color: "#475569" }}>This route supports roster/detail read, add player, basic player updates, guarded league-rating edits, Club Social identity linking, and guarded player merge. Merges require Replay History after execution.</p><div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}><strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong><p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to send authorized Player Editor requests." : sessionLoading ? "Checking admin session…" : "Sign in before using the Player Editor."}</p>{sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}{!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}</div><button type="button" onClick={loadWorkspace} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Refreshing…" : "Refresh players and identities"}</button>{status.warnings?.length ? <ul style={{ color: "#92400e" }}>{status.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}</article>
-    <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Add new player</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}><label><strong>Name</strong><br /><input value={newName} onChange={(event) => setNewName(event.target.value)} style={inputStyle} /></label><label><strong>Starting JUPR</strong><br /><input value={newStartingJupr} onChange={(event) => setNewStartingJupr(event.target.value)} type="number" min={1} max={7} step={0.1} style={inputStyle} /></label><button type="button" onClick={createPlayer} disabled={saving || !accessToken} style={ghostButtonStyle}>Add player</button></div></article>
+    <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Add new player</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}><label><strong>Name</strong><br /><input value={newName} onChange={(event) => setNewName(event.target.value)} style={inputStyle} /></label><label><strong>Starting JUPR</strong><br /><input value={newStartingJupr} onChange={(event) => setNewStartingJupr(event.target.value)} type="number" min={1} max={7} step={0.1} style={inputStyle} /></label><button type="button" onClick={createPlayer} disabled={saving || !accessToken || Boolean(writeRecovery)} style={ghostButtonStyle}>Add player</button></div></article>
     <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Select player</h2><select value={selectedId} onChange={(event) => loadDetail(event.target.value)} style={inputStyle} disabled={saving || !accessToken}><option value="">Choose a player</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{playerOptionLabel(player)}</option>)}</select></article>
-    {detail ? <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Manage player</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem" }}><label><strong>Name</strong><br /><input value={editName} onChange={(event) => setEditName(event.target.value)} style={inputStyle} /></label><label><strong>Overall JUPR</strong><br /><input value={editRating} onChange={(event) => setEditRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label><label><strong>Starting JUPR</strong><br /><input value={editStartingRating} onChange={(event) => setEditStartingRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label><label><strong>Active</strong><br /><select value={editActive ? "yes" : "no"} onChange={(event) => setEditActive(event.target.value === "yes")} style={inputStyle}><option value="yes">Active</option><option value="no">Inactive</option></select></label></div><p><button type="button" onClick={savePlayer} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Saving…" : "Save player"}</button></p><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}><div><strong>Wins</strong><br />{detail.player.wins ?? 0}</div><div><strong>Losses</strong><br />{detail.player.losses ?? 0}</div><div><strong>Matches</strong><br />{detail.player.matches_played ?? 0}</div><div><strong>Match refs</strong><br />{detail.match_reference_counts?.total ?? 0}</div></div></article> : null}
+    {detail ? <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Manage player</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem" }}><label><strong>Name</strong><br /><input value={editName} onChange={(event) => setEditName(event.target.value)} style={inputStyle} /></label><label><strong>Overall JUPR</strong><br /><input value={editRating} onChange={(event) => setEditRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label><label><strong>Starting JUPR</strong><br /><input value={editStartingRating} onChange={(event) => setEditStartingRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label><label><strong>Active</strong><br /><select value={editActive ? "yes" : "no"} onChange={(event) => setEditActive(event.target.value === "yes")} style={inputStyle}><option value="yes">Active</option><option value="no">Inactive</option></select></label></div><p><button type="button" onClick={savePlayer} disabled={saving || !accessToken || Boolean(writeRecovery)} style={buttonStyle}>{saving ? "Saving…" : "Save player"}</button></p><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}><div><strong>Wins</strong><br />{detail.player.wins ?? 0}</div><div><strong>Losses</strong><br />{detail.player.losses ?? 0}</div><div><strong>Matches</strong><br />{detail.player.matches_played ?? 0}</div><div><strong>Match refs</strong><br />{detail.match_reference_counts?.total ?? 0}</div></div></article> : null}
     {detail?.league_ratings?.length ? (
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>League ratings</h2>
@@ -379,7 +681,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
             description="This targeted correction can diverge from replayed history and will be audit-flagged. Run Replay History afterward if derived history must be rebuilt."
             confirmLabel="Yes, save league rating"
             confirmationText={leagueRatingConfirmText}
-            disabled={saving || !accessToken || !selectedLeagueRatingId}
+            disabled={saving || !accessToken || !selectedLeagueRatingId || Boolean(writeRecovery)}
             busy={saving}
             onConfirm={saveLeagueRating}
           />

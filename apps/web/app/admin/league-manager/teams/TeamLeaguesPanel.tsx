@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type {
   AdminLeagueManagerListResponse,
   AdminLeagueManagerStatusResponse
@@ -134,6 +135,17 @@ function operationKey(kind: string): string {
   return `${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
 }
 
+const confirmedWriteRefreshWarning = " The action completed, but the latest team league view could not be refreshed. Reload this page before making another change; do not repeat the completed action.";
+
+async function refreshAfterConfirmedWrite(refresh: () => Promise<void>): Promise<string> {
+  try {
+    await refresh();
+    return "";
+  } catch {
+    return confirmedWriteRefreshWarning;
+  }
+}
+
 function settingsDraft(settings?: TeamSettings | null): SettingsDraft {
   return {
     registrationOpen: Boolean(settings?.registration_open),
@@ -180,7 +192,7 @@ function TeamSettingsForm({
   settings?: TeamSettings | null;
   busy: boolean;
   onDirty: () => void;
-  onSave: (draft: SettingsDraft, confirmationText: string) => Promise<void>;
+  onSave: (draft: SettingsDraft, confirmationText: string) => Promise<ActionCompletion>;
 }) {
   const [draft, setDraft] = useState<SettingsDraft>(() => settingsDraft(settings));
   function update<K extends keyof SettingsDraft>(key: K, value: SettingsDraft[K]) {
@@ -240,7 +252,7 @@ function ScoreFixtureCard({
     setScoreKey(operationKey(`team-score-${fixture.id}`));
   }
 
-  async function saveScore(confirmationText: string) {
+  async function saveScore(confirmationText: string): Promise<ActionCompletion> {
     setBusy(true);
     setMessage(null);
     try {
@@ -257,16 +269,19 @@ function ScoreFixtureCard({
         source: "next_team_league_fixture_result"
       });
       setScoreKey(operationKey(`team-score-${fixture.id}`));
-      setMessage("Result saved.");
-      await onSaved();
+      const refreshWarning = await refreshAfterConfirmedWrite(onSaved);
+      const successMessage = `${resultStatus === "complete" ? "The canonical doubles match and fixture were saved together." : "The forfeit was saved to the fixture and standings."}${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess(resultStatus === "complete" ? "Team result saved" : "Forfeit saved", successMessage);
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "Unable to save this result."} The same request key is retained for retry.`);
+      throw error;
     } finally {
       setBusy(false);
     }
   }
 
-  async function reconcile(confirmationText: string) {
+  async function reconcile(confirmationText: string): Promise<ActionCompletion> {
     setBusy(true);
     setMessage(null);
     try {
@@ -276,10 +291,13 @@ function ScoreFixtureCard({
         source: "next_team_league_fixture_reconcile"
       });
       setReconcileKey(operationKey(`team-reconcile-${fixture.id}`));
-      setMessage("Result reconciled.");
-      await onSaved();
+      const refreshWarning = await refreshAfterConfirmedWrite(onSaved);
+      const successMessage = `The fixture was reconciled from its canonical match.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess("Team result reconciled", successMessage);
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "Unable to reconcile this result."} The same request key is retained for retry.`);
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -434,15 +452,17 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     });
   }
 
-  async function saveSettings(draft: SettingsDraft, confirmationText: string) {
+  async function saveSettings(draft: SettingsDraft, confirmationText: string): Promise<ActionCompletion> {
     if (!leagueName) {
-      setMessage("Select a league first.");
-      return;
+      const error = new Error("Select a league first.");
+      setMessage(error.message);
+      throw error;
     }
     const playoffCount = draft.playoffTeamCount ? Number(draft.playoffTeamCount) : null;
     if (draft.playoffFormat === "all_team_single_elimination" && (!Number.isInteger(playoffCount) || Number(playoffCount) < 2 || Number(playoffCount) > 128)) {
-      setMessage("Playoff team count must be a whole number from 2 to 128.");
-      return;
+      const error = new Error("Playoff team count must be a whole number from 2 to 128.");
+      setMessage(error.message);
+      throw error;
     }
     setBusy(true);
     setMessage(null);
@@ -468,11 +488,14 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
           source: "next_team_league_settings_page"
         })
       });
-      await refreshDetail();
       setSettingsKey(operationKey("team-settings"));
-      setMessage("Team league setup saved.");
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `Registration, partner, substitute, schedule, and playoff settings were saved together.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess("Team league setup saved", successMessage);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to save team league setup.");
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -494,8 +517,12 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
-  async function commitSchedule(confirmationText: string) {
-    if (!preview || preview.phase !== phase) return;
+  async function commitSchedule(confirmationText: string): Promise<ActionCompletion> {
+    if (!preview || preview.phase !== phase) {
+      const error = new Error("Preview the current schedule phase before publishing it.");
+      setMessage(error.message);
+      throw error;
+    }
     setBusy(true);
     setMessage(null);
     try {
@@ -513,19 +540,23 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
       });
       setPreview(null);
       setScheduleKey(operationKey(`team-schedule-${phase}`));
-      await refreshDetail();
-      setMessage(`${phase === "regular" ? "Regular-season schedule" : "Playoff bracket"} published.`);
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `${phase === "regular" ? "Regular-season schedule" : "Playoff bracket"} published.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess(phase === "regular" ? "Schedule published" : "Playoff bracket published", successMessage);
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "Unable to publish the schedule."} The same request key is retained for retry.`);
+      throw error;
     } finally {
       setBusy(false);
     }
   }
 
-  async function applyWaitlist(confirmationText: string) {
+  async function applyWaitlist(confirmationText: string): Promise<ActionCompletion> {
     if ((waitlistAction === "pair" && waitlistIds.length !== 2) || (waitlistAction === "withdraw" && !waitlistIds.length)) {
-      setMessage(waitlistAction === "pair" ? "Select exactly two waiting players." : "Select at least one waiting player.");
-      return;
+      const error = new Error(waitlistAction === "pair" ? "Select exactly two waiting players." : "Select at least one waiting player.");
+      setMessage(error.message);
+      throw error;
     }
     setBusy(true);
     setMessage(null);
@@ -541,10 +572,13 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
       setWaitlistIds([]);
       setWaitlistTeamName("");
       setWaitlistKey(operationKey("team-waitlist"));
-      await refreshDetail();
-      setMessage(waitlistAction === "pair" ? "Waitlisted players paired." : "Waitlist entries withdrawn.");
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `${waitlistAction === "pair" ? "Waitlisted players paired." : "Waitlist entries withdrawn."}${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess(waitlistAction === "pair" ? "Waitlisted players paired" : "Waitlist entries withdrawn", successMessage);
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "Unable to update the waitlist."} The same request key is retained for retry.`);
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -573,10 +607,11 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
-  async function resolveRecovery(confirmationText: string) {
+  async function resolveRecovery(confirmationText: string): Promise<ActionCompletion> {
     if (!recoveryId || recoveryNote.trim().length < 5) {
-      setMessage("Add a recovery note of at least five characters.");
-      return;
+      const error = new Error("Add a recovery note of at least five characters.");
+      setMessage(error.message);
+      throw error;
     }
     setBusy(true);
     setMessage(null);
@@ -596,10 +631,13 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
       setRecoveryEvidence(null);
       setRecoveryId("");
       setRecoveryNote("");
-      await refreshDetail();
-      setMessage("Recovery action completed and verified.");
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `The interrupted operation was resolved and verified against canonical evidence.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess("Recovery completed", successMessage);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to resolve the operation.");
+      throw error;
     } finally {
       setBusy(false);
     }

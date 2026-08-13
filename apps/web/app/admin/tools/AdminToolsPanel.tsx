@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -165,11 +166,13 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
         method: "PATCH",
         body: JSON.stringify({ email: targetEmail, role: targetRole, user_id: targetUserId || null, action, confirmation_text: confirmationText, operation_key: key })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess(action === "upsert" ? "Role saved" : "Role revoked", action === "upsert" ? "The club-scoped role assignment was saved." : "The club-scoped role assignment was revoked.");
+      if (!actionRequest.isCurrent(generation)) return completion;
       setOverview((current) => current ? { ...current, roles: payload.roles } : current);
       setMessage(payload.audit_warning ? `Saved, but audit warning: ${payload.audit_warning}` : (action === "upsert" ? "Role assignment saved." : "Role assignment revoked."));
       setRoleOperationKey("");
-    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to update role assignment."); }
+      return completion;
+    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to update role assignment."); throw error; }
     finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 
@@ -183,11 +186,13 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
         method: "POST",
         body: JSON.stringify({ mode: workerMode, max_jobs: Number(workerMaxJobs), time_budget_seconds: Number(workerBudget), confirmation_text: confirmationText, operation_key: key })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Badge queue complete", payload.audit_warning ? `The badge queue completed with an audit warning: ${payload.audit_warning}` : "The badge queue worker completed successfully.");
+      if (!actionRequest.isCurrent(generation)) return completion;
       setLastWorkerResult(payload);
       setMessage(payload.audit_warning ? `Badge queue completed with audit warning: ${payload.audit_warning}` : "Badge queue worker completed.");
       setWorkerOperationKey("");
-    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to run badge queue worker."); }
+      return completion;
+    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to run badge queue worker."); throw error; }
     finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 
@@ -227,8 +232,8 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
 
   async function moderateSocialSubmission(confirmationText: string) {
     const selected = socialSubmissionQueue?.submissions.find((submission) => submission.id === selectedSocialSubmissionId);
-    if (!selected || !socialSubmissionQueue) { setMessage("Select and review one Club Social submission first."); return; }
-    if (socialSubmissionAction === "reject" && !socialSubmissionReason.trim()) { setMessage("Enter a rejection reason before rejecting this submission."); return; }
+    if (!selected || !socialSubmissionQueue) { const text = "Select and review one Club Social submission first."; setMessage(text); throw new Error(text); }
+    if (socialSubmissionAction === "reject" && !socialSubmissionReason.trim()) { const text = "Enter a rejection reason before rejecting this submission."; setMessage(text); throw new Error(text); }
     const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
@@ -245,20 +250,22 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           source: "next_admin_tools_social_review"
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Submission moderated", `The Club Social submission was ${payload.action === "approve" ? "approved" : "rejected"}.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       setSocialSubmissionQueue((current) => current ? { ...current, submissions: current.submissions.filter((submission) => submission.id !== selected.id), summary: { ...current.summary, returned_count: Math.max(0, current.submissions.length - 1) } } : current);
       setSelectedSocialSubmissionId("");
       setSocialSubmissionReason("");
       setSocialOperationKey("");
       const warning = payload.warnings.length ? ` Audit warning: ${payload.warnings.join(" ")}` : "";
       setMessage(`Submission ${payload.action === "approve" ? "approved" : "rejected"}.${warning}`);
-    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to moderate the Club Social submission."); }
+      return completion;
+    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to moderate the Club Social submission."); throw error; }
     finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 
   async function applyTournamentMatchBackfill(confirmationText: string) {
-    if (!tournamentBackfillPreview) { setMessage("Load and review a current tournament backfill preview first."); return; }
-    if (!selectedTournamentBackfillGameIds.length) { setMessage("Select at least one ready tournament game to backfill."); return; }
+    if (!tournamentBackfillPreview) { const text = "Load and review a current tournament backfill preview first."; setMessage(text); throw new Error(text); }
+    if (!selectedTournamentBackfillGameIds.length) { const text = "Select at least one ready tournament game to backfill."; setMessage(text); throw new Error(text); }
     const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
@@ -275,12 +282,14 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           source: "next_admin_tools_tournament_match_backfill"
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Tournament matches backfilled", `${payload.inserted_count} reviewed tournament match${payload.inserted_count === 1 ? " was" : "es were"} created.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       setTournamentBackfillPreview(null);
       setSelectedTournamentBackfillGameIds([]);
       setBackfillOperationKey("");
       setMessage(`Backfilled ${payload.inserted_count} reviewed tournament match(es). Operation ${payload.operation_id}. Reload the preview and verify Match Log before any further write.`);
-    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to apply the tournament match backfill."); }
+      return completion;
+    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to apply the tournament match backfill."); throw error; }
     finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 
@@ -306,11 +315,13 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           operation_key: key
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess(payload.read_only ? "Badge recompute preview complete" : "Badge recompute complete", payload.read_only ? "The read-only badge recompute preview finished; no rows were written." : "The guarded badge recompute finished successfully.");
+      if (!actionRequest.isCurrent(generation)) return completion;
       setLastWorkerResult(payload);
       setMessage(payload.read_only ? "Read-only badge recompute preview finished; no rows were written." : "Badge recompute finished.");
       if (recomputeMode !== "dry-run") setRecomputeOperationKey("");
-    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to run badge recompute."); }
+      return completion;
+    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to run badge recompute."); throw error; }
     finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 
@@ -328,7 +339,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   }
 
   async function recoverTournamentBackfill(confirmationText: string) {
-    if (!operationLookup || operationLookup.workflow !== "tournament_match_backfill") { setMessage("Inspect a tournament backfill operation first."); return; }
+    if (!operationLookup || operationLookup.workflow !== "tournament_match_backfill") { const text = "Inspect a tournament backfill operation first."; setMessage(text); throw new Error(text); }
     const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
@@ -336,10 +347,12 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
         method: "POST",
         body: JSON.stringify({ confirmation_text: confirmationText, source: "next_admin_tools_tournament_match_backfill_recovery" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Tournament backfill reconciled", "The backfill rows were reconciled. Verify Replay History before making another write.");
+      if (!actionRequest.isCurrent(generation)) return completion;
       setOperationLookup(payload);
       setMessage("Tournament backfill rows are reconciled. Verify Replay History before further writes.");
-    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to recover tournament backfill."); }
+      return completion;
+    } catch (error) { if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to recover tournament backfill."); throw error; }
     finally { if (actionRequest.isCurrent(generation)) setBusy(false); }
   }
 

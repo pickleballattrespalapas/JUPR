@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type {
   AdminLeagueManagerStatusResponse,
   AdminLeagueManagerWriteResponse
@@ -65,21 +66,24 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
     return payload as T;
   }
 
-  async function createLeague(confirmationText: string) {
+  async function createLeague(confirmationText: string): Promise<ActionCompletion> {
     const cleanName = name.trim();
     const minimum = Number(minGames);
     const factor = Number(kFactor);
     if (!cleanName) {
-      setMessage("League name is required.");
-      return;
+      const error = new Error("League name is required.");
+      setMessage(error.message);
+      throw error;
     }
     if (!Number.isInteger(minimum) || minimum < 0 || minimum > 1000) {
-      setMessage("Minimum games must be a whole number from 0 to 1000.");
-      return;
+      const error = new Error("Minimum games must be a whole number from 0 to 1000.");
+      setMessage(error.message);
+      throw error;
     }
     if (!Number.isInteger(factor) || factor < 1 || factor > 128) {
-      setMessage("K-factor must be a whole number from 1 to 128.");
-      return;
+      const error = new Error("K-factor must be a whole number from 1 to 128.");
+      setMessage(error.message);
+      throw error;
     }
 
     const generation = actionRequest.begin();
@@ -102,14 +106,16 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the created league response was applied.");
       const createdName = payload.league?.league_name || payload.league_name || cleanName;
       const createdType = String(payload.league?.league_type || leagueType);
       router.push(leagueHomeHref(createdName, createdType));
+      return actionSuccess("League created", `${createdName} was created as an inactive league draft.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
         setMessage(error instanceof Error ? error.message : "Unable to create league.");
       }
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }

@@ -74,6 +74,7 @@ class AdminTournamentCommercePaymentRequest(BaseModel):
     payment_status: str = Field(min_length=1, max_length=40)
     expected_order_updated_at: str = Field(min_length=1, max_length=80)
     idempotency_key: str = Field(min_length=36, max_length=80)
+    confirmation_text: str = Field(min_length=1, max_length=40)
     source: str = Field(
         default="next_tournament_commerce_admin", max_length=160
     )
@@ -94,6 +95,7 @@ class AdminTournamentCommerceFulfillmentRequest(BaseModel):
     notes: str = Field(default="", max_length=2000)
     expected_updated_at: str = Field(min_length=1, max_length=80)
     idempotency_key: str = Field(min_length=36, max_length=80)
+    confirmation_text: str = Field(min_length=1, max_length=40)
     source: str = Field(
         default="next_tournament_commerce_admin", max_length=160
     )
@@ -414,6 +416,7 @@ def install_admin_tournament_commerce_routes(
                     payload.expected_order_updated_at
                 ),
                 idempotency_key=payload.idempotency_key,
+                confirmation_text=payload.confirmation_text,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 source=payload.source,
@@ -490,6 +493,7 @@ def install_admin_tournament_commerce_routes(
                 notes=payload.notes,
                 expected_updated_at=payload.expected_updated_at,
                 idempotency_key=payload.idempotency_key,
+                confirmation_text=payload.confirmation_text,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 source=payload.source,

@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+from jupr_app.services.admin_guarded_write_service import GuardedWriteRecoveryRequired
+
 from jupr_app.services.admin_player_editor_service import (
+    PlayerEditorConflictError,
     build_admin_player_editor_status,
     create_admin_player_editor_player,
     get_admin_player_editor_detail,
     list_admin_player_editor_players,
+    reconcile_admin_player_editor_operation,
     update_admin_player_editor_player,
 )
 from jupr_app.services.admin_player_league_rating_service import update_admin_player_editor_league_rating
@@ -27,6 +33,10 @@ class FakeQuery:
         return self
 
     def eq(self, key, value):
+        self.filters.append((key, value))
+        return self
+
+    def is_(self, key, value):
         self.filters.append((key, value))
         return self
 
@@ -64,7 +74,7 @@ class FakeQuery:
             inserted = []
             for row in rows:
                 stored = dict(row)
-                if stored.get("id") is None and self.table_name == "players":
+                if stored.get("id") is None and self.table_name in {"players", "admin_guarded_operations"}:
                     ids = []
                     for existing in table:
                         try:
@@ -155,26 +165,31 @@ def test_create_player_editor_player_writes_audit(monkeypatch) -> None:
         starting_jupr=3.25,
         actor_email="owner@example.com",
         actor_role="club_owner",
+        idempotency_key="player-create-casey",
         source="test",
     )
 
     assert result["ok"] is True
     assert result["player"]["name"] == "Casey"
     assert storage["players"][-1]["rating"] == 1300.0
-    assert storage["admin_activity_log"][0]["action_type"] == "create_player_editor_player"
+    assert any(row["action_type"] == "create_player_editor_player" for row in storage["admin_activity_log"])
 
 
 def test_update_player_editor_player_writes_audit(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
     storage = fake_storage()
 
+    supabase = FakeSupabase(storage)
+    before = get_admin_player_editor_detail(supabase, club_id="club", player_id=1)["player"]
     result = update_admin_player_editor_player(
-        FakeSupabase(storage),
+        supabase,
         club_id="club",
         player_id=1,
         patch={"name": "Alex R", "rating_jupr": 3.7, "starting_jupr": 3.4, "active": False},
         actor_email="owner@example.com",
         actor_role="club_owner",
+        expected_state_fingerprint=before["state_fingerprint"],
+        idempotency_key="player-update-alex",
         source="test",
     )
 
@@ -183,21 +198,25 @@ def test_update_player_editor_player_writes_audit(monkeypatch) -> None:
     assert result["player"]["rating"] == 1480.0
     assert result["player"]["active"] is False
     assert result["player"]["inactive_at"]
-    assert storage["admin_activity_log"][0]["action_type"] == "update_player_editor_player"
+    assert any(row["action_type"] == "update_player_editor_player" for row in storage["admin_activity_log"])
 
 
 def test_update_player_editor_league_rating_writes_audit(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
     storage = fake_storage()
 
+    supabase = FakeSupabase(storage)
+    before = get_admin_player_editor_detail(supabase, club_id="club", player_id=1)["league_ratings"][0]
     result = update_admin_player_editor_league_rating(
-        FakeSupabase(storage),
+        supabase,
         club_id="club",
         player_id=1,
         league_rating_id=10,
         patch={"rating_jupr": 3.8, "starting_jupr": 3.5, "is_active": False},
         actor_email="owner@example.com",
         actor_role="club_owner",
+        expected_state_fingerprint=before["state_fingerprint"],
+        idempotency_key="league-rating-update",
         confirmation_text="SAVE LEAGUE RATING",
         source="test",
     )
@@ -208,4 +227,285 @@ def test_update_player_editor_league_rating_writes_audit(monkeypatch) -> None:
     assert result["league_rating"]["starting_rating"] == 1400.0
     assert result["league_rating"]["is_active"] is False
     assert result["league_rating"]["inactive_at"]
-    assert storage["admin_activity_log"][0]["action_type"] == "update_player_editor_league_rating"
+    assert any(row["action_type"] == "update_player_editor_league_rating" for row in storage["admin_activity_log"])
+
+
+def test_player_editor_create_exact_retry_replays_without_duplicate(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    storage = fake_storage()
+    supabase = FakeSupabase(storage)
+    kwargs = {
+        "club_id": "club",
+        "name": "Casey",
+        "starting_jupr": 3.25,
+        "actor_email": "owner@example.com",
+        "actor_role": "club_owner",
+        "idempotency_key": "player-create-replay",
+        "source": "test",
+    }
+
+    first = create_admin_player_editor_player(supabase, **kwargs)
+    replay = create_admin_player_editor_player(supabase, **kwargs)
+
+    assert replay["idempotent"] is True
+    assert replay["player"]["id"] == first["player"]["id"]
+    assert [row["name"] for row in storage["players"]].count("Casey") == 1
+
+
+class AmbiguousMutationQuery(FakeQuery):
+    def __init__(self, storage, table_name, *, target_table: str, target_kind: str):
+        super().__init__(storage, table_name)
+        self.target_table = target_table
+        self.target_kind = target_kind
+
+    def execute(self):
+        is_target = self.table_name == self.target_table and (
+            (self.target_kind == "insert" and self.insert_payload is not None)
+            or (self.target_kind == "update" and self.update_payload is not None)
+        )
+        result = super().execute()
+        if is_target:
+            raise TimeoutError("response lost after commit")
+        return result
+
+
+class AmbiguousMutationSupabase(FakeSupabase):
+    def __init__(self, storage, *, target_table: str, target_kind: str):
+        super().__init__(storage)
+        self.target_table = target_table
+        self.target_kind = target_kind
+
+    def table(self, name):
+        return AmbiguousMutationQuery(
+            self.storage,
+            name,
+            target_table=self.target_table,
+            target_kind=self.target_kind,
+        )
+
+
+def test_player_editor_create_timeout_marks_recovery_with_readback(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    storage = fake_storage()
+
+    with pytest.raises(GuardedWriteRecoveryRequired, match="may have been created"):
+        create_admin_player_editor_player(
+            AmbiguousMutationSupabase(storage, target_table="players", target_kind="insert"),
+            club_id="club",
+            name="Casey",
+            starting_jupr=3.25,
+            actor_email="owner@example.com",
+            actor_role="club_owner",
+            idempotency_key="player-create-timeout",
+            source="test",
+        )
+
+    operation = storage["admin_guarded_operations"][0]
+    assert operation["status"] == "recovery_required"
+    assert operation["result_json"]["readback_verified"] is True
+    assert operation["result_json"]["players"][0]["name"] == "Casey"
+
+    reconciled = reconcile_admin_player_editor_operation(
+        FakeSupabase(storage),
+        club_id="club",
+        operation_key="player-create-timeout",
+        confirmation_text="RECONCILE PLAYER OPERATION",
+        actor_email="owner@example.com",
+        actor_role="club_owner",
+        source="test",
+    )
+    assert reconciled["reconciled"] is True
+    assert reconciled["player"]["name"] == "Casey"
+    assert operation["status"] == "completed"
+
+
+def test_player_editor_update_timeout_marks_recovery_with_readback(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    storage = fake_storage()
+    baseline = FakeSupabase(storage)
+    before = get_admin_player_editor_detail(baseline, club_id="club", player_id=1)["player"]
+
+    with pytest.raises(GuardedWriteRecoveryRequired, match="may have committed"):
+        update_admin_player_editor_player(
+            AmbiguousMutationSupabase(storage, target_table="players", target_kind="update"),
+            club_id="club",
+            player_id=1,
+            patch={"name": "Alex R"},
+            actor_email="owner@example.com",
+            actor_role="club_owner",
+            expected_state_fingerprint=before["state_fingerprint"],
+            idempotency_key="player-update-timeout",
+            source="test",
+        )
+
+    operation = storage["admin_guarded_operations"][0]
+    assert operation["status"] == "recovery_required"
+    assert operation["result_json"]["readback_verified"] is True
+    assert operation["result_json"]["player"]["name"] == "Alex R"
+
+    reconciled = reconcile_admin_player_editor_operation(
+        FakeSupabase(storage),
+        club_id="club",
+        operation_key="player-update-timeout",
+        confirmation_text="RECONCILE PLAYER OPERATION",
+        actor_email="owner@example.com",
+        actor_role="club_owner",
+        source="test",
+    )
+    assert reconciled["reconciled"] is True
+    assert reconciled["player"]["name"] == "Alex R"
+
+
+def test_league_rating_update_timeout_marks_recovery_with_readback(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    storage = fake_storage()
+    baseline = FakeSupabase(storage)
+    before = get_admin_player_editor_detail(baseline, club_id="club", player_id=1)["league_ratings"][0]
+
+    with pytest.raises(GuardedWriteRecoveryRequired, match="may have committed"):
+        update_admin_player_editor_league_rating(
+            AmbiguousMutationSupabase(storage, target_table="league_ratings", target_kind="update"),
+            club_id="club",
+            player_id=1,
+            league_rating_id=10,
+            patch={"rating_jupr": 3.8},
+            actor_email="owner@example.com",
+            actor_role="club_owner",
+            expected_state_fingerprint=before["state_fingerprint"],
+            idempotency_key="rating-update-timeout",
+            confirmation_text="SAVE LEAGUE RATING",
+            source="test",
+        )
+
+    operation = storage["admin_guarded_operations"][0]
+    assert operation["status"] == "recovery_required"
+    assert operation["result_json"]["readback_verified"] is True
+    assert operation["result_json"]["league_rating"]["rating"] == 1520.0
+
+    reconciled = reconcile_admin_player_editor_operation(
+        FakeSupabase(storage),
+        club_id="club",
+        operation_key="rating-update-timeout",
+        confirmation_text="RECONCILE PLAYER OPERATION",
+        actor_email="owner@example.com",
+        actor_role="club_owner",
+        source="test",
+    )
+    assert reconciled["reconciled"] is True
+    assert reconciled["league_rating"]["rating"] == 1520.0
+
+
+def test_player_create_reconcile_proves_absence_and_closes_operation(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    storage = fake_storage()
+    storage["admin_guarded_operations"] = [
+        {
+            "id": 1,
+            "club_id": "club",
+            "workflow": "player_editor_create",
+            "operation_key": "player-create-absent",
+            "status": "intent_recorded",
+            "before_json": None,
+            "result_json": {
+                "planned": {
+                    "player": {
+                        "club_id": "club",
+                        "name": "Missing Person",
+                        "rating": 1400.0,
+                        "starting_rating": 1400.0,
+                        "wins": 0,
+                        "losses": 0,
+                        "matches_played": 0,
+                        "active": True,
+                        "last_game_at": None,
+                        "inactive_at": None,
+                    }
+                },
+                "preexisting_player_ids": [],
+            },
+        }
+    ]
+
+    reconciled = reconcile_admin_player_editor_operation(
+        FakeSupabase(storage),
+        club_id="club",
+        operation_key="player-create-absent",
+        confirmation_text="RECONCILE PLAYER OPERATION",
+        actor_email="owner@example.com",
+        actor_role="club_owner",
+        source="test",
+    )
+
+    assert reconciled["status"] == "failed"
+    assert reconciled["recovery_required"] is False
+    assert storage["admin_guarded_operations"][0]["status"] == "failed"
+
+
+def test_player_editor_update_replays_before_current_state_check(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    storage = fake_storage()
+    supabase = FakeSupabase(storage)
+    before = get_admin_player_editor_detail(supabase, club_id="club", player_id=1)["player"]
+    kwargs = {
+        "club_id": "club",
+        "player_id": 1,
+        "patch": {"name": "Alex R", "active": False},
+        "actor_email": "owner@example.com",
+        "actor_role": "club_owner",
+        "expected_state_fingerprint": before["state_fingerprint"],
+        "idempotency_key": "player-update-replay",
+        "source": "test",
+    }
+
+    first = update_admin_player_editor_player(supabase, **kwargs)
+    replay = update_admin_player_editor_player(supabase, **kwargs)
+
+    assert replay["idempotent"] is True
+    assert replay["player"] == first["player"]
+    assert storage["players"][0]["name"] == "Alex R"
+
+
+def test_player_editor_update_rejects_stale_review(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    storage = fake_storage()
+    supabase = FakeSupabase(storage)
+
+    with pytest.raises(PlayerEditorConflictError, match="changed after it was loaded"):
+        update_admin_player_editor_player(
+            supabase,
+            club_id="club",
+            player_id=1,
+            patch={"name": "Alex R"},
+            actor_email="owner@example.com",
+            actor_role="club_owner",
+            expected_state_fingerprint="0" * 64,
+            idempotency_key="player-update-stale",
+            source="test",
+        )
+
+    assert storage["players"][0]["name"] == "Alex"
+
+
+def test_league_rating_exact_retry_replays_before_current_state_check(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    storage = fake_storage()
+    supabase = FakeSupabase(storage)
+    before = get_admin_player_editor_detail(supabase, club_id="club", player_id=1)["league_ratings"][0]
+    kwargs = {
+        "club_id": "club",
+        "player_id": 1,
+        "league_rating_id": 10,
+        "patch": {"rating_jupr": 3.8, "is_active": False},
+        "actor_email": "owner@example.com",
+        "actor_role": "club_owner",
+        "expected_state_fingerprint": before["state_fingerprint"],
+        "idempotency_key": "league-rating-replay",
+        "confirmation_text": "SAVE LEAGUE RATING",
+        "source": "test",
+    }
+
+    first = update_admin_player_editor_league_rating(supabase, **kwargs)
+    replay = update_admin_player_editor_league_rating(supabase, **kwargs)
+
+    assert replay["idempotent"] is True
+    assert replay["league_rating"] == first["league_rating"]

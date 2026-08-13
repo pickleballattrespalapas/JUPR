@@ -440,6 +440,31 @@ def test_registration_edit_link_request_sends_email_without_exposing_match(monke
     assert "edit_token" not in str(payload)
 
 
+def test_registration_edit_link_exact_retry_does_not_resend(monkeypatch) -> None:
+    supabase, _storage, _registration_id, _token = _registered_supabase(monkeypatch)
+    calls = {"send": 0}
+
+    def fake_send(**_kwargs):
+        calls["send"] += 1
+        return {"status": "dry_run"}
+
+    monkeypatch.setattr(edit_service, "send_tournament_registration_edit_email", fake_send)
+    kwargs = {
+        "club_id": "club-1",
+        "club_slug": "tres-palapas",
+        "registration_slug": "tres-open",
+        "email": "alex@example.com",
+        "idempotency_key": "edit-link-replay-1",
+    }
+
+    first = request_public_tournament_registration_edit_link(supabase, **kwargs)
+    replay = request_public_tournament_registration_edit_link(supabase, **kwargs)
+
+    assert first == replay
+    assert first["accepted"] is True
+    assert calls["send"] == 1
+
+
 def test_registration_edit_link_request_missing_email_does_not_enumerate(monkeypatch) -> None:
     supabase, _storage, _registration_id, _token = _registered_supabase(monkeypatch)
     calls = {"send": 0}

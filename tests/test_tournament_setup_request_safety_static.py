@@ -72,7 +72,7 @@ def test_guided_shell_creation_uses_one_stable_retry_command() -> None:
     )[0]
 
     assert "globalThis.crypto.randomUUID()" in create
-    assert "const command = createCommand ||" in create
+    assert "const command = explicitCommand || createCommand ||" in create
     assert "persistCreateCommand(command);" in create
     assert "tournament_id: command.tournamentId" in create
     assert "idempotency_key: command.idempotencyKey" in create

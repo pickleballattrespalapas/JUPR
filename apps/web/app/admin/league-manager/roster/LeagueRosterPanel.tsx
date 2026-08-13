@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type {
   AdminLeagueManagerDetailResponse,
   AdminLeagueManagerRosterRow,
@@ -104,15 +105,17 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
     setFilter(nextAction === "activate" ? "not_in_league" : "in_league");
   }
 
-  async function saveBatch(confirmationText: string) {
+  async function saveBatch(confirmationText: string): Promise<ActionCompletion> {
     if (!selectedIds.length) {
-      setMessage("Select at least one player.");
-      return;
+      const error = new Error("Select at least one player.");
+      setMessage(error.message);
+      throw error;
     }
     const rating = action === "activate" ? Number(startingRating) : null;
     if (action === "activate" && (rating === null || !Number.isFinite(rating) || !((rating >= 1 && rating <= 7) || (rating >= 400 && rating <= 2800)))) {
-      setMessage("Starting rating must be JUPR 1.0–7.0 or Elo 400–2800.");
-      return;
+      const error = new Error("Starting rating must be JUPR 1.0–7.0 or Elo 400–2800.");
+      setMessage(error.message);
+      throw error;
     }
 
     const generation = actionRequest.begin();
@@ -133,17 +136,19 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the roster batch response was applied.");
       if (payload.detail) setDetail(payload.detail);
       else await loadDetail();
       const count = payload.updated_count ?? selectedIds.length;
       setMessage(`${action === "activate" ? "Added" : "Removed"} ${count} player${count === 1 ? "" : "s"}.`);
       setSelectedIds([]);
       setIdempotencyKey(operationKey());
+      return actionSuccess(action === "activate" ? "Players added" : "Players removed", `${count} player${count === 1 ? "" : "s"} ${count === 1 ? "was" : "were"} ${action === "activate" ? "added to" : "removed from"} the league.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
         setMessage(`${error instanceof Error ? error.message : "Unable to update the roster."} The same request key is retained for a safe retry.`);
       }
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }

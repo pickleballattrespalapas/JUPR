@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import type { ConfirmActionSuccess } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionSuccess } from "@/components/interaction";
 import TournamentSetupWizardNav, {
   TOURNAMENT_SETUP_STEPS,
   TOURNAMENT_SETUP_DOMAINS,
@@ -1278,10 +1278,9 @@ async function loadDetail() {
       "events",
       `Event ${eventFamilyName(value) || "saved"} saved to the private admin draft. Nothing public changed.`
     );
-    if (saved) {
-      setEventDialogKey(undefined);
-      setImpactReview(null);
-    }
+    if (!saved) throw new Error("The event was not saved. Review the draft and try again.");
+    setImpactReview(null);
+    return actionSuccess("Event saved", `${eventFamilyName(value) || "The event"} was saved to the private admin draft. Nothing public changed.`);
   }
 
   async function saveDivisionDialog(value: SetupRecord) {
@@ -1302,10 +1301,9 @@ async function loadDetail() {
       "divisions",
       `Division ${eventDivisionName(value) || "saved"} saved to the private admin draft. Nothing public changed.`
     );
-    if (saved) {
-      setDivisionDialogKey(undefined);
-      setImpactReview(null);
-    }
+    if (!saved) throw new Error("The division was not saved. Review the draft and try again.");
+    setImpactReview(null);
+    return actionSuccess("Division saved", `${eventDivisionName(value) || "The division"} was saved to the private admin draft. Nothing public changed.`);
   }
 
 
@@ -1327,10 +1325,9 @@ async function loadDetail() {
       "events",
       `${values.length} division${values.length === 1 ? "" : "s"} generated and saved to the private admin draft. Nothing public changed.`
     );
-    if (saved) {
-      setDivisionPresetFamilyKey(undefined);
-      setImpactReview(null);
-    }
+    if (!saved) throw new Error("The generated divisions were not saved. Review the draft and try again.");
+    setImpactReview(null);
+    return actionSuccess("Divisions generated", `${values.length} division${values.length === 1 ? " was" : "s were"} generated and saved to the private admin draft. Nothing public changed.`);
   }
 
   async function saveBulkDivisionEdits(rows: Array<{ key: string; value: SetupRecord }>) {
@@ -1351,12 +1348,9 @@ async function loadDetail() {
       "divisions",
       `${rows.length} division${rows.length === 1 ? "" : "s"} updated together in the private admin draft. Nothing public changed.`
     );
-    if (saved) {
-      setBulkDivisionDialogOpen(false);
-      setBulkDivisionSelecting(false);
-      setSelectedDivisionKeys([]);
-      setImpactReview(null);
-    }
+    if (!saved) throw new Error("The selected divisions were not saved. Review the draft and try again.");
+    setImpactReview(null);
+    return actionSuccess("Divisions updated", `${rows.length} division${rows.length === 1 ? " was" : "s were"} updated together in the private admin draft. Nothing public changed.`);
   }
 
   async function removeEventFamily(rowKey: string) {
@@ -2095,7 +2089,7 @@ async function saveResolutionDraft() {
     }
   }
 
-  async function publishSetup(confirmationText: string): Promise<ConfirmActionSuccess | void> {
+  async function publishSetup(confirmationText: string): Promise<ActionSuccess> {
     function rejectPublish(message: string): never {
       setMessage(message);
       throw new Error(message);
@@ -2163,34 +2157,31 @@ async function saveResolutionDraft() {
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess(
+        "Tournament published",
+        "The reviewed tournament setup is now published. Registration status was left unchanged.",
+        "Done"
+      );
+      if (!actionRequest.isCurrent(generation)) return completion;
       setSetupPublishedThisSession(true);
       await loadDetail();
       if (actionRequest.isCurrent(generation)) {
         setMessage("Tournament setup published. Registration can now be opened.");
-        return {
-          title: "Tournament published",
-          description: (
-            <p role="status" style={{ color: "#166534", fontWeight: 800 }}>
-              The reviewed tournament setup is now published. Registration status was left unchanged.
-            </p>
-          ),
-          closeLabel: "Done"
-        };
       }
+      return completion;
     } catch (error) {
+      const publishError = error instanceof Error ? error : new Error("Unable to publish setup.");
       if (actionRequest.isCurrent(generation)) {
-        const publishError = error instanceof Error ? error : new Error("Unable to publish setup.");
         setMessage(publishError.message);
-        throw publishError;
       }
+      throw publishError;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function openRegistration(confirmationText: string) {
-    if (!detail) return;
+    if (!detail) throw new Error("Reload the tournament before opening registration.");
     const generation = actionRequest.begin();
     setBusy(true);
     setMessage(null);
@@ -2211,19 +2202,23 @@ async function saveResolutionDraft() {
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
-      router.push(
-        `/admin/tournaments/registration?${new URLSearchParams({
-          tournament: tournamentId,
-          name: basics.name.trim() || tournamentName
-        }).toString()}`
-      );
+      const completion = actionSuccess("Registration opened", "The published tournament is now available to registrants.");
+      if (actionRequest.isCurrent(generation)) {
+        router.push(
+          `/admin/tournaments/registration?${new URLSearchParams({
+            tournament: tournamentId,
+            name: basics.name.trim() || tournamentName
+          }).toString()}`
+        );
+      }
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
         setMessage(
           error instanceof Error ? error.message : "Unable to open registration."
         );
       }
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -2375,6 +2370,7 @@ function renderEvents() {
         days={configuration.days}
         onCancel={() => setEventDialogKey(undefined)}
         onConfirm={saveEventDialog}
+        onAcknowledge={() => setEventDialogKey(undefined)}
       />
       <TournamentDivisionPresetDialog
         open={divisionPresetFamilyKey !== undefined}
@@ -2382,6 +2378,7 @@ function renderEvents() {
         configuration={configuration}
         onCancel={() => setDivisionPresetFamilyKey(undefined)}
         onConfirm={saveGeneratedDivisions}
+        onAcknowledge={() => setDivisionPresetFamilyKey(undefined)}
       />
       <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -2556,6 +2553,7 @@ function renderDivisions() {
         days={configuration.days}
         onCancel={() => setDivisionDialogKey(undefined)}
         onConfirm={saveDivisionDialog}
+        onAcknowledge={() => setDivisionDialogKey(undefined)}
       />
       <TournamentDivisionBulkEditDialog
         open={bulkDivisionDialogOpen}
@@ -2565,6 +2563,11 @@ function renderDivisions() {
         disabled={busy}
         onCancel={() => setBulkDivisionDialogOpen(false)}
         onConfirm={saveBulkDivisionEdits}
+        onAcknowledge={() => {
+          setBulkDivisionDialogOpen(false);
+          setBulkDivisionSelecting(false);
+          setSelectedDivisionKeys([]);
+        }}
       />
 
       <article style={cardStyle}>
@@ -2862,13 +2865,14 @@ function renderDivisions() {
           existingCount={courts.length}
           disabled={busy}
           onCancel={() => setBulkCourtDialogOpen(false)}
-          onConfirm={(count) => {
+          onConfirm={async (count) => {
             updateCourts([
               ...courts,
               ...Array.from({ length: count }, () => newVenueCourt())
             ]);
-            setBulkCourtDialogOpen(false);
+            return actionSuccess("Courts added", `${count} court${count === 1 ? " was" : "s were"} added to the unpublished venue inventory.`);
           }}
+          onAcknowledge={() => setBulkCourtDialogOpen(false)}
         />
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Tournament · Venue and tournament days</h2>
@@ -2994,7 +2998,10 @@ function renderDivisions() {
                       confirmationText=""
                       tone="danger"
                       disabled={busy || courts.length <= 1}
-                      onConfirm={() => updateCourts(courts.filter((row) => row.id !== court.id))}
+                      onConfirm={async () => {
+                        updateCourts(courts.filter((row) => row.id !== court.id));
+                        return actionSuccess("Court removed", `${courtDisplayName(court, index)} was removed from the unpublished venue inventory.`);
+                      }}
                     />
                   </div>
                 </article>

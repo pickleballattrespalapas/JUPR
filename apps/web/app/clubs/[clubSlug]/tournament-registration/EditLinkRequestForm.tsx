@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { requestClubTournamentRegistrationEditLink } from "@/lib/tournamentRegistrationApi";
 
 type EditLinkRequestFormProps = {
@@ -17,6 +17,7 @@ export default function EditLinkRequestForm({ clubSlug, tournamentId, registrati
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const idempotencyKeyRef = useRef("");
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -29,18 +30,22 @@ export default function EditLinkRequestForm({ clubSlug, tournamentId, registrati
       setError("Enter the email address used for your registration.");
       return;
     }
+    const idempotencyKey = idempotencyKeyRef.current || `edit-link:${globalThis.crypto.randomUUID()}`;
+    idempotencyKeyRef.current = idempotencyKey;
     setPending(true);
     const response = await requestClubTournamentRegistrationEditLink(clubSlug, {
       tournament_id: tournamentId,
       registration_slug: registrationSlug || null,
       email: cleanEmail,
-      website
+      website,
+      idempotency_key: idempotencyKey
     });
     setPending(false);
     if (response.error) {
       setError(response.error);
       return;
     }
+    idempotencyKeyRef.current = "";
     setMessage(response.data?.message || "If a matching registration exists, an edit link will be sent to that email address.");
   }
 
@@ -49,7 +54,7 @@ export default function EditLinkRequestForm({ clubSlug, tournamentId, registrati
       <input type="text" name="website" autoComplete="off" tabIndex={-1} style={{ position: "absolute", left: "-10000px" }} aria-hidden="true" />
       <label>
         Registration email<br />
-        <input name="email" value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" placeholder="you@example.com" required style={inputStyle} />
+        <input name="email" value={email} onChange={(event) => { idempotencyKeyRef.current = ""; setEmail(event.target.value); }} type="email" autoComplete="email" placeholder="you@example.com" required style={inputStyle} />
       </label>
       <button type="submit" disabled={pending} style={{ padding: "0.65rem 0.9rem", borderRadius: "10px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 }}>
         {pending ? "Sending…" : "Send secure edit link"}

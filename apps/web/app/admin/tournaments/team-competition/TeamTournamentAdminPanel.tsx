@@ -5,6 +5,7 @@ import { useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionSuccess } from "@/components/interaction";
 import {
   FourPlayerTeamMember,
   getAdminTeamCompetitionSnapshot,
@@ -317,7 +318,7 @@ export default function TeamTournamentAdminPanel({
     payload: Record<string, unknown>,
     confirmationText: string,
     successMessage: string
-  ): Promise<void> {
+  ): Promise<ActionSuccess> {
     if (!accessToken || !tournamentId) {
       throw new Error("Choose a tournament and sign in before making changes.");
     }
@@ -343,6 +344,7 @@ export default function TeamTournamentAdminPanel({
     await loadSnapshot(tournamentId);
     setMessageKind("success");
     setMessage(successMessage);
+    return actionSuccess("Tournament team action complete", successMessage);
   }
 
   function chooseConfigEvent(eventId: string): void {
@@ -1959,7 +1961,7 @@ function MatchupLineups({
     teamId: string,
     draft: { mixed: "STRAIGHT" | "CROSS"; tiebreakPlayerId: string },
     confirmation: string
-  ) => Promise<void>;
+  ) => Promise<ActionSuccess>;
 }) {
   const teamIds = [matchup.team_a_id, matchup.team_b_id].filter(
     (value): value is string => Boolean(value)

@@ -719,10 +719,15 @@ def update_admin_tournament_commerce_payment(
     payment_status: str,
     expected_order_updated_at: str,
     idempotency_key: str,
+    confirmation_text: str,
     actor_email: str,
     actor_role: str,
     source: str = "next_tournament_commerce_admin",
 ) -> dict[str, Any]:
+    if _clean_text(confirmation_text, limit=40).upper() != "SAVE PAYMENT STATUS":
+        raise TournamentCommerceValidationError(
+            "Type SAVE PAYMENT STATUS to confirm this payment-status change."
+        )
     clean_status = _clean_text(payment_status, limit=40).upper()
     if clean_status not in {"UNPAID", "PAID", "WAIVED", "REFUNDED"}:
         raise TournamentCommerceValidationError(
@@ -733,6 +738,7 @@ def update_admin_tournament_commerce_payment(
         "registration_id": str(registration_id),
         "payment_status": clean_status,
         "expected_order_updated_at": str(expected_order_updated_at),
+        "confirmation_text": "SAVE PAYMENT STATUS",
     }
     return _admin_order_rpc(
         supabase,
@@ -767,10 +773,15 @@ def update_admin_tournament_commerce_fulfillment(
     notes: str,
     expected_updated_at: str,
     idempotency_key: str,
+    confirmation_text: str,
     actor_email: str,
     actor_role: str,
     source: str = "next_tournament_commerce_admin",
 ) -> dict[str, Any]:
+    if _clean_text(confirmation_text, limit=40).upper() != "SAVE FULFILLMENT STATUS":
+        raise TournamentCommerceValidationError(
+            "Type SAVE FULFILLMENT STATUS to confirm this fulfillment-status change."
+        )
     clean_status = _clean_text(status, limit=40).upper()
     if clean_status not in {"PENDING", "READY", "FULFILLED", "CANCELLED"}:
         raise TournamentCommerceValidationError(
@@ -808,6 +819,7 @@ def update_admin_tournament_commerce_fulfillment(
         "status": clean_status,
         "notes": clean_notes,
         "expected_updated_at": str(expected_updated_at),
+        "confirmation_text": "SAVE FULFILLMENT STATUS",
     }
     return _admin_order_rpc(
         supabase,

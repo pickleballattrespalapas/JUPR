@@ -27,7 +27,15 @@ def utc_now_iso() -> str:
 
 
 def canonical_fingerprint(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    # Match browser JSON.stringify/TextEncoder semantics for reviewed payloads:
+    # non-ASCII text is hashed as its UTF-8 bytes, not Python ``\uXXXX`` escapes.
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+        ensure_ascii=False,
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -265,4 +273,4 @@ def operation_result(existing: dict[str, Any]) -> dict[str, Any]:
             str(existing.get("operation_key") or ""),
             "The completed operation has no readable result. Reconcile it before retrying.",
         )
-    return {**result, "idempotent": True}
+    return {**result, "idempotent": True, "idempotent_replay": True}

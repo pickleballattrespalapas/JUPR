@@ -54,6 +54,36 @@ def test_cancel_requires_literal_cancel_before_any_runtime_or_rpc():
         )
 
 
+def test_payment_and_fulfillment_require_action_specific_phrases():
+    with pytest.raises(TournamentCommerceValidationError, match="SAVE PAYMENT STATUS"):
+        service.update_admin_tournament_commerce_payment(
+            object(),
+            club_id="club",
+            tournament_id=UUID,
+            registration_id="reg_test",
+            payment_status="PAID",
+            expected_order_updated_at="2026-07-01T00:00:00Z",
+            idempotency_key=UUID,
+            confirmation_text="SAVE",
+            actor_email="manager@example.com",
+            actor_role="manager",
+        )
+    with pytest.raises(TournamentCommerceValidationError, match="SAVE FULFILLMENT STATUS"):
+        service.update_admin_tournament_commerce_fulfillment(
+            object(),
+            club_id="club",
+            tournament_id=UUID,
+            fulfillment_id=UUID,
+            status="READY",
+            notes="",
+            expected_updated_at="2026-07-01T00:00:00Z",
+            idempotency_key=UUID,
+            confirmation_text="SAVE",
+            actor_email="manager@example.com",
+            actor_role="manager",
+        )
+
+
 def test_fulfilled_correction_requires_meaningful_note(monkeypatch):
     monkeypatch.setattr(
         service,
@@ -73,6 +103,7 @@ def test_fulfilled_correction_requires_meaningful_note(monkeypatch):
             notes="short",
             expected_updated_at="2026-07-01T00:00:00Z",
             idempotency_key=UUID,
+            confirmation_text="SAVE FULFILLMENT STATUS",
             actor_email="manager@example.com",
             actor_role="manager",
         )
@@ -219,6 +250,7 @@ def test_closed_admin_mutation_runtime_rejects_before_database_access(
                     payment_status="PAID",
                     expected_order_updated_at="2026-07-01T00:00:00Z",
                     idempotency_key=UUID,
+                    confirmation_text="SAVE PAYMENT STATUS",
                 ),
             ),
         ),
@@ -254,6 +286,7 @@ def test_closed_admin_mutation_runtime_rejects_before_database_access(
                     status="READY",
                     expected_updated_at="2026-07-01T00:00:00Z",
                     idempotency_key=UUID,
+                    confirmation_text="SAVE FULFILLMENT STATUS",
                 ),
             ),
         ),

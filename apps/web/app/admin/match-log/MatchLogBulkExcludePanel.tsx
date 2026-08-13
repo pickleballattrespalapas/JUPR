@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type {
   AdminMatchExclusionOperation,
   AdminMatchExclusionTarget,
@@ -119,24 +120,28 @@ export default function MatchLogBulkExcludePanel({
     setSelectedIds((current) => current.includes(matchId) ? current.filter((id) => id !== matchId) : [...current, matchId].sort((a, b) => a - b));
   }
 
-  async function submitExclude(confirmationText: string) {
+  async function submitExclude(confirmationText: string): Promise<ActionCompletion> {
     setMessage(null);
     setResult(null);
     if (!apiBase) {
-      setMessage("API base URL is not configured.");
-      return;
+      const error = new Error("API base URL is not configured.");
+      setMessage(error.message);
+      throw error;
     }
     if (!accessToken) {
-      setMessage("Sign in at /admin/login before excluding rated matches.");
-      return;
+      const error = new Error("Sign in at /admin/login before excluding rated matches.");
+      setMessage(error.message);
+      throw error;
     }
     if (!selectedIds.length) {
-      setMessage("Select at least one match to exclude.");
-      return;
+      const error = new Error("Select at least one match to exclude.");
+      setMessage(error.message);
+      throw error;
     }
     if (exclusionBlocked) {
-      setMessage(`Recover exclusion operation ${exclusionOperation?.id} before starting another.`);
-      return;
+      const error = new Error(`Recover exclusion operation ${exclusionOperation?.id} before starting another.`);
+      setMessage(error.message);
+      throw error;
     }
     setPending(true);
     try {
@@ -166,17 +171,19 @@ export default function MatchLogBulkExcludePanel({
       if (!response.ok) throw new Error(errorMessage(payload, `API error (${response.status})`));
       const typed = payload as AdminMatchLogWriteResult;
       setResult(typed);
-      setMessage(resultSummary(typed));
+      const summary = resultSummary(typed) || "Match exclusion completed.";
+      setMessage(summary);
       const status = typed.status || typed.operation_status || typed.operation?.status;
-      if (typed.ok && (!status || status === "succeeded")) {
-        setSelectedIds([]);
-        setNote("");
-        setIdempotencyKey(requestKey());
-        onExclusionOperationChange(null);
-        onMutationComplete();
-      }
+      if (!typed.ok || (status && status !== "succeeded")) throw new Error(status ? `The exclusion remains ${status.replace(/_/g, " ")}. Resume the exact recovery before submitting another exclusion.` : summary);
+      setSelectedIds([]);
+      setNote("");
+      setIdempotencyKey(requestKey());
+      onExclusionOperationChange(null);
+      onMutationComplete();
+      return actionSuccess("Rated matches excluded", summary);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to exclude selected matches.");
+      throw error;
     } finally {
       setPending(false);
     }

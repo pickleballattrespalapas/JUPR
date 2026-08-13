@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type {
   AdminLeagueManagerDetailResponse,
   AdminLeagueManagerStatusResponse,
@@ -126,8 +127,8 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
     }
   }
 
-  async function transitionLeague(action: LifecycleAction, confirmationText: string) {
-    if (!detail) return;
+  async function transitionLeague(action: LifecycleAction, confirmationText: string): Promise<ActionCompletion> {
+    if (!detail) throw new Error("Load the league before changing its status.");
     const generation = actionRequest.begin();
     setBusy(true);
     setMessage(null);
@@ -143,24 +144,27 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the league status response was applied.");
       if (payload.detail) setDetail(payload.detail);
       else await loadDetail();
       setMessage(`${lifecycleLabels[action]} completed.`);
+      return actionSuccess("League status updated", `${lifecycleLabels[action]} completed for ${initialLeague}.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
         setMessage(error instanceof Error ? error.message : "Unable to update league status.");
       }
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function duplicateLeague(confirmationText: string) {
+  async function duplicateLeague(confirmationText: string): Promise<ActionCompletion> {
     const cleanName = duplicateName.trim();
     if (!cleanName) {
-      setMessage("New draft name is required.");
-      return;
+      const error = new Error("New draft name is required.");
+      setMessage(error.message);
+      throw error;
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -177,14 +181,16 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the duplicated league response was applied.");
       const createdName = payload.league?.league_name || payload.league_name || cleanName;
       const createdType = String(payload.league?.league_type || detail?.league.league_type || initialLeagueType || "Individual");
       router.push(leagueHref("/admin/league-manager/league", createdName, createdType));
+      return actionSuccess("League duplicated", `${createdName} was created as a new draft.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
         setMessage(error instanceof Error ? error.message : "Unable to duplicate league.");
       }
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }

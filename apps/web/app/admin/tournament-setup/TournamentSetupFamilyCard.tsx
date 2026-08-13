@@ -2,6 +2,7 @@
 
 import { useId } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import {
   COMPETITION_FORMATS,
   DIVISION_STATUSES,
@@ -85,7 +86,10 @@ export function TournamentSetupFamilyCard({
           confirmationText=""
           tone="danger"
           disabled={disabled}
-          onConfirm={onRemove}
+          onConfirm={async () => {
+            onRemove();
+            return actionSuccess("Event removed", "The event defaults were removed from the local draft.");
+          }}
         />
       </div>
       <div className={styles.grid}>

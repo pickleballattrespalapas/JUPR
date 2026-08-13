@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
 import {
   adminTournamentCommerceExportUrl,
   AdminTournamentCommerceDetail,
@@ -203,6 +204,20 @@ export default function TournamentCommercePanel({
   >({});
   const [operationEvidence, setOperationEvidence] =
     useState<Record<string, unknown> | null>(null);
+  const operationKeysRef = useRef(new Map<string, { fingerprint: string; key: string }>());
+
+  function stableOperationKey(scope: string, request: Record<string, unknown>): string {
+    const fingerprint = JSON.stringify(request);
+    const pending = operationKeysRef.current.get(scope);
+    if (pending?.fingerprint === fingerprint) return pending.key;
+    const key = `commerce:${crypto.randomUUID()}`;
+    operationKeysRef.current.set(scope, { fingerprint, key });
+    return key;
+  }
+
+  function clearOperationKey(scope: string, key: string) {
+    if (operationKeysRef.current.get(scope)?.key === key) operationKeysRef.current.delete(scope);
+  }
 
   const runtime = recordValue(status || {}, "runtime");
   const environment = stringValue(runtime, "environment", "local");
@@ -700,106 +715,128 @@ export default function TournamentCommercePanel({
     );
   }
 
-  async function saveCatalog(confirmationText: string) {
-    if (!draft || !detail || !selectedTournamentId) return;
+  async function saveCatalog(confirmationText: string): Promise<ActionCompletion> {
+    if (!draft || !detail || !selectedTournamentId) throw new Error("Load and review a tournament catalog before saving.");
     const path = `/admin/clubs/${encodeURIComponent(
       clubId
     )}/tournaments/commerce/tournaments/${encodeURIComponent(
       selectedTournamentId
     )}/catalog`;
+    const request = {
+      expected_catalog_fingerprint: detail.catalog.catalog_fingerprint || "",
+      catalog: draft,
+      confirmation_text: confirmationText,
+      source: "next_tournament_commerce_admin"
+    };
+    const operationScope = `catalog:${selectedTournamentId}`;
+    const idempotencyKey = stableOperationKey(operationScope, request);
     setBusy(true);
     setMessage(null);
     const response = await mutateAdminTournamentCommerce<Record<string, unknown>>(
       path,
       "PUT",
-      {
-        expected_catalog_fingerprint:
-          detail.catalog.catalog_fingerprint || "",
-        catalog: draft,
-        confirmation_text: confirmationText,
-        idempotency_key: crypto.randomUUID(),
-        source: "next_tournament_commerce_admin"
-      },
+      { ...request, idempotency_key: idempotencyKey },
       accessToken
     );
     setBusy(false);
     if (response.error) {
       setMessage(response.error);
-      return;
+      if (response.status == null || response.status >= 500) {
+        return actionUncertain("Catalog save needs verification", response.error, idempotencyKey, "Retry exact catalog save", () => saveCatalog(confirmationText));
+      }
+      throw new Error(response.error);
     }
+    clearOperationKey(operationScope, idempotencyKey);
     await loadDetail(selectedTournamentId);
     setMessage("Tournament extras catalog saved.");
+    return actionSuccess("Tournament catalog saved", "The reviewed extras, bundles, inventory, and promotions catalog was saved.");
   }
 
   async function updatePayment(
     registrationId: string,
-    orderUpdatedAt: string
-  ) {
+    orderUpdatedAt: string,
+    confirmationText: string
+  ): Promise<ActionCompletion> {
     const paymentStatus = paymentChoices[registrationId] || "UNPAID";
     const path = `/admin/clubs/${encodeURIComponent(
       clubId
     )}/tournaments/commerce/tournaments/${encodeURIComponent(
       selectedTournamentId
     )}/orders/${encodeURIComponent(registrationId)}/payment`;
+    const request = {
+      payment_status: paymentStatus,
+      expected_order_updated_at: orderUpdatedAt,
+      confirmation_text: confirmationText,
+      source: "next_tournament_commerce_admin"
+    };
+    const operationScope = `payment:${selectedTournamentId}:${registrationId}`;
+    const idempotencyKey = stableOperationKey(operationScope, request);
     setBusy(true);
     const response = await mutateAdminTournamentCommerce<Record<string, unknown>>(
       path,
       "PATCH",
-      {
-        payment_status: paymentStatus,
-        expected_order_updated_at: orderUpdatedAt,
-        idempotency_key: crypto.randomUUID(),
-        source: "next_tournament_commerce_admin"
-      },
+      { ...request, idempotency_key: idempotencyKey },
       accessToken
     );
     setBusy(false);
     if (response.error) {
       setMessage(response.error);
-      return;
+      if (response.status == null || response.status >= 500) {
+        return actionUncertain("Payment update needs verification", response.error, idempotencyKey, "Retry exact payment update", () => updatePayment(registrationId, orderUpdatedAt, confirmationText));
+      }
+      throw new Error(response.error);
     }
+    clearOperationKey(operationScope, idempotencyKey);
     await loadDetail(selectedTournamentId);
     setMessage(`Payment marked ${paymentStatus.toLowerCase()}.`);
+    return actionSuccess("Payment status saved", `The payment is now ${paymentStatus.toLowerCase()}.`);
   }
 
   async function cancelOrder(
     registrationId: string,
     orderUpdatedAt: string,
     confirmationText: string
-  ) {
+  ): Promise<ActionCompletion> {
     const reason = (cancelReasons[registrationId] || "").trim();
     if (!reason) {
       setMessage("Enter a cancellation reason first.");
-      return;
+      throw new Error("Enter a cancellation reason first.");
     }
     const path = `/admin/clubs/${encodeURIComponent(
       clubId
     )}/tournaments/commerce/tournaments/${encodeURIComponent(
       selectedTournamentId
     )}/orders/${encodeURIComponent(registrationId)}/cancel`;
+    const request = {
+      expected_order_updated_at: orderUpdatedAt,
+      reason,
+      confirmation_text: confirmationText,
+      source: "next_tournament_commerce_admin"
+    };
+    const operationScope = `cancel:${selectedTournamentId}:${registrationId}`;
+    const idempotencyKey = stableOperationKey(operationScope, request);
     setBusy(true);
     const response = await mutateAdminTournamentCommerce<Record<string, unknown>>(
       path,
       "POST",
-      {
-        expected_order_updated_at: orderUpdatedAt,
-        reason,
-        confirmation_text: confirmationText,
-        idempotency_key: crypto.randomUUID(),
-        source: "next_tournament_commerce_admin"
-      },
+      { ...request, idempotency_key: idempotencyKey },
       accessToken
     );
     setBusy(false);
     if (response.error) {
       setMessage(response.error);
-      return;
+      if (response.status == null || response.status >= 500) {
+        return actionUncertain("Order cancellation needs verification", response.error, idempotencyKey, "Retry exact cancellation", () => cancelOrder(registrationId, orderUpdatedAt, confirmationText));
+      }
+      throw new Error(response.error);
     }
+    clearOperationKey(operationScope, idempotencyKey);
     await loadDetail(selectedTournamentId);
     setMessage("Extras order cancelled and inventory released.");
+    return actionSuccess("Extras order cancelled", "The order was cancelled, active inventory was released, and its audit history was retained.");
   }
 
-  async function updateFulfillment(row: Record<string, unknown>) {
+  async function updateFulfillment(row: Record<string, unknown>, confirmationText: string): Promise<ActionCompletion> {
     const id = stringValue(row, "id");
     const currentStatus = stringValue(row, "status", "PENDING").toUpperCase();
     const nextStatus = (fulfillmentStatuses[id] || currentStatus).toUpperCase();
@@ -812,33 +849,41 @@ export default function TournamentCommercePanel({
       setMessage(
         "Add a correction note of at least 8 characters before changing a fulfilled item."
       );
-      return;
+      throw new Error("Add a correction note of at least 8 characters before changing a fulfilled item.");
     }
     const path = `/admin/clubs/${encodeURIComponent(
       clubId
     )}/tournaments/commerce/tournaments/${encodeURIComponent(
       selectedTournamentId
     )}/fulfillment/${encodeURIComponent(id)}`;
+    const request = {
+      status: nextStatus,
+      notes,
+      expected_updated_at: stringValue(row, "updated_at"),
+      confirmation_text: confirmationText,
+      source: "next_tournament_commerce_admin"
+    };
+    const operationScope = `fulfillment:${selectedTournamentId}:${id}`;
+    const idempotencyKey = stableOperationKey(operationScope, request);
     setBusy(true);
     const response = await mutateAdminTournamentCommerce<Record<string, unknown>>(
       path,
       "PATCH",
-      {
-        status: nextStatus,
-        notes,
-        expected_updated_at: stringValue(row, "updated_at"),
-        idempotency_key: crypto.randomUUID(),
-        source: "next_tournament_commerce_admin"
-      },
+      { ...request, idempotency_key: idempotencyKey },
       accessToken
     );
     setBusy(false);
     if (response.error) {
       setMessage(response.error);
-      return;
+      if (response.status == null || response.status >= 500) {
+        return actionUncertain("Fulfillment update needs verification", response.error, idempotencyKey, "Retry exact fulfillment update", () => updateFulfillment(row, confirmationText));
+      }
+      throw new Error(response.error);
     }
+    clearOperationKey(operationScope, idempotencyKey);
     await loadDetail(selectedTournamentId);
     setMessage("Fulfillment status saved.");
+    return actionSuccess("Fulfillment status saved", `The fulfillment item is now ${nextStatus.toLowerCase()}.`);
   }
 
   async function downloadFulfillment() {
@@ -2146,18 +2191,18 @@ export default function TournamentCommercePanel({
                               <option value="WAIVED">Waived</option>
                               <option value="REFUNDED">Refunded</option>
                             </select>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void updatePayment(registrationId, updatedAt)
-                              }
+                            <ConfirmAction
+                              triggerLabel="Save payment"
+                              title="Save this payment status?"
+                              description="The payment status change is version-checked and added to the tournament commerce audit trail."
+                              confirmLabel="Yes, save payment status"
+                              confirmationText="SAVE PAYMENT STATUS"
                               disabled={
                                 busy || !adminWriteReady || statusValue === "CANCELLED"
                               }
-                              style={{ ...ghostButtonStyle, marginTop: "0.35rem" }}
-                            >
-                              Save payment
-                            </button>
+                              busy={busy}
+                              onConfirm={(confirmationText) => updatePayment(registrationId, updatedAt, confirmationText)}
+                            />
                           </td>
                           <td>
                             <input
@@ -2332,10 +2377,10 @@ export default function TournamentCommercePanel({
                               title="Save this fulfillment status?"
                               description="The status change is version-checked and added to the tournament commerce audit trail."
                               confirmLabel="Yes, save status"
-                              confirmationText="SAVE FULFILLMENT"
+                              confirmationText="SAVE FULFILLMENT STATUS"
                               disabled={busy || !adminWriteReady}
                               busy={busy}
-                              onConfirm={() => updateFulfillment(row)}
+                              onConfirm={(confirmationText) => updateFulfillment(row, confirmationText)}
                             />
                           </td>
                         </tr>

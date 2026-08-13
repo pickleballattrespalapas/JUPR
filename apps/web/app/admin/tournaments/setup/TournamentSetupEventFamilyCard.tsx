@@ -2,6 +2,7 @@
 
 import { useId } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import {
   cleanString,
   dayLabel,
@@ -93,7 +94,10 @@ export default function TournamentSetupEventFamilyCard({
             confirmationText=""
             tone="danger"
             disabled={disabled || divisionCount > 0}
-            onConfirm={onRemove}
+            onConfirm={async () => {
+              onRemove();
+              return actionSuccess("Event removed", "The event was removed from the unpublished setup draft.");
+            }}
           />
         </div>
       </div>

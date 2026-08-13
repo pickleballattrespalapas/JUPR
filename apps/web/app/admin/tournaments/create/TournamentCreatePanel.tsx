@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import type { AdminTournamentStatusResponse } from "@/lib/adminTournamentApi";
 import { useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
@@ -110,11 +111,11 @@ export default function TournamentCreatePanel({ apiBase, clubId, status }: Props
     const cleanName = name.trim();
     if (!cleanName) {
       setMessage("Tournament name is required.");
-      return;
+      throw new Error("Tournament name is required.");
     }
     if (startDate && endDate && endDate < startDate) {
       setMessage("Tournament end date cannot be before its start date.");
-      return;
+      throw new Error("Tournament end date cannot be before its start date.");
     }
 
     const requestCommand = command || {
@@ -148,16 +149,19 @@ export default function TournamentCreatePanel({ apiBase, clubId, status }: Props
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
       const createdId = String(payload.tournament?.id || requestCommand.tournamentId);
       const createdName = String(payload.tournament?.name || requestCommand.name);
-      setCommand(null);
-      persistCommand(null);
-      router.push(tournamentHomeHref(createdId, createdName));
+      if (actionRequest.isCurrent(generation)) {
+        setCommand(null);
+        persistCommand(null);
+        router.push(tournamentHomeHref(createdId, createdName));
+      }
+      return actionSuccess("Tournament created", `${createdName} was created successfully.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
         setMessage(`${error instanceof Error ? error.message : "Unable to create tournament."} Retry keeps the same protected request.`);
       }
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
