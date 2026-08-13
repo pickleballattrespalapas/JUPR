@@ -37,6 +37,15 @@ def test_publish_result_stays_visible_in_the_confirmation_dialog() -> None:
     assert "throw publishError" in panel
 
 
+def test_registration_status_does_not_create_a_false_unpublished_setup_banner() -> None:
+    panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+
+    assert "delete comparableSettings.registration_status" in panel
+    assert "delete comparableEvent.status" in panel
+    assert "draftSettingsValue.registration_status = publishedSettingsValue.registration_status" in panel
+    assert 'safeString(publishedSettings.registration_status || "draft")' in panel
+
+
 def test_tournament_days_are_date_locked_and_include_court_capacity_controls() -> None:
     panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
     builder = read_web("app/admin/tournament-setup/tournamentSetupBuilder.ts")
