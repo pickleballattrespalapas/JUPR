@@ -159,10 +159,15 @@ def _event_option_payload(row: dict[str, Any]) -> dict[str, Any]:
         "scheduled_day_ids": list(row.get("scheduled_day_ids") or []),
         "event_family_label": row.get("event_family_label"),
         "division_name": row.get("division_name"),
+        "label": row.get("label"),
         "event_type": row.get("event_type"),
         "gender_restriction": row.get("gender_restriction"),
+        "partner_required": row.get("partner_required"),
+        "public_partner_board": row.get("public_partner_board"),
         "event_format_default": row.get("event_format_default"),
         "scoring_default": row.get("scoring_default"),
+        "event_format_override": row.get("event_format_override"),
+        "scoring_override": row.get("scoring_override"),
         "skill_label": row.get("skill_label"),
         "skill_mode": row.get("skill_mode"),
         "age_label": row.get("age_label"),
@@ -1228,6 +1233,11 @@ def publish_admin_tournament_setup(
             raise RuntimeError("Tournament basics were not published.")
 
     clean_settings = dict(settings or {})
+    before_settings = get_registration_settings(supabase, str(tournament_id))
+    published_settings = dict(before_settings)
+    preserved_registration_status = str(
+        before_settings.get("registration_status") or "draft"
+    )
     for basics_key in ("location_name", "timezone", "sponsors_json"):
         if basics_key in clean_basics:
             clean_settings[basics_key] = clean_basics.get(basics_key)
@@ -1235,12 +1245,19 @@ def publish_admin_tournament_setup(
     # Registration action on the final review page.
     clean_settings.pop("registration_status", None)
     if clean_settings:
-        before_settings = get_registration_settings(
-            supabase, str(tournament_id)
+        preserved_settings = {
+            **before_settings,
+            **clean_settings,
+            "id": before_settings.get("id"),
+            "tournament_id": str(tournament_id),
+            "registration_status": before_settings.get("registration_status") or "draft",
+        }
+        updated_settings = upsert_registration_settings(supabase, preserved_settings)
+        published_settings = dict(updated_settings)
+        preserved_registration_status = str(
+            updated_settings.get("registration_status")
+            or preserved_settings["registration_status"]
         )
-        clean_settings["id"] = before_settings.get("id")
-        clean_settings["tournament_id"] = str(tournament_id)
-        upsert_registration_settings(supabase, clean_settings)
 
     result = publish_registration_configuration(
         supabase,
@@ -1254,6 +1271,11 @@ def publish_admin_tournament_setup(
         },
     )
     published_draft_settings = dict(settings or {})
+    # The post-publish builder snapshot must reflect the values actually stored
+    # by the repository (trimmed text, canonical slug, and preserved status),
+    # not an unnormalized request representation.
+    published_draft_settings.update(_settings_payload(published_settings))
+    published_draft_settings["registration_status"] = preserved_registration_status
     published_draft_settings.pop("forced_change_resolutions", None)
     published_draft_settings.pop("communication_change_acknowledgements", None)
     published_builder_draft = save_builder_draft(

@@ -25,6 +25,33 @@ def test_basics_supports_sponsor_reordering_and_draft_publication_clarity() -> N
     assert "Publish reviewed tournament" in panel
 
 
+def test_publish_result_stays_visible_in_the_confirmation_dialog() -> None:
+    panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+
+    assert 'import type { ConfirmActionSuccess } from "@/components/ConfirmAction";' in panel
+    assert "Promise<ConfirmActionSuccess | void>" in panel
+    assert 'title: "Tournament published"' in panel
+    assert "The reviewed tournament setup is now published." in panel
+    assert "Registration status was left unchanged." in panel
+    assert 'closeLabel: "Done"' in panel
+    assert "throw publishError" in panel
+
+
+def test_registration_status_does_not_create_a_false_unpublished_setup_banner() -> None:
+    panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+    builder = read_web("app/admin/tournament-setup/tournamentSetupBuilder.ts")
+
+    assert "delete comparableSettings.registration_status" in panel
+    assert "stableSetupJsonStringify" in panel
+    assert "comparablePublishedConfigurationPayload" in panel
+    assert "comparablePublishedDay" in builder
+    assert "comparablePublishedEvent" in builder
+    assert "age_rules: comparableJsonValue(event.age_rules)" in builder
+    assert 'fourPlayerTeam ? 4 : 2' in builder
+    assert "draftSettingsValue.registration_status = publishedSettingsValue.registration_status" in panel
+    assert 'safeString(publishedSettings.registration_status || "draft")' in panel
+
+
 def test_tournament_days_are_date_locked_and_include_court_capacity_controls() -> None:
     panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
     builder = read_web("app/admin/tournament-setup/tournamentSetupBuilder.ts")

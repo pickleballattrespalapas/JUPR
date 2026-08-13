@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import type { ConfirmActionSuccess } from "@/components/ConfirmAction";
 import TournamentSetupWizardNav, {
   TOURNAMENT_SETUP_STEPS,
   TOURNAMENT_SETUP_DOMAINS,
@@ -17,6 +18,7 @@ import { useAdminSession } from "@/lib/useAdminSession";
 import TournamentCommercePanel from "../commerce/TournamentCommercePanel";
 import {
   appendBuilderRow,
+  comparablePublishedConfigurationPayload,
   configurationPayload,
   dayLabel,
   dayReference,
@@ -41,6 +43,7 @@ import {
   setRecordString,
   sortDivisionsByEventAndName,
   sortEventFamiliesByTournamentDay,
+  stableSetupJsonStringify,
   syncTournamentDays,
   validateSetupConfiguration,
   withDefaultDayCourts,
@@ -315,9 +318,15 @@ function basicsDraftPayload(basics: BasicsDraft): Record<string, unknown> {
 function settingsDraftPayload(settings: Record<string, unknown>): Record<string, unknown> {
   const courts = normalizeVenueCourts(settings);
   const normalized = settingsWithVenueCourts(settings, courts);
+  const registrationSlug = safeString(settings.registration_slug)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-|-$/g, "");
   return {
-    registration_slug: safeString(settings.registration_slug).trim(),
-    locale: safeString(settings.locale) || "en",
+    registration_slug: registrationSlug,
+    locale: safeString(settings.locale).trim() || "en",
     registration_status: safeString(settings.registration_status) || "draft",
     registration_open_at: settings.registration_open_at || null,
     registration_close_at: settings.registration_close_at || null,
@@ -327,11 +336,12 @@ function settingsDraftPayload(settings: Record<string, unknown>): Record<string,
     refund_policy_markdown: safeString(settings.refund_policy_markdown),
     weather_policy_markdown: safeString(settings.weather_policy_markdown),
     sponsor_markdown: safeString(settings.sponsor_markdown),
-    venue_address: safeString(settings.venue_address),
-    venue_directions: safeString(settings.venue_directions),
+    venue_address: safeString(settings.venue_address).trim(),
+    venue_directions: safeString(settings.venue_directions).trim(),
     venue_courts_json: normalized.venue_courts_json,
     venue_court_count: normalized.venue_court_count,
     venue_court_labels: normalized.venue_court_labels,
+    timezone: safeString(settings.timezone).trim() || "America/Mazatlan",
     forced_change_resolutions: objectValue(settings.forced_change_resolutions),
     communication_change_acknowledgements: objectValue(settings.communication_change_acknowledgements)
   };
@@ -391,18 +401,18 @@ function comparablePublishedStateSignature(
   const comparableSettings = settingsDraftPayload(settings);
   delete comparableSettings.forced_change_resolutions;
   delete comparableSettings.communication_change_acknowledgements;
-  const normalized = configurationWithGlobalStatus(
-    configurationWithVenue(configuration, settings),
-    settings.registration_status
-  );
-  const publishable = publishConfigurationPayload(normalized);
+  // Registration status is controlled by the separate Open/Close action. It
+  // must not make an otherwise published setup look like an unpublished draft.
+  delete comparableSettings.registration_status;
+  const normalized = configurationWithVenue(configuration, settings);
+  const comparableConfiguration = comparablePublishedConfigurationPayload(normalized);
   const builder = configurationPayload(normalized);
-  return JSON.stringify({
+  return stableSetupJsonStringify({
     basics: basicsDraftPayload(basics),
     settings: comparableSettings,
-    days: publishable.days,
+    days: comparableConfiguration.days,
     event_families: builder.event_families,
-    event_options: publishable.event_options
+    event_options: comparableConfiguration.event_options
   });
 }
 
@@ -934,6 +944,9 @@ export default function TournamentSetupWizardPanel({
       ...publishedSettingsValue,
       ...objectValue(draft.settings)
     });
+    // Open/Close Registration is authoritative outside the setup draft. An
+    // older draft snapshot must never override the current registration state.
+    draftSettingsValue.registration_status = publishedSettingsValue.registration_status;
 
     const publishedDays = (payload.days || []).map(withDefaultDayCourts);
     const publishedCourts = normalizeVenueCourts(publishedSettingsValue, publishedDays);
@@ -2082,18 +2095,23 @@ async function saveResolutionDraft() {
     }
   }
 
-  async function publishSetup(confirmationText: string) {
-    if (!detail) return;
+  async function publishSetup(confirmationText: string): Promise<ConfirmActionSuccess | void> {
+    function rejectPublish(message: string): never {
+      setMessage(message);
+      throw new Error(message);
+    }
+
+    if (!detail) {
+      rejectPublish("Reload the tournament setup before publishing it.");
+    }
     if (
       !impactReview ||
       reviewedDraftSignature !== fullDraftSignature(basics, settings, configuration)
     ) {
-      setMessage("Review the current setup before publishing it.");
-      return;
+      rejectPublish("Review the current setup before publishing it.");
     }
     if (resolutionDraftDirty) {
-      setMessage("Save the Review actions before publishing.");
-      return;
+      rejectPublish("Save the Review actions before publishing.");
     }
     const impact = impactReview.publish_impact || {};
     const rawBlockedDetails = Array.isArray(impact.blocked_details) && impact.blocked_details.length
@@ -2103,8 +2121,7 @@ async function saveResolutionDraft() {
       .map(blockedImpactDetail)
       .filter((item) => !forcedResolutionComplete(item));
     if (unresolved.length) {
-      setMessage(`Resolve ${unresolved.length} blocked change${unresolved.length === 1 ? "" : "s"} before publishing.`);
-      return;
+      rejectPublish(`Resolve ${unresolved.length} blocked change${unresolved.length === 1 ? "" : "s"} before publishing.`);
     }
     const rawCommunicationDetails = Array.isArray(impact.communication_impact_details)
       ? impact.communication_impact_details
@@ -2113,8 +2130,7 @@ async function saveResolutionDraft() {
       .map(communicationImpactDetail)
       .filter((item) => !communicationAcknowledgementComplete(item));
     if (unresolvedCommunications.length) {
-      setMessage(`Acknowledge ${unresolvedCommunications.length} registration-preserving communication impact${unresolvedCommunications.length === 1 ? "" : "s"} before publishing.`);
-      return;
+      rejectPublish(`Acknowledge ${unresolvedCommunications.length} registration-preserving communication impact${unresolvedCommunications.length === 1 ? "" : "s"} before publishing.`);
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -2152,12 +2168,21 @@ async function saveResolutionDraft() {
       await loadDetail();
       if (actionRequest.isCurrent(generation)) {
         setMessage("Tournament setup published. Registration can now be opened.");
+        return {
+          title: "Tournament published",
+          description: (
+            <p role="status" style={{ color: "#166534", fontWeight: 800 }}>
+              The reviewed tournament setup is now published. Registration status was left unchanged.
+            </p>
+          ),
+          closeLabel: "Done"
+        };
       }
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
-        setMessage(
-          error instanceof Error ? error.message : "Unable to publish setup."
-        );
+        const publishError = error instanceof Error ? error : new Error("Unable to publish setup.");
+        setMessage(publishError.message);
+        throw publishError;
       }
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
@@ -2239,7 +2264,7 @@ async function saveResolutionDraft() {
       !hasUnpublishedChanges &&
       publishedSetupReady
   );
-  const registrationStatus = safeString(settings.registration_status || "draft");
+  const registrationStatus = safeString(publishedSettings.registration_status || "draft");
   const settingsConfirmation =
     status?.confirmation_text?.settings || "SAVE SETUP";
   const draftConfirmation =
