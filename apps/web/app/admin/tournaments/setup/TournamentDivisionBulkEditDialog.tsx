@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { FormDialog, InteractionActionError, type ActionCompletion } from "@/components/interaction";
+import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  FormDialog,
+  InteractionActionError,
+  useOpenDialogInitializer,
+  type ActionCompletion
+} from "@/components/interaction";
 import {
   COMPETITION_FORMATS,
   SCORING_OPTIONS,
@@ -146,7 +151,7 @@ export default function TournamentDivisionBulkEditDialog({ open, divisions, even
   const familyDays = useMemo(() => eventDayReferences(familyDefaults || {}), [familyDefaults]);
   const dayLabels = useMemo(() => new Map(days.map((day) => [dayReference(day.value), dayLabel(day.value) || dayReference(day.value)])), [days]);
 
-  useEffect(() => {
+  useOpenDialogInitializer(open, () => {
     if (!open || !divisions.length) return;
     const commonCapacity = uniqueValue(divisions.map((row) => numberInputValue(row.value.capacity_teams)));
     const commonFee = uniqueValue(divisions.map((row) => numberInputValue(row.value.price_usd)));
@@ -162,7 +167,7 @@ export default function TournamentDivisionBulkEditDialog({ open, divisions, even
     const commonSchedule = sameStringArray(divisions.map((row) => eventDayReferences(row.value)));
     setSelected({ capacity: false, fee: false, waitlist: false, partnerBoard: false, draw: false, scoring: false, eligibility: false, schedule: false });
     setValues({ capacity: commonCapacity ?? "", fee: commonFee ?? "", waitlist: commonWaitlist ?? true, partnerBoard: commonPartnerBoard ?? true, draw: commonDraw ?? "", scoring: commonScoring ?? "", eligibility: commonEligibility ?? "STANDARD", minimum: commonMinimum === undefined ? "3.5" : commonMinimum, maximum: commonMaximum === undefined ? "4.0" : commonMaximum, combinedCap: commonCap || "8.0", scheduleMode: (commonScheduleMode as "INHERIT_EVENT" | "CUSTOM" | undefined) ?? "INHERIT_EVENT", scheduledDayIds: commonSchedule ?? (sameFamily ? familyDays : []) });
-  }, [open, divisions, sameFamily, familyDays]);
+  });
 
   const proposedRows = useMemo(() => divisions.map((row) => ({ key: row.key, value: applyBulkValues(row.value, selected, values) })), [divisions, selected, values]);
   const previewRows = useMemo(() => proposedRows.map((row, index) => ({ key: row.key, name: eventDivisionName(divisions[index]?.value || row.value), changes: changedFields(divisions[index]?.value || {}, row.value) })), [proposedRows, divisions]);

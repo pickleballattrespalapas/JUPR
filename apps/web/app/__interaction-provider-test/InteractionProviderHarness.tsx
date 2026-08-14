@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ConfirmAction } from "@/components/ConfirmAction";
 import {
@@ -9,6 +9,7 @@ import {
   useInteraction,
   type ActionSuccess
 } from "@/components/interaction";
+import TournamentSetupDivisionDialog from "@/app/admin/tournaments/setup/TournamentSetupDivisionDialog";
 
 function DisposableRecord({ onRemove }: { onRemove: () => void }) {
   return (
@@ -188,6 +189,100 @@ function ExplicitFormFocusHarness() {
   );
 }
 
+function DivisionDraftRetentionHarness() {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"add" | "edit">("add");
+  const [parentRenderCount, setParentRenderCount] = useState(0);
+  const [sourceName, setSourceName] = useState("Default division name");
+
+  useEffect(() => {
+    if (!open) return;
+    const timer = window.setInterval(
+      () => setParentRenderCount((current) => current + 1),
+      50
+    );
+    return () => window.clearInterval(timer);
+  }, [open]);
+
+  const family = {
+    event_family_label: "Harness doubles",
+    event_family: "Harness doubles",
+    participant_type: "DOUBLES",
+    gender_restriction: "ANY",
+    competition_format: "STANDARD",
+    team_roster_size: 2,
+    default_capacity_teams: 16,
+    default_price_usd: 0,
+    default_waitlist: true,
+    default_partner_board: true,
+    scheduled_day_ids: ["harness-day"],
+    age_mode: "ALL_AGES",
+    age_label: "All Ages",
+    age_rules: { mode: "ALL_AGES" }
+  };
+  const initialValue = {
+    id: mode === "add" ? `generated-${parentRenderCount}` : "existing-division",
+    event_family_label: "Harness doubles",
+    event_family: "Harness doubles",
+    division_name: sourceName,
+    label: sourceName,
+    skill_label: "3.5",
+    skill_mode: "STANDARD",
+    eligibility_mode: "STANDARD",
+    capacity_teams: 16,
+    price_usd: 0,
+    waitlist_enabled: true,
+    partner_board_enabled: true,
+    schedule_mode: "INHERIT_EVENT",
+    scheduled_day_ids: ["harness-day"],
+    age_policy_source: "INHERIT_EVENT"
+  };
+
+  return (
+    <section>
+      <h2>Division draft retention</h2>
+      <button type="button" onClick={() => { setMode("add"); setOpen(true); }}>
+        Open add division retention check
+      </button>
+      <button type="button" onClick={() => { setMode("edit"); setOpen(true); }}>
+        Open edit division retention check
+      </button>
+      <button
+        type="button"
+        onClick={() => setSourceName("Updated authoritative division")}
+      >
+        Update authoritative division source
+      </button>
+      <output data-testid="division-parent-render-count">{parentRenderCount}</output>
+      <TournamentSetupDivisionDialog
+        open={open}
+        mode={mode}
+        initialValue={initialValue}
+        eventFamilies={[{ key: "harness-family", value: family }]}
+        days={[
+          {
+            key: "harness-day",
+            value: {
+              id: "harness-day",
+              label: "Harness day",
+              event_date: "2026-08-14",
+              enabled: true
+            }
+          }
+        ]}
+        onCancel={() => setOpen(false)}
+        onConfirm={async () =>
+          actionSuccess(
+            "Division retained",
+            "The division draft survived parent rerenders."
+          )
+        }
+        onAcknowledge={() => setOpen(false)}
+      />
+    </section>
+  );
+}
+
 export function InteractionProviderHarness() {
   const [recordExists, setRecordExists] = useState(true);
 
@@ -218,6 +313,7 @@ export function InteractionProviderHarness() {
       <DisabledTriggerFocusHarness />
       <DisabledFormTriggerFocusHarness />
       <ExplicitFormFocusHarness />
+      <DivisionDraftRetentionHarness />
     </div>
   );
 }

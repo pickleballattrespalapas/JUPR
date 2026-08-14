@@ -81,7 +81,8 @@ def test_add_division_uses_dialog_instead_of_appending_hidden_row() -> None:
     dialog = read("app/admin/tournaments/setup/TournamentSetupDivisionDialog.tsx")
     division_card = read("app/admin/tournaments/setup/TournamentSetupDivisionCard.tsx")
     assert "TournamentSetupDivisionDialog" in panel
-    assert 'import { FormDialog' in dialog
+    assert "FormDialog" in dialog
+    assert 'from "@/components/interaction"' in dialog
     assert '<FormDialog' in dialog
     assert 'onClick={() => setDivisionDialogKey(null)}' in panel
     assert 'mode={divisionDialogKey === null ? "add" : "edit"}' in panel

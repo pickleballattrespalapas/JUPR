@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { FormDialog, InteractionActionError, type ActionCompletion } from "@/components/interaction";
+import { useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  FormDialog,
+  InteractionActionError,
+  useOpenDialogInitializer,
+  type ActionCompletion
+} from "@/components/interaction";
 import {
   SKILL_LABEL_OPTIONS,
   cleanString,
@@ -177,7 +182,7 @@ export default function TournamentSetupDivisionDialog({
   const scheduleRef = useRef<HTMLFieldSetElement>(null);
   const invalidFieldRef = useRef<HTMLElement | null>(null);
 
-  useEffect(() => {
+  useOpenDialogInitializer(open, () => {
     if (!open) return;
     const familyName = eventFamilyName(initialValue);
     const family =
@@ -191,7 +196,7 @@ export default function TournamentSetupDivisionDialog({
     setDraft(prepared);
     setBaseline(JSON.stringify(prepared));
     invalidFieldRef.current = null;
-  }, [open, initialValue, eventFamilies, dialogMode]);
+  });
 
   const family = useMemo(() => {
     const name = eventFamilyName(draft);

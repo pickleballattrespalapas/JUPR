@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { FormDialog, InteractionActionError, type ActionCompletion } from "@/components/interaction";
+import {
+  FormDialog,
+  InteractionActionError,
+  useOpenDialogInitializer,
+  type ActionCompletion
+} from "@/components/interaction";
 import {
   cleanString,
   eventDayReferences,
@@ -361,7 +366,7 @@ export default function TournamentDivisionPresetDialog({
     });
   }, [open, selectedFamily, configuration, skillSpecs, genders, ageMode, familyAgePolicy]);
 
-  useEffect(() => {
+  useOpenDialogInitializer(open, () => {
     if (!open || !selectedFamily) return;
     setEligibilityMode("STANDARD");
     setSkills(["3.0", "3.5", "4.0", "4.5"]);
@@ -374,7 +379,7 @@ export default function TournamentDivisionPresetDialog({
     setAgeMode("INHERIT");
     setProposals([]);
     setMessage("");
-  }, [open, selectedFamily]);
+  });
 
   useEffect(() => {
     if (!open || !selectedFamily) return;
