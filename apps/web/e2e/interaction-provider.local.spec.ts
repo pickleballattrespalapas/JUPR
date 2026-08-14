@@ -96,7 +96,8 @@ test.describe("root interaction provider", () => {
     const dialog = page.getByRole("dialog");
     const name = dialog.getByLabel("Division name");
 
-    await name.fill("DO NOT RESET");
+    await name.clear();
+    await name.pressSequentially("DO NOT RESET", { delay: 10 });
     const rendersBefore = Number(
       (await page.getByTestId("division-parent-render-count").textContent()) || 0
     );
@@ -115,6 +116,12 @@ test.describe("root interaction provider", () => {
     ).toBeVisible();
     await dialog.getByRole("button", { name: "Discard changes" }).click();
     await expect(dialog).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Open add division retention check" }).click();
+    await expect(page.getByRole("dialog").getByLabel("Division name")).toHaveValue(
+      "Default division name"
+    );
+    await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
   });
 
   test("keeps an edit draft through rerenders and refreshes it on the next open", async ({ page }) => {
@@ -123,7 +130,10 @@ test.describe("root interaction provider", () => {
     const name = dialog.getByLabel("Division name");
 
     await expect(name).toHaveValue("Default division name");
-    await name.fill("UNSAVED EDIT");
+    await name.clear();
+    await name.pressSequentially("  Interaction Test Division Edited  ", {
+      delay: 10
+    });
     const rendersBefore = Number(
       (await page.getByTestId("division-parent-render-count").textContent()) || 0
     );
@@ -134,10 +144,23 @@ test.describe("root interaction provider", () => {
         )
       )
       .toBeGreaterThan(rendersBefore + 2);
-    await expect(name).toHaveValue("UNSAVED EDIT");
+    await expect(name).toHaveValue("  Interaction Test Division Edited  ");
 
-    await dialog.getByRole("button", { name: "Cancel" }).click();
-    await dialog.getByRole("button", { name: "Discard changes" }).click();
+    await dialog.getByRole("button", { name: "Save division" }).click();
+    await expect(
+      dialog.getByRole("heading", { name: "Division retained" })
+    ).toBeVisible();
+    await expect(page.getByTestId("division-submitted-names")).toHaveText(
+      "Interaction Test Division Edited|Public composite label"
+    );
+    await dialog.getByRole("button", { name: "Done" }).click();
+
+    await page.getByRole("button", { name: "Open edit division retention check" }).click();
+    await expect(page.getByRole("dialog").getByLabel("Division name")).toHaveValue(
+      "Interaction Test Division Edited"
+    );
+
+    await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
     await page
       .getByRole("button", { name: "Update authoritative division source" })
       .click();

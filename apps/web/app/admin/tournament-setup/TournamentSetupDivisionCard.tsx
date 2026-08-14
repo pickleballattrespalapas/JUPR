@@ -12,6 +12,7 @@ import {
   SCORING_OPTIONS,
   SKILL_LABEL_OPTIONS,
   cleanString,
+  editableString,
   dayLabel,
   dayReference,
   ageRuleValue,
@@ -68,6 +69,7 @@ export function TournamentSetupDivisionCard({
   const issueId = useId();
   const value = row.value;
   const name = eventDivisionName(value);
+  const editableName = editableString(value.division_name ?? value.label);
   const family = eventFamilyName(value);
   const usesDayLabel = eventUsesLabelDayReference(value);
   const currentDay = eventDayReference(value);
@@ -79,9 +81,9 @@ export function TournamentSetupDivisionCard({
   const dayOptionValues = new Set(dayOptions.map((option) => option.value));
   const participantType = effectiveParticipantType(value, eventFamilies);
   const gender = effectiveGenderRestriction(value, eventFamilies);
-  const skillLabel = cleanString(value.skill_label) || "Open";
+  const skillLabel = value.skill_label == null ? "Open" : editableString(value.skill_label);
   const ageMode = eventAgeMode(value);
-  const ageLabel = cleanString(value.age_label) || "All Ages";
+  const ageLabel = value.age_label == null ? "All Ages" : editableString(value.age_label);
   const minimumTeamsPerAgeGroup = ageRuleValue(value, "min_teams_per_age_group");
   const splitAgeThreshold = ageRuleValue(value, "split_age_threshold");
   const format = cleanString(value.division_format ?? value.event_format_override ?? value.event_format_default);
@@ -138,7 +140,7 @@ export function TournamentSetupDivisionCard({
           Division name
           <input
             className={styles.input}
-            value={name}
+            value={editableName}
             disabled={disabled}
             aria-invalid={issues.some((issue) => issue.path.endsWith(".division_name")) || undefined}
             onChange={(event) => onChange(setRecordString(value, ["division_name", "label"], event.target.value))}

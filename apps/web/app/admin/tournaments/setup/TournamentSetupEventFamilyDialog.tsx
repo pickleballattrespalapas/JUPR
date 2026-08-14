@@ -14,11 +14,13 @@ import {
   cleanString,
   dayLabel,
   dayReference,
+  editableString,
   eventDayReferences,
   eventFamilyName,
   numberInputValue,
   recordBoolean,
   setEventDayReferences,
+  setCanonicalRecordString,
   setRecordNumber,
   setRecordString,
   type BuilderRow,
@@ -155,6 +157,7 @@ export default function TournamentSetupEventFamilyDialog({
   if (!open) return null;
 
   const name = eventFamilyName(draft);
+  const editableName = editableString(draft.event_family ?? draft.event_family_label);
   const currentDays = eventDayReferences(draft);
   const structure = eventStructure(draft);
   const participantType = structure === "FOUR_PLAYER_TEAM" ? "MIXED_DOUBLES" : structure;
@@ -194,8 +197,13 @@ export default function TournamentSetupEventFamilyDialog({
     if (ageIssues.length) {
       validationError(ageIssues[0], "Event age policy", agePolicyRef.current);
     }
+    const canonicalDraft = setCanonicalRecordString(
+      draft,
+      ["event_family", "event_family_label"],
+      name
+    );
     return onConfirm({
-      ...draft,
+      ...canonicalDraft,
       gender_restriction: gender,
       default_partner_board:
         participantType === "SINGLES" ? false : recordBoolean(draft.default_partner_board, true)
@@ -229,7 +237,7 @@ export default function TournamentSetupEventFamilyDialog({
             <strong>Event name</strong><br />
             <input
               ref={nameRef}
-              value={name}
+              value={editableName}
               style={inputStyle}
               placeholder="Gender Doubles"
               onChange={(event) =>

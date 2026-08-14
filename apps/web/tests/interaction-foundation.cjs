@@ -18,6 +18,11 @@ const divisionDialog = read("app/admin/tournaments/setup/TournamentSetupDivision
 const divisionBulkDialog = read("app/admin/tournaments/setup/TournamentDivisionBulkEditDialog.tsx");
 const divisionPresetDialog = read("app/admin/tournaments/setup/TournamentDivisionPresetDialog.tsx");
 const bulkCourtsDialog = read("app/admin/tournaments/setup/TournamentBulkAddCourtsDialog.tsx");
+const setupWizard = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx");
+const setupBuilder = read("app/admin/tournament-setup/tournamentSetupBuilder.ts");
+const legacyDayCard = read("app/admin/tournament-setup/TournamentSetupDayCard.tsx");
+const legacyFamilyCard = read("app/admin/tournament-setup/TournamentSetupFamilyCard.tsx");
+const legacyDivisionCard = read("app/admin/tournament-setup/TournamentSetupDivisionCard.tsx");
 const css = read("components/interaction/InteractionDialog.module.css");
 
 assert.match(types, /type ActionCompletion = ActionSuccess \| ActionUncertain/);
@@ -99,6 +104,26 @@ for (const setupDialog of [
 assert.doesNotMatch(divisionDialog, /\[open, initialValue/);
 assert.doesNotMatch(eventFamilyDialog, /\[open, initialValue/);
 assert.doesNotMatch(divisionBulkDialog, /\[open, divisions/);
+
+assert.match(setupBuilder, /export function editableString\(/);
+assert.match(setupBuilder, /export function setCanonicalRecordString\(/);
+assert.match(setupBuilder, /days: rowsToPayload\(configuration\.days\)\.map\(canonicalDayPayload\)/);
+assert.match(setupBuilder, /event_families: rowsToPayload\(configuration\.eventFamilies\)\.map\(canonicalEventFamilyPayload\)/);
+assert.match(setupBuilder, /event_options: rowsToPayload\(configuration\.eventOptions\)\.map\(canonicalEventOptionPayload\)/);
+assert.match(divisionDialog, /value=\{editableString\(draft\.division_name \?\? draft\.label\)\}/);
+assert.match(divisionDialog, /setCanonicalRecordString\([\s\S]*?\["division_name", "label"\]/);
+assert.doesNotMatch(divisionDialog, /value=\{cleanString\(draft\.division_name/);
+assert.match(eventFamilyDialog, /const editableName = editableString\(draft\.event_family \?\? draft\.event_family_label\)/);
+assert.match(eventFamilyDialog, /value=\{editableName\}/);
+assert.match(divisionPresetDialog, /value=\{editableString\(proposal\.value\.division_name \?\? proposal\.value\.label\)\}/);
+assert.match(setupWizard, /value=\{editableString\(row\.value\.label\)\}/);
+assert.match(legacyDayCard, /value=\{editableString\(value\.label\)\}/);
+assert.match(legacyDayCard, /value=\{editableString\(value\.court_notes\)\}/);
+assert.match(legacyDayCard, /value=\{labels\[index\] \?\? `Court \$\{index \+ 1\}`\}/);
+assert.match(legacyFamilyCard, /const editableName = editableString\(value\.event_family \?\? value\.event_family_label\)/);
+assert.match(legacyDivisionCard, /const editableName = editableString\(value\.division_name \?\? value\.label\)/);
+assert.doesNotMatch(legacyDivisionCard, /const skillLabel = cleanString\(value\.skill_label\)/);
+assert.doesNotMatch(legacyDivisionCard, /const ageLabel = cleanString\(value\.age_label\)/);
 
 assert.match(css, /min-height: 44px/);
 assert.match(css, /@media \(max-width: 480px\)/);

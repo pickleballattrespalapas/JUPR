@@ -66,6 +66,10 @@ export function cleanString(value: unknown): string {
   return value == null ? "" : String(value).trim();
 }
 
+export function editableString(value: unknown): string {
+  return value == null ? "" : String(value);
+}
+
 export function recordBoolean(value: unknown, fallback = false): boolean {
   if (typeof value === "boolean") return value;
   if (value == null || value === "") return fallback;
@@ -89,11 +93,45 @@ export function rowsToPayload(rows: BuilderRow[]): SetupRecord[] {
   return rows.map((row) => ({ ...row.value }));
 }
 
+function canonicalDayPayload(row: SetupRecord): SetupRecord {
+  const next = { ...row };
+  if (Object.prototype.hasOwnProperty.call(row, "label")) {
+    next.label = cleanString(row.label);
+  }
+  if (Array.isArray(row.court_labels)) {
+    next.court_labels = row.court_labels.map(cleanString);
+  }
+  if (Object.prototype.hasOwnProperty.call(row, "court_notes")) {
+    next.court_notes = cleanString(row.court_notes);
+  }
+  return next;
+}
+
+function canonicalEventFamilyPayload(row: SetupRecord): SetupRecord {
+  const next = { ...row };
+  for (const key of ["event_family", "event_family_label"] as const) {
+    if (Object.prototype.hasOwnProperty.call(row, key)) {
+      next[key] = cleanString(row[key]);
+    }
+  }
+  return next;
+}
+
+function canonicalEventOptionPayload(row: SetupRecord): SetupRecord {
+  const next = { ...row };
+  for (const key of ["division_name", "label", "skill_label", "age_label"] as const) {
+    if (Object.prototype.hasOwnProperty.call(row, key)) {
+      next[key] = cleanString(row[key]);
+    }
+  }
+  return next;
+}
+
 export function configurationPayload(configuration: SetupConfiguration): SetupPayload {
   return {
-    days: rowsToPayload(configuration.days),
-    event_families: rowsToPayload(configuration.eventFamilies),
-    event_options: rowsToPayload(configuration.eventOptions)
+    days: rowsToPayload(configuration.days).map(canonicalDayPayload),
+    event_families: rowsToPayload(configuration.eventFamilies).map(canonicalEventFamilyPayload),
+    event_options: rowsToPayload(configuration.eventOptions).map(canonicalEventOptionPayload)
   };
 }
 
@@ -179,6 +217,14 @@ export function setRecordString(
 ): SetupRecord {
   const targetKey = keys.find((key) => Object.prototype.hasOwnProperty.call(row, key)) || keys[0];
   return { ...row, [targetKey]: value };
+}
+
+export function setCanonicalRecordString(
+  row: SetupRecord,
+  keys: readonly string[],
+  value: unknown
+): SetupRecord {
+  return setRecordString(row, keys, cleanString(value));
 }
 
 export function setRecordNumber(
