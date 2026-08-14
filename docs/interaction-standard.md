@@ -69,6 +69,7 @@ Use for adding or editing one contained record from a collection, card, or setup
 - **Add** or **Edit** opens the dialog with a clear noun in the title.
 - Save occurs directly to the private draft or authoritative record described by the dialog; navigation must not imply that a second save is required.
 - A failed save leaves the dialog and all field values open.
+- The form initializes its locally editable field values when the dialog opens. Session refreshes, background reads, and equivalent parent rerenders must never replace those unsaved values while it remains open. Current authoritative records and limits may still inform previews and final validation without overwriting the operator's inputs.
 - A successful save shows completion, then **Done** returns to the updated card.
 - If the form is dirty, backdrop/Escape dismissal must not silently discard it. Either disable those dismissals or ask the user to discard changes within the same dialog flow.
 
@@ -196,6 +197,7 @@ Color is supplementary. Every state includes text and, where useful, a heading o
 - Consequential action success requires authoritative response data or a readback.
 - `useLatestRequestGuard` remains appropriate for stale reads and selection changes. It does not replace an idempotency key for writes.
 - A dialog owns its own in-flight lock. A page-level `busy` flag may additionally prevent incompatible writes, but must not be the only duplicate-submit guard.
+- Initialize editable local dialog state once per explicit open session, not whenever an object or array prop receives a new JavaScript identity.
 - Do not clear the form, rotate the idempotency key, close the dialog, or navigate until success is confirmed.
 - Do not hide a partial result behind generic success. Report counts and warnings explicitly.
 - Server confirmation, expected-version/fingerprint, authorization, and write flags remain server-enforced; the dialog is not a security boundary.

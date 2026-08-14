@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { FormDialog, InteractionActionError, type ActionCompletion } from "@/components/interaction";
+import { useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  FormDialog,
+  InteractionActionError,
+  useOpenDialogInitializer,
+  type ActionCompletion
+} from "@/components/interaction";
 
 const MAX_VENUE_COURTS = 100;
 const PRESET_COUNTS = [4, 6, 8, 10] as const;
@@ -49,10 +54,10 @@ export default function TournamentBulkAddCourtsDialog({
   const [count, setCount] = useState(defaultCount);
   const countRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
+  useOpenDialogInitializer(open, () => {
     if (!open) return;
     setCount(Math.min(4, Math.max(0, MAX_VENUE_COURTS - safeExistingCount)));
-  }, [open, safeExistingCount]);
+  });
 
   const preview = useMemo(() => {
     const safeCount = Math.max(0, Math.min(maximumAddition, Math.trunc(count || 0)));

@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { FormDialog, InteractionActionError, type ActionCompletion } from "@/components/interaction";
+import { useRef, useState, type CSSProperties } from "react";
+import {
+  FormDialog,
+  InteractionActionError,
+  useOpenDialogInitializer,
+  type ActionCompletion
+} from "@/components/interaction";
 import {
   COMPETITION_FORMATS,
   GENDER_RESTRICTIONS,
@@ -138,14 +143,14 @@ export default function TournamentSetupEventFamilyDialog({
   const agePolicyRef = useRef<HTMLDivElement>(null);
   const invalidFieldRef = useRef<HTMLElement | null>(null);
 
-  useEffect(() => {
+  useOpenDialogInitializer(open, () => {
     if (!open) return;
     const structure = eventStructure(initialValue);
     const prepared = applyEventStructureWithAge({ ...initialValue }, structure);
     setDraft(prepared);
     setBaseline(JSON.stringify(prepared));
     invalidFieldRef.current = null;
-  }, [open, initialValue]);
+  });
 
   if (!open) return null;
 

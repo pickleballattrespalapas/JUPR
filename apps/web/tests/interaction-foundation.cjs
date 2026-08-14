@@ -12,6 +12,12 @@ const lifecycle = read("components/interaction/useActionLifecycle.ts");
 const types = read("components/interaction/types.ts");
 const formDialog = read("components/interaction/FormDialog.tsx");
 const feedback = read("components/interaction/ActionFeedback.tsx");
+const openDialogInitializer = read("components/interaction/useOpenDialogInitializer.ts");
+const eventFamilyDialog = read("app/admin/tournaments/setup/TournamentSetupEventFamilyDialog.tsx");
+const divisionDialog = read("app/admin/tournaments/setup/TournamentSetupDivisionDialog.tsx");
+const divisionBulkDialog = read("app/admin/tournaments/setup/TournamentDivisionBulkEditDialog.tsx");
+const divisionPresetDialog = read("app/admin/tournaments/setup/TournamentDivisionPresetDialog.tsx");
+const bulkCourtsDialog = read("app/admin/tournaments/setup/TournamentBulkAddCourtsDialog.tsx");
 const css = read("components/interaction/InteractionDialog.module.css");
 
 assert.match(types, /type ActionCompletion = ActionSuccess \| ActionUncertain/);
@@ -76,6 +82,23 @@ assert.match(formDialog, /originFocusRef=\{rememberedOriginRef\}/);
 assert.match(formDialog, /focusEligibleElement\(explicitTarget\)/);
 assert.match(formDialog, /focusEligibleElement\(rememberedOriginRef\.current\)/);
 assert.doesNotMatch(formDialog, /finally \{\s*lifecycle\.reset\(\);\s*onCancel\(\)/, "success close must not re-enable competing dialog focus restoration");
+
+assert.match(openDialogInitializer, /const initializeRef = useRef\(initialize\)/);
+assert.match(openDialogInitializer, /initializeRef\.current = initialize/);
+assert.match(openDialogInitializer, /if \(open\) initializeRef\.current\(\)/);
+assert.match(openDialogInitializer, /}, \[open\]\)/);
+for (const setupDialog of [
+  eventFamilyDialog,
+  divisionDialog,
+  divisionBulkDialog,
+  divisionPresetDialog,
+  bulkCourtsDialog
+]) {
+  assert.match(setupDialog, /useOpenDialogInitializer\(open,/);
+}
+assert.doesNotMatch(divisionDialog, /\[open, initialValue/);
+assert.doesNotMatch(eventFamilyDialog, /\[open, initialValue/);
+assert.doesNotMatch(divisionBulkDialog, /\[open, divisions/);
 
 assert.match(css, /min-height: 44px/);
 assert.match(css, /@media \(max-width: 480px\)/);

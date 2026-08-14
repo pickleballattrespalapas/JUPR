@@ -90,4 +90,60 @@ test.describe("root interaction provider", () => {
     await expect(page.locator("#form-explicit-focus-target")).toBeFocused();
     await expect(trigger).not.toBeFocused();
   });
+
+  test("keeps an unsaved division draft through equivalent parent rerenders", async ({ page }) => {
+    await page.getByRole("button", { name: "Open add division retention check" }).click();
+    const dialog = page.getByRole("dialog");
+    const name = dialog.getByLabel("Division name");
+
+    await name.fill("DO NOT RESET");
+    const rendersBefore = Number(
+      (await page.getByTestId("division-parent-render-count").textContent()) || 0
+    );
+    await expect
+      .poll(async () =>
+        Number(
+          (await page.getByTestId("division-parent-render-count").textContent()) || 0
+        )
+      )
+      .toBeGreaterThan(rendersBefore + 2);
+    await expect(name).toHaveValue("DO NOT RESET");
+
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(
+      dialog.getByRole("heading", { name: "Discard unsaved changes?" })
+    ).toBeVisible();
+    await dialog.getByRole("button", { name: "Discard changes" }).click();
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test("keeps an edit draft through rerenders and refreshes it on the next open", async ({ page }) => {
+    await page.getByRole("button", { name: "Open edit division retention check" }).click();
+    const dialog = page.getByRole("dialog");
+    const name = dialog.getByLabel("Division name");
+
+    await expect(name).toHaveValue("Default division name");
+    await name.fill("UNSAVED EDIT");
+    const rendersBefore = Number(
+      (await page.getByTestId("division-parent-render-count").textContent()) || 0
+    );
+    await expect
+      .poll(async () =>
+        Number(
+          (await page.getByTestId("division-parent-render-count").textContent()) || 0
+        )
+      )
+      .toBeGreaterThan(rendersBefore + 2);
+    await expect(name).toHaveValue("UNSAVED EDIT");
+
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await dialog.getByRole("button", { name: "Discard changes" }).click();
+    await page
+      .getByRole("button", { name: "Update authoritative division source" })
+      .click();
+    await page.getByRole("button", { name: "Open edit division retention check" }).click();
+    await expect(page.getByRole("dialog").getByLabel("Division name")).toHaveValue(
+      "Updated authoritative division"
+    );
+  });
 });

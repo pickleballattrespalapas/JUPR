@@ -25,3 +25,4 @@ export type {
 } from "./types";
 export { useActionLifecycle } from "./useActionLifecycle";
 export type { ActionLifecycle, ActionPhase } from "./useActionLifecycle";
+export { useOpenDialogInitializer } from "./useOpenDialogInitializer";
