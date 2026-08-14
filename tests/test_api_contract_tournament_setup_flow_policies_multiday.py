@@ -90,7 +90,7 @@ def test_add_division_uses_dialog_instead_of_appending_hidden_row() -> None:
     assert '? "Add division"' in dialog
     assert '`Edit ${cleanString(draft.division_name ?? draft.label) || "division"}`' in dialog
     assert 'dialogMode === "add" ? "Add division" : "Save division"' in dialog
-    assert 'return onConfirm(draft)' in dialog
+    assert 'return onConfirm(setCanonicalRecordString(' in dialog
     assert 'setDivisionDialogKey(undefined)' in panel
     assert 'onClick={onEdit}' in division_card
     assert '>Edit<' not in division_card  # JSX includes line breaks around the label.
