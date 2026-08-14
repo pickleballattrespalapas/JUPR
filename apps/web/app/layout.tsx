@@ -6,6 +6,13 @@ import { InteractionProvider } from "@/components/interaction";
 
 const productName = "Pickleball Club Sandwich";
 
+function deploymentGitSha(): string | null {
+  const value = String(process.env.VERCEL_GIT_COMMIT_SHA || "")
+    .trim()
+    .toLowerCase();
+  return /^[0-9a-f]{40}$/.test(value) ? value : null;
+}
+
 export const metadata: Metadata = {
   title: productName,
   description:
@@ -36,13 +43,18 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   const isStaging =
     (process.env.NEXT_PUBLIC_JUPR_ENV || "").trim().toLowerCase() ===
     "staging";
+  const stagingBuildSha = isStaging ? deploymentGitSha() : null;
 
   return (
     <html lang="en">
       <body style={{ margin: 0, background: "#f8fafc", color: "#0f172a" }}>
         <InteractionProvider>
           <div style={shellStyle}>
-            <PublicSiteHeader productName={productName} isStaging={isStaging} />
+            <PublicSiteHeader
+              productName={productName}
+              isStaging={isStaging}
+              stagingBuildSha={stagingBuildSha}
+            />
             <main style={{ minWidth: 0 }}>{children}</main>
             <footer style={footerStyle}>
               <span style={{ color: "#475569" }}>
