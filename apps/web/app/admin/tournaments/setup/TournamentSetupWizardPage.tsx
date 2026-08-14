@@ -91,6 +91,7 @@ export default async function TournamentSetupWizardPage({
       ) : null}
       {status ? (
         <TournamentSetupWizardPanel
+          key={tournamentId}
           apiBase={apiBase()}
           clubId={clubId}
           status={status}

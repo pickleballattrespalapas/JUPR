@@ -19,6 +19,7 @@ const divisionBulkDialog = read("app/admin/tournaments/setup/TournamentDivisionB
 const divisionPresetDialog = read("app/admin/tournaments/setup/TournamentDivisionPresetDialog.tsx");
 const bulkCourtsDialog = read("app/admin/tournaments/setup/TournamentBulkAddCourtsDialog.tsx");
 const setupWizard = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx");
+const setupPublicationStatus = read("app/admin/tournaments/setup/tournamentSetupPublicationStatus.ts");
 const setupBuilder = read("app/admin/tournament-setup/tournamentSetupBuilder.ts");
 const legacyDayCard = read("app/admin/tournament-setup/TournamentSetupDayCard.tsx");
 const legacyFamilyCard = read("app/admin/tournament-setup/TournamentSetupFamilyCard.tsx");
@@ -124,6 +125,18 @@ assert.match(legacyFamilyCard, /const editableName = editableString\(value\.even
 assert.match(legacyDivisionCard, /const editableName = editableString\(value\.division_name \?\? value\.label\)/);
 assert.doesNotMatch(legacyDivisionCard, /const skillLabel = cleanString\(value\.skill_label\)/);
 assert.doesNotMatch(legacyDivisionCard, /const ageLabel = cleanString\(value\.age_label\)/);
+
+assert.match(setupPublicationStatus, /if \(detailLoadState === "failed"\) return "unavailable"/);
+assert.match(setupPublicationStatus, /if \(detailLoadState !== "loaded"\) return "checking"/);
+assert.match(setupPublicationStatus, /if \(!hasAuthoritativeDetail\) return "unavailable"/);
+assert.match(setupPublicationStatus, /return hasUnpublishedChanges \? "unpublished" : "current"/);
+assert.match(setupWizard, /setupPublicationStatus\(\{[\s\S]*?detailLoadState,[\s\S]*?hasAuthoritativeDetail: Boolean\(detail\),[\s\S]*?hasUnpublishedChanges[\s\S]*?\}\)/);
+assert.match(setupWizard, /setDetailLoadState\("loading"\)[\s\S]*?hydrate\(payload\);[\s\S]*?setDetailLoadState\("loaded"\)/);
+assert.match(setupWizard, /catch \(error\) \{[\s\S]*?setDetailLoadState\("failed"\)/);
+assert.match(setupWizard, /publicationStatus === "current" &&[\s\S]*?publishedSetupReady/);
+assert.match(setupWizard, /aria-busy=\{publicationStatus === "checking"\}/);
+assert.doesNotMatch(setupWizard, /background:\s*hasUnpublishedChanges\s*\?/);
+assert.doesNotMatch(setupWizard, /\{hasUnpublishedChanges\s*\?\s*"Unpublished setup draft"\s*:\s*"Published setup is current"\}/);
 
 assert.match(css, /min-height: 44px/);
 assert.match(css, /@media \(max-width: 480px\)/);
