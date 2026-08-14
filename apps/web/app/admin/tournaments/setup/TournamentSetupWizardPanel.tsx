@@ -82,6 +82,11 @@ import {
   ReviewValueDisplay,
   humanReviewFieldLabel
 } from "./TournamentReviewValue";
+import {
+  setupPublicationStatus,
+  type SetupDetailLoadState,
+  type SetupPublicationStatus
+} from "./tournamentSetupPublicationStatus";
 
 type SetupStatus = {
   enabled: boolean;
@@ -190,6 +195,40 @@ const cardStyle = {
   padding: "1rem",
   background: "white",
   minWidth: 0
+};
+
+const publicationBanners: Record<
+  SetupPublicationStatus,
+  { background: string; borderColor: string; title: string; description: string }
+> = {
+  unpublished: {
+    background: "#fffbeb",
+    borderColor: "#fde68a",
+    title: "Unpublished setup draft",
+    description:
+      "Changes in the Tournament and Competition domains are saved only to this private admin draft. Public tournament pages continue using the currently published configuration until the Review domain publishes the complete tournament. Commerce catalog changes retain their separate reviewed save."
+  },
+  current: {
+    background: "#f0fdf4",
+    borderColor: "#bbf7d0",
+    title: "Published setup is current",
+    description:
+      "No unpublished setup changes are waiting. New Tournament and Competition edits remain private until the Review domain publishes them; Commerce catalog changes retain their separate reviewed save."
+  },
+  unavailable: {
+    background: "#fef2f2",
+    borderColor: "#fecaca",
+    title: "Published setup status unavailable",
+    description:
+      "The app could not load both the private draft and published configuration, so it cannot verify whether unpublished setup changes are waiting. Review the error below and retry."
+  },
+  checking: {
+    background: "#eff6ff",
+    borderColor: "#bfdbfe",
+    title: "Checking published setup…",
+    description:
+      "Loading the private draft and published configuration before comparing them."
+  }
 };
 
 const inputStyle = {
@@ -843,6 +882,8 @@ export default function TournamentSetupWizardPanel({
   const router = useRouter();
   const { accessToken, loading: sessionLoading } = useAdminSession();
   const [detail, setDetail] = useState<SetupDetail | null>(null);
+  const [detailLoadState, setDetailLoadState] =
+    useState<SetupDetailLoadState>("idle");
   const [basics, setBasics] = useState<BasicsDraft>(() =>
     emptyBasics(tournamentName)
   );
@@ -880,6 +921,7 @@ export default function TournamentSetupWizardPanel({
   function clearProtectedState() {
     actionRequest.invalidate();
     setDetail(null);
+    setDetailLoadState("idle");
     setBasics(emptyBasics(tournamentName));
     setSettings({});
     setConfiguration(emptyConfiguration);
@@ -1052,8 +1094,9 @@ export default function TournamentSetupWizardPanel({
     }
   }
 
-async function loadDetail() {
+  async function loadDetail() {
     const generation = detailRequest.begin();
+    setDetailLoadState("loading");
     setBusy(true);
     setMessage(null);
     try {
@@ -1064,8 +1107,10 @@ async function loadDetail() {
       );
       if (!detailRequest.isCurrent(generation)) return;
       hydrate(payload);
+      setDetailLoadState("loaded");
     } catch (error) {
       if (detailRequest.isCurrent(generation)) {
+        setDetailLoadState("failed");
         setMessage(
           error instanceof Error
             ? error.message
@@ -2249,6 +2294,12 @@ async function saveResolutionDraft() {
     publishedConfiguration
   );
   const hasUnpublishedChanges = Boolean(detail && currentDraftSignature !== publishedSignature);
+  const publicationStatus = setupPublicationStatus({
+    detailLoadState,
+    hasAuthoritativeDetail: Boolean(detail),
+    hasUnpublishedChanges
+  });
+  const publicationBanner = publicationBanners[publicationStatus];
   const publishedSetupState = setupState(
     publishedBasics,
     publishedSettings,
@@ -2256,8 +2307,7 @@ async function saveResolutionDraft() {
   );
   const publishedSetupReady = publishedSetupState.review === "in-progress";
   const registrationCanOpen = Boolean(
-    detail &&
-      !hasUnpublishedChanges &&
+    publicationStatus === "current" &&
       publishedSetupReady
   );
   const registrationStatus = safeString(publishedSettings.registration_status || "draft");
@@ -3736,19 +3786,31 @@ function renderDivisions() {
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
       <article
-        role="status"
         style={{
           ...cardStyle,
-          background: hasUnpublishedChanges ? "#fffbeb" : "#f0fdf4",
-          borderColor: hasUnpublishedChanges ? "#fde68a" : "#bbf7d0"
+          background: publicationBanner.background,
+          borderColor: publicationBanner.borderColor
         }}
       >
-        <strong>{hasUnpublishedChanges ? "Unpublished setup draft" : "Published setup is current"}</strong>
-        <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
-          {hasUnpublishedChanges
-            ? "Changes in the Tournament and Competition domains are saved only to this private admin draft. Public tournament pages continue using the currently published configuration until the Review domain publishes the complete tournament. Commerce catalog changes retain their separate reviewed save."
-            : "No unpublished setup changes are waiting. New Tournament and Competition edits remain private until the Review domain publishes them; Commerce catalog changes retain their separate reviewed save."}
-        </p>
+        <div
+          role={publicationStatus === "unavailable" ? "alert" : "status"}
+          aria-busy={publicationStatus === "checking"}
+        >
+          <strong>{publicationBanner.title}</strong>
+          <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
+            {publicationBanner.description}
+          </p>
+        </div>
+        {publicationStatus === "unavailable" ? (
+          <button
+            type="button"
+            style={{ ...ghostButtonStyle, marginTop: "0.75rem" }}
+            disabled={busy}
+            onClick={() => void loadDetail()}
+          >
+            {busy ? "Retrying…" : "Retry setup status"}
+          </button>
+        ) : null}
       </article>
       <TournamentSetupWizardNav
         currentStep={step}
@@ -3779,10 +3841,6 @@ function renderDivisions() {
           {message}
         </p>
       ) : null}
-      {busy && !detail ? (
-        <p role="status">Loading {tournamentName} setup…</p>
-      ) : null}
-
       {detail ? (
         step === "basics" ? (
           renderBasics()

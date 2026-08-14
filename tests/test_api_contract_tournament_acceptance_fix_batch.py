@@ -52,6 +52,30 @@ def test_registration_status_does_not_create_a_false_unpublished_setup_banner() 
     assert 'safeString(publishedSettings.registration_status || "draft")' in panel
 
 
+def test_publication_banner_waits_for_authoritative_setup_detail() -> None:
+    panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+    page = read_web("app/admin/tournaments/setup/TournamentSetupWizardPage.tsx")
+    publication_status = read_web(
+        "app/admin/tournaments/setup/tournamentSetupPublicationStatus.ts"
+    )
+
+    assert 'useState<SetupDetailLoadState>("idle")' in panel
+    assert 'setDetailLoadState("loading")' in panel
+    assert 'setDetailLoadState("loaded")' in panel
+    assert 'setDetailLoadState("failed")' in panel
+    assert "setupPublicationStatus({" in panel
+    assert 'publicationStatus === "current"' in panel
+    assert "Checking published setup…" in panel
+    assert "Published setup status unavailable" in panel
+    assert "Retry setup status" in panel
+    assert "key={tournamentId}" in page
+
+    assert 'if (detailLoadState === "failed") return "unavailable"' in publication_status
+    assert 'if (detailLoadState !== "loaded") return "checking"' in publication_status
+    assert 'if (!hasAuthoritativeDetail) return "unavailable"' in publication_status
+    assert 'return hasUnpublishedChanges ? "unpublished" : "current"' in publication_status
+
+
 def test_tournament_days_are_date_locked_and_include_court_capacity_controls() -> None:
     panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
     builder = read_web("app/admin/tournament-setup/tournamentSetupBuilder.ts")
