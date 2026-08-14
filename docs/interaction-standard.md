@@ -70,6 +70,7 @@ Use for adding or editing one contained record from a collection, card, or setup
 - Save occurs directly to the private draft or authoritative record described by the dialog; navigation must not imply that a second save is required.
 - A failed save leaves the dialog and all field values open.
 - The form initializes its locally editable field values when the dialog opens. Session refreshes, background reads, and equivalent parent rerenders must never replace those unsaved values while it remains open. Current authoritative records and limits may still inform previews and final validation without overwriting the operator's inputs.
+- Controlled text fields preserve the operator's exact in-progress value, including a trailing space typed between words. Trimming and other canonicalization occur only during validation or submission; normalized display selectors must never be fed back into a live text input. Canonicalization must preserve semantically distinct fields even when an older payload shape used one as a fallback for another.
 - A successful save shows completion, then **Done** returns to the updated card.
 - If the form is dirty, backdrop/Escape dismissal must not silently discard it. Either disable those dismissals or ask the user to discard changes within the same dialog flow.
 
@@ -248,4 +249,5 @@ An action conforms only when all applicable statements pass:
 - Authoritative readback updates the card/page state.
 - Keyboard, focus restoration, Escape, screen-reader naming, zoom, and mobile layout pass.
 - The action has an automated happy-path test and at least one error/retry test.
+- Text-entry regressions use sequential keyboard input for multi-word values; an atomic test fill is not sufficient to prove spaces survive controlled rerenders.
 - Destructive, bulk, publish, and guarded actions also have stale-version and duplicate-submit coverage.

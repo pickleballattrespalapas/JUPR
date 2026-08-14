@@ -194,6 +194,8 @@ function DivisionDraftRetentionHarness() {
   const [mode, setMode] = useState<"add" | "edit">("add");
   const [parentRenderCount, setParentRenderCount] = useState(0);
   const [sourceName, setSourceName] = useState("Default division name");
+  const sourceLabel = "Public composite label";
+  const [submittedNames, setSubmittedNames] = useState("not submitted");
 
   useEffect(() => {
     if (!open) return;
@@ -225,7 +227,7 @@ function DivisionDraftRetentionHarness() {
     event_family_label: "Harness doubles",
     event_family: "Harness doubles",
     division_name: sourceName,
-    label: sourceName,
+    label: sourceLabel,
     skill_label: "3.5",
     skill_mode: "STANDARD",
     eligibility_mode: "STANDARD",
@@ -254,6 +256,7 @@ function DivisionDraftRetentionHarness() {
         Update authoritative division source
       </button>
       <output data-testid="division-parent-render-count">{parentRenderCount}</output>
+      <output data-testid="division-submitted-names">{submittedNames}</output>
       <TournamentSetupDivisionDialog
         open={open}
         mode={mode}
@@ -271,12 +274,16 @@ function DivisionDraftRetentionHarness() {
           }
         ]}
         onCancel={() => setOpen(false)}
-        onConfirm={async () =>
-          actionSuccess(
+        onConfirm={async (value) => {
+          const divisionName = String(value.division_name ?? "");
+          const label = String(value.label ?? "");
+          setSourceName(divisionName);
+          setSubmittedNames(`${divisionName}|${label}`);
+          return actionSuccess(
             "Division retained",
             "The division draft survived parent rerenders."
-          )
-        }
+          );
+        }}
         onAcknowledge={() => setOpen(false)}
       />
     </section>

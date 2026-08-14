@@ -179,7 +179,12 @@ test("guided Tournament Setup preserves payloads, validates rows, and works at a
   await expect(page.locator("details", { hasText: "Advanced JSON import/export" })).not.toHaveAttribute("open", "");
 
   const divisionName = page.getByLabel("Division name").first();
-  await divisionName.fill("Mixed 3.5");
+  await divisionName.clear();
+  await divisionName.pressSequentially("Mixed", { delay: 10 });
+  await divisionName.press("Space");
+  await expect(divisionName).toHaveValue("Mixed ");
+  await divisionName.pressSequentially("3.5", { delay: 10 });
+  await expect(divisionName).toHaveValue("Mixed 3.5");
   await page.getByRole("button", { name: "Refresh list" }).click();
   await expect.poll(() => listReads).toBe(2);
   expect(detailReads).toBe(1);

@@ -16,6 +16,7 @@ const {
   draftSignature,
   effectiveGenderRestriction,
   effectiveParticipantType,
+  editableString,
   moveBuilderRow,
   newDayRow,
   newEventOptionRow,
@@ -23,12 +24,89 @@ const {
   publishConfigurationPayload,
   removeBuilderRow,
   setAgeRuleNumber,
+  setCanonicalRecordString,
   setEventAgeMode,
   setRecordString,
   stableSetupJsonStringify,
   validateSetupConfiguration,
   wrapBuilderRows
 } = await import(builderModuleUrl);
+
+test("editable strings preserve typing while canonical aliases normalize at save", () => {
+  assert.equal(editableString("Division "), "Division ");
+  assert.equal(editableString(null), "");
+
+  const edited = setRecordString(
+    { division_name: "Old name", label: "Public composite label", retained: true },
+    ["division_name", "label"],
+    "  New Division Name  "
+  );
+  assert.deepEqual(edited, {
+    division_name: "  New Division Name  ",
+    label: "Public composite label",
+    retained: true
+  });
+
+  const canonical = setCanonicalRecordString(
+    edited,
+    ["division_name", "label"],
+    edited.division_name
+  );
+  assert.deepEqual(canonical, {
+    division_name: "New Division Name",
+    label: "Public composite label",
+    retained: true
+  });
+
+  assert.deepEqual(
+    setCanonicalRecordString({ label: " Old label " }, ["division_name", "label"], " New label "),
+    { label: "New label" }
+  );
+  assert.deepEqual(
+    setCanonicalRecordString({ retained: true }, ["division_name", "label"], " New name "),
+    { retained: true, division_name: "New name" }
+  );
+});
+
+test("configuration payload canonicalizes editable text without merging distinct fields", () => {
+  const payload = configurationPayload({
+    days: wrapBuilderRows([{
+      id: "day-1",
+      label: " Friday ",
+      court_labels: [" Court 1 ", ""],
+      court_notes: " Nets on north wall "
+    }], "day"),
+    eventFamilies: wrapBuilderRows([{
+      event_family: " Gender Doubles ",
+      event_family_label: " Public Gender Doubles "
+    }], "family"),
+    eventOptions: wrapBuilderRows([{
+      division_name: " 3.5 ",
+      label: " Women's Doubles 3.5 ",
+      skill_label: " 3.5 ",
+      age_label: " All Ages "
+    }], "division")
+  });
+
+  assert.deepEqual(payload, {
+    days: [{
+      id: "day-1",
+      label: "Friday",
+      court_labels: ["Court 1", ""],
+      court_notes: "Nets on north wall"
+    }],
+    event_families: [{
+      event_family: "Gender Doubles",
+      event_family_label: "Public Gender Doubles"
+    }],
+    event_options: [{
+      division_name: "3.5",
+      label: "Women's Doubles 3.5",
+      skill_label: "3.5",
+      age_label: "All Ages"
+    }]
+  });
+});
 
 function validConfiguration() {
   return {

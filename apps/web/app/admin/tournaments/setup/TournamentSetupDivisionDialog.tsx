@@ -12,10 +12,12 @@ import {
   cleanString,
   dayLabel,
   dayReference,
+  editableString,
   eventDayReferences,
   eventFamilyName,
   numberInputValue,
   setEventDayReferences,
+  setCanonicalRecordString,
   setRecordNumber,
   setRecordString,
   type BuilderRow,
@@ -262,7 +264,11 @@ export default function TournamentSetupDivisionDialog({
         validationError(ageIssues[0], "Age policy", agePolicyRef.current);
       }
     }
-    return onConfirm(draft);
+    return onConfirm(setCanonicalRecordString(
+      draft,
+      ["division_name", "label"],
+      draft.division_name ?? draft.label
+    ));
   }
 
   return (
@@ -312,7 +318,7 @@ export default function TournamentSetupDivisionDialog({
             <strong>Division name</strong><br />
             <input
               ref={nameRef}
-              value={cleanString(draft.division_name ?? draft.label)}
+              value={editableString(draft.division_name ?? draft.label)}
               placeholder="3.5 · 50+"
               style={inputStyle}
               onChange={(event) =>

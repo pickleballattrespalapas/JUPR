@@ -22,6 +22,7 @@ import {
   configurationPayload,
   dayLabel,
   dayReference,
+  editableString,
   eventDayReference,
   eventDayReferences,
   eventDivisionName,
@@ -3026,7 +3027,7 @@ function renderDivisions() {
                     <label>
                       <strong>Day {index + 1} label</strong><br />
                       <input
-                        value={dayLabel(row.value)}
+                        value={editableString(row.value.label)}
                         disabled={busy}
                         style={inputStyle}
                         onChange={(event) => {

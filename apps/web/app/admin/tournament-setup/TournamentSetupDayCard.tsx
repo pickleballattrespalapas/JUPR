@@ -6,8 +6,8 @@ import { actionSuccess } from "@/components/interaction";
 import {
   FACILITY_COURT_LIMIT,
   cleanString,
-  dayCourtLabels,
   defaultCourtLabels,
+  editableString,
   setRecordNumber,
   setRecordString,
   type BuilderRow,
@@ -43,17 +43,19 @@ export function TournamentSetupDayCard({
   const value = row.value;
   const dateValue = cleanString(value.event_date ?? value.date ?? value.start_date);
   const courtCount = Math.max(1, Math.min(FACILITY_COURT_LIMIT, Number(value.court_count) || FACILITY_COURT_LIMIT));
-  const labels = dayCourtLabels(value);
+  const labels = Array.isArray(value.court_labels)
+    ? value.court_labels.map(editableString)
+    : [];
 
   function updateCourtCount(raw: string) {
     const parsed = Math.max(1, Math.min(FACILITY_COURT_LIMIT, Math.trunc(Number(raw) || 1)));
     const current = labels.length ? labels : defaultCourtLabels(courtCount);
-    const nextLabels = Array.from({ length: parsed }, (_, index) => current[index] || `Court ${index + 1}`);
+    const nextLabels = Array.from({ length: parsed }, (_, index) => current[index] ?? `Court ${index + 1}`);
     onChange({ ...setRecordNumber(value, "court_count", String(parsed)), court_labels: nextLabels });
   }
 
   function updateCourtLabel(index: number, label: string) {
-    const current = Array.from({ length: courtCount }, (_, courtIndex) => labels[courtIndex] || `Court ${courtIndex + 1}`);
+    const current = Array.from({ length: courtCount }, (_, courtIndex) => labels[courtIndex] ?? `Court ${courtIndex + 1}`);
     current[index] = label;
     onChange({ ...value, court_labels: current });
   }
@@ -102,7 +104,7 @@ export function TournamentSetupDayCard({
           Day label
           <input
             className={styles.input}
-            value={cleanString(value.label)}
+            value={editableString(value.label)}
             disabled={disabled}
             aria-invalid={issues.some((issue) => issue.path.endsWith(".label")) || undefined}
             onChange={(event) => onChange(setRecordString(value, ["label"], event.target.value))}
@@ -170,7 +172,7 @@ export function TournamentSetupDayCard({
                 Court {index + 1}
                 <input
                   className={styles.input}
-                  value={labels[index] || `Court ${index + 1}`}
+                  value={labels[index] ?? `Court ${index + 1}`}
                   disabled={disabled}
                   onChange={(event) => updateCourtLabel(index, event.target.value)}
                 />
@@ -182,7 +184,7 @@ export function TournamentSetupDayCard({
           Court notes
           <textarea
             className={styles.textarea}
-            value={cleanString(value.court_notes)}
+            value={editableString(value.court_notes)}
             disabled={disabled}
             placeholder="Optional setup, maintenance, or court-allocation notes"
             onChange={(event) => onChange(setRecordString(value, ["court_notes"], event.target.value))}

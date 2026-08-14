@@ -9,6 +9,7 @@ import {
 } from "@/components/interaction";
 import {
   cleanString,
+  editableString,
   eventDayReferences,
   eventDivisionName,
   eventFamilyName,
@@ -482,7 +483,23 @@ export default function TournamentDivisionPresetDialog({
       }));
       throw new InteractionActionError("Resolve the highlighted division names, then select them again.", { kind: "validation", fieldErrors: { "Division names": "Every selected division must have a unique name." } });
     }
-    return onConfirm(selectedProposals.map((row) => row.value));
+    return onConfirm(selectedProposals.map((row) => {
+      const canonicalName = eventDivisionName(row.value);
+      const canonicalValue = { ...row.value };
+      if (Object.prototype.hasOwnProperty.call(canonicalValue, "division_name")) {
+        canonicalValue.division_name = canonicalName;
+      }
+      if (Object.prototype.hasOwnProperty.call(canonicalValue, "label")) {
+        canonicalValue.label = canonicalName;
+      }
+      if (
+        !Object.prototype.hasOwnProperty.call(canonicalValue, "division_name") &&
+        !Object.prototype.hasOwnProperty.call(canonicalValue, "label")
+      ) {
+        canonicalValue.division_name = canonicalName;
+      }
+      return canonicalValue;
+    }));
   }
 
   return (
@@ -573,7 +590,7 @@ export default function TournamentDivisionPresetDialog({
                 <article key={proposal.key} style={{ border: `1px solid ${proposal.duplicate ? "#fde68a" : "#e2e8f0"}`, borderRadius: "12px", padding: "0.7rem", background: proposal.duplicate ? "#fffbeb" : "#f8fafc" }}>
                   <div style={{ display: "grid", gridTemplateColumns: "auto minmax(220px, 2fr) minmax(140px, 1fr) minmax(120px, 1fr)", gap: "0.6rem", alignItems: "end" }}>
                     <input type="checkbox" aria-label={`Select proposal ${index + 1}`} checked={proposal.selected} disabled={proposal.duplicate} onChange={(event) => setProposals((current) => current.map((row) => row.key === proposal.key ? { ...row, selected: event.target.checked } : row))} />
-                    <label><strong>Division name</strong><br /><input value={eventDivisionName(proposal.value)} style={inputStyle} onChange={(event) => setProposals((current) => current.map((row) => row.key === proposal.key ? {
+                    <label><strong>Division name</strong><br /><input value={editableString(proposal.value.division_name ?? proposal.value.label)} style={inputStyle} onChange={(event) => setProposals((current) => current.map((row) => row.key === proposal.key ? {
                       ...row,
                       duplicate: false,
                       issue: undefined,
