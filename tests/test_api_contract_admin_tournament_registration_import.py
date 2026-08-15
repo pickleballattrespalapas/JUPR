@@ -8,9 +8,26 @@ from tests.test_admin_match_log_service import FakeSupabase
 require_api_dependency("fastapi")
 require_api_dependency("supabase")
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from jupr_app.services.admin_tournament_guarded_operation import (
+    StaleTournamentAdminStateError,
+    TournamentAdminRecoveryRequiredError,
+)
+
 from services.api.main import app
+
+
+IMPORT_IDEMPOTENCY_KEY = "11111111-1111-4111-8111-111111111111"
+
+
+def _import_request(*, mode: str = "REPLACE", confirmation: str = "IMPORT REGISTRATIONS"):
+    return {
+        "import_mode": mode,
+        "confirmation_text": confirmation,
+        "idempotency_key": IMPORT_IDEMPOTENCY_KEY,
+    }
 
 
 def tournament_registration_import_tables(*, include_games: bool = False, missing_player: bool = False):
@@ -173,7 +190,7 @@ def test_admin_tournament_registration_team_import_replace_contract(monkeypatch)
     response = client.post(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
         headers={"Authorization": "Bearer local"},
-        json={"import_mode": "REPLACE", "confirmation_text": "IMPORT REGISTRATIONS"},
+        json=_import_request(),
     )
 
     assert response.status_code == 200
@@ -220,7 +237,7 @@ def test_admin_tournament_registration_team_import_uses_one_canonical_team_for_r
     response = client.post(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
         headers={"Authorization": "Bearer local"},
-        json={"import_mode": "REPLACE", "confirmation_text": "IMPORT REGISTRATIONS"},
+        json=_import_request(),
     )
 
     assert response.status_code == 200
@@ -250,7 +267,7 @@ def test_admin_tournament_registration_team_import_does_not_promote_mutual_free_
     response = client.post(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
         headers={"Authorization": "Bearer local"},
-        json={"import_mode": "REPLACE", "confirmation_text": "IMPORT REGISTRATIONS"},
+        json=_import_request(),
     )
 
     assert response.status_code == 400
@@ -292,7 +309,7 @@ def test_admin_tournament_registration_team_import_blocks_unlinked_partner_detai
     response = client.post(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
         headers={"Authorization": "Bearer local"},
-        json={"import_mode": "REPLACE", "confirmation_text": "IMPORT REGISTRATIONS"},
+        json=_import_request(),
     )
 
     assert response.status_code == 400
@@ -317,7 +334,7 @@ def test_admin_tournament_registration_team_import_preserves_singles_as_individu
     response = client.post(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
         headers={"Authorization": "Bearer local"},
-        json={"import_mode": "REPLACE", "confirmation_text": "IMPORT REGISTRATIONS"},
+        json=_import_request(),
     )
 
     assert response.status_code == 200
@@ -397,7 +414,7 @@ def test_admin_tournament_registration_team_import_blocks_overlapping_confirmed_
     response = client.post(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
         headers={"Authorization": "Bearer local"},
-        json={"import_mode": "REPLACE", "confirmation_text": "IMPORT REGISTRATIONS"},
+        json=_import_request(),
     )
 
     assert response.status_code == 400
@@ -418,7 +435,7 @@ def test_admin_tournament_registration_team_import_blocks_mismatched_canonical_m
     response = client.post(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
         headers={"Authorization": "Bearer local"},
-        json={"import_mode": "REPLACE", "confirmation_text": "IMPORT REGISTRATIONS"},
+        json=_import_request(),
     )
 
     assert response.status_code == 400
@@ -438,7 +455,7 @@ def test_admin_tournament_registration_team_import_append_blocks_players_already
     response = client.post(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
         headers={"Authorization": "Bearer local"},
-        json={"import_mode": "APPEND", "confirmation_text": "IMPORT REGISTRATIONS"},
+        json=_import_request(mode="APPEND"),
     )
 
     assert response.status_code == 400
@@ -455,7 +472,7 @@ def test_admin_tournament_registration_team_import_blocks_after_games(monkeypatc
     response = client.post(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
         headers={"Authorization": "Bearer local"},
-        json={"import_mode": "REPLACE", "confirmation_text": "IMPORT REGISTRATIONS"},
+        json=_import_request(),
     )
 
     assert response.status_code == 400
@@ -469,7 +486,7 @@ def test_admin_tournament_registration_team_import_requires_confirmation(monkeyp
     response = client.post(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
         headers={"Authorization": "Bearer local"},
-        json={"import_mode": "REPLACE", "confirmation_text": "IMPORT"},
+        json=_import_request(confirmation="IMPORT"),
     )
 
     assert response.status_code == 400
@@ -483,8 +500,126 @@ def test_admin_tournament_registration_team_import_blocks_unlinked_players(monke
     response = client.post(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
         headers={"Authorization": "Bearer local"},
-        json={"import_mode": "REPLACE", "confirmation_text": "IMPORT REGISTRATIONS"},
+        json=_import_request(),
     )
 
     assert response.status_code == 400
     assert "could not be resolved" in response.json()["detail"]
+
+
+def test_admin_tournament_registration_team_import_requires_browser_uuid(monkeypatch):
+    client = _client(monkeypatch, tournament_registration_import_tables())
+
+    response = client.post(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "import_mode": "REPLACE",
+            "confirmation_text": "IMPORT REGISTRATIONS",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_admin_tournament_registration_team_import_returns_structured_uncertainty(
+    monkeypatch,
+):
+    client = _client(monkeypatch, tournament_registration_import_tables())
+    monkeypatch.setattr(
+        "services.api.admin_tournament_routes._guarded_ops_mutation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            TournamentAdminRecoveryRequiredError("response lost after durable intent")
+        ),
+    )
+
+    response = client.post(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
+        headers={"Authorization": "Bearer local"},
+        json=_import_request(),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "kind": "uncertain",
+        "code": "TOURNAMENT_REGISTRATION_IMPORT_RECOVERY_REQUIRED",
+        "message": "response lost after durable intent",
+        "recovery_required": True,
+        "operation_reference": IMPORT_IDEMPOTENCY_KEY,
+    }
+
+
+def test_admin_tournament_registration_team_import_keeps_unrelated_stale_lock_definite(
+    monkeypatch,
+):
+    client = _client(monkeypatch, tournament_registration_import_tables())
+    monkeypatch.setattr(
+        "services.api.admin_tournament_routes._guarded_ops_mutation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            StaleTournamentAdminStateError(
+                "Another Tournament Admin operation already owns this tournament lock."
+            )
+        ),
+    )
+
+    response = client.post(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/teams/import-registrations",
+        headers={"Authorization": "Bearer local"},
+        json=_import_request(),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Another Tournament Admin operation already owns this tournament lock."
+    )
+
+
+def test_admin_tournament_registration_import_reconcile_is_authenticated_and_delegates(
+    monkeypatch,
+):
+    client = _client(monkeypatch, tournament_registration_import_tables())
+    calls = []
+
+    def reconcile(*_args, **kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "recovery_disposition": "not_applied"}
+
+    monkeypatch.setattr(
+        "services.api.admin_tournament_routes.reconcile_admin_tournament_registration_import_operation",
+        reconcile,
+    )
+    path = (
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/"
+        f"teams/import-registrations/operations/{IMPORT_IDEMPOTENCY_KEY}/reconcile"
+    )
+
+    response = client.post(
+        path,
+        headers={"Authorization": "Bearer local"},
+        json={
+            "retained_request": _import_request(),
+            "confirmation_text": "RECONCILE REGISTRATION IMPORT",
+        },
+    )
+
+    assert response.status_code == 200
+    assert calls[0]["operation_reference"] == IMPORT_IDEMPOTENCY_KEY
+    assert calls[0]["actor_email"] == "admin@example.com"
+    assert calls[0]["actor_role"] == "club_owner"
+    assert calls[0]["retained_request"]["idempotency_key"] == IMPORT_IDEMPOTENCY_KEY
+
+    calls.clear()
+
+    def deny(_authorization):
+        raise HTTPException(status_code=401, detail="invalid bearer token")
+
+    monkeypatch.setattr("services.api.admin_tournament_routes.authenticate_bearer", deny)
+    denied = client.post(
+        path,
+        json={
+            "retained_request": _import_request(),
+            "confirmation_text": "RECONCILE REGISTRATION IMPORT",
+        },
+    )
+    assert denied.status_code == 401
+    assert calls == []

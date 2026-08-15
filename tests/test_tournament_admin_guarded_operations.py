@@ -14,6 +14,7 @@ from jupr_app.domain.tournament_registration_repo import publish_registration_co
 from jupr_app.services.admin_tournament_guarded_operation import (
     StaleTournamentAdminStateError,
     TournamentAdminRecoveryRequiredError,
+    reconcile_tournament_admin_guarded_operation,
     require_tournament_admin_mutation_runtime,
     run_tournament_admin_guarded_operation,
 )
@@ -56,6 +57,53 @@ def _run(supabase, *, mutate, expected_state: str = "v1", preflight=None, curren
         reconcile=reconcile,
         mutate=mutate,
     )
+
+
+def test_generic_reconcile_never_verifies_an_in_flight_intent(monkeypatch) -> None:
+    _enable_staging(monkeypatch)
+    request = build_tournament_admin_operation_request(
+        club_id="club",
+        surface="registration",
+        action="tournament_registration_update",
+        entity_type="tournament_registration",
+        entity_id="registration-1",
+        expected_state="v1",
+        payload={"status": "waitlist"},
+    )
+    operation = {
+        **request,
+        "status": "intent",
+        "request_json": request,
+        "result_json": {},
+        "attempt_count": 1,
+    }
+    supabase = FakeSupabase(
+        {"tournament_admin_operations": [operation], "admin_activity_log": []}
+    )
+    verifier_called = False
+
+    def verify(_operation):
+        nonlocal verifier_called
+        verifier_called = True
+        return {"status": "not_applied", "evidence": {}}
+
+    with pytest.raises(TournamentAdminRecoveryRequiredError, match="may still be in flight"):
+        reconcile_tournament_admin_guarded_operation(
+            supabase,
+            club_id="club",
+            surface="registration",
+            operation_key=request["operation_key"],
+            entity_type="tournament_registration",
+            entity_id="registration-1",
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+            source="test_generic_intent_reconcile",
+            verify_outcome=verify,
+        )
+
+    assert verifier_called is False
+    assert operation["status"] == "intent"
+    assert supabase.tables["admin_activity_log"] == []
 
 
 def test_operation_identity_is_deterministic_and_payload_sensitive() -> None:
@@ -145,6 +193,145 @@ def test_guard_writes_intent_before_mutation_and_replays_without_second_write(mo
         "tournament_registration_update_intent",
         "tournament_registration_update_completion",
     ]
+
+
+def test_same_uuid_insert_race_refetches_winner_and_stays_recovery_required(
+    monkeypatch,
+) -> None:
+    _enable_staging(monkeypatch, "operations")
+    client_key = "11111111-1111-4111-8111-111111111111"
+    payload = {
+        "draw_id": "draw-1",
+        "import_mode": "REPLACE",
+        "expected_draw_updated_at": "2026-08-15T10:00:00+00:00",
+    }
+    request = build_tournament_admin_operation_request(
+        club_id="club",
+        surface="operations",
+        action="ops_registration_import",
+        entity_type="tournament_event_draw",
+        entity_id="draw-1",
+        lock_scope="tournament-1",
+        expected_state="v1",
+        payload=payload,
+        idempotency_key=client_key,
+    )
+    tables = {
+        "tournament_admin_operations": [],
+        "admin_activity_log": [],
+        "domain_rows": [],
+    }
+    supabase = FakeSupabase(tables)
+
+    def lose_insert(_supabase, _payload):
+        tables["tournament_admin_operations"].append(
+            {
+                **request,
+                "client_idempotency_key": client_key,
+                "status": "intent",
+                "request_json": dict(request),
+                "result_json": {},
+                "attempt_count": 1,
+            }
+        )
+        raise StaleTournamentAdminStateError("duplicate key")
+
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tournament_guarded_operation._insert_operation",
+        lose_insert,
+    )
+
+    with pytest.raises(
+        TournamentAdminRecoveryRequiredError,
+        match="won the durable idempotency race and may still be in flight",
+    ):
+        run_tournament_admin_guarded_operation(
+            supabase,
+            club_id="club",
+            surface="operations",
+            action="ops_registration_import",
+            entity_type="tournament_event_draw",
+            entity_id="draw-1",
+            lock_scope="tournament-1",
+            expected_state="v1",
+            current_state=lambda: "v1",
+            payload=payload,
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+            source="next_tournament_ops_import_registrations",
+            mutate=lambda: tables["domain_rows"].append({"id": "unsafe"}),
+            idempotency_key=client_key,
+        )
+
+    assert tables["domain_rows"] == []
+    assert tables["tournament_admin_operations"][0]["status"] == "intent"
+    assert tables["admin_activity_log"] == []
+
+
+def test_unrelated_active_lock_insert_collision_remains_definite_and_never_mutates(
+    monkeypatch,
+) -> None:
+    _enable_staging(monkeypatch, "operations")
+    tables = {
+        "tournament_admin_operations": [],
+        "admin_activity_log": [],
+        "domain_rows": [],
+    }
+    supabase = FakeSupabase(tables)
+
+    def lose_to_unrelated_lock(_supabase, _payload):
+        tables["tournament_admin_operations"].append(
+            {
+                "operation_key": "another-operation",
+                "request_fingerprint": "another-request",
+                "client_idempotency_key": "22222222-2222-4222-8222-222222222222",
+                "club_id": "club",
+                "surface": "operations",
+                "action": "ops_create_draw",
+                "entity_type": "tournament_event_draw",
+                "entity_id": "another-draw",
+                "lock_scope": "tournament-1",
+                "expected_state": "v1",
+                "status": "intent",
+                "request_json": {},
+                "result_json": {},
+            }
+        )
+        raise StaleTournamentAdminStateError("duplicate key")
+
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tournament_guarded_operation._insert_operation",
+        lose_to_unrelated_lock,
+    )
+
+    with pytest.raises(
+        StaleTournamentAdminStateError,
+        match="duplicate key",
+    ):
+        run_tournament_admin_guarded_operation(
+            supabase,
+            club_id="club",
+            surface="operations",
+            action="ops_registration_import",
+            entity_type="tournament_event_draw",
+            entity_id="draw-1",
+            lock_scope="tournament-1",
+            expected_state="v1",
+            current_state=lambda: "v1",
+            payload={
+                "draw_id": "draw-1",
+                "import_mode": "REPLACE",
+                "expected_draw_updated_at": "2026-08-15T10:00:00+00:00",
+            },
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+            source="next_tournament_ops_import_registrations",
+            mutate=lambda: tables["domain_rows"].append({"id": "unsafe"}),
+            idempotency_key="11111111-1111-4111-8111-111111111111",
+        )
+
+    assert tables["domain_rows"] == []
+    assert tables["admin_activity_log"] == []
 
 
 def test_stale_state_refuses_operation_audit_and_domain_mutation(monkeypatch) -> None:

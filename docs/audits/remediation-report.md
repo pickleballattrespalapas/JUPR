@@ -6,7 +6,7 @@ Candidate status: implementation working tree; not deployed and not formally acc
 
 ## Outcome
 
-The app now has one normative interaction standard and complete, stable-ID inventories for the audited frontend and backend surfaces. The candidate implements a shared confirmation/form lifecycle, replaces native and one-off modal paths, requires explicit completion results from shared confirmations, preserves success above consumer lifetimes, and hardens the highest-priority backend gaps without a Supabase migration.
+The app now has one normative interaction standard and complete, stable-ID inventories for the audited frontend and backend surfaces. The candidate implements a shared confirmation/form lifecycle, replaces native and one-off modal paths, requires explicit completion results from shared confirmations, preserves success above consumer lifetimes, hardens the highest-priority backend gaps, and includes one forward-only Supabase trigger-function migration that corrects the tournament-team text/UUID comparison.
 
 This is not a claim that all audited rows fully conform. The audit is complete; remediation is broad but intentionally records justified exceptions and residual work. In particular, transport-level uncertainty is not yet normalized across every durable client action, several application-ledgered writes still require an integrated SQL RPC for transaction-level atomicity, and `BE-184` still needs approved throttling/provider-reconciliation infrastructure.
 
@@ -17,11 +17,11 @@ Production, staging deployment state, runtime flags, DNS, and remote Supabase da
 | Inventory | Exact audited count | Coverage |
 | --- | ---: | --- |
 | Frontend action families/source instances | **232** | 42 Create, 52 Edit, 21 Delete, 17 Bulk Edit, 21 Publish, and 79 Guarded actions |
-| Backend unsafe-method FastAPI contracts | **196** | 157 `POST`, 30 `PATCH`, 8 `PUT`, and 1 `DELETE`; 165 admin-prefixed and 31 public contracts |
-| Total audited frontend + backend contracts | **428** | 232 frontend rows + 196 backend unsafe-method contracts |
-| Staging write-wave coverage | **196 / 196** | 0 missing and 0 stale manifest entries; 12 additional named-wave assignments across 10 multi-wave contracts |
+| Backend unsafe-method FastAPI contracts | **197** | 158 `POST`, 30 `PATCH`, 8 `PUT`, and 1 `DELETE`; 166 admin-prefixed and 31 public contracts |
+| Total audited frontend + backend contracts | **429** | 232 frontend rows + 197 backend unsafe-method contracts |
+| Staging write-wave coverage | **197 / 197** | 0 missing and 0 stale manifest entries; 12 additional named-wave assignments across 10 multi-wave contracts |
 
-The frontend rows are recorded in [frontend-interaction-inventory.md](frontend-interaction-inventory.md). The backend routes, guards, durability families, and stable IDs `BE-001` through `BE-196` are recorded in [backend-guarded-action-inventory.md](backend-guarded-action-inventory.md). Existing rows `BE-001`–`BE-192` remain unchanged; the four authenticated proof-only reconciliation routes are appended as `BE-193`–`BE-196`. The governing requirements are in [interaction-standard.md](../interaction-standard.md); the implementation sequence and test model are in [implementation-plan.md](implementation-plan.md).
+The frontend rows are recorded in [frontend-interaction-inventory.md](frontend-interaction-inventory.md). The backend routes, guards, durability families, and stable IDs `BE-001` through `BE-197` are recorded in [backend-guarded-action-inventory.md](backend-guarded-action-inventory.md). Existing rows `BE-001`–`BE-192` remain unchanged; five authenticated proof-only reconciliation routes are appended as `BE-193`–`BE-197`. The governing requirements are in [interaction-standard.md](../interaction-standard.md); the implementation sequence and test model are in [implementation-plan.md](implementation-plan.md).
 
 The counts describe audited action contracts, not unique buttons rendered at runtime. Repeated rows that invoke the same handler and contract share an action ID. Preview, plan, quote, and resolve endpoints remain in the backend inventory because the write boundary deliberately fails closed by unsafe HTTP method and some previews persist review or audit evidence.
 
@@ -51,7 +51,7 @@ The strict result contract is a real compile-time safeguard, but it does not by 
 
 ### Backend guards implemented in this candidate
 
-The following targeted changes use existing private ledgers and guarded services. No new Supabase schema or remote database mutation was made.
+The following targeted application guards use existing private ledgers and guarded services. The candidate adds no new tables or columns, but it does include a forward-only migration that replaces the existing tournament-team eligibility trigger function with the type-correct comparison. No remote database mutation was made while preparing this candidate.
 
 | IDs | Implemented application guarantee | Remaining limitation |
 | --- | --- | --- |
@@ -61,6 +61,7 @@ The following targeted changes use existing private ledgers and guarded services
 | `BE-073`, `BE-074` | Backend validation of `COMPLETE SESSION` and `PUBLISH MATCHES`; phrase participates in durable request fingerprint | No schema residual for these two actions |
 | `BE-081`, `BE-082`, `BE-083`, `BE-194` | Create idempotency; canonical state fingerprints; edit/rating CAS; exact replay; retained recovery; authenticated inspection; `SAVE LEAGUE RATING`; proof-only `RECONCILE PLAYER OPERATION` | Player/rating row, domain audit, and ledger completion are separate transactions |
 | `BE-111`, `BE-113` | `SAVE PAYMENT STATUS` and `SAVE FULFILLMENT STATUS` included in the existing transactional commerce request fingerprint | No schema residual for these two actions |
+| `BE-118`, `BE-197` | Browser UUID and exact reviewed registration-import request are retained before send; structured uncertainty blocks all guarded Ops writes in that club tab; authenticated proof-only `RECONCILE REGISTRATION IMPORT` uses a stored result or an exact-request recovery tombstone and never repeats the import. The tombstone serializes an absent lookup against a late original request, while a competing original `intent` remains uncertain. | The atomic team-write RPC and private guarded-operation/audit ledger are separate transactions; a normal empty `recovery_required` row remains locked until commit-fence or manual evidence exists |
 | `BE-184` | Stable edit-link request key, recipient/tournament/registration dedupe, durable delivery intent/receipt, 15-minute provider-uncertain resend suppression, and non-enumerating public response | Client-IP throttling, longer-lived exact-key replay, and provider receipt reconciliation are deferred |
 
 At the audited boundary there are no P0 route bypasses. Production writes remain fail-closed unless separately enabled, and service-role credentials remain server-only.
@@ -84,7 +85,7 @@ An exception means the surface differs from the preferred focused-dialog present
 
 ### 1. Transport uncertainty and reconciliation
 
-The shared lifecycle can represent `uncertain`, and targeted generator, Club Social, guarded-operation, and communication flows retain an exact operation identity. Four appended authenticated `POST` contracts now make proof-only recovery explicit: Match Uploader `BE-193`, Player Editor `BE-194`, Club Social `BE-195`, and League Live `BE-196`. Each requires its action-specific reconciliation phrase, uses the original operation key, and resolves only when frozen operation evidence plus authoritative readback proves either the intended result or, where supported, non-commit; none reruns the original mutation. Ambiguous or incomplete evidence remains recovery-required.
+The shared lifecycle can represent `uncertain`, and targeted generator, Club Social, guarded-operation, and communication flows retain an exact operation identity. Five appended authenticated `POST` contracts now make proof-only recovery explicit: Match Uploader `BE-193`, Player Editor `BE-194`, Club Social `BE-195`, League Live `BE-196`, and Tournament Ops registration import `BE-197`. Each requires its action-specific reconciliation phrase and none reruns the original mutation. `BE-197` retains the full reviewed browser request and reserves an exact-request tombstone before an absent lookup is considered non-applied, preventing a still-in-flight original request from arriving later and mutating. It closes completion only from a stored result and closes non-application only from that winning tombstone; a normal empty `recovery_required` row stays locked because a momentarily unchanged readback cannot fence a late PostgREST RPC commit. Ambiguous, incomplete, or still-`intent` evidence remains recovery-required.
 
 Coverage is still not universal across all durable clients. Many legacy API helpers expose an ordinary thrown error without proving whether it occurred before or after the request was sent. The lifecycle currently treats an unknown exception as `failed`; therefore a caller may offer retry where the server may actually have committed. Full conformance requires a transport-aware, machine-readable error envelope with `kind`, stable `code`, `operation_key`, and an exact inspect/reconcile action across every durable family. Until that work is complete, do not claim universal prevention of blind post-timeout retries.
 
@@ -96,6 +97,7 @@ Application-level idempotency, CAS, intent ledgers, readback, and recovery are i
 - `BE-050` / `BE-195`: Club Social domain update, audit, and operation completion;
 - `BE-059` / `BE-193`: player batch insert, audit, and operation completion;
 - `BE-081`–`BE-083` / `BE-194`: player/rating mutation, audit, and operation completion.
+- `BE-118` / `BE-197`: atomic registration-team write, guarded-operation result, and completion/recovery audit.
 
 Each requires a separately reviewed Supabase migration/RPC. The current candidate must be described as **application guard implemented with atomic-RPC residual**, not fully transaction-atomic.
 
@@ -133,16 +135,17 @@ The shared primitive implements native modal behavior, accessible names/descript
 
 | Evidence | Recorded result | What it proves |
 | --- | --- | --- |
-| Unsafe-route AST/manifest comparison | 196 registered / 196 manifest; 0 missing; 0 stale; 12 additional assignments across 10 multi-wave contracts | Complete fail-closed staging boundary inventory |
+| Unsafe-route AST/manifest comparison | 197 registered / 197 manifest; 0 missing; 0 stale; 12 additional assignments across 10 multi-wave contracts | Complete fail-closed staging boundary inventory |
 | Staging boundary tests | 20 passed / 1 deprecation warning | Exact route/write-wave set equality, overlap classification, and staging boundary behavior |
-| Combined interaction-inventory + staging-boundary static rerun | 28 passed / 1 deprecation warning | The 232/196/428 count assertions, stable `BE-193`–`BE-196` mappings, interaction source guards, and the boundary tests pass together |
+| Combined interaction-inventory, registration-import recovery static contracts, and staging-boundary rerun | 31 passed / 1 deprecation warning | Covers the 232/197/429 count assertions, stable `BE-193`–`BE-197` mappings, retained-request and uncertainty source guards, and exact route/write-wave equality |
+| Registration-import recovery contract | 57 focused backend/API/generic-guard/static tests passed / 3 framework warnings | Covers exact retained request validation, authentication, structured uncertainty, reference mismatch with zero writes, tombstone-wins/late-original refusal, same-UUID insert races, definite unrelated stale locks, original-intent-wins uncertainty, stored-result completion, audited proven-no-write closure, empty-recovery refusal, and idempotent reconciliation |
 | Focused backend remediation suite | 146 passed / 3 deprecation warnings | Phrase, CAS, replay, duplicate suppression, durable intent, authorization, Unicode parity, and proof-only recovery/ambiguity behavior for targeted families |
 | Static interaction guard | Product source scan: zero native browser prompts; only shared product modal primitive | Removal of native/one-off modal escape hatches in the candidate tree |
 | Shared foundation contract | Source/component contract plus provider-unmount harness present | Strict completion, provider ownership, duplicate lock, persistent result, focus fallback, and uncertain-state API are testable |
 | Web TypeScript and component checks | `tsc --noEmit --incremental false` passed; 5 / 5 component contracts passed | The migrated interaction consumers satisfy the strict completion types, guarded-recovery contracts, and existing component contracts |
 | Optimized Next.js production build | Passed; 88 / 88 pages generated | The candidate compiles, type-checks, and produces the complete web application bundle; existing hook warnings remain non-blocking |
 | Local provider browser specification | 4 Playwright scenarios discovered; equivalent temporary jsdom harness passed its original 3 / 3 cases | Unmount persistence, the single-open lock, focus-target precedence, and connected-disabled-trigger fallback are encoded; a real browser run remains pending because no browser binary was available in this sandbox |
-| Broad Python suite, final frozen candidate | 2796 passed / 9 failed / 40 warnings | All nine failures belong to the exact baseline's ten-failure set; one baseline failure now passes and no new interaction-standard regression remains |
+| Broad Python suite, final frozen candidate | 2835 passed / 9 failed / 40 warnings | All nine failures belong to the exact baseline's ten-failure set; one baseline failure now passes and no new interaction-standard regression remains |
 | Exact baseline comparison (`dcf08791`) | 2756 passed / 10 failed / 40 warnings | Establishes the pre-existing failure set; one baseline failure now passes in the candidate, and no new failure was introduced |
 | Newly introduced failure triage | 9 interaction-related static failures corrected; focused rerun 9 / 9 passed | The migrated strict-return, request-guard, exact-retry, persistent-result, and provider source contracts introduced no remaining Python-suite regression |
 
@@ -159,12 +162,12 @@ The terms below are deliberately separate:
 
 | Scope | Implemented | Automated-ready | Manual-ready | Formally accepted |
 | --- | --- | --- | --- | --- |
-| Normative standard and 232/196 inventories (428 total contracts) | Yes | Yes — exact-count/static checks | Yes — review artifacts available | **No** |
+| Normative standard and 232/197 inventories (429 total contracts) | Yes | Yes — exact-count/static checks | Yes — review artifacts available | **No** |
 | Shared confirmation/form lifecycle and root-owned persistent result | Yes | Yes — foundation/static contract and regression harness | Conditional — final build/CI and staging deployment still required | **No** |
 | Native prompt and one-off modal removal | Yes in candidate source | Yes — prohibited-source guard | Conditional — keyboard/zoom/mobile check pending | **No** |
 | Targeted frontend high-consequence migrations | Broadly implemented | Partial — strongest generator/Social/provider paths covered; domain coverage is not universal | Partial — remaining row findings and staging checks above apply | **No** |
-| Targeted backend `BE-026`, `BE-050`, `BE-059`, `BE-073`/`074`, `BE-081`–`083`, `BE-111`/`113`, `BE-184`, and `BE-193`–`196` | Application guards and proof-only reconciliation routes implemented; stated residuals remain | Yes for focused application behavior; no for deferred RPC/provider work | Conditional — staging verification required | **No** |
+| Targeted backend `BE-026`, `BE-050`, `BE-059`, `BE-073`/`074`, `BE-081`–`083`, `BE-111`/`113`, `BE-118`, `BE-184`, and `BE-193`–`197` | Application guards and proof-only reconciliation routes implemented; stated residuals remain | Yes for focused application behavior; no for deferred RPC/provider work | Conditional — staging verification required | **No** |
 | All 232 frontend actions fully conforming | Audit complete; remediation not complete | No | No | **No** |
-| All 196 backend contracts fully transaction-atomic and uniformly reconcilable | Boundary audit complete; not all contracts have that requirement or guarantee | No | No | **No** |
+| All 197 backend contracts fully transaction-atomic and uniformly reconcilable | Boundary audit complete; not all contracts have that requirement or guarantee | No | No | **No** |
 
 No line item in this report is formally accepted or production-deployed. Promotion remains a separate guarded decision after the exact candidate commit, final automated evidence, and manual staging acceptance are recorded.

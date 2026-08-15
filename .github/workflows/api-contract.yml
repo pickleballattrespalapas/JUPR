@@ -45,8 +45,10 @@ jobs:
           python -m pytest -q \
             tests/test_production_deployment_hardening.py \
             tests/test_admin_action_token_guards_static.py \
+            tests/test_app_wide_interaction_standard.py \
             tests/test_authenticated_auto_load_contract.py \
             tests/test_ci_safety_contracts.py \
+            tests/test_combined_rating_team_tournament_migration_postgres_compatibility.py \
             tests/test_staging_evidence_automation.py \
             tests/test_staging_evidence_automation_workflow.py \
             tests/test_staging_write_session.py \
@@ -59,6 +61,7 @@ jobs:
             tests/test_static_support_parity_contract.py \
             tests/test_support_requests_auto_load_static.py \
             tests/test_top_players_printable_auto_load_static.py \
+            tests/test_tournament_admin_guarded_operations.py \
             tests/test_tournament_live_static_contract.py \
             tests/test_tournament_ops_operator_safety_static.py \
             tests/test_tournament_setup_request_safety_static.py \

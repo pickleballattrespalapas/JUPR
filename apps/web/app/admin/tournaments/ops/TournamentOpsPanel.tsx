@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import { actionSuccess } from "@/components/interaction";
+import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
 import type {
   AdminTournamentOpsSnapshotResponse,
   AdminTournamentOpsTeam,
@@ -17,11 +17,52 @@ import { useAdminSession } from "@/lib/useAdminSession";
 export type OpsWorkflow = "all" | "draws" | "import" | "results" | "publish";
 type Props = { apiBase: string | null; clubId: string; status: AdminTournamentStatusResponse; workflow?: OpsWorkflow; initialTournamentId: string };
 type TeamEditorRow = { editor_key: string; team_number: string; player1_id: string; player2_id: string; seed: string; notes: string };
+type RegistrationImportBody = {
+  import_mode: string;
+  idempotency_key: string;
+  expected_state_fingerprint: string;
+  expected_draw_updated_at: string;
+  confirmation_text: string;
+  source: string;
+};
+type RegistrationImportRecovery = {
+  version: 1;
+  clubId: string;
+  tournamentId: string;
+  drawId: string;
+  createdAt: string;
+  operationReference: string;
+  message: string;
+  body: RegistrationImportBody;
+};
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
+const registrationImportReconcileConfirmation = "RECONCILE REGISTRATION IMPORT";
+
+class TournamentOpsRequestError extends Error {
+  readonly status: number;
+  readonly uncertain: boolean;
+  readonly operationReference: string | null;
+
+  constructor(message: string, status: number, uncertain = false, operationReference: string | null = null) {
+    super(message);
+    this.name = "TournamentOpsRequestError";
+    this.status = status;
+    this.uncertain = uncertain;
+    this.operationReference = operationReference;
+  }
+}
+
+function registrationImportStorageKey(clubId: string): string {
+  return `jupr_tournament_ops_registration_import_pending_v1:${clubId}`;
+}
+
+function registrationImportErrorIsUncertain(error: unknown): boolean {
+  return !(error instanceof TournamentOpsRequestError) || error.uncertain;
+}
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -119,8 +160,37 @@ export default function TournamentOpsPanel({
   const [resultsReviewDirty, setResultsReviewDirty] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [registrationImportRecovery, setRegistrationImportRecovery] = useState<RegistrationImportRecovery | null>(null);
+  const [registrationImportRecoveryLoaded, setRegistrationImportRecoveryLoaded] = useState(false);
   const snapshotRequest = useLatestRequestGuard(accessToken);
   const actionRequest = useLatestRequestGuard(accessToken);
+  const importRecoveryStorageKey = registrationImportStorageKey(clubId);
+
+  useEffect(() => {
+    setRegistrationImportRecovery(null);
+    setRegistrationImportRecoveryLoaded(false);
+    try {
+      const raw = globalThis.sessionStorage?.getItem(importRecoveryStorageKey);
+      if (!raw) return;
+      const stored = JSON.parse(raw) as Partial<RegistrationImportRecovery>;
+      if (
+        stored.version === 1
+        && stored.clubId === clubId
+        && typeof stored.tournamentId === "string"
+        && typeof stored.drawId === "string"
+        && typeof stored.createdAt === "string"
+        && typeof stored.operationReference === "string"
+        && typeof stored.message === "string"
+        && typeof stored.body?.idempotency_key === "string"
+      ) {
+        setRegistrationImportRecovery(stored as RegistrationImportRecovery);
+      }
+    } catch {
+      // The in-memory guard remains available when browser storage is blocked.
+    } finally {
+      setRegistrationImportRecoveryLoaded(true);
+    }
+  }, [clubId, importRecoveryStorageKey]);
 
   const operationsWriteReady = Boolean(
     status.mutation_runtime?.service_role_ready
@@ -137,7 +207,11 @@ export default function TournamentOpsPanel({
     .filter((row) => String(row.draw_id || "") === selectedDrawId)
     .map((row) => ({ id: String(row.id || ""), updated_at: String(row.updated_at || "") }));
   const officialPublishReady = Boolean(snapshot?.operation_runtime?.official_publish_enabled);
-  const guardedWriteDisabled = busy || !accessToken || !operationsWriteReady || !reviewedState;
+  // One tab retains one exact registration-import request for this club. Block
+  // every guarded Ops write until it is reconciled so navigating to another
+  // tournament cannot overwrite that sole recovery slot.
+  const registrationImportBlocksWrites = registrationImportRecovery !== null;
+  const guardedWriteDisabled = busy || !accessToken || !operationsWriteReady || !reviewedState || !registrationImportRecoveryLoaded || registrationImportBlocksWrites;
   const drawCasWriteDisabled = guardedWriteDisabled || !reviewedDrawUpdatedAt;
   const teamSnapshotCasDisabled = drawCasWriteDisabled || !reviewedTeamVersions.length || reviewedTeamVersions.some((row) => !row.id || !row.updated_at);
   const gameSnapshotCasDisabled = teamSnapshotCasDisabled || !reviewedSourceGameVersions.length || reviewedSourceGameVersions.some((row) => !row.id || !row.updated_at);
@@ -152,14 +226,28 @@ export default function TournamentOpsPanel({
     const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      const detail = String(payload?.detail || `API error (${response.status})`);
-      if (response.status === 409) {
-        const recovery = /recovery|required|may already|identical request|response.?lost/i.test(detail);
-        throw new Error(recovery
-          ? `${detail} Keep this exact reviewed request intact and retry it only to reconcile, or use the Streamlit fallback.`
-          : `${detail} Reload the authoritative Ops snapshot before submitting a new request.`);
-      }
-      throw new Error(detail);
+      const detail = payload?.detail;
+      const detailRecord = detail && typeof detail === "object" ? detail as Record<string, unknown> : null;
+      const detailMessage = typeof detail === "string"
+        ? detail
+        : String(detailRecord?.message || `API error (${response.status})`);
+      const recoveryRequired = detailRecord?.recovery_required === true
+        || detailRecord?.kind === "uncertain"
+        || (response.status === 409 && /recovery|required|may already|identical request|response.?lost/i.test(detailMessage));
+      const explicitlyFailed = detailRecord?.kind === "failed"
+        && detailRecord?.recovery_required !== true;
+      const operationReference = typeof detailRecord?.operation_reference === "string"
+        ? detailRecord.operation_reference
+        : null;
+      const message = response.status === 409 && !recoveryRequired
+        ? `${detailMessage} Reload the authoritative Ops snapshot before submitting a new request.`
+        : detailMessage;
+      throw new TournamentOpsRequestError(
+        message,
+        response.status,
+        recoveryRequired || (!explicitlyFailed && (response.status >= 500 || [408, 425, 429].includes(response.status))),
+        operationReference,
+      );
     }
     return payload as T;
   }
@@ -181,6 +269,16 @@ export default function TournamentOpsPanel({
   function warningSuffix(payload: AdminTournamentWriteResponse): string {
     const warnings = (payload.warnings || []).map((warning) => String(warning || "").trim()).filter(Boolean);
     return warnings.length ? ` ${warnings.join(" ")}` : "";
+  }
+
+  function persistRegistrationImportRecovery(recovery: RegistrationImportRecovery | null) {
+    try {
+      if (recovery) globalThis.sessionStorage?.setItem(importRecoveryStorageKey, JSON.stringify(recovery));
+      else globalThis.sessionStorage?.removeItem(importRecoveryStorageKey);
+    } catch {
+      // State still blocks replacement writes for the lifetime of this page.
+    }
+    setRegistrationImportRecovery(recovery);
   }
 
   function resetTeamEditor(nextSnapshot: AdminTournamentOpsSnapshotResponse | null, drawId: string) {
@@ -269,35 +367,139 @@ export default function TournamentOpsPanel({
     }
   }
 
-  async function importRegistrations(confirmationText: string) {
-    if (!selectedTournamentId || !selectedDrawId) {
-      setMessage("Select a tournament and draw before importing registrations.");
-      throw new Error("Select a tournament and draw before importing registrations.");
-    }
-    const generation = actionRequest.begin();
-    const tournamentId = selectedTournamentId;
-    const drawId = selectedDrawId;
+  async function executeRegistrationImport(
+    recovery: RegistrationImportRecovery,
+    generation: number,
+  ): Promise<ActionCompletion> {
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/teams/import-registrations`, {
+      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(recovery.tournamentId)}/draws/${encodeURIComponent(recovery.drawId)}/teams/import-registrations`, {
         method: "POST",
-        body: JSON.stringify({ import_mode: registrationImportMode, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_import_registrations" })
+        body: JSON.stringify(recovery.body),
       });
       const importedCount = payload.updated_count ?? payload.teams?.length ?? 0;
       const importWarning = warningSuffix(payload);
       const completion = actionSuccess("Registration teams imported", `${importedCount} registration team${importedCount === 1 ? " was" : "s were"} imported.${importWarning}`);
+      persistRegistrationImportRecovery(null);
       if (!actionRequest.isCurrent(generation)) return completion;
-      await loadOps(tournamentId, drawId);
+      await loadOps(recovery.tournamentId, recovery.drawId);
       if (!actionRequest.isCurrent(generation)) return completion;
-      setMessage(`Imported ${payload.updated_count ?? payload.teams?.length ?? 0} registration team(s) with ${payload.import_mode || registrationImportMode} mode.${importWarning}${operationSuffix(payload)}`);
+      setMessage(`Imported ${importedCount} registration team(s) with ${payload.import_mode || recovery.body.import_mode} mode.${importWarning}${operationSuffix(payload)}`);
       return completion;
     } catch (error) {
-      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to import registrations.");
-      throw error;
+      const errorMessage = error instanceof Error ? error.message : "Unable to confirm the registration import.";
+      if (!registrationImportErrorIsUncertain(error)) {
+        persistRegistrationImportRecovery(null);
+        if (actionRequest.isCurrent(generation)) setMessage(errorMessage);
+        throw error;
+      }
+      const operationReference = error instanceof TournamentOpsRequestError && error.operationReference
+        ? error.operationReference
+        : recovery.operationReference;
+      const pending = { ...recovery, operationReference, message: errorMessage };
+      persistRegistrationImportRecovery(pending);
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(`${errorMessage} The exact browser request is retained; reconcile it before another guarded Ops write in this club tab.`);
+      }
+      return actionUncertain(
+        "Registration import outcome needs checking",
+        "The request reached an uncertain outcome. Reconcile the protected operation; the recovery action will never repeat the import or guess from a momentary readback.",
+        operationReference,
+        "Reconcile protected operation",
+        () => reconcileRegistrationImport(pending),
+      );
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
+  }
+
+  async function reconcileRegistrationImport(
+    recovery: RegistrationImportRecovery,
+  ): Promise<ActionCompletion> {
+    const generation = actionRequest.begin();
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentWriteResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(recovery.tournamentId)}/draws/${encodeURIComponent(recovery.drawId)}/teams/import-registrations/operations/${encodeURIComponent(recovery.operationReference)}/reconcile`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            retained_request: recovery.body,
+            confirmation_text: registrationImportReconcileConfirmation,
+            source: "next_tournament_ops_registration_import_reconcile",
+          }),
+        },
+      );
+      const notApplied = payload.recovery_disposition === "not_applied";
+      const completion = actionSuccess(
+        notApplied ? "Registration import did not run" : "Registration import reconciled",
+        notApplied
+          ? "The exact recovery reservation prevented this request from beginning, so no teams were changed. The prior lock is closed; reload and review before starting a new import."
+          : "Authoritative evidence proves the exact import completed. Its stored result was recovered without repeating the write.",
+      );
+      persistRegistrationImportRecovery(null);
+      if (!actionRequest.isCurrent(generation)) return completion;
+      await loadOps(recovery.tournamentId, recovery.drawId);
+      if (!actionRequest.isCurrent(generation)) return completion;
+      setMessage(notApplied
+        ? "The interrupted registration import is proven not applied. Review the reloaded draw before starting a new import."
+        : `The interrupted registration import was reconciled.${operationSuffix(payload)}`);
+      return completion;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unable to reconcile the registration import.";
+      const pending = { ...recovery, message: errorMessage };
+      persistRegistrationImportRecovery(pending);
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(`${errorMessage} The retained operation remains blocked; do not submit a replacement import.`);
+      }
+      return actionUncertain(
+        "Registration import still needs verification",
+        "The protected operation has no commit-safe completion evidence yet. The original request remains retained and no import was repeated.",
+        recovery.operationReference,
+        "Reconcile protected operation again",
+        () => reconcileRegistrationImport(pending),
+      );
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function importRegistrations(confirmationText: string): Promise<ActionCompletion> {
+    const generation = actionRequest.begin();
+    if (!selectedTournamentId || !selectedDrawId || !reviewedState || !reviewedDrawUpdatedAt) {
+      setMessage("Reload a tournament draw before importing registrations.");
+      throw new Error("Reload a tournament draw before importing registrations.");
+    }
+    if (registrationImportRecovery) {
+      const blocked = `Reconcile retained operation ${registrationImportRecovery.operationReference} before another guarded Ops write in this club tab.`;
+      setMessage(blocked);
+      throw new Error(blocked);
+    }
+    if (!actionRequest.isCurrent(generation)) {
+      throw new Error("The admin session changed before this registration import could start.");
+    }
+    const idempotencyKey = globalThis.crypto.randomUUID();
+    const recovery: RegistrationImportRecovery = {
+      version: 1,
+      clubId,
+      tournamentId: selectedTournamentId,
+      drawId: selectedDrawId,
+      createdAt: new Date().toISOString(),
+      operationReference: idempotencyKey,
+      message: "Registration import request is being submitted.",
+      body: {
+        import_mode: registrationImportMode,
+        idempotency_key: idempotencyKey,
+        expected_state_fingerprint: reviewedState,
+        expected_draw_updated_at: reviewedDrawUpdatedAt,
+        confirmation_text: confirmationText,
+        source: "next_tournament_ops_import_registrations",
+      },
+    };
+    persistRegistrationImportRecovery(recovery);
+    return executeRegistrationImport(recovery, generation);
   }
 
   async function importBulkTeams(confirmationText: string) {
@@ -717,6 +919,27 @@ export default function TournamentOpsPanel({
         </article>
       ) : null}
 
+      {registrationImportRecovery ? (
+        <article data-testid="registration-import-recovery" style={{ ...cardStyle, background: "#fff7ed", borderColor: "#f59e0b" }}>
+          <h2 style={{ marginTop: 0 }}>Interrupted registration import retained</h2>
+          <p>
+            The exact request for tournament <code>{registrationImportRecovery.tournamentId}</code>, draw <code>{registrationImportRecovery.drawId}</code>, is retained in this browser tab as <code>{registrationImportRecovery.operationReference}</code>.
+          </p>
+          <p style={{ color: "#92400e" }}>{registrationImportRecovery.message}</p>
+          <p>All guarded Ops writes in this club tab stay blocked until commit-safe operation evidence proves completion or the exact recovery reservation proves the request could not begin.</p>
+          <ConfirmAction
+            triggerLabel="Reconcile protected operation"
+            title="Reconcile this registration import?"
+            description="This reads the retained operation and never repeats the import. A normal empty recovery remains blocked unless commit-safe evidence exists."
+            confirmLabel="Yes, reconcile operation"
+            confirmationText={registrationImportReconcileConfirmation}
+            disabled={!accessToken || !operationsWriteReady}
+            busy={busy}
+            onConfirm={() => reconcileRegistrationImport(registrationImportRecovery)}
+          />
+        </article>
+      ) : null}
+
       {operationsWriteReady && snapshot && shows("draws") ? (
         <article style={{ ...cardStyle, background: "#f8fafc" }}>
           <h2 style={{ marginTop: 0 }}>Create empty division draw</h2>
@@ -725,7 +948,7 @@ export default function TournamentOpsPanel({
             <label><strong>Registration division</strong><br /><select value={drawEventOptionId} onChange={(event) => setDrawEventOptionId(event.target.value)} style={inputStyle}><option value="">Legacy / tournament-wide draw</option>{(snapshot.event_options || []).map((row) => <option key={String(row.id)} value={String(row.id)}>{eventOptionLabel(row)}</option>)}</select></label>
             <label><strong>Draw name</strong><br /><input value={drawName} onChange={(event) => setDrawName(event.target.value)} placeholder="optional" style={inputStyle} /></label>
           </div>
-          <p><ConfirmAction triggerLabel="Create draw" title="Create this tournament draw?" description={`This creates a new draft draw${drawName.trim() ? ` named ${drawName.trim()}` : ""}${drawEventOptionId ? " for the selected registration division" : " for the tournament-wide legacy scope"}.`} confirmLabel="Yes, create draw" confirmationText="CREATE DRAW" disabled={!accessToken || !operationsWriteReady || !reviewedState} busy={busy} onConfirm={createDraw} /></p>
+          <p><ConfirmAction triggerLabel="Create draw" title="Create this tournament draw?" description={`This creates a new draft draw${drawName.trim() ? ` named ${drawName.trim()}` : ""}${drawEventOptionId ? " for the selected registration division" : " for the tournament-wide legacy scope"}.`} confirmLabel="Yes, create draw" confirmationText="CREATE DRAW" disabled={!accessToken || !operationsWriteReady || !reviewedState || !registrationImportRecoveryLoaded || registrationImportBlocksWrites} busy={busy} onConfirm={createDraw} /></p>
         </article>
       ) : null}
 
