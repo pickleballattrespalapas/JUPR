@@ -49,6 +49,7 @@ jobs:
             tests/test_authenticated_auto_load_contract.py \
             tests/test_ci_safety_contracts.py \
             tests/test_combined_rating_team_tournament_migration_postgres_compatibility.py \
+            tests/test_tournament_draw_child_trigger_postgres_compatibility.py \
             tests/test_staging_evidence_automation.py \
             tests/test_staging_evidence_automation_workflow.py \
             tests/test_staging_write_session.py \
