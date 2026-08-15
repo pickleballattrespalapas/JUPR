@@ -9,6 +9,18 @@ from jupr_app.domain.tournament_admin_operations import build_tournament_admin_o
 
 
 TOURNAMENT_ADMIN_OPERATION_TABLE = "tournament_admin_operations"
+TOURNAMENT_ADMIN_RECOVERY_TOMBSTONE_ERROR = (
+    "reconciliation tombstone reserved before domain mutation began"
+)
+TOURNAMENT_ADMIN_STATE_CHANGED_BEFORE_INTENT_ERROR = (
+    "state changed before durable audit intent"
+)
+TOURNAMENT_ADMIN_INTENT_AUDIT_UNAVAILABLE_ERROR = (
+    "required audit intent unavailable"
+)
+TOURNAMENT_ADMIN_STALE_CAS_NO_WRITE_PREFIX = (
+    "compare-and-swap rejected without a domain write: "
+)
 SURFACE_MUTATION_FLAGS = {
     "tournament": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS",
     "setup": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_SETUP_MUTATIONS",
@@ -185,10 +197,15 @@ def _write_required_audit(
     before_json: Any = None,
     after_json: Any = None,
 ) -> None:
+    operation_status = (
+        "not_applied"
+        if str(action_type).endswith("_not_applied")
+        else action_type.rsplit("_", 1)[-1]
+    )
     marker = {
         "operation_key": operation["operation_key"],
         "request_fingerprint": operation["request_fingerprint"],
-        "operation_status": action_type.rsplit("_", 1)[-1],
+        "operation_status": operation_status,
     }
     result = write_admin_activity_log(
         supabase,
@@ -293,6 +310,119 @@ def get_tournament_admin_operation_record_by_idempotency_key(
     )
 
 
+def reserve_tournament_admin_recovery_tombstone(
+    supabase: Any,
+    *,
+    club_id: str,
+    surface: str,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    lock_scope: str,
+    expected_state: str,
+    payload: dict[str, Any],
+    idempotency_key: str,
+    actor_email: str,
+) -> tuple[dict[str, Any], bool]:
+    """Reserve an exact request as not-runnable before absence is trusted.
+
+    A browser can lose a fetch response while its original request is still in
+    flight.  A read that observes no row is therefore not proof that the
+    request will never start.  This helper inserts a ``recovery_required``
+    tombstone with the exact same operation identity.  The unique browser-key
+    constraint serializes that insert against the original guarded runner:
+
+    * when the tombstone wins, a late original finds it and cannot mutate;
+    * when the original wins, the tombstone insert loses and this helper
+      returns that authoritative operation for normal reconciliation.
+
+    The tombstone remains active until the caller persists its required audit
+    and closes it through ``reconcile_tournament_admin_guarded_operation``.
+    """
+
+    require_tournament_admin_mutation_runtime(surface)
+    clean_idempotency_key = str(idempotency_key or "").strip()
+    reviewed_state = str(expected_state or "").strip()
+    if not clean_idempotency_key:
+        raise ValueError("A retained browser idempotency key is required for recovery.")
+    if not reviewed_state:
+        raise ValueError("The retained reviewed state is required for recovery.")
+
+    operation_request = build_tournament_admin_operation_request(
+        club_id=str(club_id),
+        surface=str(surface),
+        action=str(action),
+        entity_type=str(entity_type),
+        entity_id=str(entity_id),
+        lock_scope=str(lock_scope or entity_id),
+        expected_state=reviewed_state,
+        payload=dict(payload or {}),
+        idempotency_key=clean_idempotency_key,
+    )
+
+    def matching_existing() -> dict[str, Any] | None:
+        existing = _get_operation_by_idempotency_key(
+            supabase,
+            club_id=str(club_id),
+            surface=str(surface),
+            idempotency_key=clean_idempotency_key,
+        )
+        if existing is None:
+            existing = _get_operation(
+                supabase,
+                club_id=str(club_id),
+                operation_key=str(operation_request["operation_key"]),
+            )
+        if existing is not None and str(existing.get("request_fingerprint") or "") != str(
+            operation_request["request_fingerprint"]
+        ):
+            raise ValueError(
+                "The retained idempotency key belongs to a different Tournament Admin request."
+            )
+        return existing
+
+    existing = matching_existing()
+    if existing is not None:
+        return existing, False
+
+    now = _now_iso()
+    tombstone_payload = {
+        "operation_key": operation_request["operation_key"],
+        "request_fingerprint": operation_request["request_fingerprint"],
+        "client_idempotency_key": clean_idempotency_key,
+        "club_id": str(club_id),
+        "surface": str(surface),
+        "action": str(action),
+        "entity_type": str(entity_type),
+        "entity_id": str(entity_id),
+        "lock_scope": str(lock_scope or entity_id),
+        "expected_state": reviewed_state,
+        "status": "recovery_required",
+        "request_json": operation_request,
+        "result_json": {},
+        "error_text": TOURNAMENT_ADMIN_RECOVERY_TOMBSTONE_ERROR,
+        "attempt_count": 1,
+        "created_by": str(actor_email or ""),
+        "updated_by": str(actor_email or ""),
+        "created_at": now,
+        "updated_at": now,
+    }
+    try:
+        return _insert_operation(supabase, tombstone_payload), True
+    except StaleTournamentAdminStateError as exc:
+        # PostgreSQL's unique constraint waits for a concurrent insert to
+        # commit before rejecting this insert.  Refetching therefore reveals
+        # the winner when it was the same exact browser request.  A different
+        # active tournament operation remains a safe, unresolved lock.
+        raced = matching_existing()
+        if raced is not None:
+            return raced, False
+        raise TournamentAdminRecoveryRequiredError(
+            "Another guarded Tournament Admin operation owns this tournament. "
+            "Keep the retained registration import blocked and check again after it settles."
+        ) from exc
+
+
 def reconcile_tournament_admin_guarded_operation(
     supabase: Any,
     *,
@@ -305,6 +435,7 @@ def reconcile_tournament_admin_guarded_operation(
     actor_role: str,
     source: str,
     verify_outcome: Callable[[dict[str, Any]], dict[str, Any]],
+    settled_failed_is_not_applied: bool = False,
 ) -> dict[str, Any]:
     """Resolve an interrupted mutation from authoritative domain evidence.
 
@@ -334,10 +465,33 @@ def reconcile_tournament_admin_guarded_operation(
             "recovery_disposition": "already_completed",
             "recovery_evidence": {},
         }
-    if status == "failed":
+    if status == "failed" and not settled_failed_is_not_applied:
         raise ValueError("This Tournament Admin operation is already closed as not applied or failed.")
+    if status == "intent":
+        # Durable intent is not a settled outcome. The original executor may
+        # still be between its intent audit and domain mutation, so even an
+        # unchanged authoritative fingerprint is only a momentary observation.
+        # A verifier must never close this row while that executor can proceed.
+        raise TournamentAdminRecoveryRequiredError(
+            "This Tournament Admin operation has durable intent and may still be in flight. "
+            "Keep its scope locked and check again after the original executor settles."
+        )
 
-    if status in {"mutated", "recovery_required"} and isinstance(stored_result, dict) and stored_result:
+    if status == "failed":
+        # This opt-in is used only after a specialized caller has verified a
+        # runner-defined failure that guarantees the mutation never wrote.
+        # The normal generic contract continues to reject arbitrary failed
+        # rows. Persisting the standard marker makes sequential retries
+        # idempotent through the caller's stored-not-applied fast path.
+        verification = {
+            "status": "not_applied",
+            "result": {},
+            "evidence": {
+                "authority": "tournament_admin_operations",
+                "runner_proven_no_domain_write": True,
+            },
+        }
+    elif status in {"mutated", "recovery_required"} and isinstance(stored_result, dict) and stored_result:
         verification = {
             "status": "completed",
             "result": stored_result,
@@ -595,17 +749,58 @@ def run_tournament_admin_guarded_operation(
     }
     if clean_idempotency_key:
         operation_payload["client_idempotency_key"] = clean_idempotency_key
-    operation = _insert_operation(
-        supabase,
-        operation_payload,
-    )
+    try:
+        operation = _insert_operation(
+            supabase,
+            operation_payload,
+        )
+    except StaleTournamentAdminStateError as exc:
+        # Two identical browser requests can both observe no operation before
+        # racing to persist durable intent. PostgreSQL reports the losing
+        # insert as a unique-key/active-lock collision only after the winner
+        # settles. Refetch the exact UUID so that collision can never degrade
+        # into a definite stale-state response while the winner may commit.
+        if not clean_idempotency_key:
+            raise
+        raced_existing = _get_operation_by_idempotency_key(
+            supabase,
+            club_id=str(club_id),
+            surface=str(surface),
+            idempotency_key=clean_idempotency_key,
+        )
+        if raced_existing is None:
+            raced_existing = _get_operation(
+                supabase,
+                club_id=str(club_id),
+                operation_key=str(operation_request["operation_key"]),
+            )
+        if raced_existing is None:
+            raise
+        if str(raced_existing.get("request_fingerprint") or "") != str(
+            operation_request["request_fingerprint"]
+        ):
+            raise ValueError(
+                "This idempotency key was already used for a different Tournament Admin request. Reload and create a new command."
+            ) from exc
+        raced_result = raced_existing.get("result_json")
+        if str(raced_existing.get("status") or "") == "completed" and isinstance(
+            raced_result, dict
+        ):
+            return _public_result(raced_existing, raced_result, replay=True)
+        raise TournamentAdminRecoveryRequiredError(
+            "An identical Tournament Admin request won the durable idempotency race and may still be in flight. "
+            f"Operation key: {operation_request['operation_key']}. Keep the retained request blocked and reconcile it; do not repeat the mutation."
+        ) from exc
     locked_state = str(current_state() or "").strip()
     if locked_state != reviewed_state:
         _update_operation(
             supabase,
             club_id=str(club_id),
             operation_key=operation_request["operation_key"],
-            patch={"status": "failed", "error_text": "state changed before durable audit intent"},
+            patch={
+                "status": "failed",
+                "error_text": TOURNAMENT_ADMIN_STATE_CHANGED_BEFORE_INTENT_ERROR,
+            },
         )
         raise StaleTournamentAdminStateError(
             "Tournament Admin data changed while the operation lock was being acquired. Reload before submitting a new mutation."
@@ -629,14 +824,17 @@ def run_tournament_admin_guarded_operation(
             supabase,
             club_id=str(club_id),
             operation_key=operation_request["operation_key"],
-            patch={"status": "failed", "error_text": "required audit intent unavailable"},
+            patch={
+                "status": "failed",
+                "error_text": TOURNAMENT_ADMIN_INTENT_AUDIT_UNAVAILABLE_ERROR,
+            },
         )
         raise RuntimeError("Required Tournament Admin audit intent could not be persisted; no domain mutation was attempted.")
 
     try:
         result = dict(mutate() or {})
     except StaleTournamentAdminStateError as exc:
-        error_text = str(exc)[:1000]
+        error_text = f"{TOURNAMENT_ADMIN_STALE_CAS_NO_WRITE_PREFIX}{exc}"[:1000]
         try:
             _update_operation(
                 supabase,

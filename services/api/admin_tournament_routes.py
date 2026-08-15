@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import HTTPException, Query, Response
 from pydantic import BaseModel, Field
@@ -41,6 +42,10 @@ from jupr_app.services.admin_tournament_ops_service import (
 from jupr_app.services.admin_tournament_playoff_service import generate_admin_tournament_playoff_games
 from jupr_app.services.admin_tournament_podium_service import generate_admin_tournament_draw_podium
 from jupr_app.services.admin_tournament_registration_import_service import import_admin_tournament_registrations_to_draw
+from jupr_app.services.admin_tournament_registration_import_recovery_service import (
+    REGISTRATION_IMPORT_RECONCILE_CONFIRMATION,
+    reconcile_admin_tournament_registration_import_operation,
+)
 from jupr_app.services.admin_tournament_results_import_service import (
     apply_admin_tournament_results_import,
     build_admin_tournament_results_import_preview,
@@ -164,10 +169,20 @@ class AdminTournamentDrawTeamsReplaceRequest(BaseModel):
 
 class AdminTournamentRegistrationImportRequest(BaseModel):
     import_mode: str = "REPLACE"
+    idempotency_key: UUID
     expected_state_fingerprint: str | None = None
     expected_draw_updated_at: str | None = None
     confirmation_text: str = ""
     source: str = "next_tournament_admin_import_registrations"
+
+
+class AdminTournamentRegistrationImportReconcileRequest(BaseModel):
+    retained_request: AdminTournamentRegistrationImportRequest
+    confirmation_text: str = Field(default="", max_length=120)
+    source: str = Field(
+        default="next_tournament_ops_registration_import_reconcile",
+        max_length=180,
+    )
 
 
 class AdminTournamentBulkTeamImportRequest(BaseModel):
@@ -408,6 +423,7 @@ def _guarded_admin_mutation(
     preflight=None,
     reconcile=None,
     mutate,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     require_tournament_admin_mutation_runtime(surface)
     if not tournament_admin_guarded_runtime_enabled(surface):
@@ -429,6 +445,7 @@ def _guarded_admin_mutation(
         preflight=preflight,
         reconcile=reconcile,
         mutate=mutate,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -448,6 +465,7 @@ def _guarded_ops_mutation(
     preflight,
     reconcile=None,
     mutate,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     return _guarded_admin_mutation(
         supabase,
@@ -470,6 +488,7 @@ def _guarded_ops_mutation(
         preflight=preflight,
         reconcile=reconcile,
         mutate=mutate,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -660,6 +679,59 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 source=payload.source,
                 preflight=lambda: import_admin_tournament_registrations_to_draw(supabase, **kwargs, dry_run=True),
                 mutate=lambda: import_admin_tournament_registrations_to_draw(supabase, **kwargs),
+                idempotency_key=str(payload.idempotency_key),
+            )
+        except TournamentAdminRecoveryRequiredError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "kind": "uncertain",
+                    "code": "TOURNAMENT_REGISTRATION_IMPORT_RECOVERY_REQUIRED",
+                    "message": str(exc),
+                    "recovery_required": True,
+                    "operation_reference": str(payload.idempotency_key),
+                },
+            ) from exc
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post(
+        "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams/import-registrations/operations/{operation_reference}/reconcile"
+    )
+    def post_admin_tournament_registration_team_import_reconcile(
+        club_id: str,
+        tournament_id: str,
+        draw_id: str,
+        operation_reference: str,
+        payload: AdminTournamentRegistrationImportReconcileRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+            required_permissions=(PERMISSION_MANAGE_TOURNAMENTS,),
+        )
+        try:
+            if str(payload.confirmation_text or "").strip() != REGISTRATION_IMPORT_RECONCILE_CONFIRMATION:
+                raise ValueError(
+                    f"Type {REGISTRATION_IMPORT_RECONCILE_CONFIRMATION} exactly to reconcile this registration import."
+                )
+            return reconcile_admin_tournament_registration_import_operation(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                draw_id=str(draw_id),
+                operation_reference=str(operation_reference),
+                retained_request=payload.retained_request.model_dump(mode="json"),
+                confirmation_text=payload.confirmation_text,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
             )
         except Exception as exc:
             _handle(exc)

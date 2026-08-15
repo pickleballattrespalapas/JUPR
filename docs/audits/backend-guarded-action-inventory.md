@@ -2,7 +2,7 @@
 
 Audit date: 2026-08-13
 
-Audited revision: `dcf08791` baseline, with the no-migration remediation working-tree update described below.
+Audited revision: `dcf08791` baseline, with the guarded-action remediation and forward trigger-function migration working-tree update described below.
 
 Scope: every FastAPI `POST`, `PUT`, `PATCH`, and `DELETE` decorator in `services/api`, its request contract, service-level guard/durability path, Supabase mutation boundary, staging write-wave classification, and likely Next.js consumer.
 
@@ -12,21 +12,21 @@ This document is an evidence inventory, not a claim that every unsafe-method rou
 
 | Measure | Count | Result |
 |---|---:|---|
-| Unsafe-method FastAPI contracts | **196** | Complete AST inventory |
-| `POST` / `PATCH` / `PUT` / `DELETE` | **157 / 30 / 8 / 1** | All enumerated below |
-| Admin-prefixed / public contracts | **165 / 31** | Admin routes resolve authenticated club-scoped access; public routes use task-specific tokens, secrets, identity, and/or anti-abuse controls |
-| Contracts in `OPEN_WRITE_ROUTES` | **196** | Exact match to the AST inventory |
+| Unsafe-method FastAPI contracts | **197** | Complete AST inventory |
+| `POST` / `PATCH` / `PUT` / `DELETE` | **158 / 30 / 8 / 1** | All enumerated below |
+| Admin-prefixed / public contracts | **166 / 31** | Admin routes resolve authenticated club-scoped access; public routes use task-specific tokens, secrets, identity, and/or anti-abuse controls |
+| Contracts in `OPEN_WRITE_ROUTES` | **197** | Exact match to the AST inventory |
 | Missing from staging write-wave manifest | **0** | Pass |
 | Stale/extra manifest entries | **0** | Pass |
 | Additional named-wave assignments beyond each route's primary assignment | **12** | Intentional overlap across 10 route contracts is listed below |
-| Request contracts carrying a typed-confirmation field | **134** | Post-remediation count; one is a preview request where the field is not required; apply-mode dry runs bypass phrases intentionally |
-| Request contracts carrying expected-state/CAS input | **98** | Post-remediation count; some additional guarded families derive a server-side fingerprint |
-| Request contracts carrying an idempotency/operation key | **104** | Post-remediation count; some tournament operations derive a deterministic server-side operation key |
-| Contracts carrying neither direct CAS nor a client replay key | **58** | Post-remediation count; includes the four proof-only reconciliation requests, read-only previews/resolvers, and action-level gaps; it does **not** mean 58 unprotected writes |
+| Request contracts carrying a typed-confirmation field | **135** | Post-remediation count; one is a preview request where the field is not required; apply-mode dry runs bypass phrases intentionally |
+| Request contracts carrying expected-state/CAS input | **99** | Post-remediation count; nested retained requests are included, and some additional guarded families derive a server-side fingerprint |
+| Request contracts carrying an idempotency/operation key | **105** | Post-remediation count; nested retained requests are included, and some tournament operations derive a deterministic server-side operation key |
+| Contracts carrying neither direct CAS nor a client replay key | **58** | Post-remediation count; includes four proof-only reconciliation requests, read-only previews/resolvers, and action-level gaps; it does **not** mean 58 unprotected writes |
 
 ### Verdict
 
-There is **no externally exposed route that bypasses the global environment/write-wave boundary** in the audited tree. `StagingWriteWaveMiddleware` is fail-closed for every unsafe method, production writes remain disabled unless explicitly enabled, and the checked-in open-wave manifest covers all 196 contracts exactly (`services/api/middleware.py`, `scripts/staging_write_waves.py`, `tests/test_staging_write_wave_guards.py`, `tests/test_permanent_staging_write_mode.py`).
+There is **no externally exposed route that bypasses the global environment/write-wave boundary** in the audited tree. `StagingWriteWaveMiddleware` is fail-closed for every unsafe method, production writes remain disabled unless explicitly enabled, and the checked-in open-wave manifest covers all 197 contracts exactly (`services/api/middleware.py`, `scripts/staging_write_waves.py`, `tests/test_staging_write_wave_guards.py`, `tests/test_permanent_staging_write_mode.py`).
 
 The strongest mutation families already meet most of the interaction standard: live-ladder operations, tournament guarded operations, direct match entry, replay/exclusion recovery, team competition, and public live writes use combinations of compare-and-swap, stable operation identity, durable intent/completion rows, atomic RPCs, audit evidence, and explicit reconciliation.
 
@@ -44,11 +44,12 @@ The following changes are implemented in the working tree using the existing pri
 | `BE-073` / `BE-074` | **Implemented** | Backend validates `COMPLETE SESSION` / `PUBLISH MATCHES` before operation claim, and the phrase participates in the existing durable request fingerprint. | No schema work remains for this finding. Routine generator mutations `BE-067`–`BE-072` remain documented phrase exceptions unless product classifies them as guarded consequences. |
 | `BE-081` / `BE-082` / `BE-083` / `BE-194` | **Implemented with residual** | Create now requires idempotency. Player and league-rating edits return a canonical state fingerprint, require the reviewed fingerprint plus idempotency, use CAS filters, replay an exact completed request before current-state rejection, and expose authenticated inspection plus proof-only `RECONCILE PLAYER OPERATION`. `BE-083` retains `SAVE LEAGUE RATING`. | Domain row, completion audit, and ledger completion are separate transactions. Required-audit failure becomes recovery-required; a player-editor RPC is deferred. |
 | `BE-111` / `BE-113` | **Implemented** | Backend now validates `SAVE PAYMENT STATUS` / `SAVE FULFILLMENT STATUS`, and the phrase is included in the existing commerce RPC request fingerprint. | Existing commerce RPC atomicity/idempotency remains authoritative; no migration is needed. |
+| `BE-118` / `BE-197` | **Implemented with residual** | Registration import now requires a browser UUID, retains the exact reviewed request in tab-scoped storage, returns structured uncertainty, and exposes authenticated proof-only `RECONCILE REGISTRATION IMPORT`. An exact-request tombstone uses the existing unique client-key constraint to prevent a late original request from mutating after an absent lookup; a competing original `intent` remains locked until it settles. | The atomic team-write RPC and the private guarded-operation/audit ledger are separate transactions. Reconciliation never reruns the import and refuses to close a normal empty `recovery_required` row from a momentary readback; that state needs future commit-fence evidence or manual recovery. |
 | `BE-184` | **Partially implemented; abuse control deferred** | Request contract carries a stable key; recipient/tournament/registration is deduplicated in a privacy-safe 15-minute server bucket; a durable delivery intent/receipt suppresses repeat delivery and provider-uncertain resend within that bucket; the public response remains non-enumerating. | Client-IP rate limiting, longer-lived exact-key replay, and provider receipt reconciliation need an approved rate-limit store/schema/provider contract. Provider acceptance and ledger completion are necessarily separate. |
 
 ## Audit method and stable IDs
 
-The inventory was generated from Python AST traversal of all route modules beneath `services/api`, then statically traced through request models and imported `jupr_app/services` functions. The original filename/line traversal IDs `BE-001` through `BE-192` are preserved unchanged. The four newly registered reconciliation contracts are appended as `BE-193` through `BE-196`; future routes must continue appending rather than renumbering existing rows.
+The inventory was generated from Python AST traversal of all route modules beneath `services/api`, then statically traced through request models and imported `jupr_app/services` functions. The original filename/line traversal IDs `BE-001` through `BE-192` are preserved unchanged. Five registered reconciliation contracts are appended as `BE-193` through `BE-197`; future routes must continue appending rather than renumbering existing rows.
 
 The following are deliberately separate concepts:
 
@@ -71,7 +72,7 @@ The table reports fields visible in the HTTP request contract. A dash in the CAS
 3. staging writes are rejected unless the exact `(method, route-template)` belongs to the active wave;
 4. route templates, not caller-supplied concrete URLs, are compared.
 
-`scripts/staging_write_waves.py` is the authoritative classification. Its `open` manifest contains all 196 audited contracts. `tests/test_staging_write_wave_guards.py:40-65` checks the manifest against registered unsafe routes and rejects both omissions and stale entries. `tests/test_permanent_staging_write_mode.py` enforces the intended open staging posture. `fly.staging.toml` configures that posture, while the following high-risk capabilities stay independently disabled unless explicitly enabled:
+`scripts/staging_write_waves.py` is the authoritative classification. Its `open` manifest contains all 197 audited contracts. `tests/test_staging_write_wave_guards.py:40-65` checks the manifest against registered unsafe routes and rejects both omissions and stale entries. `tests/test_permanent_staging_write_mode.py` enforces the intended open staging posture. `fly.staging.toml` configures that posture, while the following high-risk capabilities stay independently disabled unless explicitly enabled:
 
 - `JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL`
 - `JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION`
@@ -93,7 +94,7 @@ Ten contracts have more than one named-wave assignment: `BE-025` through `BE-029
 | Player editor/social/rating: `BE-075`–`BE-083`, `BE-194` | `jupr_app/services/admin_player_merge_service.py`, `admin_player_editor_service.py`, `admin_player_social_identity_service.py`, `admin_player_league_rating_service.py` | Merge/social link paths are guarded; remediated create/edit/rating paths add idempotency and reviewed-state CAS | Merge has compensation and replay-evidence recovery; `BE-194` resolves uncertain basic player/rating operations only from frozen evidence and authoritative state, while integrated SQL audit atomicity remains deferred | Stronger; `BE-081`–`BE-083`/`BE-194` application guards and exact recovery complete with atomic-RPC residual |
 | Communications: `BE-084`–`BE-091`, `BE-158`–`BE-160`, `BE-184`, `BE-192` | `jupr_app/services/admin_communications_service.py`, `admin_weekly_recap_service.py`, public email/edit-link/verification services | Admin batches use operation/fingerprint/expected row state; remediated `BE-184` adds a caller key plus recipient-scoped delivery dedupe | Admin send/retry distinguishes uncertain delivery; `BE-184` records delivery intent/receipt and suppresses uncertain resend within the 15-minute business bucket; IP throttling, longer replay, and provider reconciliation remain deferred | Mixed; `BE-184` duplicate delivery mitigated, abuse-control residual remains |
 | Team leagues/competition: `BE-094`–`BE-100`, `BE-144`–`BE-156`, `BE-177`–`BE-178`, `BE-188`–`BE-191` | `jupr_app/services/team_league_service.py`, tournament team competition services and SQL RPCs | Expected versions/fingerprints and idempotency on consequential writes; public invitation/team paths use signed tokens and keys | Result/recovery actions are explicit and operation-ledgered; team competition commits use RPCs | Strong overall |
-| Tournament guarded operations: `BE-107`–`BE-157` (except semantically read-only previews) | `jupr_app/services/admin_tournament_guarded_operation.py`; `supabase/migrations/20260719204700_tournament_operations_guard_surface.sql`; domain-specific tournament services/RPC migrations | Reviewed expected state is checked before and after lock; active scope lock; request fingerprint; client or deterministic server idempotency | Intent/completion/failure operation rows; preflight; audit; reconcile/recovery; surface-scoped operation table supports `tournament`, `setup`, `registration`, `import_handoff`, `tournament_live`, `operations` | Strong core; commerce status updates and a few legacy mutations have UI/confirmation consistency gaps |
+| Tournament guarded operations: `BE-107`–`BE-157`, `BE-197` (except semantically read-only previews) | `jupr_app/services/admin_tournament_guarded_operation.py`; `jupr_app/services/admin_tournament_registration_import_recovery_service.py`; `supabase/migrations/20260719204700_tournament_operations_guard_surface.sql`; domain-specific tournament services/RPC migrations | Reviewed expected state is checked before and after lock; active scope lock; request fingerprint; client or deterministic server idempotency; `BE-197` reserves an exact-request tombstone before treating an absent operation as not applied | Intent/completion/failure operation rows; preflight; audit; reconcile/recovery; surface-scoped operation table supports `tournament`, `setup`, `registration`, `import_handoff`, `tournament_live`, `operations` | Strong core; completed/stored-result and tombstone recovery never repeat the write; an empty normal recovery remains safely locked pending commit-fence or manual evidence |
 | Public Live and public generators: `BE-161`–`BE-165`, `BE-168`–`BE-175` | `jupr_app/services/public_live_write_service.py`, `public_play_generator_service.py` | Edit token + expected version + idempotency on writes; request scope/rate controls | Uses guarded operation paths rather than browser-supplied Supabase authority | Strong for anonymous/public mutation |
 | Public intake and tournament registration: `BE-167`, `BE-176`, `BE-179`–`BE-187` | public route modules and registration/pairing/support services | Edit/confirmation tokens and expected selection versions exist where updating; several create/email routes expose no client replay key | Business-key dedupe exists in some services, but the HTTP contract does not consistently preserve an exact request identity | Mixed; retry-sensitive routes require follow-up |
 
@@ -123,7 +124,7 @@ This mapping is based on API client calls and route/component names. It is a sta
 | `BE-101`–`BE-106` | Admin Tools | `apps/web/app/admin/tools` |
 | `BE-107`–`BE-113` | Tournament Commerce | `apps/web/app/admin/tournaments/commerce/TournamentCommercePanel.tsx` |
 | `BE-114`–`BE-115` | Tournament Live | `apps/web/app/admin/tournament-live/TournamentLivePanel.tsx` |
-| `BE-116`–`BE-137` | Tournament draw/results/publish/status, registration editor/bulk | `apps/web/app/admin/tournaments`, including `bulk/BulkRegistrationPanel.tsx`, `editor/TournamentRegistrationEditorPanel.tsx`, and `registrations/RegistrationManagementPanel.tsx` |
+| `BE-116`–`BE-137`, `BE-197` | Tournament draw/results/publish/status, registration editor/bulk, and import recovery | `apps/web/app/admin/tournaments`, including `ops/TournamentOpsPanel.tsx`, `bulk/BulkRegistrationPanel.tsx`, `editor/TournamentRegistrationEditorPanel.tsx`, and `registrations/RegistrationManagementPanel.tsx` |
 | `BE-138`–`BE-143` | Tournament Setup wizard | `apps/web/app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx` and setup dialogs/cards |
 | `BE-144`–`BE-156` | Team Tournament Competition | `apps/web/app/admin/tournaments/team-competition/TeamTournamentAdminPanel.tsx` |
 | `BE-158`–`BE-160` | Weekly Recap | `apps/web/app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx` |
@@ -348,7 +349,7 @@ The confirmation column is the phrase enforced by the backend, not the wording o
 |---|---|---|---|---|---|
 | BE-116 | `POST /admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws` — `post_admin_tournament_draw` | `CREATE DRAW` | expected_state_fingerprint | — | tournament-operations |
 | BE-117 | `PUT /admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams` — `put_admin_tournament_draw_teams` | `SAVE TEAMS` | expected_state_fingerprint,expected_draw_updated_at | — | tournament-operations |
-| BE-118 | `POST /admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams/import-registrations` — `post_admin_tournament_registration_team_import` | `IMPORT REGISTRATIONS` | expected_state_fingerprint,expected_draw_updated_at | — | tournament-operations |
+| BE-118 | `POST /admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams/import-registrations` — `post_admin_tournament_registration_team_import` | `IMPORT REGISTRATIONS` | expected_state_fingerprint,expected_draw_updated_at | idempotency_key | tournament-operations |
 | BE-119 | `POST /admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams/import-bulk` — `post_admin_tournament_bulk_team_import` | `IMPORT TEAMS` | expected_state_fingerprint,expected_draw_updated_at | — | tournament-operations |
 | BE-120 | `POST /admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/games/round-robin` — `post_admin_tournament_round_robin_games` | `GENERATE GAMES` | expected_state_fingerprint,expected_draw_updated_at,expected_team_versions | — | tournament-operations |
 | BE-121 | `POST /admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/results-import/preview` — `post_admin_tournament_results_import_preview` | — | — | — | tournament-operations |
@@ -504,6 +505,7 @@ These IDs are deliberately appended after the original `BE-001`–`BE-192` inven
 | BE-194 | Player Editor — `POST /admin/clubs/{club_id}/players/editor/operations/{operation_key}/reconcile` — `post_admin_player_editor_operation_reconcile` | `RECONCILE PLAYER OPERATION` | — | — | match-player |
 | BE-195 | Club Social — `POST /admin/clubs/{club_id}/match-log/social/operations/{operation_key}/reconcile` — `post_admin_match_log_social_operation_reconcile` | `RECONCILE SOCIAL MATCH` | — | — | match-player |
 | BE-196 | League Live — `POST /admin/clubs/{club_id}/league-manager/live-operations/{operation_key}/reconcile` — `post_admin_league_live_create_reconcile` | `RECONCILE LIVE SESSION` | — | — | league-live-domain,league-live-submit |
+| BE-197 | Tournament Ops — `POST /admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams/import-registrations/operations/{operation_reference}/reconcile` — `post_admin_tournament_registration_team_import_reconcile` | `RECONCILE REGISTRATION IMPORT` | retained_request.expected_state_fingerprint,retained_request.expected_draw_updated_at | retained_request.idempotency_key | tournament-operations |
 
 ## Action-level findings and required remediation
 
@@ -520,6 +522,7 @@ These IDs are deliberately appended after the original `BE-001`–`BE-192` inven
 | `BE-081` / `BE-082` / `BE-194` | Player create had no replay key; player update had no browser-loaded CAS or replay identity. | **Application guard implemented.** Create requires idempotency. Detail exposes `state_fingerprint`; update requires it plus idempotency, uses field CAS, exact completion replay, and durable recovery state. `BE-194` requires `RECONCILE PLAYER OPERATION` and proves create/edit results from frozen evidence plus authoritative state. | **Deferred migration:** player row + audit/receipt are not one SQL transaction. Routine Create/Edit intentionally has no typed phrase. |
 | `BE-083` / `BE-194` | Rating edit had a phrase but no reviewed state or retry identity. | **Application guard implemented.** League-rating detail exposes `state_fingerprint`; update requires it plus idempotency and `SAVE LEAGUE RATING`, applies CAS, and supports exact replay. `BE-194` also reconciles this workflow from the planned rating evidence and authoritative row. | **Deferred migration:** rating row + audit/receipt are not one SQL transaction. |
 | `BE-074` | Official match publication lacked backend proof of consequence confirmation. | **Complete.** `PUBLISH MATCHES` is validated before claim and included in the existing durable request fingerprint. | No schema residual. |
+| `BE-118` / `BE-197` | A registration-import response loss left the browser without a safe retry or authoritative way to distinguish completion from non-application. | **Application guard implemented.** The browser creates and tab-persists one UUID plus the exact reviewed import request before send. Structured uncertainty retains that request. `BE-197` requires `RECONCILE REGISTRATION IMPORT`, authenticates Tournament Admin authority, and never reruns the import. An absent operation is first serialized against any late original by inserting the exact same-key/fingerprint tombstone; an original `intent` that wins remains uncertain until settled. | Team rows are atomically written, but that RPC and the generic operation/audit ledger are separate transactions. Stored result can prove completion and a winning tombstone proves non-start; a normal empty `recovery_required` row stays locked because fingerprint equality cannot fence a late RPC commit. |
 | `BE-026` / `BE-196` | A lost session-create response could create a second active session; compensation could fail. | **Application guard implemented.** Create requires a stable key; intent precedes mutation; exact completion replay and changed-payload rejection are enforced; ambiguous failure is recovery-required. `BE-196` requires `RECONCILE LIVE SESSION` and proves the exact planned session and court state from authoritative storage without rerunning creation. | **Deferred migration:** session + court rows + service audit + operation completion are not one transaction. Existing compensation remains; create-session RPC is preferred. |
 | `BE-184` | Retries could send duplicate edit-link email and the public request was an abuse surface. | **Duplicate-delivery mitigation implemented.** The contract carries a stable key; recipient/tournament/registration gets a privacy-safe 15-minute dedupe receipt; repeat and provider-uncertain requests within that bucket do not resend; the response stays generic. | **Partially deferred:** client-IP rate limiting, longer-lived exact-key replay, and provider reconciliation require approved infrastructure/provider work. |
 
@@ -607,14 +610,14 @@ Every new or remediated consequential write should meet all applicable checks be
 The audit reran a dependency-free AST/manifest check and obtained:
 
 ```text
-unsafe_routes=196 manifest=196 missing=0 stale=0 overlaps=12 open_flags=32
+unsafe_routes=197 manifest=197 missing=0 stale=0 overlaps=12 open_flags=32
 ```
 
 The repository's boundary-equivalent tests are:
 
 ```bash
-# Registered unsafe-method contracts (AST-based in the audit script): 196
-# OPEN_WRITE_ROUTES entries: 196
+# Registered unsafe-method contracts (AST-based in the audit script): 197
+# OPEN_WRITE_ROUTES entries: 197
 # Set comparison: 0 missing, 0 stale
 
 pytest -q tests/test_staging_write_wave_guards.py \
@@ -623,7 +626,7 @@ pytest -q tests/test_staging_write_wave_guards.py \
 
 Result for this exact boundary command: **20 passed**, with one framework deprecation warning.
 
-The no-migration remediation was additionally verified with:
+The targeted application-guard remediation, separate from the forward trigger-function migration, was additionally verified with:
 
 ```bash
 PYTHONPATH=/tmp/jupr-pytest:$PYTHONPATH python -m pytest -q \
@@ -641,6 +644,6 @@ PYTHONPATH=/tmp/jupr-pytest:$PYTHONPATH python -m pytest -q \
 
 Final result for this exact backend-remediation command: **146 passed**, with three pre-existing framework deprecation warnings. It covers the remediated phrase contracts, reviewed-state rejection, exact completed replay, changed-request/key rejection, duplicate email suppression, durable-intent failure, authorization, proof-only reconciliation behavior, Unicode fingerprint parity, and timeout-after-commit ambiguity. It does not prove cross-table SQL atomicity for the explicitly deferred RPC work above.
 
-The final frozen candidate broad run completed with **2796 passed, 9 failed, and 40 warnings**. The exact `dcf08791` baseline completed with **2756 passed, 10 failed, and 40 warnings**. Each of the candidate's nine failures belongs to the baseline's ten-failure set; one baseline failure now passes and no new interaction-standard regression remains. These counts are regression evidence rather than a claim that the repository-wide suite is globally green.
+The final frozen candidate broad run completed with **2835 passed, 9 failed, and 40 warnings**. The exact `dcf08791` baseline completed with **2756 passed, 10 failed, and 40 warnings**. Each of the candidate's nine failures belongs to the baseline's ten-failure set; one baseline failure now passes and no new interaction-standard regression remains. These counts are regression evidence rather than a claim that the repository-wide suite is globally green.
 
-Re-run the AST/manifest comparison whenever a FastAPI route decorator changes. The stable-ID table should be updated in the same pull request; new unsafe routes receive IDs after `BE-196`. The four authenticated operation-inspection routes remain safe-method `GET` contracts; the separately appended proof-only reconciliation routes `BE-193`–`BE-196` are `POST` contracts and therefore raise the unsafe-route and staging-manifest totals from 192 to 196.
+Re-run the AST/manifest comparison whenever a FastAPI route decorator changes. The stable-ID table should be updated in the same pull request; new unsafe routes receive IDs after `BE-197`. Four authenticated operation-inspection routes remain safe-method `GET` contracts; the five separately appended proof-only reconciliation routes `BE-193`–`BE-197` are `POST` contracts and therefore raise the unsafe-route and staging-manifest totals from 192 to 197.
