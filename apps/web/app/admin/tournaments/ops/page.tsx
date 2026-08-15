@@ -9,7 +9,13 @@ function first(value: string | string[] | undefined): string {
 
 export default function AdminTournamentOpsPage({ searchParams }: Props) {
   const tournamentId = first(searchParams?.tournament).trim();
+  const legacyImportTournamentId = first(searchParams?.tournament_id).trim();
   const tournamentName = first(searchParams?.name).trim();
+  if (!tournamentId && legacyImportTournamentId) {
+    const query = new URLSearchParams({ tournament: legacyImportTournamentId });
+    if (tournamentName) query.set("name", tournamentName);
+    redirect(`/admin/tournaments/ops/import?${query.toString()}`);
+  }
   if (!tournamentId) redirect("/admin/tournaments");
   return <TournamentOpsWorkflowPage workflow="all" kicker="Tournament Manager / Operations" title="operations" description="Manage draws, team imports, reviewed results, scoring, playoffs, podiums, awards, and official match publication through recoverable audited operations." tournamentId={tournamentId} tournamentName={tournamentName || null} />;
 }
