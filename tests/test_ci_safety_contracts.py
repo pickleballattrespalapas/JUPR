@@ -13,6 +13,7 @@ def test_api_contract_runs_new_deployment_and_admin_ux_regressions() -> None:
         "tests/test_authenticated_auto_load_contract.py",
         "tests/test_tournament_setup_request_safety_static.py",
         "tests/test_tournament_setup_selection_ux.py",
+        "tests/test_tournament_draw_child_trigger_postgres_compatibility.py",
         "tests/test_ci_safety_contracts.py",
         "tests/test_staging_evidence_automation.py",
         "tests/test_staging_evidence_automation_workflow.py",
