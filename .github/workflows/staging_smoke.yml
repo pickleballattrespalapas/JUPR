@@ -207,7 +207,7 @@ jobs:
         if: always()
         shell: python
         env:
-          EXPECTED_PUBLIC_READ_TESTS: "78"
+          EXPECTED_PUBLIC_READ_TESTS: "79"
           PYTHONPATH: ${{ github.workspace }}
         run: |
           import json

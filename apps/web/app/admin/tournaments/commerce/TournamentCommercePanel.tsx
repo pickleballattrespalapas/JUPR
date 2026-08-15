@@ -987,7 +987,7 @@ export default function TournamentCommercePanel({
 
   return (
     <section data-commerce-form aria-label={`${tournamentName} payments, extras, and fulfillment`} style={{ display: "grid", gap: "1rem" }}>
-      <style>{`[data-commerce-form] label { min-width: 0; } [data-commerce-form] input, [data-commerce-form] select, [data-commerce-form] textarea, [data-commerce-form] button { box-sizing: border-box; max-width: 100%; } [data-commerce-form] summary { cursor: pointer; }`}</style>
+      <style>{`[data-commerce-form] label { min-width: 0; } [data-commerce-form] input, [data-commerce-form] select, [data-commerce-form] textarea, [data-commerce-form] button { box-sizing: border-box; max-width: 100%; } [data-commerce-form] summary { cursor: pointer; } [data-commerce-form] [data-operation-evidence-trigger]:focus { outline: 3px solid #60a5fa; outline-offset: 2px; }`}</style>
 
       <InteractionDialog
         open={operationEvidenceOpen}
@@ -2549,6 +2549,7 @@ export default function TournamentCommercePanel({
                               <button
                                 type="button"
                                 aria-haspopup="dialog"
+                                data-operation-evidence-trigger
                                 onClick={(event) =>
                                   openOperationEvidence(
                                     operationId,
