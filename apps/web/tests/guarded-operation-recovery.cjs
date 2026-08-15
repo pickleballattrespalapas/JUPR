@@ -50,5 +50,15 @@ assert.match(tournamentCommerce, /const key = crypto\.randomUUID\(\);/, "Tournam
 assert.doesNotMatch(tournamentCommerce, /`commerce:\$\{crypto\.randomUUID\(\)\}`/, "Tournament Commerce must not prefix UUID operation keys");
 assert.equal((tournamentCommerce.match(/stableOperationKey\(operationScope, request\)/g) || []).length, 4, "Every guarded Tournament Commerce write must use the stable canonical UUID key helper");
 assert.equal((tournamentCommerce.match(/clearOperationKey\(operationScope, idempotencyKey\)/g) || []).length, 4, "Every confirmed Tournament Commerce write must release its completed operation key");
+assert.match(tournamentCommerce, /<InteractionDialog[\s\S]*open=\{operationEvidenceOpen\}[\s\S]*phase=\{operationEvidenceLoading \? "working" : operationEvidenceError \? "error" : "ready"\}[\s\S]*title="Authoritative evidence"/, "Tournament Commerce must open inspected authoritative evidence in the shared dialog with visible loading and error phases");
+assert.match(tournamentCommerce, /data-dialog-focus/, "Tournament Commerce evidence dialog must receive deterministic initial focus");
+assert.match(tournamentCommerce, /returnFocusRef=\{operationEvidenceReturnFocusRef\}/, "Tournament Commerce evidence dialog must return focus to the exact Inspect trigger");
+assert.match(tournamentCommerce, /onRequestClose=\{closeOperationEvidence\}/, "Tournament Commerce evidence dialog must close through shared dialog semantics");
+assert.match(tournamentCommerce, /aria-haspopup="dialog"/, "Tournament Commerce Inspect controls must announce that they open a dialog");
+assert.match(tournamentCommerce, /Loading authoritative evidence…/, "Tournament Commerce evidence dialog must communicate read progress");
+assert.match(tournamentCommerce, /Evidence could not be loaded\./, "Tournament Commerce evidence dialog must retain read failures in the dialog");
+assert.match(tournamentCommerce, /onClick=\{\(\) => void inspectOperation\(operationEvidenceId\)\}/, "Tournament Commerce evidence dialog must offer a safe read-only retry");
+assert.doesNotMatch(tournamentCommerce, /\{operationEvidence\s*\?\s*\(\s*<article/, "Tournament Commerce must not place inspected evidence in an inline article");
+assert.equal((tournamentCommerce.match(/<h2[^>]*>Authoritative evidence<\/h2>/g) || []).length, 0, "Tournament Commerce must not render authoritative evidence inline below the operation list");
 
 console.log("Guarded operation recovery contracts passed.");

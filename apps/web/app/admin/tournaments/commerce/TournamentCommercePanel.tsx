@@ -4,7 +4,12 @@ import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
 
 import { ConfirmAction } from "@/components/ConfirmAction";
-import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
+import {
+  actionSuccess,
+  actionUncertain,
+  InteractionDialog,
+  type ActionCompletion
+} from "@/components/interaction";
 import {
   adminTournamentCommerceExportUrl,
   AdminTournamentCommerceDetail,
@@ -204,6 +209,11 @@ export default function TournamentCommercePanel({
   >({});
   const [operationEvidence, setOperationEvidence] =
     useState<Record<string, unknown> | null>(null);
+  const [operationEvidenceOpen, setOperationEvidenceOpen] = useState(false);
+  const [operationEvidenceLoading, setOperationEvidenceLoading] = useState(false);
+  const [operationEvidenceError, setOperationEvidenceError] = useState<string | null>(null);
+  const [operationEvidenceId, setOperationEvidenceId] = useState("");
+  const operationEvidenceReturnFocusRef = useRef<HTMLElement | null>(null);
   const operationKeysRef = useRef(new Map<string, { fingerprint: string; key: string }>());
 
   function stableOperationKey(scope: string, request: Record<string, unknown>): string {
@@ -308,6 +318,10 @@ export default function TournamentCommercePanel({
     setDraft(null);
     setCatalogReviewed(false);
     setOperationEvidence(null);
+    setOperationEvidenceOpen(false);
+    setOperationEvidenceLoading(false);
+    setOperationEvidenceError(null);
+    setOperationEvidenceId("");
     if (!tournamentId || !accessToken) return;
     setBusy(true);
     setMessage(null);
@@ -921,6 +935,9 @@ export default function TournamentCommercePanel({
   }
 
   async function inspectOperation(operationId: string) {
+    setOperationEvidenceLoading(true);
+    setOperationEvidenceError(null);
+    setOperationEvidence(null);
     setBusy(true);
     const response = await getAdminTournamentCommerceOperation(
       clubId,
@@ -929,12 +946,27 @@ export default function TournamentCommercePanel({
       accessToken
     );
     setBusy(false);
+    setOperationEvidenceLoading(false);
     if (response.error || !response.data) {
-      setMessage(response.error || "Unable to inspect operation.");
+      setOperationEvidenceError(response.error || "Unable to inspect operation.");
       return;
     }
     setOperationEvidence(response.data);
-    setMessage("Loaded authoritative recovery evidence.");
+  }
+
+  function openOperationEvidence(operationId: string, trigger: HTMLElement) {
+    operationEvidenceReturnFocusRef.current = trigger;
+    setOperationEvidenceId(operationId);
+    setOperationEvidenceOpen(true);
+    void inspectOperation(operationId);
+  }
+
+  function closeOperationEvidence() {
+    if (operationEvidenceLoading) return;
+    setOperationEvidenceOpen(false);
+    setOperationEvidence(null);
+    setOperationEvidenceError(null);
+    setOperationEvidenceId("");
   }
 
   useAuthenticatedAutoLoad(`${accessToken}\u0000${tournamentId}`, loadWorkspace);
@@ -957,7 +989,78 @@ export default function TournamentCommercePanel({
     <section data-commerce-form aria-label={`${tournamentName} payments, extras, and fulfillment`} style={{ display: "grid", gap: "1rem" }}>
       <style>{`[data-commerce-form] label { min-width: 0; } [data-commerce-form] input, [data-commerce-form] select, [data-commerce-form] textarea, [data-commerce-form] button { box-sizing: border-box; max-width: 100%; } [data-commerce-form] summary { cursor: pointer; }`}</style>
 
-
+      <InteractionDialog
+        open={operationEvidenceOpen}
+        phase={operationEvidenceLoading ? "working" : operationEvidenceError ? "error" : "ready"}
+        title="Authoritative evidence"
+        description="Read-only recovery details for the selected commerce operation."
+        returnFocusRef={operationEvidenceReturnFocusRef}
+        onRequestClose={closeOperationEvidence}
+        actions={operationEvidenceError ? (
+          <>
+            <button type="button" onClick={closeOperationEvidence} style={ghostButtonStyle}>
+              Close
+            </button>
+            <button
+              type="button"
+              onClick={() => void inspectOperation(operationEvidenceId)}
+              style={buttonStyle}
+            >
+              Retry
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={closeOperationEvidence}
+            disabled={operationEvidenceLoading}
+            style={buttonStyle}
+          >
+            {operationEvidenceLoading ? "Loading…" : "OK"}
+          </button>
+        )}
+      >
+        <div tabIndex={-1} data-dialog-focus>
+          {operationEvidenceLoading ? (
+            <p role="status">Loading authoritative evidence…</p>
+          ) : operationEvidenceError ? (
+            <div role="alert" style={{ color: "#b91c1c" }}>
+              <strong>Evidence could not be loaded.</strong>
+              <p>{operationEvidenceError}</p>
+            </div>
+          ) : operationEvidence ? (
+            <dl
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fit, minmax(min(100%, 180px), 1fr))",
+                gap: "0.75rem"
+              }}
+            >
+              <div>
+                <dt>Recovery state</dt>
+                <dd>{stringValue(operationEvidence, "recovery_state", "—")}</dd>
+              </div>
+              <div>
+                <dt>Mutation complete</dt>
+                <dd>
+                  {Boolean(operationEvidence.authoritative_mutation_complete)
+                    ? "Yes"
+                    : "No"}
+                </dd>
+              </div>
+              <div>
+                <dt>Safe retry</dt>
+                <dd>{Boolean(operationEvidence.safe_retry) ? "Yes" : "No"}</dd>
+              </div>
+              <div>
+                <dt>Retry mode</dt>
+                <dd>{stringValue(operationEvidence, "retry_mode", "—")}</dd>
+              </div>
+            </dl>
+          ) : null}
+        </div>
+      </InteractionDialog>
       {detail && draft ? (
         <>
           <nav
@@ -2445,8 +2548,12 @@ export default function TournamentCommercePanel({
                             <td>
                               <button
                                 type="button"
-                                onClick={() =>
-                                  void inspectOperation(operationId)
+                                aria-haspopup="dialog"
+                                onClick={(event) =>
+                                  openOperationEvidence(
+                                    operationId,
+                                    event.currentTarget
+                                  )
                                 }
                                 disabled={busy}
                                 style={ghostButtonStyle}
@@ -2464,49 +2571,6 @@ export default function TournamentCommercePanel({
                   <p>No commerce operations are recorded.</p>
                 ) : null}
               </article>
-
-              {operationEvidence ? (
-                <article style={cardStyle}>
-                  <h2 style={{ marginTop: 0 }}>Authoritative evidence</h2>
-                  <dl
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns:
-                        "repeat(auto-fit, minmax(min(100%, 180px), 1fr))",
-                      gap: "0.75rem"
-                    }}
-                  >
-                    <div>
-                      <dt>Recovery state</dt>
-                      <dd>
-                        {stringValue(operationEvidence, "recovery_state", "—")}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Mutation complete</dt>
-                      <dd>
-                        {Boolean(
-                          operationEvidence.authoritative_mutation_complete
-                        )
-                          ? "Yes"
-                          : "No"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Safe retry</dt>
-                      <dd>
-                        {Boolean(operationEvidence.safe_retry) ? "Yes" : "No"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Retry mode</dt>
-                      <dd>
-                        {stringValue(operationEvidence, "retry_mode", "—")}
-                      </dd>
-                    </div>
-                  </dl>
-                </article>
-              ) : null}
 
               <article style={cardStyle}>
                 <h2 style={{ marginTop: 0 }}>Recent audit trail</h2>
