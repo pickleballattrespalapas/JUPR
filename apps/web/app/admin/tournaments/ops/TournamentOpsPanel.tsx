@@ -178,6 +178,11 @@ export default function TournamentOpsPanel({
     return payload.operation_key ? ` Operation ${payload.operation_key.slice(0, 12)} recorded.` : "";
   }
 
+  function warningSuffix(payload: AdminTournamentWriteResponse): string {
+    const warnings = (payload.warnings || []).map((warning) => String(warning || "").trim()).filter(Boolean);
+    return warnings.length ? ` ${warnings.join(" ")}` : "";
+  }
+
   function resetTeamEditor(nextSnapshot: AdminTournamentOpsSnapshotResponse | null, drawId: string) {
     setTeamRows(teamRowsFromTeams(nextSnapshot?.teams || [], drawId));
   }
@@ -280,11 +285,12 @@ export default function TournamentOpsPanel({
         body: JSON.stringify({ import_mode: registrationImportMode, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_import_registrations" })
       });
       const importedCount = payload.updated_count ?? payload.teams?.length ?? 0;
-      const completion = actionSuccess("Registration teams imported", `${importedCount} registration team${importedCount === 1 ? " was" : "s were"} imported.`);
+      const importWarning = warningSuffix(payload);
+      const completion = actionSuccess("Registration teams imported", `${importedCount} registration team${importedCount === 1 ? " was" : "s were"} imported.${importWarning}`);
       if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
       if (!actionRequest.isCurrent(generation)) return completion;
-      setMessage(`Imported ${payload.updated_count ?? payload.teams?.length ?? 0} registration team(s) with ${payload.import_mode || registrationImportMode} mode.${operationSuffix(payload)}`);
+      setMessage(`Imported ${payload.updated_count ?? payload.teams?.length ?? 0} registration team(s) with ${payload.import_mode || registrationImportMode} mode.${importWarning}${operationSuffix(payload)}`);
       return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to import registrations.");

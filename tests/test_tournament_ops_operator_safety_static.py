@@ -73,3 +73,12 @@ def test_tournament_ops_workflow_header_preserves_phase_and_tournament_context()
     assert "TournamentOpsPanel" in page
     assert "initialTournamentId={tournamentId}" in page
     assert "operationsWriteReady" not in page
+
+
+def test_registration_import_surfaces_excluded_needs_partner_warning_in_success_result() -> None:
+    panel = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
+
+    assert "function warningSuffix(payload: AdminTournamentWriteResponse)" in panel
+    assert "const importWarning = warningSuffix(payload);" in panel
+    assert 'actionSuccess("Registration teams imported"' in panel
+    assert 'imported.${importWarning}`' in panel
