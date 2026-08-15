@@ -149,6 +149,20 @@ def test_flexible_bundles_and_extra_option_guidance_are_present() -> None:
     assert "EVENT_CHOICE" in migration
 
 
+def test_admin_commerce_write_keys_match_the_backend_uuid_contract() -> None:
+    panel = read_web("app/admin/tournaments/commerce/TournamentCommercePanel.tsx")
+    commerce_service = read_root(
+        "jupr_app/services/public_tournament_commerce_service.py"
+    )
+
+    assert "const key = crypto.randomUUID();" in panel
+    assert "`commerce:${crypto.randomUUID()}`" not in panel
+    assert panel.count("stableOperationKey(operationScope, request)") == 4
+    assert panel.count("clearOperationKey(operationScope, idempotencyKey)") == 4
+    assert 'field="idempotency_key"' in commerce_service
+    assert "must be a valid UUID" in commerce_service
+
+
 def test_review_has_actionable_blocked_change_resolution() -> None:
     panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
     page = read_web("app/admin/tournaments/setup/TournamentSetupWizardPage.tsx")

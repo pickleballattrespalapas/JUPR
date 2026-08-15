@@ -45,4 +45,10 @@ assert.match(teamLeagues, /do not repeat the completed action/, "Team League ref
 assert.equal((teamLeagues.match(/await refreshAfterConfirmedWrite\(/g) || []).length, 6, "Every Team League mutation with a follow-up refresh must preserve its confirmed success");
 assert.doesNotMatch(teamLeagues, /await (?:onSaved|refreshDetail)\(\);/, "Team League mutations must not let a follow-up refresh reject after a confirmed write");
 
+const tournamentCommerce = fs.readFileSync(path.join(webRoot, "app", "admin", "tournaments", "commerce", "TournamentCommercePanel.tsx"), "utf8");
+assert.match(tournamentCommerce, /const key = crypto\.randomUUID\(\);/, "Tournament Commerce must send a canonical UUID operation key accepted by the API");
+assert.doesNotMatch(tournamentCommerce, /`commerce:\$\{crypto\.randomUUID\(\)\}`/, "Tournament Commerce must not prefix UUID operation keys");
+assert.equal((tournamentCommerce.match(/stableOperationKey\(operationScope, request\)/g) || []).length, 4, "Every guarded Tournament Commerce write must use the stable canonical UUID key helper");
+assert.equal((tournamentCommerce.match(/clearOperationKey\(operationScope, idempotencyKey\)/g) || []).length, 4, "Every confirmed Tournament Commerce write must release its completed operation key");
+
 console.log("Guarded operation recovery contracts passed.");

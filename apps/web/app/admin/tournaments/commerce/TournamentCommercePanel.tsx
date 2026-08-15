@@ -210,7 +210,7 @@ export default function TournamentCommercePanel({
     const fingerprint = JSON.stringify(request);
     const pending = operationKeysRef.current.get(scope);
     if (pending?.fingerprint === fingerprint) return pending.key;
-    const key = `commerce:${crypto.randomUUID()}`;
+    const key = crypto.randomUUID();
     operationKeysRef.current.set(scope, { fingerprint, key });
     return key;
   }
