@@ -5,6 +5,7 @@ import math
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.tournament_registration_repo import (
@@ -824,6 +825,10 @@ def build_admin_tournament_registration_import_handoff(
         for row in detail.get("registrations") or []
         if str(row.get("registration_status") or "").lower() == "confirmed"
     ]
+    ops_query = {"tournament": str(tournament_id)}
+    tournament_name = _clean_text(detail["tournament"].get("name"), limit=200)
+    if tournament_name:
+        ops_query["name"] = tournament_name
     return {
         "ok": True,
         "mode": "tournament_registration_import_handoff",
@@ -835,7 +840,7 @@ def build_admin_tournament_registration_import_handoff(
         "imported_selection_count": len(imported_selection_ids),
         "imported_selection_ids": imported_selection_ids,
         "direct_import_available": False,
-        "ops_path": f"/admin/tournaments/ops?tournament_id={str(tournament_id)}",
+        "ops_path": f"/admin/tournaments/ops/import?{urlencode(ops_query)}",
         "required_ops_confirmation": "IMPORT REGISTRATIONS",
         "integrity_notice": "Tournament Ops rechecks draw scope, confirmed player links, duplicates, and existing games. Registration Admin cannot bypass those draw-integrity guards.",
     }
