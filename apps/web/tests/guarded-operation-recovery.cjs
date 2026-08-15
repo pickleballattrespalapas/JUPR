@@ -55,6 +55,8 @@ assert.match(tournamentCommerce, /data-dialog-focus/, "Tournament Commerce evide
 assert.match(tournamentCommerce, /returnFocusRef=\{operationEvidenceReturnFocusRef\}/, "Tournament Commerce evidence dialog must return focus to the exact Inspect trigger");
 assert.match(tournamentCommerce, /onRequestClose=\{closeOperationEvidence\}/, "Tournament Commerce evidence dialog must close through shared dialog semantics");
 assert.match(tournamentCommerce, /aria-haspopup="dialog"/, "Tournament Commerce Inspect controls must announce that they open a dialog");
+assert.match(tournamentCommerce, /data-operation-evidence-trigger/, "Tournament Commerce must mark the exact evidence trigger for visible focus restoration");
+assert.match(tournamentCommerce, /\[data-operation-evidence-trigger\]:focus \{ outline: 3px solid #60a5fa; outline-offset: 2px; \}/, "Tournament Commerce must show a blue focus ring after pointer-driven dialog acknowledgement");
 assert.match(tournamentCommerce, /Loading authoritative evidence…/, "Tournament Commerce evidence dialog must communicate read progress");
 assert.match(tournamentCommerce, /Evidence could not be loaded\./, "Tournament Commerce evidence dialog must retain read failures in the dialog");
 assert.match(tournamentCommerce, /onClick=\{\(\) => void inspectOperation\(operationEvidenceId\)\}/, "Tournament Commerce evidence dialog must offer a safe read-only retry");

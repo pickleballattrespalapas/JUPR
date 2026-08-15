@@ -91,7 +91,7 @@ def _run_browser_evidence_validation(
         cwd=tmp_path,
         env={
             **os.environ,
-            "EXPECTED_PUBLIC_READ_TESTS": "78",
+            "EXPECTED_PUBLIC_READ_TESTS": "79",
             "PYTHONPATH": str(ROOT),
         },
     )
@@ -288,17 +288,17 @@ def test_staging_smoke_runs_only_the_strict_public_read_manifest():
     assert tuple(token for token in command[2:] if not token.startswith("--")) == expected_specs
     assert {"--retries=0", "--forbid-only"}.issubset(command)
     assert "PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/public-read-report.json" in workflow
-    assert 'EXPECTED_PUBLIC_READ_TESTS: "78"' in workflow
+    assert 'EXPECTED_PUBLIC_READ_TESTS: "79"' in workflow
     assert "from scripts.run_parity_staging_wave import report_errors" in workflow
     assert "Reject incomplete browser public-read evidence" in workflow
 
 
-def test_staging_smoke_browser_evidence_gate_requires_all_78_clean_tests(
+def test_staging_smoke_browser_evidence_gate_requires_all_79_clean_tests(
     tmp_path: Path,
 ):
     valid = _run_browser_evidence_validation(
         tmp_path,
-        {"stats": {"expected": 78, "skipped": 0, "unexpected": 0, "flaky": 0}},
+        {"stats": {"expected": 79, "skipped": 0, "unexpected": 0, "flaky": 0}},
     )
     assert valid.returncode == 0, valid.stdout + valid.stderr
 
@@ -308,7 +308,7 @@ def test_staging_smoke_browser_evidence_gate_requires_all_78_clean_tests(
     )
     assert incomplete.returncode == 1
     assert "skipped 1 test" in incomplete.stdout
-    assert "requires exactly 78" in incomplete.stdout
+    assert "requires exactly 79" in incomplete.stdout
 
 
 def test_staging_smoke_browser_evidence_gate_fails_when_report_is_missing(
