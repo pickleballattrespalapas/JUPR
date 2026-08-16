@@ -36,8 +36,7 @@ def test_issue_driven_evidence_controller_is_retired() -> None:
     assert "schedule:" not in controller
     assert "workflow_run:" not in controller
     assert "Issue-driven staging evidence orchestration is retired." in controller
-    assert "Staging remains permanently writable for acceptance testing." in controller
-    assert "write_wave=none" not in controller
+    assert "Staging remains read-only at rest with write_wave=none." in controller
     assert "flyctl" not in controller
 
 
@@ -55,11 +54,12 @@ def test_emergency_disable_is_the_only_fixed_none_control() -> None:
     assert "parity-final-evidence.yml" not in recovery
 
 
-def test_normal_fly_deploy_defaults_to_open_and_remains_staging_only() -> None:
+def test_normal_fly_deploy_defaults_to_none_and_remains_staging_only() -> None:
     fly = _read(FLY_PATH)
 
-    assert "|| 'open'" in fly
-    assert 'default: "open"' in fly
+    assert "|| 'none'" in fly
+    assert "|| 'open'" not in fly
+    assert 'default: "none"' in fly
     assert "FLY_APP_NAME: juprleagues-api-staging" in fly
     assert 'test "$EXPECTED_SUPABASE_PROJECT_REF" = "sijpxjxvdtrehmqvirfi"' in fly
     assert "Refusing any Supabase target except isolated staging" in fly

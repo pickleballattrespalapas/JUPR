@@ -13,9 +13,9 @@ ADMIN_WRITE_PILOT_FLAG = "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT"
 def _admin_wave(*flags: str) -> tuple[str, ...]:
     return (ADMIN_WRITE_PILOT_FLAG, *flags)
 
-# Named waves remain available for diagnosis and emergency isolation. The `open`
-# wave is the normal staging posture and enables every reviewed staging mutation
-# gate. Production-only email and public-live override flags remain disabled.
+# Named waves are available only for explicitly approved staging tests. The
+# fail-closed `none` wave is the normal staging posture. `open` enables every
+# reviewed staging mutation gate and must never be selected automatically.
 STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
     NO_WRITE_WAVE: (),
     "public-intake-auth": (
@@ -289,7 +289,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/jupr-live/sessions/{session_key}/publish"),
         ("POST", "/admin/clubs/{club_id}/jupr-live/operations/{operation_key}/reconcile"),
         # Round-Robin Generator and Ladder Generator share the reviewed
-        # permanent-open staging gate while using their own product-facing API.
+        # staging gate while using their own product-facing API.
         ("POST", "/admin/clubs/{club_id}/play-generators/preview"),
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions"),
         ("PATCH", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/scores"),
@@ -481,7 +481,7 @@ def append_github_env(path: Path, *, wave: str) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Configure the Fly staging write posture; open is the permanent test default."
+        description="Configure the Fly staging write posture; none is the fail-closed default."
     )
     parser.add_argument("--wave", required=True, choices=(OPEN_WRITE_WAVE, *tuple(STAGING_WRITE_WAVES)))
     parser.add_argument("--fly-config", type=Path, required=True)

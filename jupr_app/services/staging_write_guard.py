@@ -170,6 +170,6 @@ def require_staging_communications_mutations() -> None:
     if staging_communications_mutations_enabled():
         return
     raise PermissionError(
-        "Communications mutations are disabled. Use permanent-open staging or "
-        f"the communications wave with {COMMUNICATIONS_MUTATION_FLAG}=1."
+        "Communications mutations are disabled. Use the explicitly approved "
+        f"communications staging wave with {COMMUNICATIONS_MUTATION_FLAG}=1."
     )

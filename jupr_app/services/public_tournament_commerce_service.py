@@ -100,8 +100,8 @@ def require_tournament_commerce_mutation_runtime(*, actor_type: str) -> None:
         or not _truthy(MUTATION_FLAG)
     ):
         raise PermissionError(
-            "Tournament commerce writes are disabled. Use permanent-open staging "
-            f"or the approved {expected_wave} wave."
+            "Tournament commerce writes are disabled. Use the explicitly approved "
+            f"{expected_wave} staging wave."
         )
     if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
         raise TournamentCommerceUnavailableError(

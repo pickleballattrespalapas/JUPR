@@ -72,7 +72,7 @@ The table reports fields visible in the HTTP request contract. A dash in the CAS
 3. staging writes are rejected unless the exact `(method, route-template)` belongs to the active wave;
 4. route templates, not caller-supplied concrete URLs, are compared.
 
-`scripts/staging_write_waves.py` is the authoritative classification. Its `open` manifest contains all 197 audited contracts. `tests/test_staging_write_wave_guards.py:40-65` checks the manifest against registered unsafe routes and rejects both omissions and stale entries. `tests/test_permanent_staging_write_mode.py` enforces the intended open staging posture. `fly.staging.toml` configures that posture, while the following high-risk capabilities stay independently disabled unless explicitly enabled:
+`scripts/staging_write_waves.py` is the authoritative classification. Its `open` manifest contains every audited contract, but automatic and at-rest staging use `none`. `tests/test_staging_write_wave_guards.py` checks the manifest against registered unsafe routes and rejects both omissions and stale entries. `tests/test_permanent_staging_write_mode.py` enforces the fail-closed staging posture. `fly.staging.toml` configures that posture, while the following high-risk capabilities stay independently disabled unless explicitly enabled:
 
 - `JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL`
 - `JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION`

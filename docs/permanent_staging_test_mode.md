@@ -1,12 +1,15 @@
-# Permanent staging test mode
+# Fail-closed staging test mode
 
-Staging is intentionally writable at all times for acceptance testing. The former issue-controlled, 60-minute, one-wave-at-a-time lease system is retired.
+Staging is read-only at rest. Automatic deployments must preserve that posture;
+business writes require one explicitly approved, least-privilege wave.
 
 ## Normal staging posture
 
-- `JUPR_STAGING_WRITE_WAVE=open`
-- Every reviewed staging mutation gate is enabled.
-- Public and authenticated staging test flows remain available without reopening a window.
+- `JUPR_STAGING_WRITE_WAVE=none`
+- Every reviewed staging mutation gate is disabled.
+- Read-only public and authenticated staging flows remain available.
+- A manual staging deployment may select one named write wave only for an
+  explicitly approved acceptance action, then must restore `none`.
 - Admin pages continue to require admin authentication.
 - API audit logs, idempotency, transaction guards, recovery locks, and confirmation dialogs remain in place.
 - Email remains `dry_run`; live player-update email is disabled.
@@ -22,6 +25,8 @@ Staging is intentionally writable at all times for acceptance testing. The forme
 
 ## Emergency stop
 
-`Staging Emergency Write Disable` is a manual owner-only workflow that can deploy `write_wave=none`. The next normal staging deployment restores permanent `open` mode.
+`Staging Emergency Write Disable` is a manual owner-only workflow that deploys
+`write_wave=none`. Normal staging deployments also default to `none`; they never
+reopen a business-write wave automatically.
 
 Admin status fetches use no-store responses so pages cannot remain stuck on a previously deployed guarded state. This implementation converted 14 cached admin fetch call(s).

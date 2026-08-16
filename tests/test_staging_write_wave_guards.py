@@ -249,7 +249,7 @@ def test_direct_singles_uploader_gate_opens_only_in_atomic_match_wave() -> None:
         wave for wave, flags in STAGING_WRITE_WAVES.items() if flag in flags
     } == {"match-player"}
     assert expected_write_flags("match-player")[flag] is True
-    assert f'{flag} = "1"' in (ROOT / "fly.staging.toml").read_text(
+    assert f'{flag} = "0"' in (ROOT / "fly.staging.toml").read_text(
         encoding="utf-8"
     )
     assert f'{flag} = "0"' in (ROOT / "fly.toml").read_text(encoding="utf-8")
@@ -279,7 +279,7 @@ def test_match_log_destructive_gate_opens_only_in_atomic_recovery_wave() -> None
         }
         for name in ALL_STAGING_WRITE_FLAGS
     }
-    assert f'{flag} = "1"' in (ROOT / "fly.staging.toml").read_text(
+    assert f'{flag} = "0"' in (ROOT / "fly.staging.toml").read_text(
         encoding="utf-8"
     )
     assert f'{flag} = "0"' in (ROOT / "fly.toml").read_text(encoding="utf-8")
@@ -300,7 +300,7 @@ def test_tournament_commerce_gate_opens_only_in_its_two_reviewed_waves() -> None
     assert expected_write_flags(NO_WRITE_WAVE)[flag] is False
     assert expected_write_flags("public-intake-auth")[flag] is True
     assert expected_write_flags("tournament-commerce-admin")[flag] is True
-    assert f'{flag} = "1"' in (ROOT / "fly.staging.toml").read_text(
+    assert f'{flag} = "0"' in (ROOT / "fly.staging.toml").read_text(
         encoding="utf-8"
     )
     assert f'{flag} = "0"' in (ROOT / "fly.toml").read_text(

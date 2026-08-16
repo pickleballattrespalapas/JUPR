@@ -1,7 +1,7 @@
 name: Deploy FastAPI staging to Fly
 run-name: >-
   Fly staging ·
-  ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'open' }} ·
+  ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'none' }} ·
   ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.expected_candidate_sha || github.sha }}
 
 on:
@@ -31,13 +31,13 @@ on:
         required: true
         default: "tres_palapas"
       write_wave:
-        description: "Staging write posture; open is the permanent testing default"
+        description: "Staging write posture; select a write wave only for an explicitly approved test"
         required: true
         type: choice
-        default: "open"
+        default: "none"
         options:
-          - open
           - none
+          - open
           - public-intake-auth
           - communications
           - match-player
@@ -98,7 +98,7 @@ jobs:
       JUPR_REQUIRE_API_AUDIT_LOG: "1"
       JUPR_REQUIRE_WORKER_RUN_LOG: "1"
       JUPR_SUPABASE_JWT_MODE: jwks
-      JUPR_STAGING_WRITE_WAVE: open
+      JUPR_STAGING_WRITE_WAVE: none
     steps:
       - name: Check out canonical staging
         uses: actions/checkout@v4
@@ -137,7 +137,7 @@ jobs:
       - name: Configure staging write posture
         shell: bash
         env:
-          SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'open' }}
+          SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'none' }}
         run: |
           set -euo pipefail
           python scripts/staging_write_waves.py \

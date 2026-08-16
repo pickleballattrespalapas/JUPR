@@ -48,8 +48,8 @@ def require_public_team_tournament_mutation_runtime() -> None:
         or os.getenv(PUBLIC_INTAKE_WRITE_FLAG, "").strip().lower() not in TRUTHY
     ):
         raise PermissionError(
-            "Four-player team writes are disabled. Use permanent-open staging "
-            f"or the approved {PUBLIC_TEAM_WRITE_WAVE} wave."
+            "Four-player team writes are disabled. Use the explicitly approved "
+            f"{PUBLIC_TEAM_WRITE_WAVE} staging wave."
         )
     if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
         raise RuntimeError(

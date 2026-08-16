@@ -111,15 +111,15 @@ def test_staging_fly_config_is_isolated_and_full_surface():
     assert env["JUPR_WEB_BASE_URL"] == EXPECTED_STAGING_WEB_ORIGIN
     assert env["JUPR_REQUIRE_API_AUDIT_LOG"] == "1"
     assert env["JUPR_REQUIRE_WORKER_RUN_LOG"] == "1"
-    assert env["JUPR_STAGING_WRITE_WAVE"] == "open"
+    assert env["JUPR_STAGING_WRITE_WAVE"] == "none"
     assert {
         name: env[name] == "1" for name in ALL_STAGING_WRITE_FLAGS
-    } == expected_write_flags("open")
+    } == expected_write_flags("none")
     assert all(env.get(name, "0") == "0" for name in ALWAYS_DISABLED_FLAGS)
     assert all(env.get(name) == "1" for name in FULL_NEXT_ADMIN_FLAGS)
     assert env["JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"] == "1"
     assert env["JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"] == "1"
-    assert env["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "1"
+    assert env["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "0"
     assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"] == "0"
     assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"] == "0"
     assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "0"
@@ -172,7 +172,7 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
 
     assert "  push:\n    branches:\n      - staging\n" in workflow
     assert (
-        "SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'open' }}"
+        "SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'none' }}"
         in workflow
     )
     assert "${{ inputs." not in workflow
@@ -242,8 +242,8 @@ def test_staging_deploy_wave_choices_exactly_match_the_code_ledger():
         if line.strip().startswith("- ")
     )
 
-    assert 'default: "open"' in write_wave
-    assert choices[0] == "open"
+    assert 'default: "none"' in write_wave
+    assert choices[0] == "none"
     assert set(choices) == {OPEN_WRITE_WAVE, *STAGING_WRITE_WAVES}
     assert len(choices) == len(STAGING_WRITE_WAVES) + 1
 
