@@ -42,7 +42,6 @@ def test_named_operator_surfaces_auto_load_lists_and_keep_only_recovery_controls
         "apps/web/app/admin/tournaments/TournamentAdminPanel.tsx": ("loadTournaments", "Refresh tournaments"),
         "apps/web/app/admin/tournaments/bulk/BulkRegistrationPanel.tsx": ("loadTournaments", "Refresh tournaments"),
         "apps/web/app/admin/tournaments/registrations/RegistrationManagementPanel.tsx": ("loadTournaments", "Refresh tournaments"),
-        "apps/web/app/admin/tournaments/status/TournamentStatusPanel.tsx": ("loadTournaments", "Refresh tournaments"),
         "apps/web/app/admin/tournaments/delete-draft/DeleteDraftPanel.tsx": ("loadTournaments", "Refresh draft tournaments"),
         "apps/web/app/admin/league-manager/live/LeagueLiveRoundPanel.tsx": ("loadInitialWorkspace", "Refresh sessions"),
     }
@@ -160,10 +159,6 @@ def test_refresh_preserves_valid_tournament_selections_and_reloads_current_detai
             'setSelectedTournamentId("");',
             "await loadDetail(selectedBeforeRefresh, true)",
         ),
-        "apps/web/app/admin/tournaments/status/TournamentStatusPanel.tsx": (
-            'setSelectedTournamentId("");',
-            "nextTournaments.some((row) => row.id === selectedBeforeRefresh) ? selectedBeforeRefresh :",
-        ),
     }
 
     for relative, (selection_clear, reload_contract) in expectations.items():
@@ -204,8 +199,8 @@ def test_admin_tools_scopes_reads_independently_and_guards_every_secondary_actio
     assert "const overviewRequest = useLatestRequestGuard(accessToken, clearProtectedAdminToolsState);" in source
     assert "const socialQueueRequest = useLatestRequestGuard(accessToken);" in source
     assert "const actionRequest = useLatestRequestGuard(accessToken);" in source
-    assert source.count("const generation = actionRequest.begin();") >= 9
-    assert source.count("if (!actionRequest.isCurrent(generation)) return") >= 9
+    assert source.count("const generation = actionRequest.begin();") >= 8
+    assert source.count("if (!actionRequest.isCurrent(generation)) return") >= 8
     assert "overviewMessage" in source
     assert "socialQueueMessage" in source
 

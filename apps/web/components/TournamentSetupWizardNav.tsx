@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
 export type TournamentSetupStep =
   | "basics"
@@ -24,6 +25,7 @@ type Props = {
   currentStep: TournamentSetupStep;
   tournamentId: string;
   tournamentName: string;
+  drawId?: string;
   states?: Partial<Record<TournamentSetupStep, TournamentSetupStepState>>;
 };
 
@@ -137,11 +139,14 @@ export function tournamentSetupDomainForStep(
 export function tournamentSetupStepHref(
   step: TournamentSetupStep,
   tournamentId: string,
-  tournamentName: string
+  tournamentName: string,
+  drawId = ""
 ): string {
-  const params = new URLSearchParams({ tournament: tournamentId });
-  if (tournamentName) params.set("name", tournamentName);
-  return `/admin/tournaments/setup/${step}?${params.toString()}`;
+  return tournamentRouteHref(`/admin/tournaments/setup/${step}`, {
+    tournamentId,
+    tournamentName,
+    drawId
+  });
 }
 
 function stateLabel(state: TournamentSetupStepState | undefined): string | null {
@@ -181,6 +186,7 @@ export default function TournamentSetupWizardNav({
   currentStep,
   tournamentId,
   tournamentName,
+  drawId = "",
   states = {}
 }: Props) {
   const currentDomain = tournamentSetupDomainForStep(currentStep);
@@ -205,7 +211,7 @@ export default function TournamentSetupWizardNav({
           return (
             <li key={domain.key} style={{ minWidth: 0 }}>
               <Link
-                href={tournamentSetupStepHref(domain.steps[0], tournamentId, tournamentName)}
+                href={tournamentSetupStepHref(domain.steps[0], tournamentId, tournamentName, drawId)}
                 aria-current={active ? "step" : undefined}
                 style={{
                   display: "grid",
@@ -282,7 +288,7 @@ export default function TournamentSetupWizardNav({
             return (
               <Link
                 key={step}
-                href={tournamentSetupStepHref(step, tournamentId, tournamentName)}
+                href={tournamentSetupStepHref(step, tournamentId, tournamentName, drawId)}
                 aria-current={active ? "page" : undefined}
                 style={{
                   padding: "0.45rem 0.7rem",

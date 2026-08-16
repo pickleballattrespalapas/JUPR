@@ -22,6 +22,7 @@ import {
   useLatestRequestGuard
 } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
+import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
 type Props = {
   apiBase: string | null;
@@ -29,6 +30,7 @@ type Props = {
   status: AdminTournamentStatusResponse;
   tournamentId: string;
   tournamentName: string;
+  drawId: string;
   registrationId: string;
 };
 
@@ -151,11 +153,10 @@ function selectionEdit(row: AdminTournamentSelection | null): SelectionEdit {
 function selectedHref(
   path: string,
   tournamentId: string,
-  tournamentName: string
+  tournamentName: string,
+  drawId: string
 ): string {
-  const params = new URLSearchParams({ tournament: tournamentId });
-  if (tournamentName) params.set("name", tournamentName);
-  return `${path}?${params.toString()}`;
+  return tournamentRouteHref(path, { tournamentId, tournamentName, drawId });
 }
 function eventLabel(row: Record<string, unknown>): string {
   const family = String(row.event_family_label || "").trim();
@@ -206,6 +207,7 @@ export default function TournamentRegistrantEditPanel({
   status,
   tournamentId,
   tournamentName,
+  drawId,
   registrationId
 }: Props) {
   const { accessToken, loading: sessionLoading } = useAdminSession();
@@ -803,7 +805,8 @@ export default function TournamentRegistrantEditPanel({
           href={selectedHref(
             "/admin/tournaments/registration/registrants",
             tournamentId,
-            tournamentName
+            tournamentName,
+            drawId
           )}
         >
           ← Back to registrations

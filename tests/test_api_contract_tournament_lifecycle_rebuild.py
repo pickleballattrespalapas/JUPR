@@ -57,14 +57,22 @@ def test_lifecycle_phase_overviews_and_subnavigation_exist() -> None:
   assert '"basics"' in setup_entry
   assert 'redirect("/admin/tournaments")' in setup_entry
 
+  registration = read("app/admin/tournaments/registration/page.tsx")
+  assert "TournamentLifecycleOverviewPanel" in registration
+  assert 'redirect("/admin/tournaments")' in registration
+
+  live_shell = read("app/admin/tournaments/live-operations/TournamentLiveRoute.tsx")
+  assert "readTournamentRouteContext" in live_shell
+  assert "initialTournamentId={context.tournamentId}" in live_shell
+  assert "initialDrawId={context.drawId}" in live_shell
+  assert "SelectedTournamentPanelScope" not in live_shell
   for page in (
-      "app/admin/tournaments/registration/page.tsx",
       "app/admin/tournaments/live-operations/page.tsx",
       "app/admin/tournaments/publish/page.tsx",
   ):
       source = read(page)
-      assert "TournamentLifecycleOverviewPanel" in source
-      assert 'redirect("/admin/tournaments")' in source
+      assert "TournamentLiveRoute" in source
+      assert "searchParams={searchParams}" in source
 
   for label in (
       "Tournament basics and policies",
@@ -146,7 +154,8 @@ def test_commerce_is_selected_tournament_only_and_uses_edit_summaries() -> None:
     assert 'savedBundleIds.has(bundle.id) ? "Edit" : "New bundle"' in panel
     assert "draft.variants.length" in panel
     assert "TournamentPhaseNav" in page
-    assert "tournamentId={tournamentId}" in page
+    assert "readTournamentRouteContext(searchParams)" in page
+    assert "tournamentId={context.tournamentId}" in page
 
 
 def test_event_format_is_one_primary_choice_with_a_review_summary() -> None:
@@ -165,7 +174,9 @@ def test_event_format_is_one_primary_choice_with_a_review_summary() -> None:
     assert "Review:" in panel
     assert "friendlyWorkspaceWarning" in panel
     assert "APIError" not in panel
-    assert "initialTournamentId={tournamentId}" in page
+    assert "readTournamentRouteContext(searchParams)" in page
+    assert "initialTournamentId={context.tournamentId}" in page
+    assert "initialDrawId={context.drawId}" in page
     assert 'phase="setup"' in page
 
 
@@ -186,7 +197,7 @@ def test_registration_list_and_edit_are_separate_pages_with_richer_summary() -> 
     assert "← Back to registrations" in edit_panel
     assert "Save registration" in edit_panel
     assert "Save event entry" in edit_panel
-    assert "/admin/tournaments/registration/registrants?" in legacy_page
+    assert 'tournamentRouteHref("/admin/tournaments/registration/registrants", context)' in legacy_page
 
 
 def test_ops_pages_are_selected_tournament_only_without_legacy_selector_shell() -> None:
@@ -204,15 +215,16 @@ def test_ops_pages_are_selected_tournament_only_without_legacy_selector_shell() 
     assert "TournamentPhaseNav" in workflow
 
 
-def test_selected_tournament_legacy_modules_show_one_stable_loading_shell() -> None:
-    scope = read("app/admin/tournaments/SelectedTournamentPanelScope.tsx")
-
-    assert "const [ready, setReady]" in scope
-    assert "hasVisibleTransientText" in scope
-    assert "Loading {tournamentName" in scope
-    assert 'style={{ display: ready ? "block" : "none" }}' in scope
-    assert '"checking admin session"' in scope
-    assert '"loading tournaments"' in scope
+def test_selected_tournament_legacy_dom_scope_is_retired() -> None:
+    assert not (
+        ROOT
+        / "apps"
+        / "web"
+        / "app"
+        / "admin"
+        / "tournaments"
+        / "SelectedTournamentPanelScope.tsx"
+    ).exists()
 
 
 def test_temporary_patch_files_are_retired() -> None:

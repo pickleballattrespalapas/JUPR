@@ -19,6 +19,9 @@ from jupr_app.services.admin_tournament_guarded_operation import (
     StaleTournamentAdminStateError,
     TournamentAdminRecoveryRequiredError,
 )
+from jupr_app.services.admin_tournament_lifecycle_service import (
+    require_admin_tournament_official_publish_readiness,
+)
 from jupr_app.services.admin_tournament_service import (
     TOURNAMENT_SELECT,
     _clean_text,
@@ -790,6 +793,13 @@ def publish_admin_tournament_draw_matches(
     if not draw:
         raise ValueError("draw not found for this tournament")
     _require_team_rating_child_feature(draw)
+    require_admin_tournament_official_publish_readiness(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=clean_tournament_id,
+        draw_id=clean_draw_id,
+        ignore_operation_key=str(guarded_operation_key or "") or None,
+    )
 
     teams = _teams_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     games = _games_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)

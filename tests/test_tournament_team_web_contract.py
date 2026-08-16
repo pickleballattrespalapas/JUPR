@@ -18,7 +18,7 @@ def test_admin_team_tournament_workspace_is_reachable_and_complete():
         "TeamTournamentAdminPanel.tsx"
     )
 
-    assert 'href: "/admin/tournaments/team-competition"' in nav
+    assert '"/admin/tournaments/team-competition"' in nav
     assert "TeamTournamentAdminPanel" in page
     for workflow in (
         "SAVE COMPETITION",
@@ -35,9 +35,11 @@ def test_admin_team_tournament_workspace_is_reachable_and_complete():
         "SAVE TEAM SCORE",
         "RECONCILE TEAM SCORE",
         "SAVE TEAM PODIUM",
-        "PUBLISH TEAM PODIUM",
     ):
         assert workflow in panel
+    assert "Team podium publication is unavailable" in panel
+    assert "PUBLISH TEAM PODIUM" not in panel
+    assert "publish: true" not in panel
     assert "/admin/tournaments/ops/publish" in panel
     assert "useAdminSession" in panel
     assert "useAuthenticatedAutoLoad" in panel
@@ -45,8 +47,9 @@ def test_admin_team_tournament_workspace_is_reachable_and_complete():
     ops_panel = _read(
         "apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx"
     )
-    assert "Four-player rating games" in ops_panel
-    assert "next_team_tournament_child_publish" in ops_panel
+    assert "Official publishing moved" in ops_panel
+    assert "cannot publish official matches or four-player rating children" in ops_panel
+    assert "next_team_tournament_child_publish" not in ops_panel
 
 
 def test_team_tournament_surfaces_are_responsive_and_publicly_discoverable():
@@ -61,7 +64,7 @@ def test_team_tournament_surfaces_are_responsive_and_publicly_discoverable():
 
     assert "@media (max-width: 760px)" in css
     assert "grid-template-columns: 1fr" in css
-    assert "tournament-team-results" in club
+    assert 'href: `${base}/tournaments`' in club
     assert "tournament-team-results" in registration
 
 

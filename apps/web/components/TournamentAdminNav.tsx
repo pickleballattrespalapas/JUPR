@@ -2,6 +2,11 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import {
+  readTournamentRouteContext,
+  tournamentRouteHref,
+  type TournamentRouteContext
+} from "@/lib/tournamentRouteContext";
 import styles from "./TournamentAdminNav.module.css";
 
 type NavigationItem = {
@@ -12,36 +17,15 @@ type NavigationItem = {
 
 const exact = (href: string) => (pathname: string) => pathname === href;
 
-function selectedHref(
-  path: string,
-  tournamentId: string,
-  tournamentName: string
-): string {
-  const params = new URLSearchParams({ tournament: tournamentId });
-  if (tournamentName) params.set("name", tournamentName);
-  return `${path}?${params.toString()}`;
-}
-
-function selectedItems(
-  tournamentId: string,
-  tournamentName: string
-): NavigationItem[] {
+function selectedItems(context: TournamentRouteContext): NavigationItem[] {
   return [
     {
-      href: selectedHref(
-        "/admin/tournaments/tournament",
-        tournamentId,
-        tournamentName
-      ),
+      href: tournamentRouteHref("/admin/tournaments/tournament", context),
       label: "Tournament Home",
       match: exact("/admin/tournaments/tournament")
     },
     {
-      href: selectedHref(
-        "/admin/tournaments/setup",
-        tournamentId,
-        tournamentName
-      ),
+      href: tournamentRouteHref("/admin/tournaments/setup", context),
       label: "Tournament Builder",
       match: (pathname) =>
         pathname === "/admin/tournaments/setup" ||
@@ -50,11 +34,7 @@ function selectedItems(
         pathname === "/admin/tournaments/team-competition"
     },
     {
-      href: selectedHref(
-        "/admin/tournaments/registration",
-        tournamentId,
-        tournamentName
-      ),
+      href: tournamentRouteHref("/admin/tournaments/registration", context),
       label: "Registration",
       match: (pathname) =>
         pathname === "/admin/tournaments/registration" ||
@@ -65,11 +45,7 @@ function selectedItems(
         pathname === "/admin/tournaments/commerce"
     },
     {
-      href: selectedHref(
-        "/admin/tournaments/live-operations",
-        tournamentId,
-        tournamentName
-      ),
+      href: tournamentRouteHref("/admin/tournaments/live-operations", context),
       label: "Live Operations",
       match: (pathname) =>
         pathname === "/admin/tournaments/live-operations" ||
@@ -81,11 +57,7 @@ function selectedItems(
         pathname === "/admin/tournaments/ops/import"
     },
     {
-      href: selectedHref(
-        "/admin/tournaments/publish",
-        tournamentId,
-        tournamentName
-      ),
+      href: tournamentRouteHref("/admin/tournaments/publish", context),
       label: "Publish",
       match: (pathname) =>
         pathname === "/admin/tournaments/publish" ||
@@ -126,9 +98,8 @@ function NavigationLinks({
 export default function TournamentAdminNav() {
   const pathname = usePathname() || "";
   const searchParams = useSearchParams();
-  const tournamentId = String(searchParams.get("tournament") || "").trim();
-  const tournamentName = String(searchParams.get("name") || "").trim();
-  const hasTournament = Boolean(tournamentId);
+  const context = readTournamentRouteContext(searchParams);
+  const hasTournament = Boolean(context.tournamentId);
   const managerItems: NavigationItem[] = [
     {
       href: "/admin/tournaments",
@@ -137,7 +108,7 @@ export default function TournamentAdminNav() {
     }
   ];
   const tournamentItems = hasTournament
-    ? selectedItems(tournamentId, tournamentName)
+    ? selectedItems(context)
     : [];
 
   return (

@@ -1,21 +1,14 @@
 import { redirect } from "next/navigation";
-import TournamentOpsWorkflowPage from "./TournamentOpsWorkflowPage";
+import { readTournamentRouteContext, tournamentRouteHref } from "@/lib/tournamentRouteContext";
+import TournamentLiveRoute from "../live-operations/TournamentLiveRoute";
 
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
-function first(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? String(value[0] || "") : String(value || "");
-}
-
 export default function AdminTournamentOpsPage({ searchParams }: Props) {
-  const tournamentId = first(searchParams?.tournament).trim();
-  const legacyImportTournamentId = first(searchParams?.tournament_id).trim();
-  const tournamentName = first(searchParams?.name).trim();
-  if (!tournamentId && legacyImportTournamentId) {
-    const query = new URLSearchParams({ tournament: legacyImportTournamentId });
-    if (tournamentName) query.set("name", tournamentName);
-    redirect(`/admin/tournaments/ops/import?${query.toString()}`);
+  const context = readTournamentRouteContext(searchParams);
+  const legacyImportTournamentId = String(Array.isArray(searchParams?.tournament_id) ? searchParams?.tournament_id[0] : searchParams?.tournament_id || "").trim();
+  if (!searchParams?.tournament && legacyImportTournamentId) {
+    redirect(tournamentRouteHref("/admin/tournaments/ops/import", context));
   }
-  if (!tournamentId) redirect("/admin/tournaments");
-  return <TournamentOpsWorkflowPage workflow="all" kicker="Tournament Manager / Operations" title="operations" description="Manage draws, team imports, reviewed results, scoring, playoffs, podiums, awards, and official match publication through recoverable audited operations." tournamentId={tournamentId} tournamentName={tournamentName || null} />;
+  return <TournamentLiveRoute searchParams={searchParams} view="podium" phase="live" kicker="Tournament Manager / Live Operations" title="podium draft" description="Generate, explicitly review, and award the podium for the selected tournament draw." />;
 }

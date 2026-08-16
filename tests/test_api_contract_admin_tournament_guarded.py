@@ -4,6 +4,11 @@ from types import SimpleNamespace
 
 from tests.conftest import require_api_dependency
 from tests.test_api_contract_admin_tournament import FakeSupabase, tournament_tables
+from tests.test_admin_tournament_lifecycle_service import (
+    _official_match_for_game,
+    _ready_tables,
+)
+from tests.test_admin_tournament_podium_review_service import podium_review_tables
 
 require_api_dependency("fastapi")
 require_api_dependency("supabase")
@@ -71,8 +76,13 @@ def test_registration_write_has_versioned_audit_lifecycle_and_idempotent_replay(
     ]
 
 
-def test_completed_archive_replays_before_already_archived_preflight(monkeypatch) -> None:
-    tables = tournament_tables()
+def test_ready_archive_is_blocked_before_durable_intent_without_atomic_rpc(monkeypatch) -> None:
+    tables, _ = _ready_tables(monkeypatch)
+    tables["tournaments"][0]["updated_at"] = "2026-03-02T00:00:00Z"
+    tables["matches"] = [
+        _official_match_for_game(tables, game)
+        for game in tables["tournament_games"]
+    ]
     tables["tournament_admin_operations"] = []
     supabase = FakeSupabase(tables)
     _install(monkeypatch, supabase)
@@ -84,24 +94,51 @@ def test_completed_archive_replays_before_already_archived_preflight(monkeypatch
         "confirmation_text": "ARCHIVE",
     }
     client = TestClient(app)
+    audit_count = len(tables["admin_activity_log"])
 
     first = client.patch(
-        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/status-action",
+        "/admin/clubs/club/tournaments/admin/tournaments/tour-1/status-action",
         headers={"Authorization": "Bearer local"},
         json=request,
     )
     replay = client.patch(
-        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/status-action",
+        "/admin/clubs/club/tournaments/admin/tournaments/tour-1/status-action",
         headers={"Authorization": "Bearer local"},
         json=request,
     )
 
-    assert first.status_code == 200, first.text
-    assert replay.status_code == 200, replay.text
-    assert first.json()["idempotent_replay"] is False
-    assert replay.json()["idempotent_replay"] is True
-    assert len(tables["tournament_admin_operations"]) == 1
-    assert tables["tournaments"][0]["status"] == "ARCHIVED"
+    assert first.status_code == 403, first.text
+    assert replay.status_code == 403, replay.text
+    assert "ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE" in first.json()["detail"]
+    assert tables["tournament_admin_operations"] == []
+    assert len(tables["admin_activity_log"]) == audit_count
+    assert tables["tournaments"][0]["status"] == "PUBLISHED"
+
+
+def test_incomplete_archive_is_rejected_by_atomic_commit_gate_before_durable_intent(monkeypatch) -> None:
+    tables = podium_review_tables()
+    tables["tournaments"][0]["updated_at"] = "2026-03-02T00:00:00Z"
+    tables["tournament_admin_operations"] = []
+    supabase = FakeSupabase(tables)
+    _install(monkeypatch, supabase)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS", "1")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "tournament-mutations")
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour-1/status-action",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "action": "archive",
+            "expected_updated_at": "2026-03-02T00:00:00Z",
+            "confirmation_text": "ARCHIVE",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE" in response.json()["detail"]
+    assert tables["tournaments"][0]["status"] == "PUBLISHED"
+    assert tables["tournament_admin_operations"] == []
+    assert tables["admin_activity_log"] == []
 
 
 def test_stale_registration_write_has_no_operation_audit_or_domain_write(monkeypatch) -> None:

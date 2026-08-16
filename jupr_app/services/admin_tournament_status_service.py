@@ -4,7 +4,6 @@ from typing import Any
 from datetime import datetime, timezone
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
-from jupr_app.domain.tournament_registration_repo import archive_tournament, unarchive_tournament
 from jupr_app.services.admin_tournament_service import (
     TOURNAMENT_SELECT,
     _clean_text,
@@ -12,6 +11,10 @@ from jupr_app.services.admin_tournament_service import (
     _tournament_payload,
     is_admin_tournament_admin_enabled,
     is_api_audit_log_required,
+)
+from jupr_app.services.admin_tournament_lifecycle_service import (
+    ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE_CODE,
+    ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE_MESSAGE,
 )
 
 CONFIRM_ARCHIVE = "ARCHIVE"
@@ -28,6 +31,7 @@ def apply_admin_tournament_status_action(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    guarded_operation_key: str | None = None,
     source: str = "next_tournament_admin_status_action",
     dry_run: bool = False,
 ) -> dict[str, Any]:
@@ -49,29 +53,31 @@ def apply_admin_tournament_status_action(
         raise ValueError("Tournament is already archived.")
     if normalized_action == "unarchive" and str(before.get("status") or "").upper() != "ARCHIVED":
         raise ValueError("Only archived tournaments can be unarchived.")
+    if normalized_action == "archive":
+        raise PermissionError(
+            f"{ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE_CODE}: "
+            f"{ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE_MESSAGE}"
+        )
     if dry_run:
         return {"ok": True, "mode": "tournament_status_action_preflight", "dry_run": True, "write_count": 0, "action": normalized_action}
 
+    next_status = "ARCHIVED" if normalized_action == "archive" else "DRAFT"
+    status_update = (
+        supabase.table("tournaments")
+        .update({"status": next_status, "updated_at": datetime.now(timezone.utc).isoformat()})
+        .eq("club_id", str(club_id))
+        .eq("id", clean_tournament_id)
+    )
     if expected_updated_at:
-        next_status = "ARCHIVED" if normalized_action == "archive" else "DRAFT"
-        rows = (
-            supabase.table("tournaments")
-            .update({"status": next_status, "updated_at": datetime.now(timezone.utc).isoformat()})
-            .eq("club_id", str(club_id))
-            .eq("id", clean_tournament_id)
-            .eq("updated_at", str(expected_updated_at))
-            .execute()
-        )
+        status_update = status_update.eq("updated_at", str(expected_updated_at))
+    rows = status_update.execute()
+    if expected_updated_at:
         if not list(getattr(rows, "data", None) or []):
             from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
 
             raise StaleTournamentAdminStateError("Tournament changed after it was loaded. Reload before changing status.")
-    elif normalized_action == "archive":
-        archive_tournament(supabase, clean_tournament_id)
-    else:
-        unarchive_tournament(supabase, clean_tournament_id)
 
-    after = _first_row(supabase, "tournaments", TOURNAMENT_SELECT, key="id", value=clean_tournament_id) or {**before, "status": "ARCHIVED" if normalized_action == "archive" else "DRAFT"}
+    after = _first_row(supabase, "tournaments", TOURNAMENT_SELECT, key="id", value=clean_tournament_id) or {**before, "status": next_status}
     tournament = _tournament_payload(after)
     audit_payload = build_activity_payload(
         club_id=str(club_id),

@@ -51,9 +51,8 @@ def test_lifecycle_overview_and_phase_nav_match_refined_setup_flow() -> None:
 
 def test_legacy_registration_rules_route_redirects_to_basics() -> None:
     route = read("app/admin/tournaments/setup/registration-rules/page.tsx")
-    assert 'redirect(`/admin/tournaments/setup/basics?' in route
-    assert 'params.set("tournament", tournament)' in route
-    assert 'params.set("name", name)' in route
+    assert "readTournamentRouteContext(searchParams)" in route
+    assert 'redirect(tournamentRouteHref("/admin/tournaments/setup/basics", context))' in route
 
 
 def test_policy_templates_and_weather_policy_are_required() -> None:

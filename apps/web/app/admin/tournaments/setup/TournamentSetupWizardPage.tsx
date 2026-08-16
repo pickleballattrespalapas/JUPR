@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import type { TournamentSetupStep } from "@/components/TournamentSetupWizardNav";
 import TournamentSetupWizardPanel from "./TournamentSetupWizardPanel";
+import { readTournamentRouteContext } from "@/lib/tournamentRouteContext";
 
 type StatusResponse = {
   enabled: boolean;
@@ -56,10 +57,9 @@ export default async function TournamentSetupWizardPage({
   step,
   searchParams
 }: Props) {
-  const tournamentId = first(searchParams?.tournament).trim();
-  const tournamentName = first(searchParams?.name).trim();
+  const context = readTournamentRouteContext(searchParams);
   const resolveDivisionId = first(searchParams?.resolveDivision).trim();
-  if (!tournamentId) redirect("/admin/tournaments");
+  if (!context.tournamentId) redirect("/admin/tournaments");
 
   const clubId = "tres_palapas";
   const { data: status, error } = await loadStatus(clubId);
@@ -78,7 +78,7 @@ export default async function TournamentSetupWizardPage({
       >
         Tournament Manager / Tournament Builder
       </p>
-      <h1 style={{ marginTop: 0 }}>{tournamentName || "Tournament"} builder</h1>
+      <h1 style={{ marginTop: 0 }}>{context.tournamentName || "Tournament"} builder</h1>
       <p style={{ color: "#334155", maxWidth: "860px" }}>
         Build the tournament across four logical domains: Tournament, Competition,
         Commerce, and Review. Draft saves never change public tournament pages;
@@ -91,12 +91,13 @@ export default async function TournamentSetupWizardPage({
       ) : null}
       {status ? (
         <TournamentSetupWizardPanel
-          key={tournamentId}
+          key={context.tournamentId}
           apiBase={apiBase()}
           clubId={clubId}
           status={status}
-          tournamentId={tournamentId}
-          tournamentName={tournamentName || tournamentId}
+          tournamentId={context.tournamentId}
+          tournamentName={context.tournamentName || context.tournamentId}
+          drawId={context.drawId}
           step={step}
           resolveDivisionId={resolveDivisionId}
         />

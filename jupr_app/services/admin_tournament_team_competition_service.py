@@ -1394,6 +1394,12 @@ def replace_team_podium(
     podium: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     require_admin_team_tournament_runtime()
+    if publish:
+        raise PermissionError(
+            "TEAM_PODIUM_CANONICAL_REVIEW_UNAVAILABLE: publishing a four-player "
+            "team podium is disabled until explicit immutable review evidence, "
+            "exact awards, and tournament lifecycle closeout are integrated."
+        )
     snapshot = get_admin_team_tournament_snapshot(
         supabase, club_id=club_id, tournament_id=tournament_id
     )

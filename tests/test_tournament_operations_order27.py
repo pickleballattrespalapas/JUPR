@@ -310,7 +310,7 @@ def test_order27_next_routes_and_recovery_copy_static_contract() -> None:
     assert panel.count("expected_team_versions: reviewedTeamVersions") == 3
     assert panel.count("expected_source_game_versions: reviewedSourceGameVersions") == 2
     assert panel.count("expected_draw_updated_at: reviewedDrawUpdatedAt") == 8
-    assert api.count('"expected_draw_updated_at": payload.expected_draw_updated_at') == 16
+    assert api.count('"expected_draw_updated_at": payload.expected_draw_updated_at') == 18
     assert api.count('"expected_team_versions": [_dump_model(row) for row in payload.expected_team_versions]') == 6
     assert api.count('"expected_source_game_versions": [_dump_model(row) for row in payload.expected_source_game_versions]') == 4
 

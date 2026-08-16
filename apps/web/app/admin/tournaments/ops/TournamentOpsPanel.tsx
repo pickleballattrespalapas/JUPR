@@ -6,6 +6,7 @@ import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
 import type {
   AdminTournamentOpsSnapshotResponse,
+  AdminTournamentOpsPlayer,
   AdminTournamentOpsTeam,
   AdminTournamentResultsImportPreviewResponse,
   AdminTournamentStatusResponse,
@@ -13,9 +14,10 @@ import type {
 } from "@/lib/adminTournamentApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
+import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
 export type OpsWorkflow = "all" | "draws" | "import" | "results" | "publish";
-type Props = { apiBase: string | null; clubId: string; status: AdminTournamentStatusResponse; workflow?: OpsWorkflow; initialTournamentId: string };
+type Props = { apiBase: string | null; clubId: string; status: AdminTournamentStatusResponse; workflow?: OpsWorkflow; initialTournamentId: string; initialDrawId?: string | null };
 type TeamEditorRow = { editor_key: string; team_number: string; player1_id: string; player2_id: string; seed: string; notes: string };
 type RegistrationImportBody = {
   import_mode: string;
@@ -81,11 +83,27 @@ function eventOptionLabel(row: Record<string, unknown>): string {
   return division || family || String(row.id || "Event");
 }
 
-function gameLabel(row: Record<string, unknown>): string {
+function playerLabel(players: AdminTournamentOpsPlayer[], playerId: number | null | undefined): string {
+  if (playerId == null) return "Player unavailable";
+  return players.find((player) => Number(player.id) === Number(playerId))?.name || "Player unavailable";
+}
+
+function teamLabel(team: AdminTournamentOpsTeam | undefined, players: AdminTournamentOpsPlayer[]): string {
+  if (!team) return "Team unavailable";
+  const first = playerLabel(players, team.player1_id);
+  const second = team.player2_id == null ? "" : playerLabel(players, team.player2_id);
+  return second ? `${first} / ${second}` : first;
+}
+
+function gameLabel(
+  row: Record<string, unknown>,
+  teamsById: Map<string, AdminTournamentOpsTeam>,
+  players: AdminTournamentOpsPlayer[]
+): string {
   const stage = String(row.stage || "Game");
   const round = row.rr_round_number ? `R${row.rr_round_number}` : String(row.playoff_round || "");
   const slot = row.rr_slot_number ? `S${row.rr_slot_number}` : String(row.playoff_game_code || "");
-  const teams = `${shortValue(row.team_a_id)} vs ${shortValue(row.team_b_id)}`;
+  const teams = `${teamLabel(teamsById.get(String(row.team_a_id || "")), players)} vs ${teamLabel(teamsById.get(String(row.team_b_id || "")), players)}`;
   return [stage, round, slot, teams].filter(Boolean).join(" · ");
 }
 
@@ -106,38 +124,17 @@ function teamRowsFromTeams(teams: AdminTournamentOpsTeam[], drawId: string): Tea
   }));
 }
 
-function GenericRowsTable({ rows, preferredColumns }: { rows: Array<Record<string, unknown>>; preferredColumns: string[] }) {
-  if (!rows.length) return <p style={{ color: "#64748b" }}>No rows loaded.</p>;
-  const discovered = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
-  const columns = [...preferredColumns.filter((key) => discovered.includes(key)), ...discovered.filter((key) => !preferredColumns.includes(key)).slice(0, 6)];
-  return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "860px" }}>
-        <thead>
-          <tr>{columns.map((column) => <th key={column} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>{column}</th>)}</tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={String(row.id || index)}>
-              {columns.map((column) => <td key={column} style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0", maxWidth: 260, overflowWrap: "anywhere" }}>{shortValue(row[column])}</td>)}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 export default function TournamentOpsPanel({
   apiBase,
   clubId,
   status,
   workflow = "all",
-  initialTournamentId
+  initialTournamentId,
+  initialDrawId = ""
 }: Props) {
   const { accessToken } = useAdminSession();
   const [selectedTournamentId, setSelectedTournamentId] = useState(initialTournamentId);
-  const [selectedDrawId, setSelectedDrawId] = useState("");
+  const [selectedDrawId, setSelectedDrawId] = useState(initialDrawId || "");
   const [snapshot, setSnapshot] = useState<AdminTournamentOpsSnapshotResponse | null>(null);
   const [drawEventOptionId, setDrawEventOptionId] = useState("");
   const [drawName, setDrawName] = useState("");
@@ -149,7 +146,6 @@ export default function TournamentOpsPanel({
   const [scoreA, setScoreA] = useState("");
   const [scoreB, setScoreB] = useState("");
   const [playoffAdvanceCount, setPlayoffAdvanceCount] = useState("4");
-  const [publishBonusElo, setPublishBonusElo] = useState("0");
   const [resultsImportMode, setResultsImportMode] = useState("REPLACE");
   const [resultsRawText, setResultsRawText] = useState("playerA1,playerB1,teamAGame1,teamBGame1\n");
   const [resultsPreview, setResultsPreview] = useState<AdminTournamentResultsImportPreviewResponse | null>(null);
@@ -199,6 +195,9 @@ export default function TournamentOpsPanel({
   );
   const reviewedState = snapshot?.state_fingerprint || "";
   const selectedDraw = snapshot?.draws?.find((row) => String(row.id || "") === selectedDrawId) || null;
+  const players = snapshot?.players || [];
+  const teamsById = new Map((snapshot?.teams || []).map((team) => [String(team.id || ""), team]));
+  const teamEditorPlayerChoicesReady = players.length > 0;
   const reviewedDrawUpdatedAt = String(selectedDraw?.updated_at || "").trim();
   const reviewedTeamVersions = (snapshot?.teams || [])
     .filter((row) => String(row.draw_id || "") === selectedDrawId)
@@ -545,8 +544,8 @@ export default function TournamentOpsPanel({
       throw new Error("Add at least one team with Player 1 before saving.");
     }
     if (teams.some((team) => !Number.isFinite(team.team_number) || !Number.isFinite(team.player1_id) || (team.player2_id !== null && !Number.isFinite(team.player2_id)))) {
-      setMessage("Team number and player IDs must be numeric. Use player selectors when available.");
-      throw new Error("Team number and player IDs must be numeric. Use player selectors when available.");
+      setMessage("One or more team entries are invalid. Reload the player choices and review every row.");
+      throw new Error("One or more team entries are invalid. Reload the player choices and review every row.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -661,12 +660,12 @@ export default function TournamentOpsPanel({
         method: "PATCH",
         body: JSON.stringify({ score_a: nextA, score_b: nextB, expected_state_fingerprint: reviewedState, expected_game_updated_at: String(selectedGame?.updated_at || "") || null, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_score_game" })
       });
-      const savedGameId = String(payload.game?.id || gameId);
-      const completion = actionSuccess("Score saved", `The score for game ${savedGameId} was saved.`);
+      const selectedMatchup = selectedGame ? gameLabel(selectedGame, teamsById, players) : "the selected matchup";
+      const completion = actionSuccess("Score saved", `The score for ${selectedMatchup} was saved.`);
       if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
       if (!actionRequest.isCurrent(generation)) return completion;
-      setMessage(`Saved score for game ${String(payload.game?.id || gameId)}.${operationSuffix(payload)}`);
+      setMessage(`Saved score for ${selectedMatchup}.${operationSuffix(payload)}`);
       return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save score.");
@@ -700,78 +699,6 @@ export default function TournamentOpsPanel({
       return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to generate podium.");
-      throw error;
-    } finally {
-      if (actionRequest.isCurrent(generation)) setBusy(false);
-    }
-  }
-
-  async function awardPodium(confirmationText: string) {
-    if (!selectedTournamentId || !selectedDrawId) {
-      setMessage("Select a tournament and draw before awarding podium trophies.");
-      throw new Error("Select a tournament and draw before awarding podium trophies.");
-    }
-    const generation = actionRequest.begin();
-    const tournamentId = selectedTournamentId;
-    const drawId = selectedDrawId;
-    setBusy(true);
-    setMessage(null);
-    try {
-      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/podium/awards`, {
-        method: "POST",
-        body: JSON.stringify({ expected_state_fingerprint: reviewedState, confirmation_text: confirmationText, source: "next_tournament_ops_award_podium" })
-      });
-      const awardedCount = payload.awarded_count ?? 0;
-      const completion = actionSuccess("Podium awards complete", `${awardedCount} new badge${awardedCount === 1 ? " was" : "s were"} awarded from the verified podium.`);
-      if (!actionRequest.isCurrent(generation)) return completion;
-      await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return completion;
-      setMessage(`Awarded ${payload.awarded_count ?? 0} new badge(s) from ${payload.candidate_count ?? 0} podium candidate(s).${operationSuffix(payload)}`);
-      return completion;
-    } catch (error) {
-      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to award podium trophies.");
-      throw error;
-    } finally {
-      if (actionRequest.isCurrent(generation)) setBusy(false);
-    }
-  }
-
-  async function publishOfficialMatches(
-    confirmationText: string,
-    ratingChildDrawId = ""
-  ) {
-    if (!selectedTournamentId || (!selectedDrawId && !ratingChildDrawId)) {
-      setMessage("Select a tournament and draw before publishing official matches.");
-      throw new Error("Select a tournament and draw before publishing official matches.");
-    }
-    const bonusElo = ratingChildDrawId ? 0 : Number(publishBonusElo || "0");
-    if (!Number.isFinite(bonusElo) || bonusElo < 0) {
-      setMessage("Playoff winner bonus must be a non-negative number.");
-      throw new Error("Playoff winner bonus must be a non-negative number.");
-    }
-    const generation = actionRequest.begin();
-    const tournamentId = selectedTournamentId;
-    const drawId = ratingChildDrawId || selectedDrawId;
-    setBusy(true);
-    setMessage(null);
-    try {
-      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/matches/publish`, {
-        method: "POST",
-        body: JSON.stringify({ confirmation_text: confirmationText, playoff_winner_bonus_elo: bonusElo, expected_state_fingerprint: reviewedState, source: ratingChildDrawId ? "next_team_tournament_child_publish" : "next_tournament_ops_publish_matches" })
-      });
-      const matchCount = payload.match_count ?? 0;
-      const completion = actionSuccess("Official matches published", `${matchCount} official rating match${matchCount === 1 ? " was" : "es were"} published.`);
-      if (!actionRequest.isCurrent(generation)) return completion;
-      await loadOps(tournamentId, ratingChildDrawId ? "" : drawId);
-      if (!actionRequest.isCurrent(generation)) return completion;
-      setMessage(
-        ratingChildDrawId
-          ? `Published ${payload.match_count ?? 0} four-player child game as an official rating match.${operationSuffix(payload)}`
-          : `Published ${payload.match_count ?? 0} official rating match(es). Bonus applied to ${payload.bonus_match_count ?? 0} medal-playoff match(es) at ${payload.playoff_winner_bonus_elo ?? bonusElo} Elo per winning player.${operationSuffix(payload)}`
-      );
-      return completion;
-    } catch (error) {
-      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to publish official tournament matches.");
       throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
@@ -890,9 +817,31 @@ export default function TournamentOpsPanel({
     return id || "";
   }
 
+  function importedPlayerLabel(playerRef: unknown): string {
+    const ref = String(playerRef || "");
+    if (ref.startsWith("existing:")) {
+      const playerId = ref.slice("existing:".length);
+      return resultsPreview?.player_options.find((player) => String(player.id) === playerId)?.name || "Player unavailable";
+    }
+    if (ref.startsWith("create:")) {
+      const importKey = ref.slice("create:".length);
+      const imported = resultsPreview?.players.find((player) => String(player.import_key || "") === importKey);
+      return String(imported?.display_name || imported?.name || "Player unavailable");
+    }
+    return "Player unavailable";
+  }
+
+  function importedTeamLabel(teamRef: unknown): string {
+    const team = resultsPreview?.teams.find((row) => String(row.team_ref || "") === String(teamRef || ""));
+    if (!team) return "Team unavailable";
+    const first = importedPlayerLabel(team.p1_ref);
+    const second = team.p2_ref ? importedPlayerLabel(team.p2_ref) : "";
+    return second ? `${first} / ${second}` : first;
+  }
+
   useAuthenticatedAutoLoad(
     status.enabled ? `${accessToken}\u0000${initialTournamentId}` : "",
-    () => loadOps(initialTournamentId, "")
+    () => loadOps(initialTournamentId, initialDrawId || "")
   );
 
 
@@ -922,9 +871,7 @@ export default function TournamentOpsPanel({
       {registrationImportRecovery ? (
         <article data-testid="registration-import-recovery" style={{ ...cardStyle, background: "#fff7ed", borderColor: "#f59e0b" }}>
           <h2 style={{ marginTop: 0 }}>Interrupted registration import retained</h2>
-          <p>
-            The exact request for tournament <code>{registrationImportRecovery.tournamentId}</code>, draw <code>{registrationImportRecovery.drawId}</code>, is retained in this browser tab as <code>{registrationImportRecovery.operationReference}</code>.
-          </p>
+          <p>The exact registration import request is retained in this browser tab. Its technical recovery reference remains protected without exposing tournament or draw identifiers in the operator workflow.</p>
           <p style={{ color: "#92400e" }}>{registrationImportRecovery.message}</p>
           <p>All guarded Ops writes in this club tab stay blocked until commit-safe operation evidence proves completion or the exact recovery reservation proves the request could not begin.</p>
           <ConfirmAction
@@ -978,7 +925,7 @@ export default function TournamentOpsPanel({
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Draw selection</h2>
             <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
-              <label><strong>Draw</strong><br /><select value={selectedDrawId} onChange={(event) => selectDraw(event.target.value)} disabled={busy} style={inputStyle}><option value="">Choose a draw…</option>{snapshot.draws.map((draw) => <option key={draw.id} value={draw.id}>{draw.name || draw.id}</option>)}</select></label>
+              <label><strong>Draw</strong><br /><select value={selectedDrawId} onChange={(event) => selectDraw(event.target.value)} disabled={busy} style={inputStyle}><option value="">Choose a draw…</option>{snapshot.draws.map((draw, index) => <option key={draw.id} value={draw.id}>{draw.name || `Unnamed draw ${index + 1}`}</option>)}</select></label>
               <button type="button" onClick={() => selectedTournamentId && selectedDrawId ? loadOps(selectedTournamentId, selectedDrawId) : undefined} disabled={!selectedTournamentId || !selectedDrawId || busy} style={ghostButtonStyle}>Reload selected draw</button>
             </div>
           </article>
@@ -995,7 +942,7 @@ export default function TournamentOpsPanel({
 
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Bulk import teams</h2>
-            <p style={{ color: "#475569" }}>Paste CSV or TSV with headers like <code>Player 1, Player 2, Seed, Notes</code>. Player names or IDs must match the club roster. Import is blocked after games exist.</p>
+            <p style={{ color: "#475569" }}>Paste CSV or TSV with headers like <code>Player 1, Player 2, Seed, Notes</code>. Player names must match the club roster. Import is blocked after games exist.</p>
             <textarea value={bulkTeamText} onChange={(event) => setBulkTeamText(event.target.value)} style={{ ...inputStyle, minHeight: "8rem", fontFamily: "monospace" }} />
             <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
               <label><strong>Mode</strong><br /><select value={bulkTeamMode} onChange={(event) => setBulkTeamMode(event.target.value)} style={inputStyle}><option value="REPLACE">Replace current teams</option><option value="APPEND">Append after current teams</option></select></label>
@@ -1008,7 +955,7 @@ export default function TournamentOpsPanel({
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Team editor</h2>
             <p style={{ color: "#475569" }}>Assign players manually, then review the full team list before saving.</p>
-            {selectedDrawId ? (
+            {selectedDrawId && teamEditorPlayerChoicesReady ? (
               <>
                 <ConfirmAction triggerLabel="Save teams" title="Replace the draw's saved teams?" description="This saves the currently reviewed team rows as the authoritative team list for the selected draw." confirmLabel="Yes, save teams" confirmationText="SAVE TEAMS" tone="danger" disabled={drawCasWriteDisabled} busy={busy} onConfirm={saveTeams} />
                 <div style={{ overflowX: "auto", marginTop: "1rem" }}>
@@ -1016,8 +963,8 @@ export default function TournamentOpsPanel({
                     <thead><tr>{["Team #", "Player 1", "Player 2", "Seed", "Notes", "Action"].map((header) => <th key={header} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>{header}</th>)}</tr></thead>
                     <tbody>{teamRows.map((row, index) => <tr key={row.editor_key}>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input value={row.team_number} onChange={(event) => updateTeamRow(index, { team_number: event.target.value })} style={inputStyle} /></td>
-                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{snapshot.players?.length ? <select value={playerSelectValue(row.player1_id)} onChange={(event) => updateTeamRow(index, { player1_id: event.target.value })} style={inputStyle}><option value="">Choose player…</option>{snapshot.players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</select> : <input value={row.player1_id} onChange={(event) => updateTeamRow(index, { player1_id: event.target.value })} placeholder="player id" style={inputStyle} />}</td>
-                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{snapshot.players?.length ? <select value={playerSelectValue(row.player2_id)} onChange={(event) => updateTeamRow(index, { player2_id: event.target.value })} style={inputStyle}><option value="">Singles / no partner</option>{snapshot.players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</select> : <input value={row.player2_id} onChange={(event) => updateTeamRow(index, { player2_id: event.target.value })} placeholder="optional player id" style={inputStyle} />}</td>
+                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><select value={playerSelectValue(row.player1_id)} onChange={(event) => updateTeamRow(index, { player1_id: event.target.value })} style={inputStyle}><option value="">Choose player…</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</select></td>
+                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><select value={playerSelectValue(row.player2_id)} onChange={(event) => updateTeamRow(index, { player2_id: event.target.value })} style={inputStyle}><option value="">Singles / no partner</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</select></td>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input value={row.seed} onChange={(event) => updateTeamRow(index, { seed: event.target.value })} style={inputStyle} /></td>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input value={row.notes} onChange={(event) => updateTeamRow(index, { notes: event.target.value })} style={inputStyle} /></td>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><button type="button" onClick={() => setTeamRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} style={ghostButtonStyle}>Remove</button></td>
@@ -1026,14 +973,14 @@ export default function TournamentOpsPanel({
                 </div>
                 <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}><button type="button" onClick={() => setTeamRows((current) => [...current, { editor_key: `new-team-${Date.now()}`, team_number: String(current.length + 1), player1_id: "", player2_id: "", seed: String(current.length + 1), notes: "" }])} style={ghostButtonStyle}>Add team row</button><button type="button" onClick={() => resetTeamEditor(snapshot, selectedDrawId)} style={ghostButtonStyle}>Reset from snapshot</button></p>
               </>
-            ) : <p style={{ color: "#64748b" }}>Create or select a draw before editing teams.</p>}
+            ) : <p style={{ color: "#64748b" }}>{selectedDrawId ? "Club player names are unavailable, so manual team setup is disabled. Reload the authoritative snapshot or use the guarded registration import." : "Create or select a draw before editing teams."}</p>}
           </article>
 
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate round-robin games</h2><p style={{ color: "#475569" }}>Generate the schedule only after teams are saved and team numbers are contiguous.</p><ConfirmAction triggerLabel="Generate games" title="Generate round-robin games?" description="This creates the schedule from the currently reviewed teams and draw version." confirmLabel="Yes, generate games" confirmationText="GENERATE GAMES" disabled={teamSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generateGames} /></article>
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Score game</h2><p style={{ color: "#475569" }}>Select a game and enter the score. Ties are blocked; published, awarded, or downstream-finalized draws are locked.</p>{snapshot.games.length ? <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(100px, 140px) minmax(100px, 140px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Game</strong><br /><select value={scoreGameId} onChange={(event) => selectScoreGame(event.target.value)} style={inputStyle}><option value="">Choose a game…</option>{snapshot.games.map((game) => <option key={String(game.id)} value={String(game.id)}>{gameLabel(game)}</option>)}</select></label><label><strong>Score A</strong><br /><input type="number" value={scoreA} onChange={(event) => setScoreA(event.target.value)} style={inputStyle} /></label><label><strong>Score B</strong><br /><input type="number" value={scoreB} onChange={(event) => setScoreB(event.target.value)} style={inputStyle} /></label><ConfirmAction triggerLabel="Save score" title="Save this game score?" description={`This records ${scoreA || "0"}–${scoreB || "0"} for the selected game.`} confirmLabel="Yes, save score" confirmationText="SAVE SCORE" disabled={drawCasWriteDisabled || !scoreGameId} busy={busy} onConfirm={saveScore} /></div> : <p style={{ color: "#64748b" }}>Generate games before scoring.</p>}</article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Score game</h2><p style={{ color: "#475569" }}>Select a matchup and enter the score. Ties are blocked; published, awarded, or downstream-finalized draws are locked.</p>{snapshot.games.length ? <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(100px, 140px) minmax(100px, 140px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Matchup</strong><br /><select value={scoreGameId} onChange={(event) => selectScoreGame(event.target.value)} style={inputStyle}><option value="">Choose a matchup…</option>{snapshot.games.map((game) => <option key={String(game.id)} value={String(game.id)}>{gameLabel(game, teamsById, players)}</option>)}</select></label><label><strong>Score A</strong><br /><input type="number" value={scoreA} onChange={(event) => setScoreA(event.target.value)} style={inputStyle} /></label><label><strong>Score B</strong><br /><input type="number" value={scoreB} onChange={(event) => setScoreB(event.target.value)} style={inputStyle} /></label><ConfirmAction triggerLabel="Save score" title="Save this matchup score?" description={`This records ${scoreA || "0"}–${scoreB || "0"} for the selected matchup.`} confirmLabel="Yes, save score" confirmationText="SAVE SCORE" disabled={drawCasWriteDisabled || !scoreGameId} busy={busy} onConfirm={saveScore} /></div> : <p style={{ color: "#64748b" }}>Generate games before scoring.</p>}</article>
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate playoffs</h2><p style={{ color: "#475569" }}>After all round-robin games are scored, choose how many teams advance.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 180px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Advance count</strong><br /><select value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} style={inputStyle}><option value="4">4 teams</option><option value="5">5 teams</option><option value="6">6 teams</option></select></label><ConfirmAction triggerLabel="Generate playoffs" title="Generate the playoff bracket?" description={`This advances ${playoffAdvanceCount} teams from the reviewed round-robin results into the playoff bracket.`} confirmLabel="Yes, generate playoffs" confirmationText="GENERATE PLAYOFFS" disabled={gameSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generatePlayoffs} /></div></article>
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate podium</h2><p style={{ color: "#475569" }}>Creates draw-scoped podium rows from finalized playoffs, or from completed round-robin standings when no playoffs exist.</p><ConfirmAction triggerLabel="Generate podium" title="Generate podium placements?" description="This calculates and stores podium rows from the currently reviewed final results." confirmLabel="Yes, generate podium" confirmationText="GENERATE PODIUM" disabled={gameSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generatePodium} /></article>
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Award podium trophies</h2><p style={{ color: "#475569" }}>Awards draw-scoped tournament badges from generated podium rows. Re-running is idempotent for existing badge context.</p><ConfirmAction triggerLabel="Award podium" title="Award the generated podium trophies?" description="This mints draw-scoped tournament badges for the verified podium placements." confirmLabel="Yes, award podium" confirmationText="AWARD PODIUM" disabled={guardedWriteDisabled || !selectedDrawId} busy={busy} onConfirm={awardPodium} /></article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Review and award podium</h2><p style={{ color: "#475569" }}>Podium awards require current explicit review evidence and exact award versions. This legacy editor cannot mint awards.</p><Link href={tournamentRouteHref("/admin/tournaments/live-operations/podium", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open guarded Podium review</Link></article>
           </> : null}
 
           {operationsWriteReady && shows("results") ? (
@@ -1068,7 +1015,7 @@ export default function TournamentOpsPanel({
                         const decision = resultsMappings[importKey] || {};
                         const suggestion = resultsPreview.suggestions[importKey] || {};
                         return <tr key={importKey}>
-                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{String(player.display_name || player.name || importKey)}</td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{String(player.display_name || player.name || `Imported player ${index + 1}`)}</td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}><select value={decision.action || "unresolved"} onChange={(event) => { const action = event.target.value; setResultsMappings((current) => ({ ...current, [importKey]: { action, player_id: action === "use_existing" ? current[importKey]?.player_id ?? null : null } })); setResultsReviewDirty(true); }} style={inputStyle}><option value="unresolved">Resolve before commit</option><option value="use_existing">Use existing player</option><option value="create_new">Create new player</option></select></td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{decision.action === "use_existing" ? <select value={String(decision.player_id || "")} onChange={(event) => { setResultsMappings((current) => ({ ...current, [importKey]: { action: "use_existing", player_id: event.target.value || null } })); setResultsReviewDirty(true); }} style={inputStyle}><option value="">Choose player…</option>{resultsPreview.player_options.map((option) => <option key={String(option.id)} value={String(option.id)}>{option.name}</option>)}</select> : <span>—</span>}</td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{shortValue(suggestion.suggested_player_name || suggestion.suggested_name || suggestion.reason)}</td>
@@ -1088,8 +1035,8 @@ export default function TournamentOpsPanel({
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{rowKey}</td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}><input type="checkbox" checked={review.include !== false} onChange={(event) => { setResultsMatchReviews((current) => ({ ...current, [rowKey]: { ...review, include: event.target.checked } })); setResultsReviewDirty(true); }} /></td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}><select value={review.stage || "PLAYOFF"} onChange={(event) => { setResultsMatchReviews((current) => ({ ...current, [rowKey]: { ...review, stage: event.target.value } })); setResultsReviewDirty(true); }} style={inputStyle}><option value="ROUND_ROBIN">Round robin</option><option value="PLAYOFF">Playoff</option><option value="BRONZE">Bronze</option><option value="FINAL">Final</option></select></td>
-                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{shortValue(match.team_a_label || match.team_a_ref)}</td>
-                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{shortValue(match.team_b_label || match.team_b_ref)}</td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{String(match.team_a_label || importedTeamLabel(match.team_a_ref))}</td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{String(match.team_b_label || importedTeamLabel(match.team_b_ref))}</td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{shortValue(match.score_a)}–{shortValue(match.score_b)}</td>
                         </tr>;
                       })}</tbody>
@@ -1098,7 +1045,7 @@ export default function TournamentOpsPanel({
 
                   <div>
                     <h3>Podium review</h3>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>{["1", "2", "3"].map((placement) => <label key={placement}><strong>Place {placement}</strong><br /><select value={resultsPodiumRefs[placement] || ""} onChange={(event) => { setResultsPodiumRefs((current) => ({ ...current, [placement]: event.target.value || null })); setResultsReviewDirty(true); }} style={inputStyle}><option value="">No placement</option>{resultsPreview.podium_candidates.map((teamRef) => <option key={teamRef} value={teamRef}>{teamRef}</option>)}</select></label>)}</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>{["1", "2", "3"].map((placement) => <label key={placement}><strong>Place {placement}</strong><br /><select value={resultsPodiumRefs[placement] || ""} onChange={(event) => { setResultsPodiumRefs((current) => ({ ...current, [placement]: event.target.value || null })); setResultsReviewDirty(true); }} style={inputStyle}><option value="">No placement</option>{resultsPreview.podium_candidates.map((teamRef) => <option key={teamRef} value={teamRef}>{importedTeamLabel(teamRef)}</option>)}</select></label>)}</div>
                   </div>
 
                   {operationsWriteReady ? <div style={{ padding: "0.9rem", border: "1px solid #93c5fd", borderRadius: "10px", background: "white" }}>
@@ -1111,58 +1058,21 @@ export default function TournamentOpsPanel({
 
           {operationsWriteReady && shows("publish") ? (
             <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
-              <h2 style={{ marginTop: 0 }}>Publish official rating matches</h2>
-              <p style={{ color: "#7c2d12" }}>Creates official Match Log rows from finalized tournament games and applies the regular rating path for both doubles and singles. Optional medal-playoff bonus adds Elo only to semifinal, bronze, and gold winners. Publishing needs both tournament and match-management permissions, a separate staging gate, and a safe email mode when automatic player updates are enabled.</p>
-              {!officialPublishReady ? <p style={{ color: "#b91c1c", fontWeight: 700 }}>Official publish is gated off in this environment.</p> : null}
-              {snapshot.rating_child_publish_queue?.length ? (
-                <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
-                  <h3 style={{ marginBottom: 0 }}>Four-player rating games</h3>
-                  <p style={{ color: "#7c2d12", margin: 0 }}>Each finalized child game publishes separately. Parent team results never enter ratings.</p>
-                  {snapshot.rating_child_publish_queue.map((row) => {
-                    const drawId = String(row.draw?.id || "");
-                    const label = String(
-                      row.draw?.name ||
-                      row.child_game?.game_code ||
-                      "Four-player rating game"
-                    );
-                    return (
-                      <div key={drawId} style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center", justifyContent: "space-between", padding: "0.75rem", border: "1px solid #fed7aa", borderRadius: "10px", background: "white" }}>
-                        <div>
-                          <strong>{label}</strong>
-                          <br />
-                          <span style={{ color: "#7c2d12" }}>{row.publish_state.replaceAll("_", " ")}</span>
-                        </div>
-                        {row.publish_state === "READY_TO_PUBLISH" ? (
-                          <ConfirmAction
-                            triggerLabel="Publish rating game"
-                            title={`Publish ${label} as an official rating match?`}
-                            description="This publishes only the finalized child game. No playoff bonus is permitted."
-                            confirmLabel="Publish rating game"
-                            confirmationText="PUBLISH MATCHES"
-                            tone="danger"
-                            disabled={guardedWriteDisabled || !officialPublishReady || !drawId}
-                            busy={busy}
-                            onConfirm={(confirmation) =>
-                              publishOfficialMatches(confirmation, drawId)
-                            }
-                          />
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
-                <label><strong>Winner bonus Elo</strong><br /><input type="number" min="0" step="0.5" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} style={inputStyle} /><small style={{ color: "#7c2d12" }}>4 Elo = +0.01 JUPR.</small></label>
-                <ConfirmAction triggerLabel="Publish official matches" title="Publish these tournament games as official rated matches?" description={`This terminal write creates Match Log rows from every finalized game and applies a ${publishBonusElo || "0"}-Elo medal-playoff bonus to eligible winners.`} confirmLabel="Yes, publish official matches" confirmationText="PUBLISH MATCHES" tone="danger" disabled={guardedWriteDisabled || !officialPublishReady || !selectedDrawId} busy={busy} onConfirm={publishOfficialMatches} />
-              </div>
+              <h2 style={{ marginTop: 0 }}>Official publishing moved</h2>
+              <p style={{ color: "#7c2d12" }}>This legacy operations editor cannot publish official matches or four-player rating children. The guarded Publish workspace requires tournament-wide score, podium-review, award, official-link, and recovery evidence before any write.</p>
+              <Link href={tournamentRouteHref("/admin/tournaments/ops/publish", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open guarded Publish workspace</Link>
             </article>
           ) : null}
 
-          <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Draws</h2><GenericRowsTable rows={snapshot.draws} preferredColumns={["id", "name", "status", "registration_day_id", "event_option_id", "team_count"]} /></article>
-          <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Teams</h2><GenericRowsTable rows={snapshot.teams} preferredColumns={["team_number", "player1_id", "player2_id", "source", "draw_id", "event_option_id"]} /></article>
-          <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Games</h2><GenericRowsTable rows={snapshot.games} preferredColumns={["stage", "rr_round_number", "rr_slot_number", "playoff_game_code", "playoff_round", "team_a_id", "team_b_id", "score_a", "score_b", "winner_team_id", "status"]} /></article>
-          <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Podium</h2><GenericRowsTable rows={snapshot.podium} preferredColumns={["placement", "team_id", "player1_id", "player2_id", "award_label", "draw_id"]} /></article>
+          <article data-testid="legacy-ops-human-summary" style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>Human-readable live details</h2>
+            <p style={{ color: "#475569" }}>Raw draw, player, team, game, and podium identifiers are intentionally hidden from this legacy workspace. Use the focused Live views for matchup cards, score corrections, and podium review.</p>
+            <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+              <Link href={tournamentRouteHref("/admin/tournaments/live-operations/draws", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open draw overview</Link>
+              <Link href={tournamentRouteHref("/admin/tournaments/live-operations/scoring", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open matchup scoring</Link>
+              <Link href={tournamentRouteHref("/admin/tournaments/live-operations/podium", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open podium review</Link>
+            </p>
+          </article>
         </>
       ) : null}
 

@@ -2,17 +2,18 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { ConfirmAction } from "@/components/ConfirmAction";
 import type {
   AdminTournamentDetailResponse,
-  AdminTournamentStatusResponse,
-  AdminTournamentWriteResponse
+  AdminTournamentLifecycle,
+  AdminTournamentLiveSnapshotResponse,
+  AdminTournamentStatusResponse
 } from "@/lib/adminTournamentApi";
 import {
   useAuthenticatedAutoLoad,
   useLatestRequestGuard
 } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
+import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
 type Props = {
   apiBase: string | null;
@@ -20,12 +21,7 @@ type Props = {
   status: AdminTournamentStatusResponse;
   tournamentId: string;
   initialName?: string | null;
-};
-
-type TournamentEdit = {
-  name: string;
-  startDate: string;
-  endDate: string;
+  initialDrawId?: string | null;
 };
 
 type PhaseCard = {
@@ -42,15 +38,6 @@ const cardStyle = {
   padding: "1rem",
   background: "white",
   minWidth: 0
-};
-const inputStyle = {
-  width: "100%",
-  minWidth: 0,
-  boxSizing: "border-box" as const,
-  padding: "0.55rem",
-  border: "1px solid #cbd5e1",
-  borderRadius: "8px",
-  font: "inherit"
 };
 const phaseCardStyle = {
   ...cardStyle,
@@ -72,22 +59,10 @@ function dateValue(value?: string | null): string {
 function selectedHref(
   path: string,
   tournamentId: string,
-  tournamentName: string
+  tournamentName: string,
+  drawId = ""
 ): string {
-  const params = new URLSearchParams({ tournament: tournamentId });
-  if (tournamentName) params.set("name", tournamentName);
-  return `${path}?${params.toString()}`;
-}
-
-function editFromDetail(
-  detail: AdminTournamentDetailResponse | null,
-  fallbackName: string
-): TournamentEdit {
-  return {
-    name: detail?.tournament.name || fallbackName,
-    startDate: dateValue(detail?.tournament.start_date),
-    endDate: dateValue(detail?.tournament.end_date)
-  };
+  return tournamentRouteHref(path, { tournamentId, tournamentName, drawId });
 }
 
 function phaseStateStyle(state: string) {
@@ -106,7 +81,9 @@ function phaseStateStyle(state: string) {
 function phaseCards(
   detail: AdminTournamentDetailResponse,
   tournamentId: string,
-  tournamentName: string
+  tournamentName: string,
+  lifecycle: AdminTournamentLifecycle | null,
+  initialDrawId: string
 ): PhaseCard[] {
   const registrationStatus = String(
     detail.tournament.registration_status || ""
@@ -119,6 +96,12 @@ function phaseCards(
   );
   const registrations = detail.summary.registrations || 0;
   const registrationOpen = registrationStatus === "open";
+  const counts = lifecycle?.counts;
+  const selectedDrawId = initialDrawId || lifecycle?.draws[0]?.draw_id || "";
+  const gamesExist = Boolean(counts?.games);
+  const liveInProgress = Boolean(gamesExist && ((counts?.open_games || 0) > 0 || (counts?.finalized_games || 0) > 0));
+  const publishReady = lifecycle?.domain_readiness.official_publish.ready;
+  const publishBlockers = lifecycle?.domain_readiness.official_publish.blockers || [];
 
   return [
     {
@@ -129,7 +112,8 @@ function phaseCards(
       href: selectedHref(
         "/admin/tournaments/setup",
         tournamentId,
-        tournamentName
+        tournamentName,
+        selectedDrawId
       ),
       note: setupReady
         ? `${detail.event_options.length} events across ${detail.days.length} tournament days`
@@ -147,36 +131,46 @@ function phaseCards(
       href: selectedHref(
         "/admin/tournaments/registration",
         tournamentId,
-        tournamentName
+        tournamentName,
+        selectedDrawId
       ),
       note: `${registrations} registration${registrations === 1 ? "" : "s"}`
     },
     {
       title: "Live Operations",
-      state: setupReady && registrations ? "Ready" : "Blocked",
       description:
         "Preflight, check-in, draws, court schedule, live scoring, corrections, recovery, and podium draft.",
       href: selectedHref(
         "/admin/tournaments/live-operations",
         tournamentId,
-        tournamentName
+        tournamentName,
+        selectedDrawId
       ),
-      note:
-        setupReady && registrations
+      state: !lifecycle ? "Needs attention" : liveInProgress ? "In progress" : setupReady && registrations ? "Ready" : "Blocked",
+      note: !lifecycle
+        ? "Authoritative draw state is unavailable; readiness is not inferred"
+        : gamesExist
+        ? `${counts?.finalized_games || 0} of ${counts?.games || 0} games scored; ${counts?.open_games || 0} open`
+        : setupReady && registrations
           ? "Core setup and registrations are present"
           : "Complete setup and add registrations first"
     },
     {
       title: "Publish",
-      state: "Not started",
+      state: publishReady ? ((counts?.published_games || 0) === (counts?.games || 0) && Boolean(counts?.games) ? "Complete" : "Ready") : "Blocked",
       description:
         "Review results, publish ready divisions, create official matches, complete replay, and close the tournament.",
       href: selectedHref(
         "/admin/tournaments/publish",
         tournamentId,
-        tournamentName
+        tournamentName,
+        selectedDrawId
       ),
-      note: "Results become official only through Publish"
+      note: !lifecycle
+        ? "Authoritative publish readiness is unavailable; publishing remains blocked"
+        : publishReady
+        ? "Results become official only through Publish"
+        : publishBlockers.map((blocker) => blocker.message).join(" · ") || "Authoritative publish readiness is unavailable"
     }
   ];
 }
@@ -184,15 +178,49 @@ function phaseCards(
 function nextAction(
   detail: AdminTournamentDetailResponse,
   tournamentId: string,
-  tournamentName: string
+  tournamentName: string,
+  lifecycle: AdminTournamentLifecycle | null,
+  initialDrawId: string
 ): { label: string; href: string; reason: string } {
+  const counts = lifecycle?.counts;
+  const drawId = initialDrawId || lifecycle?.draws[0]?.draw_id || "";
+  if (!lifecycle) {
+    return {
+      label: "Review authoritative Live state",
+      href: selectedHref("/admin/tournaments/live-operations", tournamentId, tournamentName, drawId),
+      reason: "Authoritative draw state is unavailable. Live and publish readiness will not be inferred from setup or registration counts."
+    };
+  }
+  if ((counts?.games || 0) > 0 && (counts?.open_games || 0) > 0) {
+    return {
+      label: "Continue scoring",
+      href: selectedHref("/admin/tournament-live", tournamentId, tournamentName, drawId),
+      reason: `${counts?.finalized_games || 0} of ${counts?.games || 0} games scored; ${counts?.open_games || 0} open.`
+    };
+  }
+  if ((counts?.games || 0) > 0 && !lifecycle?.domain_readiness.official_publish.ready) {
+    return {
+      label: "Resolve publish blockers",
+      href: selectedHref("/admin/tournaments/ops/results", tournamentId, tournamentName, drawId),
+      reason: lifecycle?.domain_readiness.official_publish.blockers.map((blocker) => blocker.message).join(" ") || "Publishing prerequisites remain incomplete."
+    };
+  }
+  const unpublishedGames = counts?.unpublished_games ?? Math.max(0, (counts?.games || 0) - (counts?.published_games || 0));
+  if (lifecycle?.domain_readiness.official_publish.ready && unpublishedGames > 0) {
+    return {
+      label: "Publish ready divisions",
+      href: selectedHref("/admin/tournaments/ops/publish", tournamentId, tournamentName, drawId),
+      reason: "Every tournament prerequisite is complete; official publication is ready for deliberate review."
+    };
+  }
   if (!detail.tournament.start_date || !detail.tournament.end_date) {
     return {
       label: "Finish tournament basics",
       href: selectedHref(
         "/admin/tournaments/setup/basics",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       reason: "Tournament dates are incomplete."
     };
@@ -203,7 +231,8 @@ function nextAction(
       href: selectedHref(
         "/admin/tournaments/setup/events",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       reason: "Events or tournament days still need attention."
     };
@@ -214,7 +243,8 @@ function nextAction(
       href: selectedHref(
         "/admin/tournaments/setup/review",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       reason: "Core setup is ready; registration is not open."
     };
@@ -225,19 +255,21 @@ function nextAction(
       href: selectedHref(
         "/admin/tournaments/registration",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       reason: "Registration is open and no entrants are recorded yet."
     };
   }
   return {
-    label: "Prepare Live Operations",
+    label: "Open Live Operations",
     href: selectedHref(
       "/admin/tournaments/live-operations",
       tournamentId,
-      tournamentName
+      tournamentName,
+      drawId
     ),
-    reason: "Core setup and registrations are present."
+    reason: "Authoritative lifecycle state is available; review the live preflight before proceeding."
   };
 }
 
@@ -246,25 +278,22 @@ export default function TournamentHomePanel({
   clubId,
   status,
   tournamentId,
-  initialName
+  initialName,
+  initialDrawId
 }: Props) {
   const { accessToken, loading: sessionLoading } = useAdminSession();
   const [detail, setDetail] = useState<AdminTournamentDetailResponse | null>(null);
-  const [edit, setEdit] = useState<TournamentEdit>(() =>
-    editFromDetail(null, initialName || "")
-  );
+  const [lifecycle, setLifecycle] = useState<AdminTournamentLifecycle | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const detailRequest = useLatestRequestGuard(
     `${accessToken}\u0000${tournamentId}`,
     clearProtectedState
   );
-  const actionRequest = useLatestRequestGuard(accessToken);
 
   function clearProtectedState() {
-    actionRequest.invalidate();
     setDetail(null);
-    setEdit(editFromDetail(null, initialName || ""));
+    setLifecycle(null);
     setBusy(false);
     setMessage(null);
   }
@@ -288,14 +317,17 @@ export default function TournamentHomePanel({
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<AdminTournamentDetailResponse>(
-        `/admin/clubs/${encodeURIComponent(
-          clubId
-        )}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`
-      );
+      const [payload, liveSnapshot] = await Promise.all([
+        requestJson<AdminTournamentDetailResponse>(
+          `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`
+        ),
+        requestJson<AdminTournamentLiveSnapshotResponse>(
+          `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(tournamentId)}/snapshot${initialDrawId ? `?draw_id=${encodeURIComponent(initialDrawId)}` : ""}`
+        ).catch(() => null)
+      ]);
       if (!detailRequest.isCurrent(generation)) return;
       setDetail(payload);
-      setEdit(editFromDetail(payload, initialName || ""));
+      setLifecycle(liveSnapshot?.lifecycle || null);
     } catch (error) {
       if (detailRequest.isCurrent(generation)) {
         setMessage(
@@ -304,57 +336,6 @@ export default function TournamentHomePanel({
       }
     } finally {
       if (detailRequest.isCurrent(generation)) setBusy(false);
-    }
-  }
-
-  async function saveTournament(confirmationText: string) {
-    if (!detail?.tournament.updated_at) {
-      setMessage("Reload this tournament before saving changes.");
-      return;
-    }
-    if (edit.startDate && edit.endDate && edit.endDate < edit.startDate) {
-      setMessage("Tournament end date cannot be before its start date.");
-      return;
-    }
-
-    const generation = actionRequest.begin();
-    setBusy(true);
-    setMessage(null);
-    try {
-      const payload = await requestJson<AdminTournamentWriteResponse>(
-        `/admin/clubs/${encodeURIComponent(
-          clubId
-        )}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            name: edit.name.trim(),
-            start_date: edit.startDate || null,
-            end_date: edit.endDate || null,
-            expected_updated_at: detail.tournament.updated_at,
-            confirmation_text: confirmationText,
-            source: "next_tournament_lifecycle_home"
-          })
-        }
-      );
-      if (!actionRequest.isCurrent(generation)) return;
-      await loadDetail();
-      if (!actionRequest.isCurrent(generation)) return;
-      setMessage(
-        payload.idempotent_replay
-          ? "Tournament update safely reconciled."
-          : "Tournament details saved."
-      );
-    } catch (error) {
-      if (actionRequest.isCurrent(generation)) {
-        setMessage(
-          error instanceof Error
-            ? error.message
-            : "Unable to save tournament details."
-        );
-      }
-    } finally {
-      if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
@@ -383,9 +364,10 @@ export default function TournamentHomePanel({
   }
 
   const tournamentName = detail?.tournament.name || initialName || tournamentId;
-  const next = detail ? nextAction(detail, tournamentId, tournamentName) : null;
+  const routeDrawId = String(initialDrawId || "");
+  const next = detail ? nextAction(detail, tournamentId, tournamentName, lifecycle, routeDrawId) : null;
   const phases = detail
-    ? phaseCards(detail, tournamentId, tournamentName)
+    ? phaseCards(detail, tournamentId, tournamentName, lifecycle, routeDrawId)
     : [];
 
   return (
@@ -429,6 +411,23 @@ export default function TournamentHomePanel({
             </article>
           ) : null}
 
+          {lifecycle && !lifecycle.domain_readiness.official_publish.ready ? (
+            <article style={{ ...cardStyle, borderColor: "#fecaca", background: "#fef2f2" }}>
+              <h2 style={{ marginTop: 0 }}>Publish blockers</h2>
+              <ul>
+                {lifecycle.domain_readiness.official_publish.blockers.map((blocker) => <li key={`${blocker.code}:${blocker.draw_id || "tournament"}`}>{blocker.message}</li>)}
+              </ul>
+            </article>
+          ) : null}
+
+          {!lifecycle ? (
+            <article style={{ ...cardStyle, borderColor: "#fde68a", background: "#fffbeb" }}>
+              <h2 style={{ marginTop: 0 }}>Authoritative tournament state unavailable</h2>
+              <p>Live and publish readiness remain blocked until the draw lifecycle can be loaded. Setup and registration counts are not used as a substitute.</p>
+              <Link href={selectedHref("/admin/tournaments/live-operations", tournamentId, tournamentName, routeDrawId)}>Open Live Operations and reload</Link>
+            </article>
+          ) : null}
+
           <section aria-label="Tournament lifecycle phases">
             <h2>Tournament workflow</h2>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.85rem" }}>
@@ -454,7 +453,7 @@ export default function TournamentHomePanel({
       </p>
     </div>
     <Link
-      href={selectedHref("/admin/tournaments/setup/basics", tournamentId, tournamentName)}
+      href={selectedHref("/admin/tournaments/setup/basics", tournamentId, tournamentName, routeDrawId)}
       style={{ display: "inline-block", padding: "0.6rem 0.9rem", borderRadius: "999px", background: "#0f172a", color: "white", textDecoration: "none", fontWeight: 800 }}
     >
       Edit in guided setup
@@ -463,9 +462,9 @@ export default function TournamentHomePanel({
 </article>
 
           <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-            <Link href={selectedHref("/admin/tournaments/status", tournamentId, tournamentName)}>Status & recovery</Link>
+            <Link href={selectedHref("/admin/tournaments/status", tournamentId, tournamentName, routeDrawId)}>Status & recovery</Link>
             {String(detail.tournament.status).toLowerCase() === "draft" ? (
-              <Link href={selectedHref("/admin/tournaments/delete-draft", tournamentId, tournamentName)} style={{ color: "#b91c1c" }}>
+              <Link href={selectedHref("/admin/tournaments/delete-draft", tournamentId, tournamentName, routeDrawId)} style={{ color: "#b91c1c" }}>
                 Delete draft
               </Link>
             ) : null}

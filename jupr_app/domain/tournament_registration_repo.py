@@ -474,7 +474,11 @@ def tournament_can_be_deleted(supabase, tournament: dict[str, Any]) -> tuple[boo
 
 
 def archive_tournament(supabase, tournament_id: str) -> None:
-    supabase.table("tournaments").update({"status": "ARCHIVED"}).eq("id", str(tournament_id)).execute()
+    del supabase, tournament_id
+    raise PermissionError(
+        "Direct tournament archiving is disabled. Use guarded Tournament Closeout so "
+        "scores, podium review, awards, official matches, and recovery evidence are rechecked."
+    )
 
 
 def unarchive_tournament(supabase, tournament_id: str) -> None:

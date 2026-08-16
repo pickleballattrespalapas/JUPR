@@ -8,6 +8,7 @@ import type { ActionCompletion } from "@/components/interaction";
 import type {
   AdminTournament,
   AdminTournamentDraw,
+  AdminTournamentLifecycleReadiness,
   AdminTournamentListResponse,
   AdminTournamentLiveOperation,
   AdminTournamentLiveReadiness,
@@ -16,11 +17,32 @@ import type {
   AdminTournamentOpsTeam,
   AdminTournamentWriteResponse
 } from "@/lib/adminTournamentApi";
+import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
-import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import { useAdminSession } from "@/lib/useAdminSession";
 import styles from "./TournamentLivePanel.module.css";
 
-type Props = { apiBase: string | null; clubId: string; status: AdminTournamentLiveStatusResponse };
+export type TournamentOperatorView =
+  | "overview"
+  | "draws"
+  | "scoring"
+  | "corrections"
+  | "podium"
+  | "results"
+  | "publish-overview"
+  | "publish"
+  | "closeout"
+  | "status";
+
+type Props = {
+  apiBase: string | null;
+  clubId: string;
+  status: AdminTournamentLiveStatusResponse;
+  initialTournamentId?: string;
+  initialTournamentName?: string | null;
+  initialDrawId?: string | null;
+  view?: TournamentOperatorView;
+};
 type LiveCommand = "save_score" | "generate_round_robin" | "generate_playoffs" | "generate_podium" | "award_podium" | "publish_official_matches";
 type ReviewedRowVersion = { id: string; updated_at: string };
 type LiveCommandBody = {
@@ -92,11 +114,11 @@ function gameSortKey(game: Record<string, unknown>): string {
 }
 
 function gameLabel(game: Record<string, unknown>): string {
-  const stage = String(game.stage || "Game").replace(/_/g, " ");
+  const stage = String(game.stage || "").toUpperCase();
   const rr = game.rr_round_number ? `Round ${game.rr_round_number}` : "";
-  const slot = game.rr_slot_number ? `Slot ${game.rr_slot_number}` : "";
+  const slot = game.rr_slot_number ? `Court/Slot ${game.rr_slot_number}` : "";
   const playoff = [game.playoff_round, game.playoff_game_code].map(shortValue).filter((item) => item !== "—").join(" ");
-  return [stage, rr, slot, playoff].filter(Boolean).join(" · ") || String(game.id || "Game");
+  return [stage === "PLAYOFF" ? "Playoff" : "", rr, slot, playoff].filter(Boolean).join(" · ") || "Scheduled game";
 }
 
 function drawLabel(draw: AdminTournamentDraw): string {
@@ -104,16 +126,27 @@ function drawLabel(draw: AdminTournamentDraw): string {
 }
 
 function playerLabel(snapshot: AdminTournamentLiveSnapshotResponse | null, playerId?: number | null): string {
-  if (playerId == null) return "—";
+  if (playerId == null) return "Player unavailable";
   const match = (snapshot?.players || []).find((player) => Number(player.id) === Number(playerId));
-  return match ? `${match.name} (#${match.id})` : `#${playerId}`;
+  return match?.name || "Player unavailable";
 }
 
 function teamLabel(team: AdminTournamentOpsTeam | undefined, snapshot: AdminTournamentLiveSnapshotResponse | null): string {
   if (!team) return "Unassigned";
   const p1 = playerLabel(snapshot, team.player1_id ?? null);
   const p2 = team.player2_id == null ? null : playerLabel(snapshot, team.player2_id);
-  return `Team ${team.team_number ?? "?"}: ${p2 ? `${p1} / ${p2}` : p1}`;
+  return p2 ? `${p1} / ${p2}` : p1;
+}
+
+function matchupLabel(
+  game: Record<string, unknown>,
+  teamsById: Map<string, AdminTournamentOpsTeam>,
+  snapshot: AdminTournamentLiveSnapshotResponse | null
+): string {
+  const teamA = teamLabel(teamsById.get(String(game.team_a_id || "")), snapshot);
+  const teamB = teamLabel(teamsById.get(String(game.team_b_id || "")), snapshot);
+  const status = isScored(game) ? "Final" : "Open";
+  return `${gameLabel(game)} — ${teamA} vs ${teamB} — ${status}`;
 }
 
 function compactKey(value: string | null | undefined): string {
@@ -140,7 +173,7 @@ function readPendingCommand(clubId: string, tournamentId: string, drawId: string
 }
 
 function StatusChip({ scored }: { scored: boolean }) {
-  return <span className={scored ? styles.successChip : styles.openChip}>{scored ? "scored" : "open"}</span>;
+  return <span className={scored ? styles.successChip : styles.openChip}>{scored ? "Final" : "Open"}</span>;
 }
 
 function OperationChip({ status }: { status: string }) {
@@ -158,8 +191,27 @@ function CommandBlockers({ readiness }: { readiness: AdminTournamentLiveReadines
   );
 }
 
-export default function TournamentLivePanel({ apiBase, clubId, status }: Props) {
-  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
+function lifecycleBlockerMessages(readiness?: AdminTournamentLifecycleReadiness | null): string[] {
+  return (readiness?.blockers || []).map((blocker) => blocker.message);
+}
+
+function LifecycleBlockers({ readiness }: { readiness?: AdminTournamentLifecycleReadiness | null }) {
+  const blockers = lifecycleBlockerMessages(readiness);
+  if (readiness?.ready) return <p className={styles.readyText}>Tournament readiness: ready.</p>;
+  if (!blockers.length) return <p className={styles.muted}>Tournament readiness is unavailable. Reload before acting.</p>;
+  return <ul className={styles.blockers}>{blockers.map((message) => <li key={message}>{message}</li>)}</ul>;
+}
+
+export default function TournamentLivePanel({
+  apiBase,
+  clubId,
+  status,
+  initialTournamentId = "",
+  initialTournamentName = null,
+  initialDrawId = "",
+  view = "scoring"
+}: Props) {
+  const { accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [includeArchived, setIncludeArchived] = useState(false);
   const [tournaments, setTournaments] = useState<AdminTournament[]>([]);
   const [draws, setDraws] = useState<AdminTournamentDraw[]>([]);
@@ -169,6 +221,9 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
   const [scoreGameId, setScoreGameId] = useState("");
   const [scoreA, setScoreA] = useState("");
   const [scoreB, setScoreB] = useState("");
+  const [roundFilter, setRoundFilter] = useState("all");
+  const [gameStatusFilter, setGameStatusFilter] = useState("all");
+  const [scoreConfirmation, setScoreConfirmation] = useState(false);
   const [playoffAdvanceCount, setPlayoffAdvanceCount] = useState("4");
   const [publishBonusElo, setPublishBonusElo] = useState("0");
   const [pendingCommand, setPendingCommand] = useState<PendingCommand | null>(null);
@@ -178,19 +233,27 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
   const listRequest = useLatestRequestGuard(accessToken, clearProtectedLiveState);
   const drawsRequest = useLatestRequestGuard(accessToken);
   const boardRequest = useLatestRequestGuard(accessToken);
-  const actionRequest = useLatestRequestGuard(accessToken);
+  const actionScope = `${accessToken}\u0000${selectedTournamentId}\u0000${selectedDrawId}`;
+  const actionRequest = useLatestRequestGuard(actionScope);
 
   const selectedTournament = tournaments.find((tournament) => tournament.id === selectedTournamentId) || snapshot?.tournament || null;
-  const { teamsById, sortedGames, rrGames, playoffGames } = useMemo(() => {
+  const { teamsById, sortedGames } = useMemo(() => {
     const games = [...(snapshot?.games || [])].sort((left, right) => gameSortKey(left).localeCompare(gameSortKey(right)));
     return {
       teamsById: new Map((snapshot?.teams || []).map((team) => [String(team.id || ""), team])),
-      sortedGames: games,
-      rrGames: games.filter((game) => String(game.stage || "").toUpperCase() === "ROUND_ROBIN"),
-      playoffGames: games.filter((game) => String(game.stage || "").toUpperCase() === "PLAYOFF")
+      sortedGames: games
     };
   }, [snapshot]);
   const selectedGame = sortedGames.find((game) => String(game.id || "") === scoreGameId) || sortedGames.find((game) => !isScored(game)) || sortedGames[0] || null;
+  const roundOptions = [...new Set(sortedGames.map((game) => String(game.rr_round_number || game.playoff_round || "Other")))];
+  const filteredGames = sortedGames.filter((game) => {
+    const round = String(game.rr_round_number || game.playoff_round || "Other");
+    return (roundFilter === "all" || round === roundFilter)
+      && (gameStatusFilter === "all" || (gameStatusFilter === "final") === isScored(game));
+  });
+  const lifecycle = snapshot?.lifecycle;
+  const officialReadiness = lifecycle?.domain_readiness?.official_publish;
+  const archiveReadiness = lifecycle?.domain_readiness?.archive;
   const activeOperations = (snapshot?.operations || []).filter((operation) => ACTIVE_OPERATION_STATUSES.has(operation.status));
   const pendingOperation = pendingCommand
     ? (snapshot?.operations || []).find((operation) => operation.client_idempotency_key === pendingCommand.body.idempotency_key) || null
@@ -209,10 +272,10 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
   }
 
   function clearProtectedLiveState() {
-    drawsRequest.invalidate(); boardRequest.invalidate();
+    drawsRequest.invalidate(); boardRequest.invalidate(); actionRequest.invalidate();
     setBusy(false); setNotice(null);
     setTournaments([]); setDraws([]); setSelectedTournamentId(""); setSelectedDrawId(""); setSnapshot(null);
-    setScoreGameId(""); setScoreA(""); setScoreB(""); setPendingCommand(null); setLastResult(null);
+    setScoreGameId(""); setScoreA(""); setScoreB(""); setScoreConfirmation(false); setPendingCommand(null); setLastResult(null);
   }
 
   function seedScoreEditor(nextSnapshot: AdminTournamentLiveSnapshotResponse | null) {
@@ -221,6 +284,7 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
     setScoreGameId(target ? String(target.id || "") : "");
     setScoreA(target?.score_a == null ? "" : String(target.score_a));
     setScoreB(target?.score_b == null ? "" : String(target.score_b));
+    setScoreConfirmation(false);
   }
 
   async function fetchBoard(tournamentId: string, drawId: string): Promise<AdminTournamentLiveSnapshotResponse> {
@@ -238,8 +302,8 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
   }
 
   async function loadTournaments() {
-    const selectedTournamentBeforeRefresh = selectedTournamentId;
-    const selectedDrawBeforeRefresh = selectedDrawId;
+    const selectedTournamentBeforeRefresh = selectedTournamentId || initialTournamentId;
+    const selectedDrawBeforeRefresh = selectedDrawId || initialDrawId || "";
     const generation = listRequest.begin();
     drawsRequest.invalidate();
     boardRequest.invalidate();
@@ -328,6 +392,7 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
   }
 
   function selectTournament(tournamentId: string) {
+    actionRequest.invalidate();
     setSelectedTournamentId(tournamentId);
     setSelectedDrawId("");
     setDraws([]);
@@ -341,11 +406,19 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
   }
 
   function selectDraw(drawId: string) {
+    actionRequest.invalidate();
     setSelectedDrawId(drawId);
     setSnapshot(null);
     setPendingCommand(null);
     if (selectedTournamentId && drawId) void loadLiveBoard(selectedTournamentId, drawId);
     else boardRequest.invalidate();
+  }
+
+  function selectScoreGame(game: Record<string, unknown>) {
+    setScoreGameId(String(game.id || ""));
+    setScoreA(game.score_a == null ? "" : String(game.score_a));
+    setScoreB(game.score_b == null ? "" : String(game.score_b));
+    setScoreConfirmation(false);
   }
 
   function commandReadiness(command: LiveCommand): AdminTournamentLiveReadiness {
@@ -375,13 +448,17 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
         method: "POST",
         body: JSON.stringify(command.body)
       });
-      const completionText = result.reconciled
+      const completedGame = snapshot?.games.find((row) => String(row.id || "") === String(command.body.game_id || ""));
+      const scoreCompletion = command.body.command === "save_score" && completedGame
+        ? `Score saved for ${matchupLabel(completedGame, teamsById, snapshot)}: ${command.body.score_a}–${command.body.score_b}.`
+        : "";
+      const completionText = scoreCompletion || (result.reconciled
         ? `Operation ${compactKey(result.operation_key)} reconciled without repeating the domain write.`
         : result.idempotent_replay
           ? `Operation ${compactKey(result.operation_key)} returned its durable stored result.`
           : replay
             ? `Exact request ${compactKey(result.operation_key)} completed.`
-            : `Tournament Live command completed as operation ${compactKey(result.operation_key)}.`;
+            : `Tournament Live command completed as operation ${compactKey(result.operation_key)}.`);
       const completion = actionSuccess("Tournament Live command complete", completionText);
       if (!actionRequest.isCurrent(generation)) return completion;
       persistPending(null);
@@ -514,6 +591,68 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
     return submitCommand("save_score", confirmationText, { game_id: String(selectedGame.id || ""), score_a: a, score_b: b });
   }
 
+  function validateScoreDraft() {
+    if (!selectedGame) {
+      setNotice({ tone: "error", text: "Select a matchup before reviewing a score." });
+      return;
+    }
+    const a = Number(scoreA);
+    const b = Number(scoreB);
+    if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0 || a === b) {
+      setScoreConfirmation(false);
+      setNotice({ tone: "error", text: "Enter two non-tied, non-negative whole-number scores. A tied or invalid score cannot be reviewed or saved." });
+      return;
+    }
+    setNotice(null);
+    setScoreConfirmation(true);
+  }
+
+  async function reviewPodium(confirmationText: string): Promise<ActionCompletion> {
+    if (!snapshot?.state_fingerprint || !selectedTournamentId || !selectedDrawId) {
+      throw new Error("Reload the selected draw before reviewing its podium.");
+    }
+    const reviewedDraw = snapshot.draws.find((draw) => draw.id === selectedDrawId);
+    const versionRows = (rows: Array<{ id?: unknown; updated_at?: unknown }>) =>
+      rows
+        .map((row) => ({ id: String(row.id || ""), updated_at: String(row.updated_at || "") }))
+        .sort((left, right) => left.id.localeCompare(right.id));
+    const expectedTeamVersions = versionRows(snapshot.teams);
+    const expectedGameVersions = versionRows(snapshot.games);
+    if (!reviewedDraw?.updated_at || expectedTeamVersions.some((row) => !row.id || !row.updated_at) || expectedGameVersions.some((row) => !row.id || !row.updated_at)) {
+      throw new Error("The reviewed draw, team, or game versions are incomplete. Reload before reviewing the podium.");
+    }
+    const generation = actionRequest.begin();
+    setBusy(true);
+    setNotice(null);
+    try {
+      const result = await requestJson<{ review_fingerprint?: string; reviewed?: boolean }>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/podium/review`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_state_fingerprint: snapshot.state_fingerprint,
+            expected_draw_updated_at: reviewedDraw.updated_at,
+            expected_team_versions: expectedTeamVersions,
+            expected_source_game_versions: expectedGameVersions,
+            confirmation_text: confirmationText,
+            source: "next_tournament_podium_review"
+          })
+        }
+      );
+      const completion = actionSuccess("Podium reviewed", "The current teams, games, and podium are now tied to immutable review evidence.");
+      if (!actionRequest.isCurrent(generation)) return completion;
+      const board = await fetchBoard(selectedTournamentId, selectedDrawId);
+      if (actionRequest.isCurrent(generation)) hydrateBoard(board, selectedTournamentId, selectedDrawId);
+      if (actionRequest.isCurrent(generation)) setNotice({ tone: "success", text: result.reviewed ? "Podium review recorded. Any later team, game, or podium change will require a new review." : "Podium review response reconciled." });
+      return completion;
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to review the podium." });
+      throw error;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
   async function reconcileOperation(operation: AdminTournamentLiveOperation, confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) throw new Error("Select a tournament draw before reconciling an operation.");
     const generation = actionRequest.begin();
@@ -591,242 +730,202 @@ export default function TournamentLivePanel({ apiBase, clubId, status }: Props) 
   const podiumReadiness = commandReadiness("generate_podium");
   const awardReadiness = commandReadiness("award_podium");
   const publishReadiness = commandReadiness("publish_official_matches");
+  const routeContext = {
+    tournamentId: selectedTournamentId || initialTournamentId,
+    tournamentName: selectedTournament?.name || initialTournamentName || "",
+    drawId: selectedDrawId || initialDrawId || ""
+  };
+  const counts = lifecycle?.counts;
+  const totalGames = counts?.games ?? sortedGames.length;
+  const finalizedGames = counts?.finalized_games ?? sortedGames.filter(isScored).length;
+  const openGames = counts?.open_games ?? Math.max(0, totalGames - finalizedGames);
+  const duplicatePublications = counts?.duplicate_publications ?? counts?.duplicate_official_links ?? 0;
+  const uncertainOperations = counts?.uncertain_operations ?? counts?.recovery_required_operations ?? 0;
+  const podiumEntryCount = counts?.podium_entries ?? (lifecycle?.draws || []).reduce((total, draw) => total + draw.podium.length, 0);
+  const selectedLifecycleDraw = lifecycle?.draws.find((draw) => draw.draw_id === selectedDrawId) || lifecycle?.draws[0];
+  const currentPodiumReview = Boolean(
+    selectedLifecycleDraw?.review_evidence
+      && (selectedLifecycleDraw.review_evidence.current ?? selectedLifecycleDraw.review_evidence.reviewed)
+  );
+  const publishActuallyReady = Boolean(officialReadiness?.ready && publishReadiness.ready);
+  const runtimeCanPublish = Boolean(
+    status.writes_enabled
+      && status.official_publish_writes_enabled
+      && status.official_publish_write_flag?.enabled
+      && status.service_role_ready
+      && status.operation_store_ready
+      && status.audit_store_ready
+  );
+  const archiveAtomicAvailable = Boolean(
+    lifecycle?.runtime_capability?.archive_available
+      && lifecycle?.runtime_capability?.archive_writes_enabled
+      && lifecycle?.runtime_capability?.archive_atomic_commit_enabled
+  );
+
+  const gameCards = (games: Array<Record<string, unknown>>, editable: boolean) => (
+    <div className={`${styles.gameCards} ${styles.mobileGames}`}>
+      {games.map((game) => (
+        <article key={String(game.id || matchupLabel(game, teamsById, snapshot))} className={styles.gameCard}>
+          <div className={styles.headingRow}>
+            <strong>{gameLabel(game)}</strong>
+            <StatusChip scored={isScored(game)} />
+          </div>
+          <p className={styles.matchup}>{teamLabel(teamsById.get(String(game.team_a_id || "")), snapshot)} <span>vs</span> {teamLabel(teamsById.get(String(game.team_b_id || "")), snapshot)}</p>
+          <p className={styles.resultLine}>{isScored(game) ? `${shortValue(game.score_a)}–${shortValue(game.score_b)}` : "Score pending"}</p>
+          {editable ? <button type="button" className={styles.secondaryButton} onClick={() => selectScoreGame(game)}>{isScored(game) ? "Correct score" : "Enter score"}</button> : null}
+        </article>
+      ))}
+    </div>
+  );
+
+  const operationEvidence = (
+    <article className={styles.card}>
+      <h2>Recent operations and reconciliation</h2>
+      <p className={styles.muted}>Durable operation and audit evidence is retained for every guarded draw write.</p>
+      {!snapshot?.operations.length ? <p className={styles.muted}>No draw operations are recorded.</p> : (
+        <div className={styles.operationList}>
+          {snapshot.operations.map((operation) => (
+            <div key={operation.operation_key} className={styles.operationRow}>
+              <div>
+                <OperationChip status={operation.status} /> <strong>{operation.command?.replace(/_/g, " ") || operation.action}</strong>
+                <p className={styles.muted}>{formatTimestamp(operation.updated_at)} · attempt {operation.attempt_count}</p>
+                {operation.error_text ? <p className={styles.errorText}>{operation.error_text}</p> : null}
+                <details>
+                  <summary>Technical operation evidence</summary>
+                  <p><code>{operation.operation_key}</code></p>
+                  <p><code>{operation.client_idempotency_key}</code></p>
+                  <p>Intent: {operation.audit_evidence.intent_present ? "yes" : "no"} · completion/reconcile: {operation.audit_evidence.completion_present ? "yes" : "no"} · failure: {operation.audit_evidence.failure_present ? "yes" : "no"}</p>
+                </details>
+              </div>
+              {ACTIVE_OPERATION_STATUSES.has(operation.status) ? (
+                <ConfirmAction triggerLabel="Reconcile operation" title="Reconcile this interrupted tournament operation?" description="The server verifies authoritative evidence and closes or completes recovery without repeating the domain mutation." confirmLabel="Yes, reconcile operation" confirmationText="RECONCILE TOURNAMENT LIVE" busy={busy} onConfirm={(confirmationText) => reconcileOperation(operation, confirmationText)} />
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+      {lastResult ? <details><summary>Last technical response</summary><code>{lastResult.operation_key}</code>{lastResult.idempotent_replay ? " · idempotent replay" : ""}{lastResult.reconciled ? " · reconciled" : ""}</details> : null}
+    </article>
+  );
+
+  const scoreWorkspace = (
+    <article className={styles.card}>
+      <div className={styles.headingRow}>
+        <div><p className={styles.eyebrow}>{view === "corrections" ? "Correction" : "Live score"}</p><h2>{selectedGame ? gameLabel(selectedGame) : "Select a matchup"}</h2></div>
+        {selectedGame ? <StatusChip scored={isScored(selectedGame)} /> : null}
+      </div>
+      <CommandBlockers readiness={scoreReadiness} />
+      {selectedGame ? (
+        <>
+          <div className={styles.scorecard}>
+            <div><span>Team A</span><strong>{teamLabel(teamsById.get(String(selectedGame.team_a_id || "")), snapshot)}</strong></div>
+            <label htmlFor="score-a">Team A score<input id="score-a" value={scoreA} onChange={(event) => { setScoreA(event.target.value); setScoreConfirmation(false); }} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
+            <div className={styles.versus}>vs</div>
+            <label htmlFor="score-b">Team B score<input id="score-b" value={scoreB} onChange={(event) => { setScoreB(event.target.value); setScoreConfirmation(false); }} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
+            <div><span>Team B</span><strong>{teamLabel(teamsById.get(String(selectedGame.team_b_id || "")), snapshot)}</strong></div>
+          </div>
+          {isScored(selectedGame) ? <p><strong>Before correction:</strong> {shortValue(selectedGame.score_a)}–{shortValue(selectedGame.score_b)} · <strong>After correction:</strong> {scoreA || "—"}–{scoreB || "—"}</p> : null}
+          {!scoreConfirmation ? <button type="button" className={styles.primaryButton} onClick={validateScoreDraft} disabled={!scoreReadiness.ready || busy}>Review score</button> : (
+            <section className={styles.confirmationCard} aria-label="Score confirmation">
+              <div className={styles.headingRow}><div><p className={styles.eyebrow}>Score review</p><h3>{gameLabel(selectedGame)}</h3></div><button type="button" className={styles.secondaryButton} onClick={() => setScoreConfirmation(false)}>Edit score</button></div>
+              <p className={styles.matchup}>{teamLabel(teamsById.get(String(selectedGame.team_a_id || "")), snapshot)} <strong>{scoreA}</strong> – <strong>{scoreB}</strong> {teamLabel(teamsById.get(String(selectedGame.team_b_id || "")), snapshot)}</p>
+              <p><strong>Proposed winner:</strong> {Number(scoreA) > Number(scoreB) ? teamLabel(teamsById.get(String(selectedGame.team_a_id || "")), snapshot) : teamLabel(teamsById.get(String(selectedGame.team_b_id || "")), snapshot)}</p>
+              <ConfirmAction triggerLabel="Confirm & save" title="Confirm this exact tournament score?" description={`${matchupLabel(selectedGame, teamsById, snapshot)}. Save ${scoreA}–${scoreB}.`} confirmLabel="Confirm & save" confirmationText={scoreReadiness.confirmation || CONFIRMATIONS.save_score} disabled={!scoreReadiness.ready} busy={busy} onConfirm={async (confirmationText) => { const completion = await saveScore(confirmationText); setScoreConfirmation(false); return completion; }} />
+            </section>
+          )}
+        </>
+      ) : <p className={styles.muted}>No game is available in this draw.</p>}
+    </article>
+  );
 
   return (
     <section className={styles.root}>
       <article className={styles.card}>
         <div className={styles.headingRow}>
-          <div>
-            <h2>Tournament Live control room</h2>
-            <p className={styles.muted}>Draw-scoped tournament scoring and progression, authorized by FastAPI/Python.</p>
+          <div><p className={styles.eyebrow}>Authoritative tournament state</p><h2>{selectedTournament?.name || initialTournamentName || "Selected tournament"}</h2></div>
+          <button type="button" className={styles.secondaryButton} onClick={() => void loadLiveBoard()} disabled={busy || !selectedTournamentId || !selectedDrawId}>Reload selected draw</button>
+        </div>
+        <p className={styles.muted}>This draw-scoped tournament runner is not JUPR Live. Tournament games become official only through the guarded Publish workflow.</p>
+        <div className={styles.statsGrid}>
+          <div><span>Draw</span><strong>{draws.find((draw) => draw.id === selectedDrawId)?.name || selectedLifecycleDraw?.name || "Select a draw"}</strong></div>
+          <div><span>Scores</span><strong>{finalizedGames} of {totalGames}</strong></div>
+          <div><span>Open games</span><strong>{openGames}</strong></div>
+          <div><span>Official matches</span><strong>{counts?.published_games ?? snapshot?.progression?.published_games ?? 0}</strong></div>
+          <div><span>Awards</span><strong>{counts?.verified_awards ?? snapshot?.progression?.verified_awards ?? 0} / {counts?.expected_awards ?? snapshot?.progression?.expected_awards ?? 0}</strong></div>
+        </div>
+        {snapshot?.state_fingerprint ? <details><summary>Technical state version</summary><code>{snapshot.state_fingerprint}</code></details> : null}
+        <details className={styles.selectionDetails}>
+          <summary>Change or refresh selection</summary>
+          <div className={styles.controlGrid}>
+            <label className={styles.checkboxLabel}><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} disabled={busy} />Include archived tournaments</label>
+            <button type="button" className={styles.secondaryButton} onClick={loadTournaments} disabled={busy || !accessToken}>{busy ? "Refreshing…" : "Refresh tournaments"}</button>
+            <label>Tournament<select value={selectedTournamentId} onChange={(event) => selectTournament(event.target.value)} disabled={busy} className={styles.input}><option value="">Choose tournament…</option>{tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name}</option>)}</select></label>
+            <label>Draw<select value={selectedDrawId} onChange={(event) => selectDraw(event.target.value)} className={styles.input} disabled={busy || !draws.length}><option value="">Choose draw…</option>{draws.map((draw) => <option key={draw.id} value={draw.id}>{drawLabel(draw)}</option>)}</select></label>
           </div>
-          <span className={status.writes_enabled ? styles.successChip : styles.recoveryChip}>
-            {status.writes_enabled ? "staging writes open" : "read only"}
-          </span>
-        </div>
-        <div className={styles.boundaryCallout}>
-          <strong>Separate product boundary:</strong> this runner operates a prepared tournament draw. It is not JUPR Live, which remains the one-off Round Robin, League/Ladder, and Club Social product. <Link href="/admin/jupr-live">Open JUPR Live Admin</Link>.
-        </div>
-        <div className={accessToken ? styles.sessionReady : styles.sessionWarning}>
-          <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
-          <p>{accessToken ? "Authenticated reads are available. Writes still require the dedicated staging gate shown above." : sessionLoading ? "Checking admin session…" : "Sign in before loading tournament data."}</p>
-          {sessionMessage ? <p className={styles.errorText}>{sessionMessage}</p> : null}
-          {!accessToken && !sessionLoading ? <Link href="/admin/login">Open admin login</Link> : null}
-        </div>
-        {status.warnings?.length ? (
-          <ul className={styles.warnings}>{[...new Set(status.warnings)].map((warning) => <li key={warning}>{warning}</li>)}</ul>
-        ) : null}
-        <p className={styles.linkRow}>
-          <a href={status.streamlit_fallback_url} target="_blank" rel="noreferrer">Open Streamlit Tournament Live fallback</a>
-          <span aria-hidden="true"> · </span>
-          <Link href="/admin/tournaments/ops">Tournament Ops setup/recovery</Link>
-          <span aria-hidden="true"> · </span>
-          <Link href="/admin/match-log">Match Log corrections</Link>
-          <span aria-hidden="true"> · </span>
-          <Link href="/admin/replay-history">Replay History</Link>
-        </p>
+        </details>
+        {!accessToken && !sessionLoading ? <p className={styles.sessionWarning}>Admin sign-in required. <Link href="/admin/login">Open admin login</Link></p> : null}
+        {sessionMessage ? <p className={styles.errorText}>{sessionMessage}</p> : null}
       </article>
 
-      <article className={styles.card}>
-        <h2>1. Select a prepared draw</h2>
-        <div className={styles.controlGrid}>
-          <label className={styles.checkboxLabel}>
-            <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} disabled={busy} />
-            Include archived tournaments
-          </label>
-          <button type="button" className={styles.primaryButton} onClick={loadTournaments} disabled={busy || !accessToken}>
-            {busy ? "Refreshing…" : "Refresh tournaments"}
-          </button>
-          <label>
-            Tournament
-            <select
-              value={selectedTournamentId}
-              onChange={(event) => selectTournament(event.target.value)}
-              disabled={busy}
-              className={styles.input}
-            >
-              <option value="">Choose tournament…</option>
-              {tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name} · {tournament.status}</option>)}
-            </select>
-          </label>
-          <button type="button" className={styles.secondaryButton} onClick={() => void loadDraws()} disabled={busy || !selectedTournamentId || !accessToken}>Retry prepared draws</button>
-          <label>
-            Draw
-            <select value={selectedDrawId} onChange={(event) => selectDraw(event.target.value)} className={styles.input} disabled={busy || !draws.length}>
-              <option value="">Choose draw…</option>
-              {draws.map((draw) => <option key={draw.id} value={draw.id}>{drawLabel(draw)}</option>)}
-            </select>
-          </label>
-          <button type="button" className={styles.primaryButton} onClick={() => void loadLiveBoard()} disabled={busy || !selectedTournamentId || !selectedDrawId || !accessToken}>Retry authoritative board</button>
-        </div>
-      </article>
+      {pendingCommand ? <article className={styles.recoveryCard}><h2>Interrupted request retained on this device</h2><p>The exact {pendingCommand.body.command.replace(/_/g, " ")} request from {formatTimestamp(pendingCommand.createdAt)} is retained until its outcome is proven.</p><div className={styles.buttonRow}><button type="button" className={styles.primaryButton} onClick={() => void executePending(pendingCommand, true)} disabled={busy}>Retry exact retained request</button><button type="button" className={styles.secondaryButton} onClick={clearLocalPending} disabled={busy || Boolean(pendingOperation && ACTIVE_OPERATION_STATUSES.has(pendingOperation.status))}>Clear local copy</button></div><details><summary>Technical operation evidence</summary><code>{pendingCommand.body.idempotency_key}</code></details></article> : null}
 
-      {snapshot ? (
+      {snapshot && view === "overview" ? (
+        <div className={styles.moduleGrid}>
+          {[
+            ["Preflight & check-in", "/admin/tournaments/live-operations/check-in", "Attendance, payment, waiver, partner, substitute, court, time, and staffing readiness."],
+            ["Draws & schedule", "/admin/tournaments/live-operations/draws", "Review prepared teams, rounds, courts, open games, and playoff progression."],
+            ["Live scoring", "/admin/tournament-live", `${finalizedGames} of ${totalGames} games scored; ${openGames} open.`],
+            ["Corrections & recovery", "/admin/tournaments/live-operations/corrections", "Correct draw scores and reconcile failed or uncertain operations."],
+            ["Podium draft", "/admin/tournaments/live-operations/podium", currentPodiumReview ? "The current podium has explicit review evidence." : "Podium review is incomplete or stale."]
+          ].map(([title, path, detail]) => <Link key={path} href={tournamentRouteHref(path, routeContext)} className={styles.moduleCard}><h2>{title}</h2><p>{detail}</p></Link>)}
+        </div>
+      ) : null}
+
+      {snapshot && view === "draws" ? (
         <>
-          <article className={styles.card}>
-            <div className={styles.headingRow}>
-              <div>
-                <p className={styles.eyebrow}>Live draw state</p>
-                <h2>{selectedTournament?.name || snapshot.tournament?.name || "Tournament"}</h2>
-              </div>
-              <button type="button" className={styles.secondaryButton} onClick={() => void loadLiveBoard()} disabled={busy}>Reload state</button>
-            </div>
-            <div className={styles.statsGrid}>
-              <div><span>Status</span><strong>{snapshot.tournament?.status || "—"}</strong></div>
-              <div><span>Phase</span><strong>{String(snapshot.progression?.phase || "—").replace(/_/g, " ")}</strong></div>
-              <div><span>Teams</span><strong>{snapshot.summary.teams}</strong></div>
-              <div><span>RR / playoff</span><strong>{rrGames.length} / {playoffGames.length}</strong></div>
-              <div><span>Open games</span><strong>{snapshot.progression?.open_games ?? 0}</strong></div>
-              <div><span>Official</span><strong>{snapshot.progression?.published_games ?? 0}</strong></div>
-              <div><span>Awards</span><strong>{snapshot.progression?.verified_awards ?? 0} / {snapshot.progression?.expected_awards ?? 0}</strong></div>
-            </div>
-            <p className={styles.stateVersion}>Reviewed draw version: <code title={snapshot.state_fingerprint || ""}>{compactKey(snapshot.state_fingerprint)}</code></p>
-            {snapshot.warnings?.length ? <ul className={styles.warnings}>{[...new Set(snapshot.warnings)].map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
-          </article>
-
-          {pendingCommand ? (
-            <article className={styles.recoveryCard}>
-              <h2>Interrupted request retained on this device</h2>
-              <p>Command <strong>{pendingCommand.body.command.replace(/_/g, " ")}</strong>, idempotency UUID <code>{pendingCommand.body.idempotency_key}</code>, saved {formatTimestamp(pendingCommand.createdAt)}.</p>
-              <p>{pendingOperation ? <>Server operation <code>{compactKey(pendingOperation.operation_key)}</code> is <strong>{pendingOperation.status}</strong>.</> : "No matching server operation is visible after the latest reload. The original request may not have reached FastAPI."}</p>
-              <div className={styles.buttonRow}>
-                <button type="button" className={styles.primaryButton} onClick={() => void executePending(pendingCommand, true)} disabled={busy}>Retry exact retained request</button>
-                <button type="button" className={styles.secondaryButton} onClick={clearLocalPending} disabled={busy || Boolean(pendingOperation && ACTIVE_OPERATION_STATUSES.has(pendingOperation.status))}>Clear local copy</button>
-              </div>
-            </article>
-          ) : null}
-
-          {activeOperations.length ? (
-            <article className={styles.recoveryCard}>
-              <h2>Recovery required before another draw write</h2>
-              <p>Reconciliation is read/verify/audit only: FastAPI will not repeat the domain mutation. Ambiguous partial publishing remains locked.</p>
-              <div className={styles.operationList}>
-                {activeOperations.map((operation) => (
-                  <div key={operation.operation_key} className={styles.operationRow}>
-                    <div><OperationChip status={operation.status} /> <strong>{operation.command?.replace(/_/g, " ") || operation.action}</strong><br /><code>{compactKey(operation.operation_key)}</code>{operation.error_text ? <p className={styles.errorText}>{operation.error_text}</p> : null}</div>
-                    <ConfirmAction triggerLabel="Reconcile operation" title="Reconcile this interrupted Tournament Live operation?" description="FastAPI will verify authoritative evidence and close or complete the recovery audit without repeating the domain mutation." confirmLabel="Yes, reconcile operation" confirmationText="RECONCILE TOURNAMENT LIVE" busy={busy} onConfirm={(confirmationText) => reconcileOperation(operation, confirmationText)} />
-                  </div>
-                ))}
-              </div>
-            </article>
-          ) : null}
-
-          <article className={styles.card}>
-            <h2>2. Enter live scores</h2>
-            <CommandBlockers readiness={scoreReadiness} />
-            {!sortedGames.length ? <p className={styles.muted}>No games exist. Generate round-robin games after Tournament Ops has finalized teams.</p> : (
-              <div className={styles.scoreGrid}>
-                <label className={styles.wideControl}>
-                  Game
-                  <select
-                    value={scoreGameId || String(selectedGame?.id || "")}
-                    onChange={(event) => {
-                      const game = sortedGames.find((row) => String(row.id || "") === event.target.value) || null;
-                      setScoreGameId(event.target.value);
-                      setScoreA(game?.score_a == null ? "" : String(game.score_a));
-                      setScoreB(game?.score_b == null ? "" : String(game.score_b));
-                    }}
-                    className={styles.input}
-                  >
-                    {sortedGames.map((game) => <option key={String(game.id || gameLabel(game))} value={String(game.id || "")}>{gameLabel(game)} · {isScored(game) ? "scored" : "open"}</option>)}
-                  </select>
-                </label>
-                <div><span className={styles.labelText}>Team A</span><strong>{teamLabel(teamsById.get(String(selectedGame?.team_a_id || "")), snapshot)}</strong></div>
-                <div><span className={styles.labelText}>Team B</span><strong>{teamLabel(teamsById.get(String(selectedGame?.team_b_id || "")), snapshot)}</strong></div>
-                <label htmlFor="score-a">Score A<input id="score-a" value={scoreA} onChange={(event) => setScoreA(event.target.value)} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
-                <label htmlFor="score-b">Score B<input id="score-b" value={scoreB} onChange={(event) => setScoreB(event.target.value)} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
-                <ConfirmAction triggerLabel="Save score" title="Save this game score?" description={`This records ${scoreA || "0"}–${scoreB || "0"} for ${selectedGame ? gameLabel(selectedGame) : "the selected game"}.`} confirmLabel="Yes, save score" confirmationText={scoreReadiness.confirmation || CONFIRMATIONS.save_score} disabled={!scoreReadiness.ready} busy={busy} onConfirm={saveScore} />
-              </div>
-            )}
-          </article>
-
-          <article className={styles.card}>
-            <h2>3. Progress this draw</h2>
-            <div className={styles.commandGrid}>
-              <section className={styles.commandCard} aria-labelledby="live-round-robin-heading">
-                <h3 id="live-round-robin-heading">Round robin</h3>
-                <p>Generate the Python schedule once, after teams are final.</p>
-                <CommandBlockers readiness={rrReadiness} />
-                <ConfirmAction triggerLabel="Generate games" title="Generate round-robin games?" description="This creates the Python schedule from the currently reviewed teams and draw version." confirmLabel="Yes, generate games" confirmationText={rrReadiness.confirmation || CONFIRMATIONS.generate_round_robin} disabled={!rrReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("generate_round_robin", confirmationText)} />
-              </section>
-
-              <section className={styles.commandCard} aria-labelledby="live-playoffs-heading">
-                <h3 id="live-playoffs-heading">Playoffs</h3>
-                <p>Seed a Python bracket only after every round-robin result is final.</p>
-                <CommandBlockers readiness={playoffReadiness} />
-                <label htmlFor="advance-count">Advance count<input id="advance-count" value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} type="number" min={4} max={6} step={1} className={styles.input} /></label>
-                <ConfirmAction triggerLabel="Generate playoffs" title="Generate the playoff bracket?" description={`This seeds a playoff bracket for the top ${playoffAdvanceCount} teams from the completed round robin.`} confirmLabel="Yes, generate playoffs" confirmationText={playoffReadiness.confirmation || CONFIRMATIONS.generate_playoffs} disabled={!playoffReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("generate_playoffs", confirmationText, { advance_count: Number(playoffAdvanceCount) })} />
-              </section>
-
-              <section className={styles.commandCard} aria-labelledby="live-podium-heading">
-                <h3 id="live-podium-heading">Podium</h3>
-                <p>Create immutable draw placements, then mint the expected linked-player awards.</p>
-                <CommandBlockers readiness={podiumReadiness} />
-                <ConfirmAction triggerLabel="Generate podium" title="Generate immutable podium placements?" description="This calculates and stores the draw placements from the reviewed final game results." confirmLabel="Yes, generate podium" confirmationText={podiumReadiness.confirmation || CONFIRMATIONS.generate_podium} disabled={!podiumReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("generate_podium", confirmationText)} />
-                <hr />
-                <CommandBlockers readiness={awardReadiness} />
-                <ConfirmAction triggerLabel="Award podium" title="Award the verified podium?" description="This mints the expected tournament awards for linked players after the podium has been verified." confirmLabel="Yes, award podium" confirmationText={awardReadiness.confirmation || CONFIRMATIONS.award_podium} disabled={!awardReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("award_podium", confirmationText)} />
-              </section>
-
-              <section className={styles.dangerCard} aria-labelledby="live-publish-heading">
-                <h3 id="live-publish-heading">Official match publish</h3>
-                <p>Terminal rated write: every game, podium award, and existing official link must verify first.</p>
-                <CommandBlockers readiness={publishReadiness} />
-                <label htmlFor="winner-bonus">Playoff winner bonus Elo<input id="winner-bonus" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} type="number" min={0} max={40} step={1} className={styles.input} /></label>
-                <ConfirmAction triggerLabel="Publish official matches" title="Publish these matches as official rated results?" description={`This terminal write publishes every verified game and applies a ${publishBonusElo || "0"}-Elo playoff-winner bonus. Use Match Log and Replay History for later corrections.`} confirmLabel="Yes, publish official matches" confirmationText={publishReadiness.confirmation || CONFIRMATIONS.publish_official_matches} tone="danger" disabled={!publishReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("publish_official_matches", confirmationText, { playoff_winner_bonus_elo: Number(publishBonusElo) })} />
-              </section>
-            </div>
-          </article>
-
-          <article className={styles.card}>
-            <h2>4. Games</h2>
-            <div className={styles.tableWrap}>
-              <table className={styles.gameTable}>
-                <caption>Authoritative games for the selected tournament draw</caption>
-                <thead><tr><th scope="col">Game</th><th scope="col">Team A</th><th scope="col">Team B</th><th scope="col">Score</th><th scope="col">Status</th></tr></thead>
-                <tbody>
-                  {sortedGames.map((game) => (
-                    <tr key={String(game.id || gameLabel(game))}>
-                      <th scope="row">{gameLabel(game)}</th>
-                      <td>{teamLabel(teamsById.get(String(game.team_a_id || "")), snapshot)}</td>
-                      <td>{teamLabel(teamsById.get(String(game.team_b_id || "")), snapshot)}</td>
-                      <td>{shortValue(game.score_a)}–{shortValue(game.score_b)}</td>
-                      <td><StatusChip scored={isScored(game)} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className={styles.mobileGames}>
-              {sortedGames.map((game) => (
-                <article key={`mobile:${String(game.id || gameLabel(game))}`} className={styles.gameCard}>
-                  <div className={styles.headingRow}><strong>{gameLabel(game)}</strong><StatusChip scored={isScored(game)} /></div>
-                  <dl><dt>Team A</dt><dd>{teamLabel(teamsById.get(String(game.team_a_id || "")), snapshot)}</dd><dt>Team B</dt><dd>{teamLabel(teamsById.get(String(game.team_b_id || "")), snapshot)}</dd><dt>Score</dt><dd>{shortValue(game.score_a)}–{shortValue(game.score_b)}</dd></dl>
-                </article>
-              ))}
-            </div>
-          </article>
-
-          <article className={styles.card}>
-            <h2>5. Durable operation and audit evidence</h2>
-            {!snapshot.operations.length ? <p className={styles.muted}>No Tournament Live operations are recorded for this draw.</p> : (
-              <div className={styles.operationList}>
-                {snapshot.operations.map((operation) => (
-                  <div key={operation.operation_key} className={styles.operationRow}>
-                    <div>
-                      <OperationChip status={operation.status} /> <strong>{operation.command?.replace(/_/g, " ") || operation.action}</strong>
-                      <p><code title={operation.operation_key}>{compactKey(operation.operation_key)}</code> · attempt {operation.attempt_count} · {formatTimestamp(operation.updated_at)}</p>
-                      <p className={styles.muted}>Intent audit: {operation.audit_evidence.intent_present ? "yes" : "no"} · completion/reconcile audit: {operation.audit_evidence.completion_present ? "yes" : "no"} · failure audit: {operation.audit_evidence.failure_present ? "yes" : "no"}</p>
-                    </div>
-                    <code title={operation.client_idempotency_key}>{compactKey(operation.client_idempotency_key)}</code>
-                  </div>
-                ))}
-              </div>
-            )}
-            {lastResult ? <p className={styles.stateVersion}>Last response: operation <code>{compactKey(lastResult.operation_key)}</code>{lastResult.idempotent_replay ? " · idempotent replay" : ""}{lastResult.reconciled ? " · reconciled" : ""}</p> : null}
-          </article>
+          <article className={styles.card}><h2>Draws & schedule</h2><p className={styles.muted}>Round and court cards keep the tournament schedule readable without a page-wide technical table.</p>{gameCards(sortedGames, false)}</article>
+          <article className={styles.card}><h2>Progress this draw</h2><div className={styles.commandGrid}><section className={styles.commandCard}><h3>Round robin</h3><CommandBlockers readiness={rrReadiness} /><ConfirmAction triggerLabel="Generate games" title="Generate round-robin games?" description="Create the reviewed Python schedule from the current teams." confirmLabel="Yes, generate games" confirmationText={rrReadiness.confirmation || CONFIRMATIONS.generate_round_robin} disabled={!rrReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("generate_round_robin", confirmationText)} /></section><section className={styles.commandCard}><h3>Playoffs</h3><CommandBlockers readiness={playoffReadiness} /><label htmlFor="advance-count">Advance count<input id="advance-count" value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} type="number" min={4} max={6} className={styles.input} /></label><ConfirmAction triggerLabel="Generate playoffs" title="Generate the playoff bracket?" description={`Advance the top ${playoffAdvanceCount} teams after every round-robin score is final.`} confirmLabel="Yes, generate playoffs" confirmationText={playoffReadiness.confirmation || CONFIRMATIONS.generate_playoffs} disabled={!playoffReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("generate_playoffs", confirmationText, { advance_count: Number(playoffAdvanceCount) })} /></section></div></article>
         </>
       ) : null}
+
+      {snapshot && (view === "scoring" || view === "corrections") ? (
+        <>
+          <article className={styles.card}><div className={styles.headingRow}><div><h2>{view === "corrections" ? "Scored games with current results" : "Round and court matchups"}</h2><p className={styles.muted}>{view === "corrections" ? "Choose a finalized game to review its before/after correction." : "Choose a matchup for inline score entry."}</p></div><div className={styles.filterRow}><label>Round<select className={styles.input} value={roundFilter} onChange={(event) => setRoundFilter(event.target.value)}><option value="all">All rounds</option>{roundOptions.map((round) => <option key={round} value={round}>{round}</option>)}</select></label><label>Status<select className={styles.input} value={gameStatusFilter} onChange={(event) => setGameStatusFilter(event.target.value)}><option value="all">All games</option><option value="open">Open</option><option value="final">Final</option></select></label></div></div>{gameCards(view === "corrections" ? filteredGames.filter(isScored) : filteredGames, true)}</article>
+          {scoreWorkspace}
+          {view === "corrections" ? <article className={styles.card}><h2>Correction boundaries</h2><p>Match Log corrections are for official published matches. Tournament draw corrections occur here before or after publication, and the server preserves replay and rating safety.</p><p className={styles.linkRow}><Link href={tournamentRouteHref("/admin/tournaments/live-operations/check-in", routeContext)}>Review substitution attendance</Link><Link href="/admin/match-log">Open Match Log</Link><Link href="/admin/replay-history">Open replay evidence</Link></p><p><strong>Forfeit or substitution:</strong> record attendance/substitution evidence first, then use the supported draw command or Match Log recovery path. Do not disguise either as an ordinary score correction.</p></article> : null}
+          {view === "corrections" ? operationEvidence : null}
+        </>
+      ) : null}
+
+      {snapshot && view === "podium" ? (
+        <article className={styles.card}><h2>Podium draft</h2><p className={styles.muted}>Generate placements, review the current teams/games/podium explicitly, then award the reviewed podium.</p><div className={styles.podiumGrid}>{(snapshot.podium || []).map((row, index) => { const teamId = String(row.team_id || row.tournament_team_id || ""); return <div key={String(row.id || `${teamId}:${index}`)} className={styles.podiumCard}><span>Place {shortValue(row.place || row.placement || index + 1)}</span><strong>{teamLabel(teamsById.get(teamId), snapshot)}</strong></div>; })}</div>{!snapshot.podium.length ? <p>No podium entries yet.</p> : null}<div className={styles.commandGrid}><section className={styles.commandCard}><h3>Generate podium</h3><CommandBlockers readiness={podiumReadiness} /><ConfirmAction triggerLabel="Generate podium" title="Generate podium placements?" description="Calculate placements from the reviewed final results." confirmLabel="Yes, generate podium" confirmationText={podiumReadiness.confirmation || CONFIRMATIONS.generate_podium} disabled={!podiumReadiness.ready} busy={busy} onConfirm={(text) => submitCommand("generate_podium", text)} /></section><section className={styles.commandCard}><h3>Explicit review</h3><p>{currentPodiumReview ? "Current review evidence is present." : "A current explicit review is required; any team, game, or podium change makes it stale."}</p><ConfirmAction triggerLabel="Review podium" title="Review this exact podium?" description="This records immutable evidence for the current teams, games, and placements." confirmLabel="Yes, review podium" confirmationText="REVIEW PODIUM" disabled={!snapshot.podium.length || currentPodiumReview} busy={busy} onConfirm={reviewPodium} /></section><section className={styles.commandCard}><h3>Awards</h3><CommandBlockers readiness={awardReadiness} /><ConfirmAction triggerLabel="Award podium" title="Award this reviewed podium?" description="Mint only the exact expected linked-player tournament awards." confirmLabel="Yes, award podium" confirmationText={awardReadiness.confirmation || CONFIRMATIONS.award_podium} disabled={!awardReadiness.ready || !currentPodiumReview} busy={busy} onConfirm={(text) => submitCommand("award_podium", text)} /></section></div></article>
+      ) : null}
+
+      {snapshot && view === "results" ? (
+        <><article className={styles.card}><div className={styles.headingRow}><div><h2>Review results</h2><p className={styles.muted}>Human-readable division and draw state, standings, podium readiness, corrections, and exceptions.</p></div><Link href={tournamentRouteHref("/admin/tournaments/publish/import-results", routeContext)} className={styles.secondaryLink}>Import results</Link></div><div className={styles.drawCards}>{(lifecycle?.draws || []).map((draw) => <section key={draw.draw_id} className={styles.commandCard}><div className={styles.headingRow}><h3>{draw.name}</h3><span className={draw.readiness.official_publish.ready ? styles.successChip : styles.recoveryChip}>{draw.readiness.official_publish.ready ? "Ready" : "Blocked"}</span></div><p>{draw.counts.finalized_games || 0} of {draw.counts.games || 0} scores complete · {(draw.counts.open_games || 0)} missing</p><h4>Standings</h4>{draw.standings.length ? <ol>{draw.standings.slice(0, 8).map((row, index) => <li key={String(row.team_id || index)}>{teamLabel(teamsById.get(String(row.team_id || "")), snapshot)} · {shortValue(row.wins)} wins</li>)}</ol> : <p className={styles.muted}>Standings are not available yet.</p>}<h4>Podium readiness</h4><LifecycleBlockers readiness={draw.readiness.official_publish} /></section>)}</div>{!(lifecycle?.draws || []).length ? <p className={styles.muted}>Reload authoritative lifecycle state to review divisions.</p> : null}</article><article className={styles.card}><h2>Selected draw results</h2>{gameCards(sortedGames, false)}</article></>
+      ) : null}
+
+      {snapshot && view === "publish-overview" ? <div className={styles.moduleGrid}>{[["Review results", "/admin/tournaments/ops/results", `${finalizedGames} of ${totalGames} scores complete.`], ["Import results", "/admin/tournaments/publish/import-results", "Separate DUPR CSV preview and guarded import workspace."], ["Publish divisions", "/admin/tournaments/ops/publish", officialReadiness?.ready ? "Tournament prerequisites are complete." : "Publishing is blocked by tournament prerequisites."], ["Tournament closeout", "/admin/tournaments/publish/closeout", archiveAtomicAvailable ? "Review the final server-enforced closeout prerequisites." : "Archive is unavailable until atomic closeout commit is installed."]].map(([title, path, detail]) => <Link key={path} href={tournamentRouteHref(path, routeContext)} className={styles.moduleCard}><h2>{title}</h2><p>{detail}</p></Link>)}</div> : null}
+
+      {snapshot && view === "publish" ? (
+        <article className={styles.card}><h2>Publish divisions</h2><div className={styles.readinessColumns}><section className={styles.commandCard}><h3>Tournament readiness</h3><LifecycleBlockers readiness={officialReadiness} /></section><section className={styles.commandCard}><h3>Runtime capability</h3><p><span className={runtimeCanPublish ? styles.successChip : styles.recoveryChip}>{runtimeCanPublish ? "Available" : "Unavailable"}</span></p><p className={styles.muted}>The dedicated official-publish permission, service role, operation store, and audit store must all be available. Environment permission never means this tournament is ready.</p></section></div><h3>{selectedLifecycleDraw?.name || "Selected draw"}</h3><p>{finalizedGames} of {totalGames} games finalized · {openGames} open · {counts?.published_games || 0} official matches</p><div className={styles.dangerCard}><h3>Official rated matches</h3><LifecycleBlockers readiness={officialReadiness} /><CommandBlockers readiness={publishReadiness} /><label htmlFor="winner-bonus">Playoff winner bonus Elo<input id="winner-bonus" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} type="number" min={0} max={40} step={1} className={styles.input} disabled={!publishActuallyReady || !runtimeCanPublish} /></label><ConfirmAction triggerLabel="Publish official matches" title="Publish all verified games as official rated matches?" description={`This terminal write publishes the exact reviewed tournament games and applies a ${publishBonusElo || "0"}-Elo playoff-winner bonus.`} confirmLabel="Yes, publish official matches" confirmationText={publishReadiness.confirmation || CONFIRMATIONS.publish_official_matches} tone="danger" disabled={!publishActuallyReady || !runtimeCanPublish} busy={busy} onConfirm={(text) => submitCommand("publish_official_matches", text, { playoff_winner_bonus_elo: Number(publishBonusElo) })} /></div></article>
+      ) : null}
+
+      {snapshot && view === "closeout" ? (
+        <article className={styles.card}><h2>Tournament closeout</h2><p className={styles.muted}>Live status cards are authoritative where records exist; operational follow-ups remain clearly marked Needs review.</p><div className={styles.closeoutGrid}>{[
+          ["Divisions", counts?.draws ? "Complete" : "Blocked", `${counts?.draws || 0} draw${counts?.draws === 1 ? "" : "s"}`],
+          ["Scores", openGames === 0 && totalGames > 0 ? "Complete" : "Blocked", `${finalizedGames} finalized; ${openGames} open`],
+          ["Podiums", lifecycle?.draws.length && lifecycle.draws.every((draw) => Boolean(draw.review_evidence && (draw.review_evidence.current ?? draw.review_evidence.reviewed))) ? "Complete" : "Blocked", `${podiumEntryCount} entries; explicit review required`],
+          ["Awards", counts?.expected_awards === counts?.verified_awards && !counts?.unexpected_awards ? "Complete" : "Blocked", `${counts?.verified_awards || 0} of ${counts?.expected_awards || 0} verified`],
+          ["Official matches", counts?.published_games === totalGames && !duplicatePublications ? "Complete" : "Blocked", `${counts?.published_games || 0} of ${totalGames} linked; ${duplicatePublications} duplicate`],
+          ["Replay / audit evidence", !counts?.active_operations && !uncertainOperations ? "Complete" : "Blocked", `${counts?.active_operations || 0} active; ${uncertainOperations} uncertain`],
+          ["Communications", "Needs review", "Confirm participant result communication before archive."],
+          ["Payments, extras, and fulfillment", "Needs review", "Offline payment and fulfillment exceptions require operator review."],
+          ["Archive readiness", archiveReadiness?.ready && archiveAtomicAvailable ? "Complete" : "Blocked", !archiveAtomicAvailable ? "Atomic archive commit is unavailable; no archive write is permitted." : archiveReadiness?.ready ? "All server-enforced archive prerequisites passed." : `${lifecycleBlockerMessages(archiveReadiness).length} blocker(s)`]
+        ].map(([title, stateValue, detail]) => <section key={title} className={styles.closeoutCard}><div className={styles.headingRow}><h3>{title}</h3><span className={stateValue === "Complete" ? styles.successChip : stateValue === "Needs review" ? styles.neutralChip : styles.recoveryChip}>{stateValue}</span></div><p>{detail}</p></section>)}</div><section className={styles.dangerCard}><h3>Archive unavailable</h3><LifecycleBlockers readiness={archiveReadiness} /><p><strong>No archive write is available.</strong> The server requires an atomic database commit that rechecks all closeout evidence under lock; that commit surface is not installed.</p></section></article>
+      ) : null}
+
+      {snapshot && view === "status" ? <><article className={styles.card}><h2>Status and recovery</h2><p>Actual score and publication operations appear below with reconciliation status and optional technical evidence. Archive lifecycle controls live only in Tournament Closeout.</p><div className={styles.statsGrid}><div><span>Active operations</span><strong>{counts?.active_operations || activeOperations.length}</strong></div><div><span>Uncertain operations</span><strong>{uncertainOperations}</strong></div><div><span>Duplicate publications</span><strong>{duplicatePublications}</strong></div></div></article>{operationEvidence}</> : null}
 
       {notice ? <p role="status" aria-live="polite" className={notice.tone === "error" ? styles.noticeError : notice.tone === "success" ? styles.noticeSuccess : styles.noticeInfo}>{notice.text}</p> : null}
     </section>

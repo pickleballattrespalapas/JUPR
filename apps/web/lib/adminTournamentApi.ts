@@ -205,10 +205,12 @@ export type AdminTournamentLiveStatusResponse = {
   environment: string;
   staging_only: true;
   writes_enabled: boolean;
+  official_publish_writes_enabled: boolean;
   service_role_ready: boolean;
   operation_store_ready: boolean;
   audit_store_ready: boolean;
   write_flag: { name: string; enabled: boolean };
+  official_publish_write_flag: { name: string; enabled: boolean };
   snapshot_endpoint?: string;
   command_endpoint?: string;
   reconcile_endpoint?: string;
@@ -245,6 +247,79 @@ export type AdminTournamentLiveOperation = {
   };
 };
 
+export type AdminTournamentLifecycleBlocker = {
+  code: string;
+  scope: string;
+  draw_id?: string | null;
+  entity_type?: string | null;
+  entity_id?: string | null;
+  count?: number | null;
+  message: string;
+};
+
+export type AdminTournamentLifecycleReadiness = {
+  ready: boolean;
+  blockers: AdminTournamentLifecycleBlocker[];
+};
+
+export type AdminTournamentLifecycleCounts = {
+  draws?: number;
+  teams?: number;
+  games?: number;
+  finalized_games?: number;
+  open_games?: number;
+  tied_games?: number;
+  podium_entries?: number;
+  podiums_complete?: number;
+  podiums_reviewed?: number;
+  expected_awards?: number;
+  verified_awards?: number;
+  unexpected_awards?: number;
+  published_games?: number;
+  unpublished_games?: number;
+  official_matches?: number;
+  duplicate_publications?: number;
+  duplicate_official_links?: number;
+  active_operations?: number;
+  uncertain_operations?: number;
+  recovery_required_operations?: number;
+};
+
+export type AdminTournamentLifecycleDraw = {
+  draw_id: string;
+  name: string;
+  status?: string;
+  protected?: boolean;
+  counts: Partial<AdminTournamentLifecycleCounts>;
+  standings: Array<Record<string, unknown>>;
+  podium: Array<Record<string, unknown>>;
+  states: Record<string, unknown>;
+  operations: AdminTournamentLiveOperation[];
+  review_evidence?: Record<string, unknown> | null;
+  readiness: {
+    official_publish: AdminTournamentLifecycleReadiness;
+    archive: AdminTournamentLifecycleReadiness;
+  };
+};
+
+export type AdminTournamentLifecycle = {
+  contract?: "jupr:tournament-lifecycle:v1" | string;
+  authority?: "python_fastapi" | string;
+  scope: "tournament" | "draw" | string;
+  tournament: Pick<AdminTournament, "id" | "name" | "status" | "updated_at">;
+  phase?: string;
+  selected_draw_id?: string | null;
+  states?: Record<string, string>;
+  counts: AdminTournamentLifecycleCounts;
+  draws: AdminTournamentLifecycleDraw[];
+  domain_readiness: {
+    official_publish: AdminTournamentLifecycleReadiness;
+    archive: AdminTournamentLifecycleReadiness;
+  };
+  runtime_capability: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+};
+
 export type AdminTournamentLiveSnapshotResponse = AdminTournamentOpsSnapshotResponse & {
   mode: "tournament_live_draw_selector" | "tournament_live_draw_snapshot";
   scope: "tournament_selector" | "draw";
@@ -277,6 +352,7 @@ export type AdminTournamentLiveSnapshotResponse = AdminTournamentOpsSnapshotResp
   readiness: Record<string, AdminTournamentLiveReadiness>;
   active_operation?: AdminTournamentLiveOperation | null;
   operations: AdminTournamentLiveOperation[];
+  lifecycle?: AdminTournamentLifecycle;
 };
 
 export type AdminTournamentWriteResponse = {
@@ -419,9 +495,35 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
 }
 
 export async function getAdminTournamentStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminTournamentStatusResponse>> {
+  if (process.env.JUPR_INTERACTION_TEST_HARNESS === "1") {
+    return { data: { enabled: true, status: "local_test_harness", warnings: [] }, error: null };
+  }
   return fetchJson<AdminTournamentStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/status`);
 }
 
 export async function getAdminTournamentLiveStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminTournamentLiveStatusResponse>> {
+  if (process.env.JUPR_INTERACTION_TEST_HARNESS === "1") {
+    return {
+      data: {
+        enabled: true,
+        status: "staging_write_ready",
+        authority: "python_fastapi",
+        product_boundary: "draw_scoped_tournament_runner_not_jupr_live",
+        club_id: clubId,
+        environment: "local_test_harness",
+        staging_only: true,
+        writes_enabled: true,
+        official_publish_writes_enabled: true,
+        service_role_ready: true,
+        operation_store_ready: true,
+        audit_store_ready: true,
+        write_flag: { name: "JUPR_INTERACTION_TEST_HARNESS", enabled: true },
+        official_publish_write_flag: { name: "JUPR_INTERACTION_TEST_HARNESS", enabled: true },
+        streamlit_fallback_url: "#local-test-harness",
+        warnings: []
+      },
+      error: null
+    };
+  }
   return fetchJson<AdminTournamentLiveStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/status`);
 }

@@ -1,12 +1,6 @@
-import { redirect } from "next/navigation";
-import TournamentOpsWorkflowPage from "../TournamentOpsWorkflowPage";
+import TournamentLiveRoute from "../../live-operations/TournamentLiveRoute";
 
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
-function first(value: string | string[] | undefined): string { return Array.isArray(value) ? String(value[0] || "") : String(value || ""); }
-
 export default function TournamentOfficialPublishPage({ searchParams }: Props) {
-  const tournamentId = first(searchParams?.tournament).trim();
-  const tournamentName = first(searchParams?.name).trim();
-  if (!tournamentId) redirect("/admin/tournaments");
-  return <TournamentOpsWorkflowPage workflow="publish" kicker="Tournament Manager / Official publish" title="publish official tournament matches" description="Publish finalized singles and doubles games through Match Log and rating processing with a separate staging gate, confirmation, email safety check, and replay-safe operation record." tournamentId={tournamentId} tournamentName={tournamentName || null} />;
+  return <TournamentLiveRoute searchParams={searchParams} view="publish" phase="publish" kicker="Tournament Manager / Publish" title="publish divisions" description="Compare tournament readiness with runtime capability, inspect exact blockers, and publish only a fully reviewed division." />;
 }

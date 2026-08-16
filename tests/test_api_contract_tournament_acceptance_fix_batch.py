@@ -68,7 +68,7 @@ def test_publication_banner_waits_for_authoritative_setup_detail() -> None:
     assert "Checking published setup…" in panel
     assert "Published setup status unavailable" in panel
     assert "Retry setup status" in panel
-    assert "key={tournamentId}" in page
+    assert "key={context.tournamentId}" in page
 
     assert 'if (detailLoadState === "failed") return "unavailable"' in publication_status
     assert 'if (detailLoadState !== "loaded") return "checking"' in publication_status

@@ -16,10 +16,16 @@ import {
 } from "@/lib/tournamentTeamCompetitionApi";
 import { useAuthenticatedAutoLoad } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
+import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
 import styles from "./TeamTournamentAdminPanel.module.css";
 
-type Props = { clubId: string; initialTournamentId: string };
+type Props = {
+  clubId: string;
+  initialTournamentId: string;
+  initialTournamentName?: string;
+  initialDrawId?: string;
+};
 type EventFormat = "STANDARD" | "COMBINED_RATING_CAP" | "FOUR_PLAYER_TEAM";
 type Tab = "setup" | "ratings" | "teams" | "schedule" | "matches" | "podium";
 type TeamSlot = "MAN_1" | "MAN_2" | "WOMAN_1" | "WOMAN_2";
@@ -154,7 +160,9 @@ function slotLabel(slot: TeamSlot): string {
 
 export default function TeamTournamentAdminPanel({
   clubId,
-  initialTournamentId
+  initialTournamentId,
+  initialTournamentName = "",
+  initialDrawId = ""
 }: Props) {
   const {
     accessToken,
@@ -253,6 +261,11 @@ export default function TeamTournamentAdminPanel({
   );
   const selectedTeam = teamsById.get(manageTeamId);
   const selectedDraw = (snapshot?.draws || []).find((row) => row.id === drawId);
+  const routeContext = {
+    tournamentId,
+    tournamentName: snapshot?.tournament.name || initialTournamentName,
+    drawId: drawId || initialDrawId
+  };
 
   function operationKey(scope: string): string {
     const existing = operationKeys.current.get(scope);
@@ -302,7 +315,16 @@ export default function TeamTournamentAdminPanel({
         row.draw_kind === "TEAM_PARENT" ||
         firstTeam?.id === String(row.event_option_id || "")
     );
-    setDrawId(firstDraw?.id || "");
+    const requestedDraw = response.data.draws.find((row) => {
+      const event = response.data?.event_options.find(
+        (candidate) => candidate.id === String(row.event_option_id || "")
+      );
+      return row.id === initialDrawId && (
+        row.draw_kind === "TEAM_PARENT" ||
+        event?.competition_format === "FOUR_PLAYER_TEAM"
+      );
+    });
+    setDrawId(requestedDraw?.id || firstDraw?.id || "");
     setRoundRobinTeamIds([]);
   }
 
@@ -1310,7 +1332,7 @@ export default function TeamTournamentAdminPanel({
                 {!teamDraws.length ? (
                   <p className={styles.notice}>
                     Create the event draw in{" "}
-                    <Link href="/admin/tournaments/ops/draws">
+                    <Link href={tournamentRouteHref("/admin/tournaments/ops/draws", routeContext)}>
                       Tournament Operations
                     </Link>{" "}
                     before building the team schedule.
@@ -1512,7 +1534,7 @@ export default function TeamTournamentAdminPanel({
                 <p className={styles.hint}>
                   Score each child game here. Publish rating-eligible child
                   matches in{" "}
-                  <Link href="/admin/tournaments/ops/publish">
+                  <Link href={tournamentRouteHref("/admin/tournaments/ops/publish", routeContext)}>
                     Official Publish
                   </Link>
                   , then reconcile only if an official row differs.
@@ -1829,31 +1851,12 @@ export default function TeamTournamentAdminPanel({
                               )
                             }
                           />
-                          <ConfirmAction
-                            triggerLabel="Publish podium and results"
-                            title="Publish this team podium?"
-                            description="The calculated placements and draw results become visible on the club results page."
-                            confirmLabel="Publish podium"
-                            confirmationText="PUBLISH TEAM PODIUM"
-                            disabled={busy || !calculated}
-                            busy={busy}
-                            onConfirm={(confirmation) =>
-                              mutate(
-                                `podium:${draw.id}:${draw.updated_at}:publish`,
-                                `${basePath}/draws/${encodeURIComponent(
-                                  draw.id
-                                )}/podium`,
-                                {
-                                  expected_draw_updated_at: draw.updated_at,
-                                  publish: true,
-                                  reason: reason.trim(),
-                                  podium: calculated
-                                },
-                                confirmation,
-                                "Podium and results published."
-                              )
-                            }
-                          />
+                          <p className={styles.notice}>
+                            Team podium publication is unavailable until it is
+                            covered by the canonical explicit-review, awards,
+                            official-match, and recovery preflight. Save a draft
+                            here; do not publish around Tournament Closeout.
+                          </p>
                         </div>
                       </article>
                     );

@@ -1,16 +1,9 @@
 import { redirect } from "next/navigation";
+import { readTournamentRouteContext, tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
-function first(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? String(value[0] || "") : String(value || "");
-}
-
 export default function TournamentSetupRegistrationRulesPage({ searchParams }: Props) {
-  const tournament = first(searchParams?.tournament).trim();
-  const name = first(searchParams?.name).trim();
-  const params = new URLSearchParams();
-  if (tournament) params.set("tournament", tournament);
-  if (name) params.set("name", name);
-  redirect(`/admin/tournaments/setup/basics?${params.toString()}`);
+  const context = readTournamentRouteContext(searchParams);
+  redirect(tournamentRouteHref("/admin/tournaments/setup/basics", context));
 }

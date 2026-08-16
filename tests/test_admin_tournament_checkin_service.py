@@ -1,0 +1,785 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from types import SimpleNamespace
+
+import pytest
+
+from jupr_app.services.admin_tournament_checkin_service import (
+    StaleTournamentCheckInError,
+    build_admin_tournament_checkin_snapshot,
+    update_admin_tournament_checkin,
+)
+
+
+class FakeQuery:
+    def __init__(self, client, table_name: str):
+        self.client = client
+        self.table_name = table_name
+        self.filters: list[tuple[str, object]] = []
+        self.order_key: str | None = None
+        self.order_desc = False
+        self.limit_value: int | None = None
+
+    def select(self, *_args, **_kwargs):
+        return self
+
+    def eq(self, key: str, value: object):
+        self.filters.append((key, value))
+        return self
+
+    def order(self, key: str, desc: bool = False):
+        self.order_key = key
+        self.order_desc = bool(desc)
+        return self
+
+    def limit(self, value: int):
+        self.limit_value = int(value)
+        return self
+
+    def execute(self):
+        if self.table_name in self.client.failed_tables:
+            raise RuntimeError(f"{self.table_name} unavailable")
+        rows = [dict(row) for row in self.client.tables.get(self.table_name, [])]
+        for key, expected in self.filters:
+            rows = [row for row in rows if str(row.get(key)) == str(expected)]
+        if self.order_key:
+            rows.sort(
+                key=lambda row: str(row.get(self.order_key) or ""),
+                reverse=self.order_desc,
+            )
+        if self.limit_value is not None:
+            rows = rows[: self.limit_value]
+        return SimpleNamespace(data=rows)
+
+
+class FakeRpc:
+    def __init__(self, client, name: str, params: dict):
+        self.client = client
+        self.name = name
+        self.params = dict(params)
+
+    def execute(self):
+        self.client.rpc_calls.append((self.name, self.params))
+        if self.name != "admin_upsert_tournament_registration_check_in":
+            raise RuntimeError(f"unsupported RPC {self.name}")
+        rows = self.client.tables["tournament_registration_check_ins"]
+        current = next(
+            (
+                row
+                for row in rows
+                if str(row.get("tournament_id")) == str(self.params["p_tournament_id"])
+                and str(row.get("registration_id")) == str(self.params["p_registration_id"])
+            ),
+            None,
+        )
+        expected = self.params.get("p_expected_updated_at")
+        if current is None and expected is not None:
+            return SimpleNamespace(data={"ok": False, "code": "CHECK_IN_STALE"})
+        if current is not None and str(current.get("updated_at")) != str(expected):
+            return SimpleNamespace(data={"ok": False, "code": "CHECK_IN_STALE"})
+
+        registration = next(
+            row
+            for row in self.client.tables["tournament_registrations"]
+            if str(row.get("id")) == str(self.params["p_registration_id"])
+        )
+        if str(registration.get("status") or "").strip().upper() not in {
+            "ACTIVE",
+            "APPROVED",
+            "CONFIRMED",
+            "REGISTERED",
+        }:
+            raise RuntimeError(
+                "JUPR_CHECK_IN_INACTIVE: registration is no longer active."
+            )
+        substitute_id = self.params.get("p_approved_substitute_player_id")
+        substitute = next(
+            (
+                row
+                for row in self.client.tables["players"]
+                if str(row.get("id")) == str(substitute_id)
+                and str(row.get("club_id")) == str(self.params["p_club_id"])
+                and row.get("active") is True
+            ),
+            None,
+        )
+        if substitute_id is not None and substitute is None:
+            raise RuntimeError(
+                "JUPR_CHECK_IN_SUBSTITUTE_INVALID: approved substitute must be an active player in this club."
+            )
+        if substitute is not None:
+            next_identity = f"player:{int(substitute['id'])}"
+            substitute_name = str(substitute.get("name") or "").strip()
+        elif registration.get("player_id") is not None:
+            next_identity = f"player:{int(registration['player_id'])}"
+            substitute_name = None
+        else:
+            profile_parts = [
+                str(registration.get(key) or "").strip().lower()
+                for key in ("display_name", "first_name", "last_name", "email")
+            ]
+            next_identity = "registration:" + ":".join(
+                [str(registration.get("id") or ""), *profile_parts]
+            )
+            substitute_name = None
+        identity_changed = (
+            current is not None
+            and current.get("attendee_identity_key") != next_identity
+        )
+        payload = {
+            "id": str((current or {}).get("id") or "check-in-1"),
+            "tournament_id": self.params["p_tournament_id"],
+            "registration_id": self.params["p_registration_id"],
+            "checked_in": False if identity_changed else self.params["p_checked_in"],
+            "waiver_verified": False
+            if identity_changed
+            else self.params["p_waiver_verified"],
+            "attendee_identity_key": next_identity,
+            "approved_substitute_player_id": substitute_id,
+            "approved_substitute_name": substitute_name,
+            "notes": self.params.get("p_notes"),
+            "updated_by": self.params.get("p_updated_by"),
+            "updated_at": "2026-08-15T12:01:00Z",
+        }
+        if current is None:
+            rows.append(payload)
+        else:
+            current.clear()
+            current.update(payload)
+        return SimpleNamespace(
+            data={
+                "ok": True,
+                "check_in": dict(payload),
+                "attendee_identity_changed": identity_changed,
+                "attendance_reset": identity_changed,
+            }
+        )
+
+
+class FakeSupabase:
+    def __init__(self, tables: dict[str, list[dict]], *, failed_tables=()):
+        self.tables = deepcopy(tables)
+        self.failed_tables = set(failed_tables)
+        self.rpc_calls: list[tuple[str, dict]] = []
+
+    def table(self, name: str):
+        return FakeQuery(self, name)
+
+    def rpc(self, name: str, params: dict):
+        return FakeRpc(self, name, params)
+
+
+class RegistrationMutatesBeforeRpc(FakeSupabase):
+    def __init__(self, tables: dict[str, list[dict]], *, next_status: str):
+        super().__init__(tables)
+        self.next_status = next_status
+
+    def rpc(self, name: str, params: dict):
+        registration = next(
+            row
+            for row in self.tables["tournament_registrations"]
+            if str(row.get("id")) == str(params["p_registration_id"])
+        )
+        registration["status"] = self.next_status
+        return super().rpc(name, params)
+
+
+def checkin_tables() -> dict[str, list[dict]]:
+    return {
+        "tournaments": [
+            {
+                "id": "tour-1",
+                "club_id": "club-1",
+                "name": "Summer Classic",
+                "status": "PUBLISHED",
+                "start_date": "2026-08-20",
+                "end_date": "2026-08-20",
+            }
+        ],
+        "tournament_registration_settings": [
+            {
+                "id": "settings-1",
+                "tournament_id": "tour-1",
+                "registration_status": "closed",
+                "timezone": "America/Chicago",
+            }
+        ],
+        "tournament_registration_days": [
+            {
+                "id": "day-1",
+                "tournament_id": "tour-1",
+                "label": "Thursday",
+                "event_date": "2026-08-20",
+                "enabled": True,
+                "sort_order": 1,
+                "court_count": 4,
+                "court_labels": ["1", "2", "3", "4"],
+                "court_open_time": "08:00",
+                "court_close_time": "18:00",
+            }
+        ],
+        "tournament_event_options": [
+            {
+                "id": "event-1",
+                "tournament_id": "tour-1",
+                "registration_day_id": "day-1",
+                "label": "Women's 3.5",
+                "event_family_label": "Women's doubles",
+                "division_name": "3.5",
+                "event_type": "DOUBLES",
+                "partner_required": True,
+                "team_allow_substitutes": True,
+                "enabled": True,
+                "sort_order": 1,
+            }
+        ],
+        "tournament_registrations": [
+            {
+                "id": "reg-1",
+                "tournament_id": "tour-1",
+                "player_id": 1,
+                "display_name": "Alex Original",
+                "status": "confirmed",
+                "payment_status": "unpaid",
+                "updated_at": "2026-08-15T10:00:00Z",
+            },
+            {
+                "id": "reg-2",
+                "tournament_id": "tour-1",
+                "player_id": 2,
+                "display_name": "Blair Partner",
+                "status": "confirmed",
+                "payment_status": "paid",
+                "updated_at": "2026-08-15T10:00:00Z",
+            },
+            {
+                "id": "reg-3",
+                "tournament_id": "tour-1",
+                "player_id": 3,
+                "display_name": "Casey Needs Partner",
+                "status": "confirmed",
+                "payment_status": "waived",
+                "updated_at": "2026-08-15T10:00:00Z",
+            },
+            {
+                "id": "reg-4",
+                "tournament_id": "tour-1",
+                "player_id": 4,
+                "display_name": "Dana Free Text",
+                "status": "confirmed",
+                "payment_status": "paid",
+                "updated_at": "2026-08-15T10:00:00Z",
+            },
+        ],
+        "tournament_registration_selections": [
+            {
+                "id": "sel-1",
+                "tournament_id": "tour-1",
+                "registration_id": "reg-1",
+                "registration_day_id": "day-1",
+                "event_option_id": "event-1",
+                "partner_mode": "HAS_PARTNER",
+                "partner_name": "Blair Partner",
+            },
+            {
+                "id": "sel-2",
+                "tournament_id": "tour-1",
+                "registration_id": "reg-2",
+                "registration_day_id": "day-1",
+                "event_option_id": "event-1",
+                "partner_mode": "HAS_PARTNER",
+                "partner_name": "Alex Original",
+            },
+            {
+                "id": "sel-3",
+                "tournament_id": "tour-1",
+                "registration_id": "reg-3",
+                "registration_day_id": "day-1",
+                "event_option_id": "event-1",
+                "partner_mode": "NEEDS_PARTNER",
+            },
+            {
+                "id": "sel-4",
+                "tournament_id": "tour-1",
+                "registration_id": "reg-4",
+                "registration_day_id": "day-1",
+                "event_option_id": "event-1",
+                "partner_mode": "HAS_PARTNER",
+                "partner_name": "Unlinked Guest",
+            },
+        ],
+        "tournament_registration_team_links": [
+            {
+                "id": "link-1",
+                "tournament_id": "tour-1",
+                "event_option_id": "event-1",
+                "registration1_id": "reg-1",
+                "registration2_id": "reg-2",
+                "selection1_id": "sel-1",
+                "selection2_id": "sel-2",
+                "status": "CONFIRMED",
+            }
+        ],
+        "tournament_registration_team_members": [
+            {
+                "id": "member-1",
+                "team_link_id": "link-1",
+                "tournament_id": "tour-1",
+                "event_option_id": "event-1",
+                "selection_id": "sel-1",
+                "registration_id": "reg-1",
+                "player_id": 1,
+                "player_order": 1,
+                "status": "ACTIVE",
+            },
+            {
+                "id": "member-2",
+                "team_link_id": "link-1",
+                "tournament_id": "tour-1",
+                "event_option_id": "event-1",
+                "selection_id": "sel-2",
+                "registration_id": "reg-2",
+                "player_id": 2,
+                "player_order": 2,
+                "status": "ACTIVE",
+            },
+        ],
+        "tournament_commerce_orders": [
+            {
+                "id": "order-1",
+                "club_id": "club-1",
+                "tournament_id": "tour-1",
+                "registration_id": "reg-1",
+                "status": "OPEN",
+                "payment_status": "PAID",
+            }
+        ],
+        "tournament_registration_check_ins": [
+            {
+                "id": "check-in-1",
+                "tournament_id": "tour-1",
+                "registration_id": "reg-1",
+                "checked_in": True,
+                "waiver_verified": True,
+                "attendee_identity_key": "player:1",
+                "approved_substitute_player_id": None,
+                "approved_substitute_name": None,
+                "notes": "Approved by TD",
+                "updated_by": "admin@example.com",
+                "updated_at": "2026-08-15T12:00:00Z",
+            }
+        ],
+        "players": [
+            {"id": 1, "club_id": "club-1", "name": "Alex Original", "active": True},
+            {"id": 2, "club_id": "club-1", "name": "Blair Partner", "active": True},
+            {"id": 3, "club_id": "club-1", "name": "Casey Needs Partner", "active": True},
+            {"id": 4, "club_id": "club-1", "name": "Dana Free Text", "active": True},
+            {"id": 10, "club_id": "club-1", "name": "Sam Substitute", "active": True},
+            {"id": 99, "club_id": "other", "name": "Wrong Club", "active": True},
+        ],
+    }
+
+
+def test_snapshot_is_operational_and_keeps_offline_payment_authoritative() -> None:
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(checkin_tables()), club_id="club-1", tournament_id="tour-1"
+    )
+
+    assert snapshot["ok"] is True
+    assert snapshot["summary"] == {
+        "expected": 4,
+        "checked_in": 1,
+        "absent": 3,
+        "unresolved": 2,
+    }
+    alex = next(card for card in snapshot["registrants"] if card["registration_id"] == "reg-1")
+    assert alex["payment"]["status"] == "PAID"
+    assert alex["payment"]["source"] == "offline_payment_tracking"
+    assert alex["attendee"]["name"] == "Alex Original"
+    assert alex["original_registrant"]["name"] == "Alex Original"
+    assert alex["waiver"]["subject"] == "attending_player"
+    assert alex["check_in"]["identity_current"] is True
+
+
+def test_snapshot_fails_closed_after_registration_attendee_identity_changes() -> None:
+    tables = checkin_tables()
+    state = tables["tournament_registration_check_ins"][0]
+    state.update(
+        {
+            "attendee_identity_key": "player:1",
+            "approved_substitute_player_id": None,
+            "approved_substitute_name": None,
+        }
+    )
+    client = FakeSupabase(tables)
+
+    before = build_admin_tournament_checkin_snapshot(
+        client, club_id="club-1", tournament_id="tour-1"
+    )
+    before_card = next(
+        card for card in before["registrants"] if card["registration_id"] == "reg-1"
+    )
+    assert before_card["check_in"]["checked_in"] is True
+    assert before_card["waiver"]["verified"] is True
+
+    registration = client.tables["tournament_registrations"][0]
+    registration.update(
+        {
+            "player_id": 20,
+            "display_name": "Alex Replacement",
+            "email": "alex.replacement@example.com",
+            "updated_at": "2026-08-15T12:30:00Z",
+        }
+    )
+
+    after = build_admin_tournament_checkin_snapshot(
+        client, club_id="club-1", tournament_id="tour-1"
+    )
+    after_card = next(
+        card for card in after["registrants"] if card["registration_id"] == "reg-1"
+    )
+    assert after["summary"]["checked_in"] == 0
+    assert after_card["check_in"]["checked_in"] is False
+    assert after_card["waiver"]["verified"] is False
+    assert after_card["check_in"]["identity_current"] is False
+    assert after_card["check_in"]["requires_reconfirmation"] is True
+    assert "ATTENDEE_IDENTITY_STALE" in {
+        blocker["code"] for blocker in after_card["blockers"]
+    }
+
+
+def test_snapshot_fails_closed_when_saved_substitute_is_no_longer_active() -> None:
+    tables = checkin_tables()
+    tables["tournament_registration_check_ins"][0].update(
+        {
+            "attendee_identity_key": "player:10",
+            "approved_substitute_player_id": 10,
+            "approved_substitute_name": "Sam Substitute",
+        }
+    )
+    substitute = next(player for player in tables["players"] if player["id"] == 10)
+    substitute["active"] = False
+
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables), club_id="club-1", tournament_id="tour-1"
+    )
+
+    card = next(
+        row for row in snapshot["registrants"] if row["registration_id"] == "reg-1"
+    )
+    assert card["check_in"]["checked_in"] is False
+    assert card["waiver"]["verified"] is False
+    assert card["check_in"]["identity_current"] is False
+    assert "APPROVED_SUBSTITUTE_INVALID" in {
+        blocker["code"] for blocker in card["blockers"]
+    }
+
+
+def test_snapshot_refreshes_substitute_name_without_invalidating_same_player() -> None:
+    tables = checkin_tables()
+    tables["tournament_registration_check_ins"][0].update(
+        {
+            "attendee_identity_key": "player:10",
+            "approved_substitute_player_id": 10,
+            "approved_substitute_name": "Sam Substitute",
+        }
+    )
+    substitute = next(player for player in tables["players"] if player["id"] == 10)
+    substitute["name"] = "Sam Updated"
+
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables), club_id="club-1", tournament_id="tour-1"
+    )
+
+    card = next(
+        row for row in snapshot["registrants"] if row["registration_id"] == "reg-1"
+    )
+    assert card["attendee"]["name"] == "Sam Updated"
+    assert card["check_in"]["checked_in"] is False
+    assert card["waiver"]["verified"] is False
+    assert card["check_in"]["identity_current"] is False
+
+
+def test_snapshot_disables_assignment_when_atomic_policy_cannot_be_proven() -> None:
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(checkin_tables()), club_id="club-1", tournament_id="tour-1"
+    )
+
+    card = next(
+        row for row in snapshot["registrants"] if row["registration_id"] == "reg-1"
+    )
+    assert card["substitution"]["event_policy_allows"] is True
+    assert card["substitution"]["allowed"] is False
+    assert card["substitution"]["blocker"]["code"] == (
+        "SUBSTITUTE_ASSIGNMENT_ATOMICITY_UNAVAILABLE"
+    )
+    assert card["check_in"]["checked_in"] is True
+    assert card["waiver"]["verified"] is True
+
+
+def test_snapshot_fails_closed_for_duplicate_saved_attendee_identity() -> None:
+    tables = checkin_tables()
+    tables["tournament_registration_check_ins"][0].update(
+        {
+            "attendee_identity_key": "player:10",
+            "approved_substitute_player_id": 10,
+            "approved_substitute_name": "Sam Substitute",
+        }
+    )
+    tables["tournament_registration_check_ins"].append(
+        {
+            "id": "check-in-2",
+            "tournament_id": "tour-1",
+            "registration_id": "reg-2",
+            "checked_in": True,
+            "waiver_verified": True,
+            "attendee_identity_key": "player:10",
+            "approved_substitute_player_id": 10,
+            "approved_substitute_name": "Sam Substitute",
+            "updated_by": "admin@example.com",
+            "updated_at": "2026-08-15T12:02:00Z",
+        }
+    )
+
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables), club_id="club-1", tournament_id="tour-1"
+    )
+
+    duplicate_cards = [
+        row
+        for row in snapshot["registrants"]
+        if row["registration_id"] in {"reg-1", "reg-2"}
+    ]
+    assert all(row["check_in"]["checked_in"] is False for row in duplicate_cards)
+    assert all(row["waiver"]["verified"] is False for row in duplicate_cards)
+    assert all(
+        "DUPLICATE_ATTENDEE_IDENTITY"
+        in {blocker["code"] for blocker in row["blockers"]}
+        for row in duplicate_cards
+    )
+
+
+def test_snapshot_exposes_unlinked_and_needs_partner_participants() -> None:
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(checkin_tables()), club_id="club-1", tournament_id="tour-1"
+    )
+
+    assert {row["kind"] for row in snapshot["unresolved_participants"]} == {
+        "NEEDS_PARTNER",
+        "UNLINKED_FREE_TEXT_PARTNER",
+    }
+    confirmed = next(card for card in snapshot["registrants"] if card["registration_id"] == "reg-1")
+    assert confirmed["events"][0]["team_state"] == "CONFIRMED_LINK"
+    assert confirmed["events"][0]["partner_name"] == "Blair Partner"
+
+
+def test_confirmed_link_is_not_complete_when_partner_registration_is_inactive() -> None:
+    tables = checkin_tables()
+    tables["tournament_registrations"][1]["status"] = "cancelled"
+
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables), club_id="club-1", tournament_id="tour-1"
+    )
+
+    alex = next(card for card in snapshot["registrants"] if card["registration_id"] == "reg-1")
+    assert alex["events"][0]["team_state"] == "UNRESOLVED"
+    assert "PARTNER_REGISTRATION_INACTIVE" in {
+        blocker["code"] for blocker in alex["blockers"]
+    }
+
+
+def test_snapshot_has_real_schedule_blockers_and_truthful_staffing_review() -> None:
+    tables = checkin_tables()
+    tables["tournament_registration_settings"][0]["timezone"] = ""
+    tables["tournament_registration_days"][0]["court_open_time"] = None
+
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables), club_id="club-1", tournament_id="tour-1"
+    )
+
+    assert snapshot["readiness"]["schedule"]["status"] == "BLOCKED"
+    assert {row["code"] for row in snapshot["readiness"]["schedule"]["blockers"]} >= {
+        "TIMEZONE_MISSING",
+        "COURT_TIME_MISSING",
+    }
+    assert snapshot["readiness"]["staffing"]["status"] == "NEEDS_REVIEW"
+    assert snapshot["readiness"]["staffing"]["source"] == "no_authoritative_staffing_record"
+
+
+def test_snapshot_fails_closed_when_draw_readiness_cannot_be_loaded() -> None:
+    with pytest.raises(RuntimeError, match="draw readiness"):
+        build_admin_tournament_checkin_snapshot(
+            FakeSupabase(
+                checkin_tables(), failed_tables={"tournament_event_draws"}
+            ),
+            club_id="club-1",
+            tournament_id="tour-1",
+        )
+
+
+def test_update_uses_sql_cas_and_resets_attendance_when_attendee_changes(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENV", "local")
+    client = FakeSupabase(checkin_tables())
+    client.tables["tournament_registration_check_ins"][0][
+        "attendee_identity_key"
+    ] = "player:999"
+
+    result = update_admin_tournament_checkin(
+        client,
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_id="reg-1",
+        expected_updated_at="2026-08-15T12:00:00Z",
+        checked_in=True,
+        waiver_verified=True,
+        approved_substitute_player_id=None,
+        approved_substitute_name=None,
+        notes="Original player attending",
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+    )
+
+    assert result["attendance_reset"] is True
+    assert result["check_in"]["checked_in"] is False
+    assert result["check_in"]["waiver_verified"] is False
+    assert client.rpc_calls[0][0] == "admin_upsert_tournament_registration_check_in"
+
+
+def test_update_rejects_stale_version(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENV", "local")
+    with pytest.raises(StaleTournamentCheckInError, match="changed"):
+        update_admin_tournament_checkin(
+            FakeSupabase(checkin_tables()),
+            club_id="club-1",
+            tournament_id="tour-1",
+            registration_id="reg-1",
+            expected_updated_at="2026-08-15T11:59:00Z",
+            checked_in=False,
+            waiver_verified=False,
+            approved_substitute_player_id=None,
+            approved_substitute_name=None,
+            notes="",
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+
+def test_update_rejects_substitute_when_event_policy_is_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENV", "local")
+    tables = checkin_tables()
+    tables["tournament_event_options"][0]["team_allow_substitutes"] = False
+    with pytest.raises(ValueError, match="Every selected event"):
+        update_admin_tournament_checkin(
+            FakeSupabase(tables),
+            club_id="club-1",
+            tournament_id="tour-1",
+            registration_id="reg-1",
+            expected_updated_at="2026-08-15T12:00:00Z",
+            checked_in=False,
+            waiver_verified=False,
+            approved_substitute_player_id=10,
+            approved_substitute_name=None,
+            notes="",
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+
+def test_update_rejects_name_only_substitute_without_calling_rpc(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENV", "local")
+    client = FakeSupabase(checkin_tables())
+
+    with pytest.raises(ValueError, match="Select an active club player"):
+        update_admin_tournament_checkin(
+            client,
+            club_id="club-1",
+            tournament_id="tour-1",
+            registration_id="reg-1",
+            expected_updated_at="2026-08-15T12:00:00Z",
+            checked_in=True,
+            waiver_verified=True,
+            approved_substitute_player_id=None,
+            approved_substitute_name="Name Only Guest",
+            notes="",
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+    assert client.rpc_calls == []
+
+
+def test_update_disables_substitute_even_when_selected_event_policy_allows(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUPR_ENV", "local")
+    client = FakeSupabase(checkin_tables())
+
+    with pytest.raises(ValueError, match="atomic eligibility and uniqueness"):
+        update_admin_tournament_checkin(
+            client,
+            club_id="club-1",
+            tournament_id="tour-1",
+            registration_id="reg-1",
+            expected_updated_at="2026-08-15T12:00:00Z",
+            checked_in=False,
+            waiver_verified=False,
+            approved_substitute_player_id=10,
+            approved_substitute_name=None,
+            notes="",
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+    assert client.rpc_calls == []
+
+
+def test_update_rpc_revalidates_positive_registration_status_under_lock(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUPR_ENV", "local")
+
+    for status in ("WAITLIST", "PENDING"):
+        client = RegistrationMutatesBeforeRpc(checkin_tables(), next_status=status)
+        with pytest.raises(ValueError, match="can be checked in"):
+            update_admin_tournament_checkin(
+                client,
+                club_id="club-1",
+                tournament_id="tour-1",
+                registration_id="reg-1",
+                expected_updated_at="2026-08-15T12:00:00Z",
+                checked_in=True,
+                waiver_verified=True,
+                approved_substitute_player_id=None,
+                approved_substitute_name=None,
+                notes="",
+                actor_email="admin@example.com",
+                actor_role="club_owner",
+            )
+
+        assert client.rpc_calls
+
+
+def test_update_rejects_client_substitute_name_even_with_player_id(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUPR_ENV", "local")
+    client = FakeSupabase(checkin_tables())
+
+    with pytest.raises(ValueError, match="atomic eligibility and uniqueness"):
+        update_admin_tournament_checkin(
+            client,
+            club_id="club-1",
+            tournament_id="tour-1",
+            registration_id="reg-1",
+            expected_updated_at="2026-08-15T12:00:00Z",
+            checked_in=True,
+            waiver_verified=True,
+            approved_substitute_player_id=10,
+            approved_substitute_name="Spoofed Browser Name",
+            notes="",
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+    assert client.rpc_calls == []

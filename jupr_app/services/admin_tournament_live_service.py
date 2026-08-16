@@ -40,6 +40,7 @@ from jupr_app.services.admin_tournament_guarded_operation import (
     tournament_admin_guarded_runtime_enabled,
     tournament_admin_mutation_status,
 )
+from jupr_app.services.admin_tournament_lifecycle_service import build_admin_tournament_lifecycle
 from jupr_app.services.admin_tournament_match_publish_service import (
     build_admin_tournament_official_publish_plan,
     publish_admin_tournament_draw_matches,
@@ -57,6 +58,9 @@ from jupr_app.services.admin_tournament_service import is_admin_tournament_admin
 
 TOURNAMENT_LIVE_SURFACE = "tournament_live"
 TOURNAMENT_LIVE_WRITE_FLAG = "JUPR_ENABLE_STAGING_NEXT_ADMIN_TOURNAMENT_LIVE_WRITES"
+TOURNAMENT_OFFICIAL_PUBLISH_WRITE_FLAG = (
+    "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH"
+)
 TOURNAMENT_LIVE_FALLBACK = "https://juprtrespalapas.streamlit.app"
 TOURNAMENT_LIVE_RECONCILE_CONFIRMATION = "RECONCILE TOURNAMENT LIVE"
 ACTIVE_OPERATION_STATUSES = {"intent", "mutated", "recovery_required"}
@@ -78,6 +82,10 @@ COMMAND_ACTIONS = {
 }
 ACTION_COMMANDS = {action: command for command, action in COMMAND_ACTIONS.items()}
 STATE_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _truthy_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _require_live_command_permission(actor_role: str, command: str) -> None:
@@ -354,6 +362,14 @@ def build_admin_tournament_live_status(supabase: Any | None, *, club_id: str) ->
         and operation_store_ready
         and audit_store_ready
     )
+    official_publish_writes_enabled = False
+    official_publish_runtime_warning: str | None = None
+    if writes_enabled:
+        try:
+            require_admin_tournament_official_publish_runtime()
+            official_publish_writes_enabled = True
+        except (PermissionError, RuntimeError) as exc:
+            official_publish_runtime_warning = str(exc)
     warnings: list[str] = []
     if not is_admin_tournament_admin_enabled():
         warnings.append("Tournament Admin reads are disabled on FastAPI.")
@@ -367,6 +383,8 @@ def build_admin_tournament_live_status(supabase: Any | None, *, club_id: str) ->
         warnings.append(store_warning)
     if audit_warning:
         warnings.append(audit_warning)
+    if official_publish_runtime_warning:
+        warnings.append(official_publish_runtime_warning)
     return {
         "enabled": is_admin_tournament_admin_enabled(),
         "status": "staging_write_ready" if writes_enabled else "read_only_fallback",
@@ -376,10 +394,15 @@ def build_admin_tournament_live_status(supabase: Any | None, *, club_id: str) ->
         "environment": environment,
         "staging_only": True,
         "writes_enabled": writes_enabled,
+        "official_publish_writes_enabled": official_publish_writes_enabled,
         "service_role_ready": service_role_ready,
         "operation_store_ready": operation_store_ready,
         "audit_store_ready": audit_store_ready,
         "write_flag": {"name": TOURNAMENT_LIVE_WRITE_FLAG, "enabled": bool(surface_flag.get("enabled"))},
+        "official_publish_write_flag": {
+            "name": TOURNAMENT_OFFICIAL_PUBLISH_WRITE_FLAG,
+            "enabled": _truthy_env(TOURNAMENT_OFFICIAL_PUBLISH_WRITE_FLAG),
+        },
         "snapshot_endpoint": "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/snapshot",
         "command_endpoint": "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/draws/{draw_id}/commands",
         "reconcile_endpoint": "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/draws/{draw_id}/operations/{operation_key}/reconcile",
@@ -637,6 +660,7 @@ def _readiness(
     publication_visible: bool,
     awards_visible: bool,
     writes_enabled: bool,
+    official_publish_writes_enabled: bool,
     active_operation: dict[str, Any] | None,
 ) -> dict[str, dict[str, Any]]:
     rr_games = [row for row in games if str(row.get("stage") or "").upper() == "ROUND_ROBIN"]
@@ -662,6 +686,10 @@ def _readiness(
         common.append(f"Operation {str(active_operation.get('operation_key') or '')[:12]}… is {active_operation.get('status')}; reconcile it before another draw write.")
 
     blockers: dict[str, list[str]] = {command: list(common) for command in COMMAND_CONFIRMATIONS}
+    if not official_publish_writes_enabled:
+        blockers["publish_official_matches"].append(
+            "The separate official-publish runtime gate is closed."
+        )
     if not games:
         blockers["save_score"].append("This draw has no games.")
     if published_ids:
@@ -759,6 +787,21 @@ def build_admin_tournament_live_snapshot(
         draw_id=str(draw_id) if draw_id else None,
     )
     status = build_admin_tournament_live_status(supabase, club_id=str(club_id))
+    lifecycle = build_admin_tournament_lifecycle(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=str(tournament_id),
+        selected_draw_id=str(draw_id) if draw_id else None,
+    )
+    lifecycle["runtime_capability"] = {
+        **dict(lifecycle.get("runtime_capability") or {}),
+        "live_writes_enabled": bool(status.get("writes_enabled")),
+        "official_publish_writes_enabled": bool(
+            status.get("official_publish_writes_enabled")
+        ),
+        "live_operation_store_ready": bool(status.get("operation_store_ready")),
+        "live_audit_store_ready": bool(status.get("audit_store_ready")),
+    }
     if not draw_id:
         return {
             **base,
@@ -768,6 +811,7 @@ def build_admin_tournament_live_snapshot(
             "product_boundary": "draw_scoped_tournament_runner_not_jupr_live",
             "state_fingerprint": None,
             "runtime": status,
+            "lifecycle": lifecycle,
             "readiness": {},
             "operations": [],
         }
@@ -843,8 +887,42 @@ def build_admin_tournament_live_snapshot(
         publication_visible=publication_visible,
         awards_visible=awards_visible,
         writes_enabled=bool(status.get("writes_enabled")) and not audit_warning and not operation_warning,
+        official_publish_writes_enabled=bool(
+            status.get("official_publish_writes_enabled")
+        ),
         active_operation=active_operation,
     )
+    lifecycle_draw = next(
+        (
+            row
+            for row in lifecycle.get("draws") or []
+            if str(row.get("draw_id") or "") == str(draw_id)
+        ),
+        {},
+    )
+    review_evidence = (
+        lifecycle_draw.get("review_evidence")
+        if isinstance(lifecycle_draw.get("review_evidence"), dict)
+        else {}
+    )
+    if not bool(review_evidence.get("current")):
+        review_message = str(
+            (review_evidence.get("blockers") or ["Explicitly review the current podium before awarding trophies."])[0]
+        )
+        for command in ("award_podium", "publish_official_matches"):
+            command_readiness = readiness.get(command) or {}
+            command_readiness["blockers"] = list(command_readiness.get("blockers") or []) + [review_message]
+            command_readiness["ready"] = False
+    publish_domain = (lifecycle.get("domain_readiness") or {}).get("official_publish") or {}
+    if not bool(publish_domain.get("ready")):
+        command_readiness = readiness.get("publish_official_matches") or {}
+        command_readiness["blockers"] = list(command_readiness.get("blockers") or []) + [
+            str(row.get("message") or "")
+            for row in publish_domain.get("blockers") or []
+            if str(row.get("message") or "")
+        ]
+        command_readiness["blockers"] = list(dict.fromkeys(command_readiness["blockers"]))
+        command_readiness["ready"] = False
     return {
         **base,
         "mode": "tournament_live_draw_snapshot",
@@ -853,6 +931,7 @@ def build_admin_tournament_live_snapshot(
         "product_boundary": "draw_scoped_tournament_runner_not_jupr_live",
         "state_fingerprint": fingerprint,
         "runtime": status,
+        "lifecycle": lifecycle,
         "progression": {
             "phase": "published" if publication_complete else "podium" if podium else "playoffs" if any(str(row.get("stage") or "").upper() == "PLAYOFF" for row in games) else "round_robin" if games else "teams_ready",
             "open_games": len([row for row in games if not _is_scored(row)]),
@@ -1161,6 +1240,11 @@ def _preflight_command(snapshot: dict[str, Any], *, command: str, payload: dict[
         raise ValueError("Advance count cannot exceed the number of teams in this draw.")
 
 
+def _require_command_runtime(command: str) -> None:
+    if command == "publish_official_matches":
+        require_admin_tournament_official_publish_runtime()
+
+
 def _mutate_command(
     supabase: Any,
     *,
@@ -1245,11 +1329,17 @@ def _mutate_command(
             atomic=True,
         )
     if command == "award_podium":
+        reviewed_podium_versions = _snapshot_version_rows(
+            list(reviewed_snapshot.get("podium") or []),
+            label="podium",
+        )
         return award_admin_tournament_draw_podium(
             **common,
             draw_id=str(draw_id),
             expected_draw_updated_at=reviewed_draw_updated_at,
             expected_team_versions=reviewed_team_versions,
+            expected_source_game_versions=reviewed_source_game_versions,
+            expected_podium_versions=reviewed_podium_versions,
             expected_podium=list(payload.get("award_podium_plan") or []),
             expected_awards=list(payload.get("award_plan") or []),
             atomic=True,
@@ -1302,6 +1392,9 @@ def execute_admin_tournament_live_command(
             )
         payload = dict(stored_payload)
     else:
+        # The separate rating/email gate is a pre-intent capability. A closed
+        # official-publish gate must never create a durable recovery lock.
+        _require_command_runtime(command)
         seed_snapshot = build_admin_tournament_live_snapshot(
             supabase,
             club_id=str(club_id),
@@ -1346,6 +1439,7 @@ def execute_admin_tournament_live_command(
                 "The captured Tournament Live snapshot no longer matches the reviewed draw. Reload before continuing."
             )
         if include_readiness:
+            _require_command_runtime(command)
             _preflight_command(snapshot, command=command, payload=payload)
         else:
             _validate_reviewed_versions(snapshot, command=command, payload=payload)

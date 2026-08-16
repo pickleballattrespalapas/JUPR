@@ -51,15 +51,48 @@ def test_selected_tournament_ops_keeps_read_only_snapshots_and_hides_post_contro
 
     assert "initialTournamentId: string" in panel
     assert "useAuthenticatedAutoLoad(" in panel
-    assert "() => loadOps(initialTournamentId, \"\")" in panel
+    assert '() => loadOps(initialTournamentId, initialDrawId || "")' in panel
     assert "Refresh tournaments" not in panel
     assert "selectTournament(event.target.value)" not in panel
     assert "loadTournaments" not in panel
     assert "Reload selected draw" in panel
     assert ">Load tournaments<" not in panel
     assert "Load ops snapshot" not in panel
-    for read_only_table in ("Draws", "Teams", "Games", "Podium"):
-        assert f">{read_only_table}</h2><GenericRowsTable" in panel
+    assert "This legacy operations editor cannot publish official matches" in panel
+    assert "This legacy editor cannot mint awards" in panel
+    assert "awardPodium" not in panel
+    assert "publishOfficialMatches" not in panel
+    assert "Publish rating game" not in panel
+    assert 'data-testid="legacy-ops-human-summary"' in panel
+    assert "Raw draw, player, team, game, and podium identifiers are intentionally hidden" in panel
+    assert "GenericRowsTable" not in panel
+    assert 'placeholder="player id"' not in panel
+    assert 'placeholder="optional player id"' not in panel
+    assert "Player names must match the club roster" in panel
+    assert "Player names or IDs" not in panel
+    assert "draw.name || draw.id" not in panel
+    assert "gameLabel(game, teamsById, players)" in panel
+    assert "importedTeamLabel(match.team_a_ref)" in panel
+    assert "importedTeamLabel(match.team_b_ref)" in panel
+    assert "{importedTeamLabel(teamRef)}</option>" in panel
+
+
+def test_legacy_streamlit_tournament_pages_have_no_direct_unarchive_action() -> None:
+    for relative_path in (
+        "jupr_app/ui/pages/tournaments.py",
+        "jupr_app/ui/pages/tournament_ops.py",
+    ):
+        source = _read(relative_path)
+        assert "unarchive_tournament" not in source
+        assert 'button("Unarchive Tournament"' not in source
+        assert "Direct unarchive is unavailable" in source
+
+
+def test_setup_operator_labels_never_fall_back_to_registration_ids() -> None:
+    panel = _read("apps/web/app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+
+    assert "registration.display_name || registration.email || registration.registration_id" not in panel
+    assert 'registration.display_name || registration.email || "Registration needs details"' in panel
 
 
 def test_tournament_ops_workflow_header_preserves_phase_and_tournament_context() -> None:
@@ -82,3 +115,19 @@ def test_registration_import_surfaces_excluded_needs_partner_warning_in_success_
     assert "const importWarning = warningSuffix(payload);" in panel
     assert 'actionSuccess("Registration teams imported"' in panel
     assert 'imported.${importWarning}`' in panel
+
+
+def test_legacy_admin_tools_cannot_bypass_canonical_tournament_publish() -> None:
+    next_tools = _read("apps/web/app/admin/tools/AdminToolsPanel.tsx")
+    streamlit_tools = _read("jupr_app/ui/pages/admin_tools.py")
+
+    assert "Preview missing tournament matches" in next_tools
+    assert "Tournament match backfill is diagnostic and read-only" in next_tools
+    assert "No write is available here" in next_tools
+    assert "applyTournamentMatchBackfill" not in next_tools
+    assert "Apply selected tournament matches" not in next_tools
+
+    assert "Tournament match backfill writes are retired" in streamlit_tools
+    assert "Backfill Missing Tournament Matches" not in streamlit_tools
+    assert "_run_tournament_match_backfill" not in streamlit_tools
+    assert "submit_match_batch" not in streamlit_tools

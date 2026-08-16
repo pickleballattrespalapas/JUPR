@@ -30,7 +30,8 @@ def test_selected_tournament_home_exposes_lifecycle_phases() -> None:
     page = read("app/admin/tournaments/tournament/page.tsx")
     panel = read("app/admin/tournaments/tournament/TournamentHomePanel.tsx")
 
-    assert 'first(searchParams?.tournament)' in page
+    assert "readTournamentRouteContext(searchParams)" in page
+    assert "context.tournamentId" in page
     assert 'redirect("/admin/tournaments")' in page
     assert "Tournament workflow" in panel
     assert "Next action" in panel
@@ -48,7 +49,8 @@ def test_selected_tournament_home_exposes_lifecycle_phases() -> None:
 def test_tournament_navigation_separates_manager_and_lifecycle_context() -> None:
     nav = read("components/TournamentAdminNav.tsx")
     assert 'label: "Tournament Manager Home"' in nav
-    assert 'const hasTournament = Boolean(tournamentId)' in nav
+    assert "const context = readTournamentRouteContext(searchParams)" in nav
+    assert 'const hasTournament = Boolean(context.tournamentId)' in nav
     assert "const tournamentItems = hasTournament" in nav
     assert 'label: "Tournament Home"' in nav
     assert 'label: "Tournament Builder"' in nav
@@ -70,19 +72,17 @@ def test_tournament_navigation_separates_manager_and_lifecycle_context() -> None
     assert "Setup, registrations, event operations, and live play" not in nav
 
 
-def test_selected_tournament_scope_removes_repeated_selection_and_preserves_links() -> None:
-    scope = read("app/admin/tournaments/SelectedTournamentPanelScope.tsx")
-    assert "MutationObserver" in scope
-    assert 'candidate.dispatchEvent(new Event("change", { bubbles: true }))' in scope
-    assert "preserveTournamentContext" in scope
-    assert 'url.searchParams.set("tournament", tournamentId)' in scope
-    assert 'querySelectorAll<HTMLAnchorElement>("a[href]")' in scope
-    assert '"registration reporting session"' in scope
-    assert '"bulk registration actions"' in scope
-    assert '"1. create tournament shell"' in scope
-    assert '"2. select tournament"' in scope
-    assert "hasVisibleTransientText" in scope
-    assert "Loading {tournamentName" in scope
+def test_selected_tournament_context_is_constructed_without_dom_mutation() -> None:
+    helper = read("lib/tournamentRouteContext.ts")
+    assert "readTournamentRouteContext" in helper
+    assert "tournamentRouteHref" in helper
+    assert 'params.set("draw", context.drawId)' in helper
+    assert not (WEB / "app/admin/tournaments/SelectedTournamentPanelScope.tsx").exists()
+    tournament_sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (WEB / "app/admin/tournaments").rglob("*.tsx")
+    )
+    assert "MutationObserver" not in tournament_sources
 
 
 def test_selected_tournament_module_pages_require_context() -> None:
@@ -113,8 +113,14 @@ def test_selected_tournament_module_pages_require_context() -> None:
     for path in pages:
         source = read(path)
         assert "searchParams" in source, path
-        assert "tournamentId" in source, path
-        assert 'redirect("/admin/tournaments")' in source or 'redirect("/admin/tournaments/create")' in source, path
+        if "TournamentLiveRoute" in source:
+            route = read("app/admin/tournaments/live-operations/TournamentLiveRoute.tsx")
+            assert "readTournamentRouteContext(searchParams)" in route, path
+            assert "context.tournamentId" in route, path
+            assert 'redirect("/admin/tournaments")' in route, path
+        else:
+            assert "tournamentId" in source, path
+            assert 'redirect("/admin/tournaments")' in source or 'redirect("/admin/tournaments/create")' in source, path
 
 
 def test_registration_handoff_targets_the_guarded_import_page(monkeypatch) -> None:
@@ -154,7 +160,7 @@ def test_legacy_import_handoff_links_redirect_to_the_guarded_import_page() -> No
     page = read("app/admin/tournaments/ops/page.tsx")
 
     assert "searchParams?.tournament_id" in page
-    assert 'redirect(`/admin/tournaments/ops/import?${query.toString()}`)' in page
+    assert 'redirect(tournamentRouteHref("/admin/tournaments/ops/import", context))' in page
 
 
 def test_league_printout_is_available_in_selected_league_navigation() -> None:

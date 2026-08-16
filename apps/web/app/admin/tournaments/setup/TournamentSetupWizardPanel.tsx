@@ -15,6 +15,7 @@ import TournamentSetupWizardNav, {
 } from "@/components/TournamentSetupWizardNav";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
+import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 import TournamentCommercePanel from "../commerce/TournamentCommercePanel";
 import {
   appendBuilderRow,
@@ -179,6 +180,7 @@ type Props = {
   status: SetupStatus | null;
   tournamentId: string;
   tournamentName: string;
+  drawId: string;
   step: TournamentSetupStep;
   resolveDivisionId?: string;
 };
@@ -876,6 +878,7 @@ export default function TournamentSetupWizardPanel({
   status,
   tournamentId,
   tournamentName,
+  drawId,
   step,
   resolveDivisionId = ""
 }: Props) {
@@ -1132,7 +1135,8 @@ export default function TournamentSetupWizardPanel({
       tournamentSetupStepHref(
         nextStep,
         tournamentId,
-        basics.name.trim() || tournamentName
+        basics.name.trim() || tournamentName,
+        drawId
       )
     );
   }
@@ -2251,10 +2255,11 @@ async function saveResolutionDraft() {
       const completion = actionSuccess("Registration opened", "The published tournament is now available to registrants.");
       if (actionRequest.isCurrent(generation)) {
         router.push(
-          `/admin/tournaments/registration?${new URLSearchParams({
-            tournament: tournamentId,
-            name: basics.name.trim() || tournamentName
-          }).toString()}`
+          tournamentRouteHref("/admin/tournaments/registration", {
+            tournamentId,
+            tournamentName: basics.name.trim() || tournamentName,
+            drawId
+          })
         );
       }
       return completion;
@@ -2561,7 +2566,7 @@ function renderEvents() {
       {footerRow(
         <>
           <Link
-            href={tournamentSetupStepHref("schedule", tournamentId, basics.name || tournamentName)}
+            href={tournamentSetupStepHref("schedule", tournamentId, basics.name || tournamentName, drawId)}
             style={ghostButtonStyle}
           >
             Back
@@ -2755,7 +2760,7 @@ function renderDivisions() {
       {footerRow(
         <>
           <Link
-            href={tournamentSetupStepHref("events", tournamentId, basics.name || tournamentName)}
+            href={tournamentSetupStepHref("events", tournamentId, basics.name || tournamentName, drawId)}
             style={ghostButtonStyle}
           >
             Back
@@ -2862,7 +2867,7 @@ function renderDivisions() {
         {footerRow(
           <>
             <Link
-              href={tournamentSetupStepHref("divisions", tournamentId, basics.name || tournamentName)}
+              href={tournamentSetupStepHref("divisions", tournamentId, basics.name || tournamentName, drawId)}
               style={ghostButtonStyle}
             >
               Back to Competition
@@ -3176,7 +3181,7 @@ function renderDivisions() {
 
         {footerRow(
           <>
-            <Link href={tournamentSetupStepHref("basics", tournamentId, basics.name || tournamentName)} style={ghostButtonStyle}>Back to Basics</Link>
+            <Link href={tournamentSetupStepHref("basics", tournamentId, basics.name || tournamentName, drawId)} style={ghostButtonStyle}>Back to Basics</Link>
             <button
               type="button"
               style={buttonStyle}
@@ -3370,7 +3375,7 @@ function renderDivisions() {
             {domainCards.map((item) => (
               <Link
                 key={item.label}
-                href={tournamentSetupStepHref(item.key, tournamentId, basics.name || tournamentName)}
+                href={tournamentSetupStepHref(item.key, tournamentId, basics.name || tournamentName, drawId)}
                 style={{
                   padding: "0.75rem",
                   border: `1px solid ${item.complete ? "#bbf7d0" : "#fecaca"}`,
@@ -3497,8 +3502,8 @@ function renderDivisions() {
                       const acknowledged = communicationAcknowledgementComplete(item);
                       const dataCompletionPending = item.requires_data_completion || item.data_completion_registrations.length > 0;
                       const editHref = item.step === "divisions"
-                        ? `${tournamentSetupStepHref("divisions", tournamentId, basics.name || tournamentName)}&resolveDivision=${encodeURIComponent(item.entity_id || "")}`
-                        : tournamentSetupStepHref(item.step || "review", tournamentId, basics.name || tournamentName);
+                        ? `${tournamentSetupStepHref("divisions", tournamentId, basics.name || tournamentName, drawId)}&resolveDivision=${encodeURIComponent(item.entity_id || "")}`
+                        : tournamentSetupStepHref(item.step || "review", tournamentId, basics.name || tournamentName, drawId);
                       return (
                         <article key={item.impact_id} style={{ padding: "0.8rem", border: `1px solid ${acknowledged ? "#bbf7d0" : dataCompletionPending ? "#fecaca" : "#fde68a"}`, borderRadius: "12px", background: acknowledged ? "#f0fdf4" : dataCompletionPending ? "#fef2f2" : "#fffbeb" }}>
                           <strong>{communicationImpactTitle(item)}</strong>
@@ -3526,7 +3531,7 @@ function renderDivisions() {
                                   const summary = affectedRegistrationImpactSummary(registration, item);
                                   return (
                                     <li key={`${registration.registration_id}-${registration.selection_id || "registration"}`}>
-                                      {registration.display_name || registration.email || registration.registration_id}{registration.email ? ` · ${registration.email}` : ""}{summary ? ` — ${summary}` : ""}
+                                      {registration.display_name || registration.email || "Registration needs details"}{registration.email && registration.display_name ? ` · ${registration.email}` : ""}{summary ? ` — ${summary}` : ""}
                                     </li>
                                   );
                                 })}
@@ -3546,10 +3551,10 @@ function renderDivisions() {
                                     ? proposed.eligibility_issues.map((value) => safeString(value)).filter(Boolean)
                                     : [];
                                   const issue = eligibilityIssues.join(" · ") || safeString(proposed.assignment_issue) || "Complete the missing eligibility information.";
-                                  const editorHref = `/admin/tournaments/registration/registrants/${encodeURIComponent(registration.registration_id)}?${new URLSearchParams({ tournament: tournamentId, name: basics.name || tournamentName }).toString()}`;
+                                  const editorHref = tournamentRouteHref(`/admin/tournaments/registration/registrants/${encodeURIComponent(registration.registration_id)}`, { tournamentId, tournamentName: basics.name || tournamentName, drawId });
                                   return (
                                     <li key={`data-${registration.registration_id}-${registration.selection_id || "registration"}`}>
-                                      <Link href={editorHref}>{registration.display_name || registration.email || registration.registration_id}</Link> — {issue}
+                                      <Link href={editorHref}>{registration.display_name || registration.email || "Registration needs details"}</Link> — {issue}
                                     </li>
                                   );
                                 })}
@@ -3619,8 +3624,8 @@ function renderDivisions() {
                   <div style={{ display: "grid", gap: "0.75rem", marginTop: "0.55rem" }}>
                     {blockedDetails.map((item) => {
                       const editHref = item.step === "divisions"
-                        ? `${tournamentSetupStepHref("divisions", tournamentId, basics.name || tournamentName)}&resolveDivision=${encodeURIComponent(item.entity_id || "")}`
-                        : tournamentSetupStepHref(item.step || "review", tournamentId, basics.name || tournamentName);
+                        ? `${tournamentSetupStepHref("divisions", tournamentId, basics.name || tournamentName, drawId)}&resolveDivision=${encodeURIComponent(item.entity_id || "")}`
+                        : tournamentSetupStepHref(item.step || "review", tournamentId, basics.name || tournamentName, drawId);
                       const plan = forcedResolutionPlan(item);
                       const planRows = Array.isArray(plan?.affected_registrations)
                         ? (plan?.affected_registrations as Array<Record<string, unknown>>)
@@ -3664,12 +3669,12 @@ function renderDivisions() {
                                     current_source: safeString(row.current_source),
                                     proposed_source: safeString(row.proposed_source)
                                   };
-                                  const editorHref = `/admin/tournaments/registration/registrants/${encodeURIComponent(registration.registration_id)}?${new URLSearchParams({ tournament: tournamentId, name: basics.name || tournamentName }).toString()}`;
+                                  const editorHref = tournamentRouteHref(`/admin/tournaments/registration/registrants/${encodeURIComponent(registration.registration_id)}`, { tournamentId, tournamentName: basics.name || tournamentName, drawId });
                                   const resolved = Boolean(row.resolved);
                                   return (
                                     <article key={`${registration.registration_id}-${registration.selection_id || "registration"}`} style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.65rem", background: "white" }}>
                                       <div style={{ display: "flex", justifyContent: "space-between", gap: "0.55rem", flexWrap: "wrap" }}>
-                                        <div><strong>{registration.display_name || registration.email || registration.registration_id}</strong><br /><small>{registration.email || "No email"} · {registration.registration_status || "Unknown status"}</small></div>
+                                        <div><strong>{registration.display_name || registration.email || "Registration needs details"}</strong><br /><small>{registration.email || "No email"} · {registration.registration_status || "Unknown status"}</small></div>
                                         <Link href={editorHref} style={ghostButtonStyle}>Open registration editor</Link>
                                       </div>
                                       {(row.current_value != null || row.proposed_value != null) ? (
@@ -3776,8 +3781,8 @@ function renderDivisions() {
 
         {footerRow(
           <>
-            <Link href={tournamentSetupStepHref("pricing", tournamentId, basics.name || tournamentName)} style={ghostButtonStyle}>Back to Commerce</Link>
-            <Link href={`/admin/tournaments/tournament?${new URLSearchParams({ tournament: tournamentId, name: basics.name || tournamentName }).toString()}`} style={ghostButtonStyle}>Return to Tournament Home</Link>
+            <Link href={tournamentSetupStepHref("pricing", tournamentId, basics.name || tournamentName, drawId)} style={ghostButtonStyle}>Back to Commerce</Link>
+            <Link href={tournamentRouteHref("/admin/tournaments/tournament", { tournamentId, tournamentName: basics.name || tournamentName, drawId })} style={ghostButtonStyle}>Return to Tournament Home</Link>
           </>
         )}
       </div>
@@ -3816,6 +3821,7 @@ function renderDivisions() {
         currentStep={step}
         tournamentId={tournamentId}
         tournamentName={basics.name || tournamentName}
+        drawId={drawId}
         states={states}
       />
 

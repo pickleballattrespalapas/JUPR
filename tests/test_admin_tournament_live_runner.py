@@ -6,9 +6,15 @@ import uuid
 
 import pytest
 
+from jupr_app.domain.tournament_podium import PODIUM_BADGE_MAP
 from jupr_app.domain.tournament_admin_operations import (
     build_tournament_admin_operation_request,
     stable_tournament_admin_fingerprint,
+)
+from jupr_app.services.admin_tournament_podium_review_service import (
+    PODIUM_REVIEW_ACTION,
+    PODIUM_REVIEW_CONTRACT,
+    build_admin_tournament_podium_review_fingerprint,
 )
 from jupr_app.services.admin_tournament_guarded_operation import (
     StaleTournamentAdminStateError,
@@ -219,6 +225,67 @@ def live_tables() -> dict[str, list[dict]]:
     }
 
 
+def install_current_live_podium_review(
+    tables: dict[str, list[dict]],
+    *,
+    install_awards: bool = False,
+) -> None:
+    draw = tables["tournament_event_draws"][0]
+    draw_id = str(draw["id"])
+    teams = [row for row in tables["tournament_teams"] if row.get("draw_id") == draw_id]
+    games = [row for row in tables["tournament_games"] if row.get("draw_id") == draw_id]
+    podium = [row for row in tables["tournament_podium"] if row.get("draw_id") == draw_id]
+    fingerprint = build_admin_tournament_podium_review_fingerprint(
+        draw=draw,
+        teams=teams,
+        games=games,
+        podium=podium,
+    )
+    tables["admin_activity_log"] = [
+        row
+        for row in tables.get("admin_activity_log", [])
+        if row.get("action_type") != PODIUM_REVIEW_ACTION
+    ]
+    tables["admin_activity_log"].append(
+        {
+            "club_id": "club",
+            "actor_email": "reviewer@example.com",
+            "action_type": PODIUM_REVIEW_ACTION,
+            "entity_type": "tournament_event_draw",
+            "entity_id": draw_id,
+            "after_json": {
+                "podium_review_evidence": {
+                    "contract": PODIUM_REVIEW_CONTRACT,
+                    "tournament_id": "tour-1",
+                    "draw_id": draw_id,
+                    "review_fingerprint": fingerprint,
+                }
+            },
+        }
+    )
+    if not install_awards:
+        return
+    teams_by_id = {str(row["id"]): row for row in teams}
+    tables["player_badges"] = []
+    for podium_row in podium:
+        placement = int(podium_row["placement"])
+        team = teams_by_id[str(podium_row["team_id"])]
+        for player_id in (team.get("player1_id"), team.get("player2_id")):
+            if player_id is None:
+                continue
+            tables["player_badges"].append(
+                {
+                    "id": f"award-{placement}-{player_id}",
+                    "club_id": "club",
+                    "player_id": player_id,
+                    "badge_id": PODIUM_BADGE_MAP[placement],
+                    "context_type": "tournament",
+                    "context_id": f"tour-1:draw:{draw_id}:podium:{placement}",
+                    "revoked_at": None,
+                }
+            )
+
+
 def _enable_live(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
     monkeypatch.setenv("JUPR_ENV", "staging")
@@ -280,6 +347,7 @@ def test_live_status_is_staging_only_and_checks_private_operation_store(monkeypa
     monkeypatch.setenv("JUPR_ENV", "staging")
     staging = build_admin_tournament_live_status(supabase, club_id="club")
     assert staging["writes_enabled"] is True
+    assert staging["official_publish_writes_enabled"] is False
     assert staging["operation_store_ready"] is True
     assert staging["audit_store_ready"] is True
     assert staging["write_flag"]["name"] == "JUPR_ENABLE_STAGING_NEXT_ADMIN_TOURNAMENT_LIVE_WRITES"
@@ -299,6 +367,68 @@ def test_live_status_fails_closed_when_required_audit_store_is_unavailable(monke
     assert status["audit_store_ready"] is False
     assert status["writes_enabled"] is False
     assert any("audit storage is unavailable" in warning for warning in status["warnings"])
+
+
+def test_closed_official_publish_gate_blocks_before_live_intent(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    game = tables["tournament_games"][0]
+    game.update(
+        {
+            "score_a": 11,
+            "score_b": 7,
+            "winner_team_id": "team-1",
+            "loser_team_id": "team-2",
+            "finalized_at": "2026-07-19T11:00:00Z",
+            "updated_at": "2026-07-19T11:00:00Z",
+        }
+    )
+    tables["tournament_podium"] = [
+        {
+            "id": f"podium-{placement}",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-1",
+            "placement": placement,
+            "team_id": f"team-{placement}",
+            "source": "ROUND_ROBIN",
+            "created_at": "2026-07-19T11:00:00Z",
+            "updated_at": "2026-07-19T11:00:00Z",
+        }
+        for placement in (1, 2, 3)
+    ]
+    install_current_live_podium_review(tables, install_awards=True)
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+    assert snapshot["runtime"]["writes_enabled"] is True
+    assert snapshot["runtime"]["official_publish_writes_enabled"] is False
+    assert snapshot["readiness"]["publish_official_matches"]["ready"] is False
+    before_audit = deepcopy(tables["admin_activity_log"])
+    request = _command(
+        snapshot,
+        command="publish_official_matches",
+        confirmation_text="PUBLISH MATCHES",
+        expected_team_versions=_FakeRpc._versions(tables["tournament_teams"]),
+        expected_source_game_versions=_FakeRpc._versions(tables["tournament_games"]),
+    )
+
+    with pytest.raises(PermissionError, match="official publishing is disabled"):
+        execute_admin_tournament_live_command(
+            supabase,
+            club_id="club",
+            tournament_id="tour-1",
+            draw_id="draw-1",
+            request=request,
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+    assert tables["tournament_admin_operations"] == []
+    assert tables["admin_activity_log"] == before_audit
 
 
 def test_draw_snapshot_is_stable_python_authority_with_progression_and_readiness(monkeypatch) -> None:
@@ -824,9 +954,20 @@ def test_atomic_award_refuses_podium_drift_after_live_lock_with_zero_badges(monk
             "placement": placement,
             "team_id": team_id,
             "source": "ROUND_ROBIN",
+            "updated_at": "2026-07-19T10:00:00Z",
         }
         for placement, team_id in ((1, "team-1"), (2, "team-2"), (3, "team-3"))
     ]
+    tables["tournament_games"][0].update(
+        {
+            "score_a": 11,
+            "score_b": 7,
+            "winner_team_id": "team-1",
+            "loser_team_id": "team-2",
+            "finalized_at": "2026-07-19T11:00:00Z",
+        }
+    )
+    install_current_live_podium_review(tables)
     supabase = DriftingAwardSupabase(tables)
     snapshot = build_admin_tournament_live_snapshot(
         supabase,
@@ -891,6 +1032,18 @@ def test_publish_expected_plan_recheck_blocks_changed_score_before_processors(mo
             "updated_at": "2026-07-19T12:00:00Z",
         }
     )
+    tables["tournament_podium"] = [
+        {
+            "id": f"podium-{placement}",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-1",
+            "placement": placement,
+            "team_id": team_id,
+            "source": "ROUND_ROBIN",
+        }
+        for placement, team_id in ((1, "team-2"), (2, "team-1"), (3, "team-3"))
+    ]
+    install_current_live_podium_review(tables, install_awards=True)
     processor_calls: list[list[dict]] = []
     monkeypatch.setattr(
         "jupr_app.services.admin_tournament_match_publish_service.process_matches",

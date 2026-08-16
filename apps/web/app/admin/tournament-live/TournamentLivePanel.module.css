@@ -1,6 +1,9 @@
 .root {
   display: grid;
   gap: 1rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 .card,
@@ -82,7 +85,7 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
   gap: 0.85rem;
-  align-items: end;
+  align-items: flex-end;
 }
 
 .scoreGrid {
@@ -210,6 +213,185 @@
   gap: 1rem;
 }
 
+.moduleGrid,
+.drawCards,
+.gameCards,
+.closeoutGrid,
+.readinessColumns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.moduleCard,
+.closeoutCard {
+  min-width: 0;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  padding: 1rem;
+  background: #fff;
+  color: #0f172a;
+  text-decoration: none;
+}
+
+.moduleCard:hover {
+  border-color: #60a5fa;
+  background: #eff6ff;
+}
+
+.moduleCard h2,
+.moduleCard p,
+.closeoutCard h3,
+.closeoutCard p {
+  margin-top: 0;
+}
+
+.secondaryLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid #0f172a;
+  border-radius: 999px;
+  color: #0f172a;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.filterRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.filterRow label {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 145px;
+  font-weight: 700;
+}
+
+.gameCards {
+  margin-top: 0.85rem;
+}
+
+.gameCard {
+  display: grid;
+  align-content: start;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.gameCard p {
+  margin: 0;
+}
+
+.matchup {
+  color: #0f172a;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.matchup span {
+  color: #64748b;
+  font-weight: 600;
+}
+
+.resultLine {
+  font-size: 1.4rem;
+  font-weight: 900;
+}
+
+.scorecard {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(110px, 0.7fr) auto minmax(110px, 0.7fr) minmax(0, 1.4fr);
+  align-items: end;
+  gap: 0.7rem;
+  margin: 0.9rem 0;
+  padding: 1rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  background: #eff6ff;
+}
+
+.scorecard > div:not(.versus),
+.scorecard label {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.scorecard span,
+.scorecard label {
+  color: #475569;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.scorecard strong {
+  color: #0f172a;
+  overflow-wrap: anywhere;
+}
+
+.versus {
+  padding-bottom: 0.7rem;
+  color: #64748b;
+  font-weight: 800;
+}
+
+.confirmationCard {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+  padding: 1rem;
+  border: 2px solid #2563eb;
+  border-radius: 14px;
+  background: #eff6ff;
+}
+
+.confirmationCard h3,
+.confirmationCard p {
+  margin-top: 0;
+}
+
+.selectionDetails {
+  margin-top: 0.85rem;
+}
+
+.selectionDetails summary,
+.root details summary {
+  cursor: pointer;
+  color: #334155;
+  font-weight: 700;
+}
+
+.selectionDetails .controlGrid {
+  margin-top: 0.8rem;
+}
+
+.podiumGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  gap: 0.75rem;
+  margin: 0.85rem 0;
+}
+
+.podiumCard {
+  display: grid;
+  gap: 0.25rem;
+  border: 1px solid #fde68a;
+  border-radius: 13px;
+  padding: 0.85rem;
+  background: #fffbeb;
+}
+
+.podiumCard span {
+  color: #92400e;
+  font-weight: 800;
+}
+
 .commandCard,
 .dangerCard {
   display: grid;
@@ -288,6 +470,7 @@
 
 .tableWrap {
   overflow-x: auto;
+  max-width: 100%;
 }
 
 .gameTable {
@@ -315,7 +498,7 @@
 }
 
 .mobileGames {
-  display: none;
+  display: grid;
 }
 
 .gameCard {
@@ -400,14 +583,25 @@
   color: #1e3a8a;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .commandGrid {
     grid-template-columns: 1fr;
   }
 
-  .tableWrap {
+  .scorecard {
+    grid-template-columns: 1fr 110px;
+  }
+
+  .scorecard .versus {
     display: none;
   }
+
+  .scorecard > div:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
 
   .mobileGames {
     display: grid;
@@ -421,6 +615,14 @@
 
   .operationRow .primaryButton {
     width: 100%;
+  }
+
+  .scorecard {
+    grid-template-columns: 1fr;
+  }
+
+  .scorecard > div:last-child {
+    grid-column: auto;
   }
 }
 
