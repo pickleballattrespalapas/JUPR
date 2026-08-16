@@ -7,6 +7,13 @@ const tournamentId = "93000000-0000-4000-8000-000000000001";
 const drawId = "da089489-8746-4c3f-96d2-7bb65fd6cc0e";
 const selectedQuery = `tournament=${tournamentId}&tournament_name=Staging+Summer+Classic&name=Staging+Summer+Classic&draw=${drawId}`;
 const pageDiagnostics = new WeakMap<Page, { consoleErrors: string[]; pageErrors: string[] }>();
+const protectedWebBase = String(process.env.STAGING_WEB_BASE_URL || "").trim().replace(/\/$/, "");
+
+function isProtectedPreviewPrefetchFallback(message: string): boolean {
+  return Boolean(protectedWebBase)
+    && message.startsWith(`Failed to fetch RSC payload for ${protectedWebBase}/`)
+    && message.includes("Falling back to browser navigation. TypeError: Failed to fetch");
+}
 
 test.describe.configure({ mode: "serial" });
 
@@ -32,7 +39,10 @@ test.beforeEach(async ({ context, page }) => {
 test.afterEach(async ({ page }) => {
   const diagnostics = pageDiagnostics.get(page);
   expect(diagnostics?.pageErrors || [], "The page raised browser errors.").toEqual([]);
-  expect(diagnostics?.consoleErrors || [], "The page emitted console errors.").toEqual([]);
+  const unexpectedConsoleErrors = (diagnostics?.consoleErrors || []).filter(
+    (message) => !isProtectedPreviewPrefetchFallback(message)
+  );
+  expect(unexpectedConsoleErrors, "The page emitted unexpected console errors.").toEqual([]);
   await expect(page.locator("[data-nextjs-dialog], .nextjs-container-errors-pseudo-html")).toHaveCount(0);
 });
 
