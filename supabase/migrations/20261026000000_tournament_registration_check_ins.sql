@@ -69,7 +69,7 @@ create index if not exists idx_tournament_registration_check_ins_substitute
 alter table public.tournament_registration_check_ins enable row level security;
 alter table public.tournament_registration_check_ins force row level security;
 
-revoke all on table public.tournament_registration_check_ins from public, anon, authenticated;
+revoke all on table public.tournament_registration_check_ins from public, anon, authenticated, service_role;
 grant select, insert, update on table public.tournament_registration_check_ins to service_role;
 
 create or replace function public.admin_upsert_tournament_registration_check_in(
@@ -315,7 +315,7 @@ $function$;
 
 revoke all on function public.admin_upsert_tournament_registration_check_in(
   text, text, text, timestamptz, boolean, boolean, integer, text, text, text
-) from public, anon, authenticated;
+) from public, anon, authenticated, service_role;
 grant execute on function public.admin_upsert_tournament_registration_check_in(
   text, text, text, timestamptz, boolean, boolean, integer, text, text, text
 ) to service_role;

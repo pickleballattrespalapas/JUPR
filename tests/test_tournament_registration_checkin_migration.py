@@ -8,6 +8,12 @@ MIGRATION = (
     / "migrations"
     / "20261026000000_tournament_registration_check_ins.sql"
 )
+PRIVILEGE_MIGRATION = (
+    ROOT
+    / "supabase"
+    / "migrations"
+    / "20261027000000_harden_tournament_registration_check_in_privileges.sql"
+)
 
 
 def test_check_in_migration_is_private_service_role_only_and_indexed() -> None:
@@ -16,7 +22,7 @@ def test_check_in_migration_is_private_service_role_only_and_indexed() -> None:
     assert "create table if not exists public.tournament_registration_check_ins" in sql
     assert "alter table public.tournament_registration_check_ins enable row level security" in sql
     assert "alter table public.tournament_registration_check_ins force row level security" in sql
-    assert "revoke all on table public.tournament_registration_check_ins from public, anon, authenticated" in sql
+    assert "revoke all on table public.tournament_registration_check_ins from public, anon, authenticated, service_role" in sql
     assert "grant select, insert, update on table public.tournament_registration_check_ins to service_role" in sql
     assert "registration_id text not null references public.tournament_registrations(id)" in sql
     assert "attendee_identity_key text not null" in sql
@@ -51,5 +57,15 @@ def test_check_in_rpc_is_compare_and_swap_and_resets_changed_attendee() -> None:
     assert "when v_attendee_identity_changed then false" in sql
     assert "registration.tournament_id::text = p_tournament_id" in sql
     assert "check_in.tournament_id = v_tournament.id" in sql
+    assert "revoke all on function public.admin_upsert_tournament_registration_check_in" in sql
+    assert "grant execute on function public.admin_upsert_tournament_registration_check_in" in sql
+
+
+def test_check_in_privilege_rebind_removes_platform_default_delete_access() -> None:
+    sql = PRIVILEGE_MIGRATION.read_text(encoding="utf-8").lower()
+
+    assert "revoke all on table public.tournament_registration_check_ins" in sql
+    assert "from public, anon, authenticated, service_role" in sql
+    assert "grant select, insert, update on table public.tournament_registration_check_ins" in sql
     assert "revoke all on function public.admin_upsert_tournament_registration_check_in" in sql
     assert "grant execute on function public.admin_upsert_tournament_registration_check_in" in sql
