@@ -261,8 +261,6 @@ jobs:
         env:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
-          export STAGING_WEB_BASE_URL="$VERCEL_DEPLOYMENT_ORIGIN"
-          export JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN="$VERCEL_DEPLOYMENT_ORIGIN"
           npx playwright test e2e/tournament-operator.acceptance.staging.spec.ts \
             --grep-invert "official publish remains blocked with runtime enabled" \
             --retries=0 \
@@ -283,8 +281,6 @@ jobs:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -euo pipefail
-          export STAGING_WEB_BASE_URL="$VERCEL_DEPLOYMENT_ORIGIN"
-          export JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN="$VERCEL_DEPLOYMENT_ORIGIN"
           npx playwright test e2e/tournament-live.staging.spec.ts \
             --grep "opt-in disposable score command replays once and restores its original score" \
             --retries=0 \
@@ -408,8 +404,6 @@ jobs:
         env:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
-          export STAGING_WEB_BASE_URL="$VERCEL_DEPLOYMENT_ORIGIN"
-          export JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN="$VERCEL_DEPLOYMENT_ORIGIN"
           npx playwright test e2e/tournament-operator.acceptance.staging.spec.ts \
             --grep "official publish remains blocked with runtime enabled" \
             --retries=0 \
