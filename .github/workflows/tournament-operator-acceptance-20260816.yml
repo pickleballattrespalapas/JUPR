@@ -1,0 +1,456 @@
+name: Temporary tournament operator staging acceptance
+
+on:
+  pull_request:
+    branches:
+      - staging
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  acceptance:
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.event.pull_request.head.ref == 'agent/tournament-operator-acceptance-20260816' &&
+      github.event.pull_request.base.ref == 'staging' &&
+      github.event.pull_request.user.login == 'pickleballattrespalapas'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    environment: staging
+    concurrency:
+      group: jupr-temporary-tournament-operator-acceptance-20260816
+      cancel-in-progress: false
+    env:
+      EXPECTED_SHA: 1048153191745079c37fd8eb64a58be482a88911
+      STAGING_API_BASE_URL: https://juprleagues-api-staging.fly.dev
+      NEXT_PUBLIC_JUPR_API_BASE_URL: https://juprleagues-api-staging.fly.dev
+      STAGING_WEB_BASE_URL: https://jupr-git-staging-pickleballattrespalapas1.vercel.app
+      STAGING_SUPABASE_PROJECT_REF: sijpxjxvdtrehmqvirfi
+      STAGING_SUPABASE_URL: https://sijpxjxvdtrehmqvirfi.supabase.co
+      JUPR_EXPECTED_STAGING_API_ORIGIN: https://juprleagues-api-staging.fly.dev
+      JUPR_EXPECTED_STAGING_AUTH_ORIGIN: https://sijpxjxvdtrehmqvirfi.supabase.co
+      TOURNAMENT_ID: 93000000-0000-4000-8000-000000000001
+      DRAW_ID: da089489-8746-4c3f-96d2-7bb65fd6cc0e
+      GAME_ID: 3d78b475-2f9a-49e5-b119-05c685a29fc4
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out the exact temporary acceptance branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact staging base and two-file acceptance diff
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$PR_BASE_SHA" = "$EXPECTED_SHA"
+          test "$PR_HEAD_SHA" = "$(git rev-parse HEAD)"
+          git fetch --no-tags origin +refs/heads/staging:refs/remotes/origin/staging
+          test "$(git rev-parse refs/remotes/origin/staging)" = "$EXPECTED_SHA"
+          FILES="$(
+            gh api --paginate "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+              --jq '.[].filename' | sort
+          )"
+          EXPECTED_FILES="$(printf '%s\n' \
+            '.github/workflows/tournament-operator-acceptance-20260816.yml' \
+            'apps/web/e2e/tournament-operator.acceptance.staging.spec.ts' \
+            | sort)"
+          test "$FILES" = "$EXPECTED_FILES"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Initialize evidence and require fail-closed starting state
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tournament-acceptance-evidence
+          python scripts/staging_evidence_automation.py fly-health \
+            > tournament-acceptance-evidence/fly-before.json
+          python scripts/staging_evidence_automation.py verify-final-none \
+            --fly-json tournament-acceptance-evidence/fly-before.json \
+            > tournament-acceptance-evidence/none-before.json
+          jq -e --arg sha "$EXPECTED_SHA" \
+            'select(
+              .git_commit_sha == $sha and
+              .image_build_git_sha == $sha and
+              .supabase_project_ref == "sijpxjxvdtrehmqvirfi" and
+              .staging_write_wave == "none" and
+              .business_data_write_wave_active == false
+            )' tournament-acceptance-evidence/fly-before.json >/dev/null
+
+      - name: Resolve exact protected Vercel deployment identity
+        shell: bash
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_AUTOMATION_BYPASS_SECRET"
+          curl --fail --silent --show-error --max-time 30 \
+            -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" \
+            "$STAGING_WEB_BASE_URL/api/environment" \
+            -o tournament-acceptance-evidence/web-environment.json
+          python - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          payload = json.loads(Path("tournament-acceptance-evidence/web-environment.json").read_text())
+          expected_sha = os.environ["EXPECTED_SHA"]
+          deployment_id = str(payload.get("vercel_deployment_id") or "")
+          deployment_origin = str(payload.get("vercel_deployment_origin") or "")
+          if payload.get("environment") != "staging":
+              raise SystemExit("Vercel environment is not staging")
+          if payload.get("git_commit_sha") != expected_sha:
+              raise SystemExit("Vercel SHA does not match the approved staging candidate")
+          if payload.get("api_origin") != os.environ["STAGING_API_BASE_URL"]:
+              raise SystemExit("Vercel API origin is not isolated staging")
+          if payload.get("auth_origin") != os.environ["STAGING_SUPABASE_URL"]:
+              raise SystemExit("Vercel Auth origin is not isolated staging")
+          if not re.fullmatch(r"dpl_[A-Za-z0-9]{8,128}", deployment_id):
+              raise SystemExit("Vercel deployment ID is not canonical")
+          if not re.fullmatch(
+              r"https://[a-z0-9](?:[a-z0-9-]{0,180}[a-z0-9])?-[a-z0-9]{8,64}-pickleballattrespalapas1\.vercel\.app",
+              deployment_origin,
+          ):
+              raise SystemExit("Vercel immutable deployment origin is not canonical staging")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              print(f"VERCEL_DEPLOYMENT_ID={deployment_id}", file=handle)
+              print(f"VERCEL_DEPLOYMENT_ORIGIN={deployment_origin}", file=handle)
+              print(f"STAGING_WEB_BASE_URL={deployment_origin}", file=handle)
+              print(f"JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN={deployment_origin}", file=handle)
+          PY
+
+      - name: Activate the narrow Tournament Live wave
+        id: activate-live
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/staging_evidence_automation.py dispatch \
+            --workflow fly_api_staging_deploy.yml \
+            --input write_wave=tournament-live \
+            --input "expected_candidate_sha=$EXPECTED_SHA" \
+            > tournament-acceptance-evidence/live-dispatch.json
+          RUN_ID="$(jq -r .workflow_run_id tournament-acceptance-evidence/live-dispatch.json)"
+          test -n "$RUN_ID"
+          python scripts/staging_evidence_automation.py wait-run \
+            --workflow fly_api_staging_deploy.yml \
+            --run-id "$RUN_ID" \
+            --candidate-sha "$EXPECTED_SHA" \
+            --timeout-seconds 3600
+          python scripts/staging_evidence_automation.py fly-health \
+            > tournament-acceptance-evidence/fly-live.json
+          jq -e --arg sha "$EXPECTED_SHA" \
+            'select(
+              .git_commit_sha == $sha and
+              .image_build_git_sha == $sha and
+              .supabase_project_ref == "sijpxjxvdtrehmqvirfi" and
+              .staging_write_wave == "tournament-live" and
+              .business_data_write_wave_active == true
+            )' tournament-acceptance-evidence/fly-live.json >/dev/null
+          FLY_IMAGE_REF="$(jq -r .fly_image_ref tournament-acceptance-evidence/fly-live.json)"
+          test -n "$FLY_IMAGE_REF"
+          echo "FLY_IMAGE_REF=$FLY_IMAGE_REF" >> "$GITHUB_ENV"
+
+      - name: Pre-attest exact live-wave deployment identity
+        shell: bash
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          python scripts/run_parity_staging_wave.py \
+            match-rating-writes \
+            --identity-only \
+            --candidate-sha "$EXPECTED_SHA" \
+            --vercel-deployment-id "$VERCEL_DEPLOYMENT_ID" \
+            --vercel-deployment-origin "$VERCEL_DEPLOYMENT_ORIGIN" \
+            --fly-image-ref "$FLY_IMAGE_REF" \
+            --expected-write-wave tournament-live \
+            --report-dir tournament-acceptance-evidence/pre-live-identity
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install browser-suite dependencies
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+
+      - name: Prepare authenticated staging admin session
+        id: prepare-live-session
+        env:
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          test -n "$GITHUB_ENV"
+          python scripts/prepare_parity_staging_session.py \
+            match-rating-writes \
+            --report-dir tournament-acceptance-evidence
+
+      - name: Capture the exact Summer Classic baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          SNAPSHOT_URL="$STAGING_API_BASE_URL/admin/clubs/tres_palapas/tournament-live/tournaments/$TOURNAMENT_ID/snapshot?draw_id=$DRAW_ID"
+          curl --fail --silent --show-error --max-time 30 \
+            -H "Authorization: Bearer $STAGING_ADMIN_BEARER_TOKEN" \
+            "$SNAPSHOT_URL" \
+            -o /tmp/tournament-operator-before.json
+          jq -e --arg game "$GAME_ID" --arg draw "$DRAW_ID" '
+            select(
+              .draw_id == $draw and
+              .lifecycle.counts.teams == 7 and
+              .lifecycle.counts.games == 21 and
+              .lifecycle.counts.finalized_games == 1 and
+              .lifecycle.counts.open_games == 20 and
+              .lifecycle.counts.active_operations == 0 and
+              .lifecycle.counts.uncertain_operations == 0 and
+              ([.games[] | select(.id == $game) | .score_a, .score_b] == [11, 7]) and
+              (.operations | length) == 3 and
+              all(.operations[]; .status == "completed")
+            )' /tmp/tournament-operator-before.json >/dev/null
+          jq --arg game "$GAME_ID" '{
+            contract: .contract,
+            authority: .authority,
+            draw_id,
+            counts: .lifecycle.counts,
+            game: (.games[] | select(.id == $game) | {id, score_a, score_b, winner_team_id}),
+            operations: [.operations[] | {operation_key, action, status, client_idempotency_key}]
+          }' /tmp/tournament-operator-before.json \
+            > tournament-acceptance-evidence/summer-classic-before.json
+          rm -f /tmp/tournament-operator-before.json
+
+      - name: Verify focused operator UI without an extra write
+        working-directory: apps/web
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          npx playwright test e2e/tournament-operator.acceptance.staging.spec.ts \
+            --grep-invert "official publish remains blocked with runtime enabled" \
+            --retries=0 \
+            --forbid-only \
+            --reporter=list
+
+      - name: Run exact reversible score evidence and reject skips
+        working-directory: apps/web
+        env:
+          JUPR_TOURNAMENT_LIVE_TOURNAMENT_ID: 93000000-0000-4000-8000-000000000001
+          JUPR_TOURNAMENT_LIVE_DRAW_ID: da089489-8746-4c3f-96d2-7bb65fd6cc0e
+          JUPR_TOURNAMENT_LIVE_GAME_ID: 3d78b475-2f9a-49e5-b119-05c685a29fc4
+          JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_A: "11"
+          JUPR_TOURNAMENT_LIVE_ORIGINAL_SCORE_B: "7"
+          JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_A: "11"
+          JUPR_TOURNAMENT_LIVE_EXERCISE_SCORE_B: "8"
+          JUPR_TOURNAMENT_LIVE_ALLOW_MUTATION_E2E: "true"
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          npx playwright test e2e/tournament-live.staging.spec.ts \
+            --grep "opt-in disposable score command replays once and restores its original score" \
+            --retries=0 \
+            --forbid-only \
+            --reporter=list \
+            | tee ../../tournament-acceptance-evidence/reversible-score.txt
+          grep -Eq '1 passed' ../../tournament-acceptance-evidence/reversible-score.txt
+          ! grep -Eqi 'skipped|did not run' ../../tournament-acceptance-evidence/reversible-score.txt
+
+      - name: Prove the Summer Classic score and lock state were restored
+        shell: bash
+        run: |
+          set -euo pipefail
+          SNAPSHOT_URL="$STAGING_API_BASE_URL/admin/clubs/tres_palapas/tournament-live/tournaments/$TOURNAMENT_ID/snapshot?draw_id=$DRAW_ID"
+          curl --fail --silent --show-error --max-time 30 \
+            -H "Authorization: Bearer $STAGING_ADMIN_BEARER_TOKEN" \
+            "$SNAPSHOT_URL" \
+            -o /tmp/tournament-operator-after.json
+          jq -e --arg game "$GAME_ID" --arg draw "$DRAW_ID" '
+            select(
+              .draw_id == $draw and
+              .lifecycle.counts.teams == 7 and
+              .lifecycle.counts.games == 21 and
+              .lifecycle.counts.finalized_games == 1 and
+              .lifecycle.counts.open_games == 20 and
+              .lifecycle.counts.active_operations == 0 and
+              .lifecycle.counts.uncertain_operations == 0 and
+              ([.games[] | select(.id == $game) | .score_a, .score_b] == [11, 7]) and
+              (.operations | length) == 5 and
+              all(.operations[]; .status == "completed")
+            )' /tmp/tournament-operator-after.json >/dev/null
+          jq --arg game "$GAME_ID" '{
+            contract: .contract,
+            authority: .authority,
+            draw_id,
+            counts: .lifecycle.counts,
+            game: (.games[] | select(.id == $game) | {id, score_a, score_b, winner_team_id}),
+            operations: [.operations[] | {operation_key, action, status, client_idempotency_key}]
+          }' /tmp/tournament-operator-after.json \
+            > tournament-acceptance-evidence/summer-classic-after.json
+          rm -f /tmp/tournament-operator-after.json
+
+      - name: End authenticated staging admin session
+        if: always() && steps.prepare-live-session.outcome == 'success'
+        env:
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+        run: |
+          python scripts/prepare_parity_staging_session.py \
+            cleanup \
+            --report-dir tournament-acceptance-evidence
+
+      - name: Restore none after Tournament Live phase
+        if: always()
+        id: restore-live-none
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/staging_evidence_automation.py fly-health \
+            > tournament-acceptance-evidence/fly-before-live-restore.json
+          CURRENT_WAVE="$(jq -r '.staging_write_wave // empty' tournament-acceptance-evidence/fly-before-live-restore.json)"
+          if [ "$CURRENT_WAVE" != "none" ]; then
+            python scripts/staging_evidence_automation.py dispatch \
+              --workflow fly_api_staging_deploy.yml \
+              --input write_wave=none \
+              --input "expected_candidate_sha=$EXPECTED_SHA" \
+              > tournament-acceptance-evidence/live-none-dispatch.json
+            RUN_ID="$(jq -r .workflow_run_id tournament-acceptance-evidence/live-none-dispatch.json)"
+            python scripts/staging_evidence_automation.py wait-run \
+              --workflow fly_api_staging_deploy.yml \
+              --run-id "$RUN_ID" \
+              --candidate-sha "$EXPECTED_SHA" \
+              --timeout-seconds 3600
+          else
+            printf '%s\n' '{"already_none":true}' \
+              > tournament-acceptance-evidence/live-none-dispatch.json
+          fi
+          python scripts/staging_evidence_automation.py fly-health \
+            > tournament-acceptance-evidence/fly-after-live-none.json
+          python scripts/staging_evidence_automation.py verify-final-none \
+            --fly-json tournament-acceptance-evidence/fly-after-live-none.json \
+            > tournament-acceptance-evidence/live-none-verification.json
+
+      - name: Activate runtime for a domain-level publish-block check
+        id: activate-publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/staging_evidence_automation.py dispatch \
+            --workflow fly_api_staging_deploy.yml \
+            --input write_wave=tournament-live-official-publish \
+            --input "expected_candidate_sha=$EXPECTED_SHA" \
+            > tournament-acceptance-evidence/publish-dispatch.json
+          RUN_ID="$(jq -r .workflow_run_id tournament-acceptance-evidence/publish-dispatch.json)"
+          python scripts/staging_evidence_automation.py wait-run \
+            --workflow fly_api_staging_deploy.yml \
+            --run-id "$RUN_ID" \
+            --candidate-sha "$EXPECTED_SHA" \
+            --timeout-seconds 3600
+          python scripts/staging_evidence_automation.py fly-health \
+            > tournament-acceptance-evidence/fly-publish.json
+          jq -e --arg sha "$EXPECTED_SHA" \
+            'select(
+              .git_commit_sha == $sha and
+              .staging_write_wave == "tournament-live-official-publish" and
+              .business_data_write_wave_active == true
+            )' tournament-acceptance-evidence/fly-publish.json >/dev/null
+
+      - name: Prepare read-only admin session for publish blocker
+        id: prepare-publish-session
+        env:
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          test -n "$GITHUB_ENV"
+          python scripts/prepare_parity_staging_session.py \
+            admin-read-export \
+            --report-dir tournament-acceptance-evidence/publish-session
+
+      - name: Verify publish and archive remain domain-blocked
+        working-directory: apps/web
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          npx playwright test e2e/tournament-operator.acceptance.staging.spec.ts \
+            --grep "official publish remains blocked with runtime enabled" \
+            --retries=0 \
+            --forbid-only \
+            --reporter=list
+
+      - name: End publish-block admin session
+        if: always() && steps.prepare-publish-session.outcome == 'success'
+        env:
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+        run: |
+          python scripts/prepare_parity_staging_session.py \
+            cleanup \
+            --report-dir tournament-acceptance-evidence/publish-session
+
+      - name: Restore and verify final no-write posture
+        if: always()
+        id: restore-final-none
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/staging_evidence_automation.py fly-health \
+            > tournament-acceptance-evidence/fly-before-final-restore.json
+          CURRENT_WAVE="$(jq -r '.staging_write_wave // empty' tournament-acceptance-evidence/fly-before-final-restore.json)"
+          if [ "$CURRENT_WAVE" != "none" ]; then
+            python scripts/staging_evidence_automation.py dispatch \
+              --workflow fly_api_staging_deploy.yml \
+              --input write_wave=none \
+              --input "expected_candidate_sha=$EXPECTED_SHA" \
+              > tournament-acceptance-evidence/final-none-dispatch.json
+            RUN_ID="$(jq -r .workflow_run_id tournament-acceptance-evidence/final-none-dispatch.json)"
+            python scripts/staging_evidence_automation.py wait-run \
+              --workflow fly_api_staging_deploy.yml \
+              --run-id "$RUN_ID" \
+              --candidate-sha "$EXPECTED_SHA" \
+              --timeout-seconds 3600
+          else
+            printf '%s\n' '{"already_none":true}' \
+              > tournament-acceptance-evidence/final-none-dispatch.json
+          fi
+          python scripts/staging_evidence_automation.py fly-health \
+            > tournament-acceptance-evidence/fly-final-none.json
+          python scripts/staging_evidence_automation.py verify-final-none \
+            --fly-json tournament-acceptance-evidence/fly-final-none.json \
+            > tournament-acceptance-evidence/final-none-verification.json
+          jq -e --arg sha "$EXPECTED_SHA" \
+            'select(
+              .git_commit_sha == $sha and
+              .image_build_git_sha == $sha and
+              .supabase_project_ref == "sijpxjxvdtrehmqvirfi" and
+              .staging_write_wave == "none" and
+              .business_data_write_wave_active == false
+            )' tournament-acceptance-evidence/fly-final-none.json >/dev/null
+
+      - name: Retain staging-only acceptance and restoration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tournament-operator-acceptance-${{ env.EXPECTED_SHA }}
+          path: tournament-acceptance-evidence
+          if-no-files-found: warn
+          retention-days: 14
