@@ -134,8 +134,6 @@ jobs:
           with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
               print(f"VERCEL_DEPLOYMENT_ID={deployment_id}", file=handle)
               print(f"VERCEL_DEPLOYMENT_ORIGIN={deployment_origin}", file=handle)
-              print(f"STAGING_WEB_BASE_URL={deployment_origin}", file=handle)
-              print(f"JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN={deployment_origin}", file=handle)
           PY
 
       - name: Activate the narrow Tournament Live wave
@@ -169,21 +167,35 @@ jobs:
           test -n "$FLY_IMAGE_REF"
           echo "FLY_IMAGE_REF=$FLY_IMAGE_REF" >> "$GITHUB_ENV"
 
-      - name: Pre-attest exact live-wave deployment identity
+      - name: Re-attest exact live-wave deployment identity
         shell: bash
         env:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -euo pipefail
-          python scripts/run_parity_staging_wave.py \
-            match-rating-writes \
-            --identity-only \
-            --candidate-sha "$EXPECTED_SHA" \
-            --vercel-deployment-id "$VERCEL_DEPLOYMENT_ID" \
-            --vercel-deployment-origin "$VERCEL_DEPLOYMENT_ORIGIN" \
-            --fly-image-ref "$FLY_IMAGE_REF" \
-            --expected-write-wave tournament-live \
-            --report-dir tournament-acceptance-evidence/pre-live-identity
+          curl --fail --silent --show-error --max-time 30 \
+            -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" \
+            "$VERCEL_DEPLOYMENT_ORIGIN/api/environment" \
+            -o tournament-acceptance-evidence/web-environment-live.json
+          jq -e --arg sha "$EXPECTED_SHA" --arg deployment "$VERCEL_DEPLOYMENT_ID" '
+            select(
+              .environment == "staging" and
+              .git_commit_sha == $sha and
+              .vercel_deployment_id == $deployment and
+              .api_origin == "https://juprleagues-api-staging.fly.dev" and
+              .auth_origin == "https://sijpxjxvdtrehmqvirfi.supabase.co"
+            )' tournament-acceptance-evidence/web-environment-live.json >/dev/null
+          python scripts/staging_evidence_automation.py fly-health \
+            > tournament-acceptance-evidence/fly-live-reattested.json
+          jq -e --arg sha "$EXPECTED_SHA" --arg image "$FLY_IMAGE_REF" '
+            select(
+              .git_commit_sha == $sha and
+              .image_build_git_sha == $sha and
+              .fly_image_ref == $image and
+              .supabase_project_ref == "sijpxjxvdtrehmqvirfi" and
+              .staging_write_wave == "tournament-live" and
+              .business_data_write_wave_active == true
+            )' tournament-acceptance-evidence/fly-live-reattested.json >/dev/null
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -249,6 +261,8 @@ jobs:
         env:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
+          export STAGING_WEB_BASE_URL="$VERCEL_DEPLOYMENT_ORIGIN"
+          export JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN="$VERCEL_DEPLOYMENT_ORIGIN"
           npx playwright test e2e/tournament-operator.acceptance.staging.spec.ts \
             --grep-invert "official publish remains blocked with runtime enabled" \
             --retries=0 \
@@ -269,6 +283,8 @@ jobs:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -euo pipefail
+          export STAGING_WEB_BASE_URL="$VERCEL_DEPLOYMENT_ORIGIN"
+          export JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN="$VERCEL_DEPLOYMENT_ORIGIN"
           npx playwright test e2e/tournament-live.staging.spec.ts \
             --grep "opt-in disposable score command replays once and restores its original score" \
             --retries=0 \
@@ -392,6 +408,8 @@ jobs:
         env:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
+          export STAGING_WEB_BASE_URL="$VERCEL_DEPLOYMENT_ORIGIN"
+          export JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN="$VERCEL_DEPLOYMENT_ORIGIN"
           npx playwright test e2e/tournament-operator.acceptance.staging.spec.ts \
             --grep "official publish remains blocked with runtime enabled" \
             --retries=0 \
