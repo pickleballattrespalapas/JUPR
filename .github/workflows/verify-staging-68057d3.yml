@@ -1,0 +1,106 @@
+name: Temporary Staging Identity 68057d3
+
+on:
+  push:
+    branches:
+      - agent/verify-staging-68057d3-20260817
+    paths:
+      - .github/workflows/verify-staging-68057d3.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temporary-staging-identity-68057d3
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify exact protected staging identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: staging
+    env:
+      VERCEL_AUTOMATION_BYPASS_SECRET: '${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}'
+    steps:
+      - name: Read and compare protected deployment identities
+        shell: python
+        run: |
+          import json
+          import os
+          import urllib.request
+
+          EXPECTED_SHA = "68057d310520b6ff2ad1f8a19e86ed6ddf3b920b"
+          EXPECTED_DEPLOYMENT_ID = "dpl_7LG7P1zCwomGLMAZoxfUY2JYUqQd"
+          EXPECTED_ORIGIN = "https://jupr-k0zdvp56u-pickleballattrespalapas1.vercel.app"
+          STAGING_ALIAS = "https://jupr-git-staging-pickleballattrespalapas1.vercel.app"
+          STAGING_API = "https://juprleagues-api-staging.fly.dev"
+          secret = os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", "").strip()
+          if not secret:
+              raise SystemExit("Missing protected staging bypass secret")
+
+          def get_json(url, *, protected=False):
+              headers = {
+                  "Accept": "application/json",
+                  "Cache-Control": "no-cache",
+                  "User-Agent": "jupr-staging-identity-verifier/1.0",
+              }
+              if protected:
+                  headers["x-vercel-protection-bypass"] = secret
+              request = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  if response.status != 200:
+                      raise RuntimeError(f"{url} returned HTTP {response.status}")
+                  return json.load(response)
+
+          alias = get_json(f"{STAGING_ALIAS}/api/environment?verify=68057d3", protected=True)
+          immutable = get_json(f"{EXPECTED_ORIGIN}/api/environment?verify=68057d3", protected=True)
+          api = get_json(f"{STAGING_API}/health")
+
+          errors = []
+          expected_web = {
+              "environment": "staging",
+              "vercel_environment": "preview",
+              "git_commit_sha": EXPECTED_SHA,
+              "vercel_deployment_id": EXPECTED_DEPLOYMENT_ID,
+              "vercel_deployment_origin": EXPECTED_ORIGIN,
+              "api_origin": STAGING_API,
+              "preview_isolation_active": True,
+              "preview_auth_isolation_active": True,
+          }
+          for label, payload in (("staging alias", alias), ("immutable deployment", immutable)):
+              for key, expected in expected_web.items():
+                  actual = payload.get(key)
+                  if actual != expected:
+                      errors.append(f"{label} {key}: expected {expected!r}, got {actual!r}")
+
+          expected_api = {
+              "ok": True,
+              "environment": "staging",
+              "git_commit_sha": EXPECTED_SHA,
+              "image_build_git_sha": EXPECTED_SHA,
+              "write_wave": "none",
+              "staging_write_wave": "none",
+              "business_data_write_wave_active": False,
+              "fly_app_name": "juprleagues-api-staging",
+          }
+          for key, expected in expected_api.items():
+              actual = api.get(key)
+              if actual != expected:
+                  errors.append(f"staging API {key}: expected {expected!r}, got {actual!r}")
+
+          if errors:
+              for error in errors:
+                  print(f"::error title=Staging identity mismatch::{error}")
+              raise SystemExit(1)
+
+          print(json.dumps({
+              "ok": True,
+              "git_commit_sha": alias["git_commit_sha"],
+              "vercel_deployment_id": alias["vercel_deployment_id"],
+              "vercel_deployment_origin": alias["vercel_deployment_origin"],
+              "staging_alias": STAGING_ALIAS,
+              "api_git_commit_sha": api["git_commit_sha"],
+              "write_wave": api["write_wave"],
+              "business_data_write_wave_active": api["business_data_write_wave_active"],
+          }, sort_keys=True))
