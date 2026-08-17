@@ -155,6 +155,72 @@ def test_league_printout_has_true_weekly_leaders_and_top_performers(monkeypatch)
     }
     assert payload["detail"]["capabilities"]["roster_mutable"] is True
     assert payload["rating_source"] == "stored_snapshots"
+    assert payload["has_printable_data"] is True
+    assert payload["printable_sections"] == {
+        "schedule": True,
+        "weekly_leaders": True,
+        "season_leaders": True,
+        "standings": True,
+        "roster": True,
+    }
+
+
+def test_empty_team_draft_is_not_printable_and_does_not_claim_player_standings(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = print_tables()
+    tables["leagues_metadata"][0].update(
+        {
+            "league_type": "Team",
+            "status": "draft",
+            "is_active": False,
+            "schedule_config": {},
+        }
+    )
+    tables["league_ratings"] = []
+    tables["matches"] = []
+
+    payload = build_admin_league_printout(
+        FakeSupabase(tables),
+        club_id="club",
+        league_name="Open",
+    )
+
+    assert payload["has_printable_data"] is False
+    assert payload["printable_sections"] == {
+        "schedule": False,
+        "weekly_leaders": False,
+        "season_leaders": False,
+        "standings": False,
+        "roster": False,
+    }
+    assert payload["warnings"] == [
+        "No printable league-night data is available yet; add a schedule, "
+        "league roster, or scored results before printing."
+    ]
+
+
+def test_team_player_ratings_only_enable_roster_not_team_standings(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = print_tables()
+    tables["leagues_metadata"][0].update(
+        {
+            "league_type": "Team",
+            "status": "draft",
+            "is_active": False,
+            "schedule_config": {},
+        }
+    )
+    tables["matches"] = []
+
+    payload = build_admin_league_printout(
+        FakeSupabase(tables),
+        club_id="club",
+        league_name="Open",
+    )
+
+    assert payload["has_printable_data"] is True
+    assert payload["printable_sections"]["standings"] is False
+    assert payload["printable_sections"]["roster"] is True
 
 
 def test_league_printout_replays_missing_selected_week_snapshots(monkeypatch) -> None:
