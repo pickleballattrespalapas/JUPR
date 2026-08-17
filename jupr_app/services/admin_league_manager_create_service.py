@@ -150,6 +150,8 @@ def create_admin_league_manager_draft(
     clean_description = _clean_text(description, limit=2000)
     clean_match_format = _normalize_match_format(match_format)
     clean_league_type = _normalize_league_type(league_type)
+    if clean_league_type == "Team" and clean_match_format == "singles":
+        raise ValueError("Team leagues must use doubles; Team + Singles is not supported.")
     clean_min_games = _bounded_int(min_games, field="min_games", minimum=0, maximum=1000)
     clean_k_factor = _bounded_int(k_factor, field="k_factor", minimum=1, maximum=128)
     if clean_name.casefold() in _existing_league_names(supabase, club_id=clean_club_id):
@@ -249,12 +251,17 @@ def duplicate_admin_league_manager_draft(
     if clean_target_name.casefold() in _existing_league_names(supabase, club_id=clean_club_id):
         raise ValueError("A league with that name already exists for this club.")
 
+    copied_league_type = _normalize_league_type(source_league.get("league_type"))
+    copied_match_format = _normalize_match_format(source_league.get("match_format"))
+    if copied_league_type == "Team" and copied_match_format == "singles":
+        raise ValueError("Team + Singles is not supported. Team leagues must use Doubles.")
+
     insert_payload = {
         "club_id": clean_club_id,
         "league_name": clean_target_name,
         "description": _clean_text(source_league.get("description"), limit=2000),
-        "league_type": _normalize_league_type(source_league.get("league_type")),
-        "match_format": _normalize_match_format(source_league.get("match_format")),
+        "league_type": copied_league_type,
+        "match_format": copied_match_format,
         "min_games": _bounded_int(
             source_league.get("min_games") if source_league.get("min_games") is not None else 0,
             field="min_games",
