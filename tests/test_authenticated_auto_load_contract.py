@@ -38,7 +38,7 @@ def test_named_operator_surfaces_auto_load_lists_and_keep_only_recovery_controls
         "apps/web/app/admin/league-manager/LeagueManagerPanel.tsx": ("loadLeagues", "Refresh leagues"),
         "apps/web/app/admin/league-manager/awards/LeagueAwardsPanel.tsx": ("loadLeagues", "Refresh leagues"),
         "apps/web/app/admin/top-players-printable/TopPlayersPrintablePanel.tsx": ("loadRankings", "Refresh rankings"),
-        "apps/web/app/admin/tournament-live/TournamentLivePanel.tsx": ("loadTournaments", "Refresh tournaments"),
+        "apps/web/app/admin/tournament-live/TournamentLivePanel.tsx": ("loadDraws", "Refresh available draws"),
         "apps/web/app/admin/tournaments/TournamentAdminPanel.tsx": ("loadTournaments", "Refresh tournaments"),
         "apps/web/app/admin/tournaments/bulk/BulkRegistrationPanel.tsx": ("loadTournaments", "Refresh tournaments"),
         "apps/web/app/admin/tournaments/registrations/RegistrationManagementPanel.tsx": ("loadTournaments", "Refresh tournaments"),
@@ -136,9 +136,11 @@ def test_selection_changes_clear_old_records_and_ignore_late_responses() -> None
         assert ".isCurrent(generation)" in source, relative
 
     tournament_live = _read("apps/web/app/admin/tournament-live/TournamentLivePanel.tsx")
-    assert "selectTournament(event.target.value)" in tournament_live
+    assert "selectTournament(event.target.value)" not in tournament_live
     assert "selectDraw(event.target.value)" in tournament_live
     assert "setSnapshot(null);" in tournament_live
+    select_draw = tournament_live.split("function selectDraw(drawId: string)", 1)[1].split("function selectScoreGame", 1)[0]
+    assert select_draw.index("boardRequest.invalidate();") < select_draw.index("setSnapshot(null);") < select_draw.index("loadLiveBoard(drawId)")
 
     weekly = _read("apps/web/app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx")
     assert "selectRecap(event.target.value)" in weekly
@@ -150,10 +152,6 @@ def test_refresh_preserves_valid_tournament_selections_and_reloads_current_detai
         "apps/web/app/admin/tournaments/bulk/BulkRegistrationPanel.tsx": (
             'setSelectedTournamentId("");',
             "await loadDetail(selectedBeforeRefresh)",
-        ),
-        "apps/web/app/admin/tournament-live/TournamentLivePanel.tsx": (
-            'setSelectedTournamentId("");',
-            "await loadDraws(selectedTournamentBeforeRefresh, selectedDrawBeforeRefresh)",
         ),
         "apps/web/app/admin/tournaments/registrations/RegistrationManagementPanel.tsx": (
             'setSelectedTournamentId("");',
@@ -170,8 +168,11 @@ def test_refresh_preserves_valid_tournament_selections_and_reloads_current_detai
 
     tournament_live = _read("apps/web/app/admin/tournament-live/TournamentLivePanel.tsx")
     assert "preferredDrawId = selectedDrawId" in tournament_live
-    assert "nextDraws.some((row) => row.id === preferredDrawId)" in tournament_live
-    assert 'void loadDraws(tournamentId, "")' in tournament_live
+    assert "const preferredDrawStillAvailable" in tournament_live
+    assert "preferredDrawId && nextDraws.some((row) => row.id === preferredDrawId)" in tournament_live
+    assert ': !preferredDrawId && nextDraws.length === 1 ? nextDraws[0].id : "";' in tournament_live
+    assert "if (!nextSelectedDrawId) {" in tournament_live
+    assert "onClick={() => void loadDraws(selectedDrawId, false)}" in tournament_live
 
 
 

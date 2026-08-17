@@ -87,7 +87,9 @@ def test_responsive_runner_retains_exact_request_and_exposes_audit_evidence() ->
     assert "expected_draw_updated_at" in panel
     assert "expected_team_versions" in panel
     assert "expected_source_game_versions" in panel
-    assert "/tournaments/admin/ops/tournaments" in panel
+    assert "/tournaments/admin/ops/tournaments" not in panel
+    assert "const lockedTournamentId = initialTournamentId;" in panel
+    assert "Refresh available draws" in panel
     assert "Retry exact retained request" in panel
     assert "Durable operation and audit evidence" in panel
     assert "not JUPR Live" in panel
