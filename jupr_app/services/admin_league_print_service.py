@@ -402,6 +402,25 @@ def build_admin_league_printout(
             "stored rating snapshots were unavailable."
         )
 
+    league = detail.get("league") or {}
+    is_team_league = _clean_text(league.get("league_type"), limit=80).casefold() == "team"
+    active_roster = [row for row in detail.get("roster") or [] if row.get("in_league")]
+    printable_sections = {
+        "schedule": bool(detail.get("schedule_preview")),
+        "weekly_leaders": bool(weekly_rows),
+        "season_leaders": bool(awards),
+        # League-rating rows are player standings. They must not be advertised as
+        # team standings until the print model carries the actual team table.
+        "standings": bool(detail.get("standings")) and not is_team_league,
+        "roster": bool(active_roster),
+    }
+    has_printable_data = any(printable_sections.values())
+    if not has_printable_data:
+        warnings.append(
+            "No printable league-night data is available yet; add a schedule, "
+            "league roster, or scored results before printing."
+        )
+
     return {
         "ok": True,
         "mode": "league_manager_printout",
@@ -413,6 +432,8 @@ def build_admin_league_printout(
         "weekly_win_leaders": win_leaders,
         "season_top_performers": awards,
         "season_top_performer_count": len(awards),
+        "has_printable_data": has_printable_data,
+        "printable_sections": printable_sections,
         "rating_source": "stored_snapshots" if replayed_match_count == 0 else "stored_snapshots_with_python_replay",
         "warnings": warnings,
     }
