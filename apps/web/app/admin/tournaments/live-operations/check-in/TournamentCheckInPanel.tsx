@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   fetchAdminTournamentCheckIn,
   updateAdminTournamentCheckIn
@@ -15,21 +16,35 @@ import styles from "./TournamentCheckInPanel.module.css";
 type Props = {
   apiBase: string | null;
   clubId: string;
+  initialDayId: string;
   tournamentId: string;
 };
 
-type Filter = "expected" | "checked_in" | "absent" | "unresolved";
+type AttendanceStatus = "EXPECTED" | "CHECKED_IN" | "ABSENT";
+type Filter = "all" | "expected" | "checked_in" | "absent" | "unresolved";
 type Draft = {
-  checkedIn: boolean;
+  attendanceStatus: AttendanceStatus;
   waiverVerified: boolean;
   substitutePlayerId: string;
   notes: string;
   expectedUpdatedAt: string | null;
 };
 
+function attendanceStatus(card: TournamentCheckInRegistrant): AttendanceStatus {
+  const status = String(card.attendance_status || "").toUpperCase();
+  if (status === "CHECKED_IN" || status === "ABSENT") return status;
+  return "EXPECTED";
+}
+
+function attendanceLabel(status: AttendanceStatus): string {
+  if (status === "CHECKED_IN") return "Checked in";
+  if (status === "ABSENT") return "Absent";
+  return "Not checked in";
+}
+
 function initialDraft(card: TournamentCheckInRegistrant): Draft {
   return {
-    checkedIn: Boolean(card.check_in.checked_in),
+    attendanceStatus: attendanceStatus(card),
     waiverVerified: Boolean(card.waiver.verified),
     substitutePlayerId: card.attendee.is_approved_substitute
       ? String(card.attendee.player_id || "__unavailable__")
@@ -59,17 +74,34 @@ function statusLabel(status: string): string {
 export default function TournamentCheckInPanel({
   apiBase,
   clubId,
+  initialDayId,
   tournamentId
 }: Props) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [snapshot, setSnapshot] = useState<TournamentCheckInSnapshot | null>(null);
+  const [selectedDayId, setSelectedDayId] = useState(initialDayId);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<Filter>("expected");
+  const [filter, setFilter] = useState<Filter>("all");
   const [loading, setLoading] = useState(false);
   const [savingId, setSavingId] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const operationKeys = useRef<Record<string, { fingerprint: string; key: string }>>({});
+
+  const preserveDayInUrl = useCallback(
+    (dayId: string) => {
+      if (!dayId) return;
+      const params = new URLSearchParams(searchParams.toString());
+      if (params.get("day_id") === dayId) return;
+      params.set("day_id", dayId);
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    },
+    [pathname, router, searchParams]
+  );
 
   const loadSnapshot = useCallback(
     async (signal?: AbortSignal) => {
@@ -82,9 +114,15 @@ export default function TournamentCheckInPanel({
           clubId,
           tournamentId,
           accessToken,
+          dayId: selectedDayId || undefined,
           signal
         });
         if (signal?.aborted) return;
+        const authoritativeDayId = payload.day_scope.selected_day_id;
+        if (authoritativeDayId && authoritativeDayId !== selectedDayId) {
+          setSelectedDayId(authoritativeDayId);
+          preserveDayInUrl(authoritativeDayId);
+        }
         setSnapshot(payload);
         setDrafts(
           Object.fromEntries(
@@ -103,7 +141,7 @@ export default function TournamentCheckInPanel({
         if (!signal?.aborted) setLoading(false);
       }
     },
-    [accessToken, apiBase, clubId, tournamentId]
+    [accessToken, apiBase, clubId, preserveDayInUrl, selectedDayId, tournamentId]
   );
 
   useEffect(() => {
@@ -124,12 +162,19 @@ export default function TournamentCheckInPanel({
     [snapshot]
   );
 
+  const selectedDayLabel = useMemo(() => {
+    const day = snapshot?.day_scope.selected_day;
+    if (!day) return "selected tournament day";
+    return day.event_date ? `${day.label} · ${day.event_date}` : day.label;
+  }, [snapshot]);
+
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return (snapshot?.registrants || []).filter((card) => {
-      const draft = drafts[card.registration_id] || initialDraft(card);
-      if (filter === "checked_in" && !draft.checkedIn) return false;
-      if (filter === "absent" && draft.checkedIn) return false;
+      const status = attendanceStatus(card);
+      if (filter === "expected" && status !== "EXPECTED") return false;
+      if (filter === "checked_in" && status !== "CHECKED_IN") return false;
+      if (filter === "absent" && status !== "ABSENT") return false;
       if (filter === "unresolved" && !unresolvedIds.has(card.registration_id)) return false;
       if (!needle) return true;
       const haystack = [
@@ -144,14 +189,14 @@ export default function TournamentCheckInPanel({
         .toLowerCase();
       return haystack.includes(needle);
     });
-  }, [drafts, filter, search, snapshot, unresolvedIds]);
+  }, [filter, search, snapshot, unresolvedIds]);
 
   function patchDraft(registrationId: string, patch: Partial<Draft>): void {
     setDrafts((current) => ({
       ...current,
       [registrationId]: {
         ...(current[registrationId] || {
-          checkedIn: false,
+          attendanceStatus: "EXPECTED",
           waiverVerified: false,
           substitutePlayerId: "",
           notes: "",
@@ -165,7 +210,7 @@ export default function TournamentCheckInPanel({
   function changeAttendee(registrationId: string, substitutePlayerId: string): void {
     patchDraft(registrationId, {
       substitutePlayerId,
-      checkedIn: false,
+      attendanceStatus: "EXPECTED",
       waiverVerified: false
     });
     setMessage(
@@ -183,20 +228,36 @@ export default function TournamentCheckInPanel({
     setMessage(null);
     setError(null);
     try {
+      const update = {
+        expected_updated_at: draft.expectedUpdatedAt,
+        attendance_status: draft.attendanceStatus,
+        waiver_verified: draft.waiverVerified,
+        approved_substitute_player_id: substitute?.id || null,
+        notes: draft.notes.trim() || null
+      } as const;
+      const fingerprint = JSON.stringify(update);
+      const existingOperation = operationKeys.current[card.registration_id];
+      const operationKey =
+        existingOperation?.fingerprint === fingerprint
+          ? existingOperation.key
+          : crypto.randomUUID();
+      operationKeys.current[card.registration_id] = {
+        fingerprint,
+        key: operationKey
+      };
       const result = await updateAdminTournamentCheckIn({
         apiBase,
         clubId,
         tournamentId,
         registrationId: card.registration_id,
+        dayId: snapshot.day_scope.selected_day_id,
         accessToken,
         input: {
-          expected_updated_at: draft.expectedUpdatedAt,
-          checked_in: draft.checkedIn,
-          waiver_verified: draft.waiverVerified,
-          approved_substitute_player_id: substitute?.id || null,
-          notes: draft.notes.trim() || null
+          operation_key: operationKey,
+          ...update
         }
       });
+      delete operationKeys.current[card.registration_id];
       setMessage(result.message);
       await loadSnapshot();
     } catch (saveError) {
@@ -208,6 +269,17 @@ export default function TournamentCheckInPanel({
     } finally {
       setSavingId("");
     }
+  }
+
+  function selectDay(dayId: string): void {
+    if (!dayId || dayId === selectedDayId) return;
+    setSelectedDayId(dayId);
+    setSnapshot(null);
+    setDrafts({});
+    operationKeys.current = {};
+    setMessage(null);
+    setError(null);
+    preserveDayInUrl(dayId);
   }
 
   if (sessionLoading) return <p className={styles.notice}>Restoring the admin session…</p>;
@@ -240,11 +312,38 @@ export default function TournamentCheckInPanel({
 
       {snapshot ? (
         <>
+          <section className={`${styles.panel} ${styles.dayPicker}`} aria-labelledby="day-picker-title">
+            <div>
+              <p className={styles.eyebrow}>Tournament-day scope</p>
+              <h2 id="day-picker-title">Choose the day you are operating</h2>
+              <p className={styles.muted}>
+                Check-in counts, players, unresolved teams, and readiness below apply only
+                to the selected day.
+              </p>
+            </div>
+            <label className={styles.field}>
+              Tournament day
+              <select
+                className={styles.select}
+                disabled={loading || Boolean(savingId)}
+                onChange={(event) => selectDay(event.target.value)}
+                value={snapshot.day_scope.selected_day_id}
+              >
+                {snapshot.day_scope.available_days.map((day) => (
+                  <option key={day.id} value={day.id}>
+                    {day.event_date ? `${day.label} · ${day.event_date}` : day.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </section>
+
           <section className={styles.summaryGrid} aria-label="Check-in summary">
             {(
               [
-                ["Expected", snapshot.summary.expected],
+                ["Expected today", snapshot.summary.expected],
                 ["Checked in", snapshot.summary.checked_in],
+                ["Not checked in", snapshot.summary.not_checked_in],
                 ["Absent", snapshot.summary.absent],
                 ["Unresolved", snapshot.summary.unresolved]
               ] as const
@@ -261,7 +360,8 @@ export default function TournamentCheckInPanel({
               <div>
                 <h2 id="readiness-title">Event-day readiness</h2>
                 <p className={styles.muted}>
-                  Authoritative schedule and draw checks; staffing remains a human review.
+                  Readiness for {selectedDayLabel}. Schedule and draw checks are
+                  authoritative; staffing remains a human review.
                 </p>
               </div>
               <button
@@ -327,7 +427,8 @@ export default function TournamentCheckInPanel({
               <div>
                 <h2 id="players-title">Player check-in</h2>
                 <p className={styles.muted}>
-                  Payment status is read from offline tracking and cannot be edited here.
+                  Showing only players scheduled for {selectedDayLabel}. Payment status is
+                  read from offline tracking and cannot be edited here.
                 </p>
               </div>
               <span className={styles.badge}>{filtered.length} shown</span>
@@ -350,9 +451,10 @@ export default function TournamentCheckInPanel({
                   onChange={(event) => setFilter(event.target.value as Filter)}
                   value={filter}
                 >
-                  <option value="expected">All expected</option>
+                  <option value="all">All scheduled</option>
+                  <option value="expected">Not checked in</option>
                   <option value="checked_in">Checked in</option>
-                  <option value="absent">Absent / not checked in</option>
+                  <option value="absent">Absent</option>
                   <option value="unresolved">Unresolved teams</option>
                 </select>
               </label>
@@ -361,6 +463,7 @@ export default function TournamentCheckInPanel({
             <div className={styles.cardList}>
               {filtered.map((card) => {
                 const draft = drafts[card.registration_id] || initialDraft(card);
+                const currentAttendance = draft.attendanceStatus;
                 const saving = savingId === card.registration_id;
                 const draftSubstitute = snapshot.player_options.find(
                   (player) => String(player.id) === draft.substitutePlayerId
@@ -387,12 +490,14 @@ export default function TournamentCheckInPanel({
                       </div>
                       <span
                         className={
-                          draft.checkedIn
+                          currentAttendance === "CHECKED_IN"
                             ? `${styles.badge} ${styles.complete}`
+                            : currentAttendance === "ABSENT"
+                              ? `${styles.badge} ${styles.blocked}`
                             : styles.badge
                         }
                       >
-                        {draft.checkedIn ? "Checked in" : "Expected"}
+                        {attendanceLabel(currentAttendance)}
                       </span>
                     </div>
 
@@ -410,19 +515,32 @@ export default function TournamentCheckInPanel({
 
                     <div className={styles.controlGrid}>
                       <div className={styles.checks}>
-                        <label className={styles.checkLabel}>
-                          <input
-                            checked={draft.checkedIn}
-                            disabled={saving || savedAttendeeUnavailable}
-                            onChange={(event) =>
-                              patchDraft(card.registration_id, {
-                                checkedIn: event.target.checked
-                              })
-                            }
-                            type="checkbox"
-                          />
-                          Checked in
-                        </label>
+                        <fieldset className={styles.attendanceControls}>
+                          <legend>Attendance</legend>
+                          {(
+                            [
+                              ["EXPECTED", "Not checked in"],
+                              ["CHECKED_IN", "Checked in"],
+                              ["ABSENT", "Mark absent"]
+                            ] as const
+                          ).map(([value, label]) => (
+                            <label className={styles.checkLabel} key={value}>
+                              <input
+                                checked={currentAttendance === value}
+                                disabled={saving || savedAttendeeUnavailable}
+                                name={`attendance-${card.registration_id}`}
+                                onChange={() =>
+                                  patchDraft(card.registration_id, {
+                                    attendanceStatus: value
+                                  })
+                                }
+                                type="radio"
+                                value={value}
+                              />
+                              {label}
+                            </label>
+                          ))}
+                        </fieldset>
                         <label className={styles.checkLabel}>
                           <input
                             checked={draft.waiverVerified}
@@ -534,7 +652,11 @@ export default function TournamentCheckInPanel({
                 );
               })}
               {!filtered.length ? (
-                <p className={styles.muted}>No expected players match these filters.</p>
+                <p className={styles.muted}>
+                  {snapshot.registrants.length
+                    ? "No scheduled players match these filters."
+                    : `No players are scheduled for ${selectedDayLabel}.`}
+                </p>
               ) : null}
             </div>
           </section>

@@ -17,7 +17,9 @@ export type TournamentCheckInEvent = {
 
 export type TournamentCheckInRegistrant = {
   registration_id: string;
+  registration_day_id: string;
   registration_status: string;
+  attendance_status: "EXPECTED" | "CHECKED_IN" | "ABSENT" | string;
   registration_updated_at?: string | null;
   original_registrant: { player_id?: number | null; name: string };
   attendee: {
@@ -37,6 +39,8 @@ export type TournamentCheckInRegistrant = {
     };
   };
   check_in: {
+    registration_day_id: string;
+    attendance_status: "EXPECTED" | "CHECKED_IN" | "ABSENT" | string;
     checked_in: boolean;
     notes?: string | null;
     updated_at?: string | null;
@@ -69,10 +73,16 @@ export type TournamentCheckInSnapshot = {
     start_date?: string | null;
     end_date?: string | null;
   };
+  day_scope: {
+    selected_day_id: string;
+    selected_day: TournamentCheckInDay;
+    available_days: TournamentCheckInDay[];
+  };
   summary: {
     expected: number;
     checked_in: number;
     absent: number;
+    not_checked_in: number;
     unresolved: number;
   };
   registrants: TournamentCheckInRegistrant[];
@@ -130,9 +140,17 @@ export type TournamentCheckInSnapshot = {
   runtime?: Record<string, unknown>;
 };
 
+export type TournamentCheckInDay = {
+  id: string;
+  label: string;
+  event_date?: string | null;
+  sort_order?: number | null;
+};
+
 export type TournamentCheckInUpdate = {
+  operation_key: string;
   expected_updated_at: string | null;
-  checked_in: boolean;
+  attendance_status: "EXPECTED" | "CHECKED_IN" | "ABSENT";
   waiver_verified: boolean;
   approved_substitute_player_id: number | null;
   notes: string | null;
@@ -143,6 +161,8 @@ export type TournamentCheckInUpdateResponse = {
   mode: "tournament_registration_check_in_update";
   check_in: {
     registration_id: string;
+    registration_day_id: string;
+    attendance_status: "EXPECTED" | "CHECKED_IN" | "ABSENT";
     checked_in: boolean;
     waiver_verified: boolean;
     approved_substitute_player_id?: number | null;
@@ -153,6 +173,7 @@ export type TournamentCheckInUpdateResponse = {
   };
   attendee_identity_changed: boolean;
   attendance_reset: boolean;
+  idempotent_replay: boolean;
   message: string;
 };
 
@@ -181,12 +202,16 @@ export async function fetchAdminTournamentCheckIn(options: {
   clubId: string;
   tournamentId: string;
   accessToken: string;
+  dayId?: string;
   signal?: AbortSignal;
 }): Promise<TournamentCheckInSnapshot> {
+  const searchParams = new URLSearchParams();
+  if (options.dayId) searchParams.set("day_id", options.dayId);
+  const query = searchParams.toString();
   return requestJson<TournamentCheckInSnapshot>(
     apiUrl(
       options.apiBase,
-      `/admin/clubs/${encodeURIComponent(options.clubId)}/tournament-live/tournaments/${encodeURIComponent(options.tournamentId)}/check-in`
+      `/admin/clubs/${encodeURIComponent(options.clubId)}/tournament-live/tournaments/${encodeURIComponent(options.tournamentId)}/check-in${query ? `?${query}` : ""}`
     ),
     options.accessToken,
     { signal: options.signal }
@@ -198,6 +223,7 @@ export async function updateAdminTournamentCheckIn(options: {
   clubId: string;
   tournamentId: string;
   registrationId: string;
+  dayId: string;
   accessToken: string;
   input: TournamentCheckInUpdate;
   signal?: AbortSignal;
@@ -205,7 +231,7 @@ export async function updateAdminTournamentCheckIn(options: {
   return requestJson<TournamentCheckInUpdateResponse>(
     apiUrl(
       options.apiBase,
-      `/admin/clubs/${encodeURIComponent(options.clubId)}/tournament-live/tournaments/${encodeURIComponent(options.tournamentId)}/check-in/${encodeURIComponent(options.registrationId)}`
+      `/admin/clubs/${encodeURIComponent(options.clubId)}/tournament-live/tournaments/${encodeURIComponent(options.tournamentId)}/check-in/${encodeURIComponent(options.registrationId)}?day_id=${encodeURIComponent(options.dayId)}`
     ),
     options.accessToken,
     {

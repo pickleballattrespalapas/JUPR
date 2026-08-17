@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-tournament-acceptance-2026-08-03",
-  "repository_migration_content_sha256": "284fa6c69f76d8f578c63a7b4fd31cf6d1fa48899c629c92c2037a77478c9f80",
+  "repository_migration_content_sha256": "fe3e7d2229d230eccd8255e7628eb57b18dac44030de257dac632e57e52e7e3a",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -57,6 +57,7 @@
     "team_league_registration_identity_recovery",
     "team_leagues_and_awards",
     "tournament_admin_operations",
+    "tournament_check_in_day_attendance",
     "tournament_commerce",
     "tournament_complete_registration_editor",
     "tournament_live_operations",

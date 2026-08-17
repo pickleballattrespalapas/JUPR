@@ -215,9 +215,8 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 63
+    assert len(versions) == 64
     assert versions[-10:] == (
-        "20260805043000",
         "20260807150000",
         "20261020000000",
         "20261021000000",
@@ -227,10 +226,11 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261025000000",
         "20261026000000",
         "20261027000000",
+        "20261028000000",
     )
-    assert len(names) == 63
+    assert len(names) == 64
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 63
+    assert len(contract["required_ledger_names"]) == 64
     assert "tournament_complete_registration_editor" in contract[
         "required_ledger_names"
     ]
@@ -357,7 +357,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261027000000"
+    assert migrations[-1] == "20261028000000"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(
