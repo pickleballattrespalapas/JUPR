@@ -34,6 +34,8 @@ from jupr_app.services.team_league_service import (
     confirm_public_team_league_partner,
     generate_playoff_fixtures,
     generate_round_robin_fixtures,
+    get_public_team_league,
+    list_public_team_leagues,
     partner_token_hash,
     register_public_team_league,
     save_admin_team_league_settings,
@@ -56,12 +58,71 @@ class _Execute:
         return SimpleNamespace(data=self.callback())
 
 
+class _RowsQuery:
+    def __init__(self, rows: list[dict]):
+        self.rows = [dict(row) for row in rows]
+        self.filters: dict[str, object] = {}
+        self.limit_count: int | None = None
+
+    def select(self, _columns: str):
+        return self
+
+    def eq(self, field: str, value: object):
+        self.filters[field] = value
+        return self
+
+    def order(self, _field: str):
+        return self
+
+    def limit(self, count: int):
+        self.limit_count = count
+        return self
+
+    def execute(self):
+        rows = [
+            row
+            for row in self.rows
+            if all(row.get(field) == value for field, value in self.filters.items())
+        ]
+        if self.limit_count is not None:
+            rows = rows[: self.limit_count]
+        return SimpleNamespace(data=rows)
+
+
 class _RegistrationRecoverySupabase:
-    def __init__(self, *, lose_first_register_response: bool = False):
+    def __init__(
+        self,
+        *,
+        lose_first_register_response: bool = False,
+        manager_status: str = "active",
+    ):
         self.lose_first_register_response = lose_first_register_response
+        self.manager_status = manager_status
         self.active_fingerprint: str | None = None
         self.result: dict | None = None
         self.register_calls = 0
+
+    def table(self, name: str):
+        rows = {
+            "team_league_settings": [
+                {
+                    "club_id": "club",
+                    "league_name": "Open",
+                    "status": "registration_open",
+                    "registration_open": True,
+                    "registration_closes_at": None,
+                }
+            ],
+            "leagues_metadata": [
+                {
+                    "club_id": "club",
+                    "league_name": "Open",
+                    "status": self.manager_status,
+                    "is_active": self.manager_status == "active",
+                }
+            ],
+        }
+        return _RowsQuery(rows.get(name, []))
 
     def rpc(self, name: str, params: dict):
         return _Execute(lambda: self._execute_rpc(name, params))
@@ -104,6 +165,28 @@ class _RecoveredPendingTeamSupabase:
     def __init__(self):
         self.invite_token_hash = ""
         self.rpc_names: list[str] = []
+
+    def table(self, name: str):
+        rows = {
+            "team_league_settings": [
+                {
+                    "club_id": "club",
+                    "league_name": "Open",
+                    "status": "registration_open",
+                    "registration_open": True,
+                    "registration_closes_at": None,
+                }
+            ],
+            "leagues_metadata": [
+                {
+                    "club_id": "club",
+                    "league_name": "Open",
+                    "status": "active",
+                    "is_active": True,
+                }
+            ],
+        }
+        return _RowsQuery(rows.get(name, []))
 
     def rpc(self, name: str, params: dict):
         self.rpc_names.append(name)
@@ -208,6 +291,36 @@ def test_registration_response_loss_recovers_committed_business_request(
     assert result["waitlist_id"] == "waitlist-1"
     assert result["recovered_by_business_identity"] is True
     assert supabase.register_calls == 1
+
+
+def test_draft_manager_league_is_hidden_and_rejects_direct_registration(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUPR_ENV", "test")
+    supabase = _RegistrationRecoverySupabase(manager_status="draft")
+
+    public_list = list_public_team_leagues(supabase, club_id="club")
+
+    assert public_list == {"ok": True, "leagues": [], "league_count": 0}
+    with pytest.raises(ValueError, match="Registration is not open"):
+        _register_solo(supabase, idempotency_key="register:draft-direct")
+    with pytest.raises(ValueError, match="not found"):
+        get_public_team_league(
+            supabase,
+            club_id="club",
+            league_name="Open",
+        )
+    assert supabase.register_calls == 0
+
+
+def test_active_manager_league_is_listed_for_public_registration() -> None:
+    supabase = _RegistrationRecoverySupabase(manager_status="active")
+
+    public_list = list_public_team_leagues(supabase, club_id="club")
+
+    assert public_list["league_count"] == 1
+    assert public_list["leagues"][0]["league_name"] == "Open"
+    assert public_list["leagues"][0]["registration_open"] is True
 
 
 def test_registration_refresh_with_new_key_recovers_exact_prior_success(
