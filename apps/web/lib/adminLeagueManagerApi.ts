@@ -40,6 +40,7 @@ export type AdminLeagueLiveStatusResponse = {
 };
 
 export type AdminLeagueManagerLeague = {
+  league_id?: string | null;
   league_name: string;
   league_type?: string | null;
   match_format?: "doubles" | "singles" | string | null;
@@ -163,6 +164,14 @@ export type AdminLeaguePrintoutResponse = {
   weekly_win_leaders: AdminLeaguePrintLeader[];
   season_top_performers: AdminLeagueTopPerformer[];
   season_top_performer_count: number;
+  has_printable_data: boolean;
+  printable_sections: {
+    schedule: boolean;
+    weekly_leaders: boolean;
+    season_leaders: boolean;
+    standings: boolean;
+    roster: boolean;
+  };
   rating_source: "stored_snapshots" | "stored_snapshots_with_python_replay";
   warnings: string[];
 };
