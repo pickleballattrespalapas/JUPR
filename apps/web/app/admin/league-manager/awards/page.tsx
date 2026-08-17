@@ -1,19 +1,16 @@
 import { redirect } from "next/navigation";
 import { getAdminLeagueManagerApiBaseUrl, getAdminLeagueManagerStatus } from "@/lib/adminLeagueManagerApi";
+import { readLeagueRouteContext } from "@/lib/leagueRouteContext";
 import LeagueAwardsPanel from "./LeagueAwardsPanel";
 import LeagueManagerNav from "../LeagueManagerNav";
 import SelectedLeaguePanelScope from "../SelectedLeaguePanelScope";
 
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
-function first(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? String(value[0] || "") : String(value || "");
-}
-
 export default async function AdminLeagueAwardsPage({ searchParams }: Props) {
-  const leagueName = first(searchParams?.league).trim();
-  const leagueType = first(searchParams?.mode).trim();
-  if (!leagueName) redirect("/admin/league-manager");
+  const context = readLeagueRouteContext(searchParams);
+  if (!context.leagueId) redirect("/admin/league-manager");
+  const leagueName = context.leagueName || context.leagueId;
 
   const clubId = "tres_palapas";
   const { data: status, error } = await getAdminLeagueManagerStatus(clubId);
@@ -24,7 +21,7 @@ export default async function AdminLeagueAwardsPage({ searchParams }: Props) {
         Admin League Manager
       </p>
       <h1 style={{ marginTop: 0 }}>{leagueName} awards</h1>
-      <LeagueManagerNav leagueName={leagueName} leagueType={leagueType || null} />
+      <LeagueManagerNav leagueId={context.leagueId} leagueName={leagueName} leagueType={context.leagueType || null} />
 
       {error ? <p role="alert" style={{ color: "#b91c1c" }}>League Manager is unavailable. {error}</p> : null}
       {status ? (
