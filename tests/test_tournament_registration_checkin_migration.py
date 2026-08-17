@@ -20,6 +20,12 @@ DAY_ATTENDANCE_MIGRATION = (
     / "migrations"
     / "20261028000000_tournament_check_in_day_attendance.sql"
 )
+DAY_FK_INDEX_MIGRATION = (
+    ROOT
+    / "supabase"
+    / "migrations"
+    / "20261029000000_tournament_check_in_day_fk_index.sql"
+)
 
 
 def test_check_in_migration_is_private_service_role_only_and_indexed() -> None:
@@ -125,3 +131,12 @@ def test_day_attendance_rpc_is_cas_idempotent_and_retires_dayless_execute() -> N
     assert "v_operation_existing.last_request_fingerprint = v_request_fingerprint" in insert_race_handler
     assert "'idempotent_replay', true" in insert_race_handler
     assert sql.count("'idempotent_replay', true") == 2
+
+
+def test_day_fk_follow_up_adds_the_advisor_required_leading_index() -> None:
+    sql = DAY_FK_INDEX_MIGRATION.read_text(encoding="utf-8").lower()
+
+    assert "create index if not exists idx_tournament_registration_check_ins_registration_day" in sql
+    assert "on public.tournament_registration_check_ins (registration_day_id)" in sql
+    assert "drop" not in sql
+    assert "grant" not in sql
