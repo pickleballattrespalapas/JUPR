@@ -141,6 +141,13 @@ function shortValue(value: unknown): string {
   return String(value);
 }
 
+function humanizeAwardWarning(warning: string): string {
+  if (/JUPR_|service.?role|migration|FastAPI|Supabase/i.test(warning)) {
+    return "A server-side prerequisite is not ready, so award changes remain unavailable.";
+  }
+  return warning.replace(/_/g, " ");
+}
+
 function awardKey(award: AwardRow): string {
   return award.award_key || `${award.category_key}:${award.rank || 1}`;
 }
@@ -428,13 +435,17 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
   const displayAwards = finalAwards.length ? finalAwards : previewAwards;
   const writeReady = Boolean(state?.writes_enabled && state?.service_role_ready && status.awards_write_enabled !== false);
   const mintReady = Boolean(writeReady && state?.badge_definitions_ready === true);
-  const messageIsError = Boolean(message && /unable|error|disabled|required|stale|failed|not |could not|before/i.test(message));
+  const hasMeasurableResults = Boolean(
+    Number(state?.provenance?.included_count || 0) > 0
+    && ((state?.player_analytics?.length || 0) > 0 || (state?.team_analytics?.length || 0) > 0)
+  );
+  const messageIsError = Boolean(message && /unable|error|disabled|required|stale|failed|could not|before/i.test(message));
 
   if (!status.enabled) {
     return (
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
-        <h2 style={{ marginTop: 0 }}>League Manager is disabled</h2>
-        <p style={{ color: "#475569" }}>Enable the guarded League Manager flag before using awards. Streamlit remains the fallback.</p>
+        <h2 style={{ marginTop: 0 }}>League awards are not available yet</h2>
+        <p style={{ color: "#475569" }}>Award review and publishing remain unavailable in this build.</p>
       </article>
     );
   }
@@ -450,7 +461,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
       </article>
 
       <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>1. Select and recover league</h2>
+        <h2 style={{ marginTop: 0 }}>Select and recover league</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
           <label>League<br /><select value={leagueName} onChange={(event) => selectLeague(event.target.value)} disabled={busy || !accessToken} style={inputStyle}><option value="">Select a league</option>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
           <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh leagues"}</button>
@@ -459,26 +470,22 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
         {!busy && !leagues.length ? <p style={{ color: "#64748b" }}>No leagues are available.</p> : null}
         {message ? <p role="status" style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}
         {wizard ? <p style={{ color: "#475569" }}>Saved step: <strong>{workflowStatus.replace(/_/g, " ")}</strong> · Revision <strong>{wizard.revision || 0}</strong> · League status <strong>{shortValue(state?.league?.status)}</strong></p> : null}
-        {state && !writeReady ? <p style={{ color: "#92400e" }}>Writes are closed. FastAPI must have <code>JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE=1</code> and a server-only service-role key. Use Streamlit fallback until the gate is ready.</p> : null}
+        {state && !writeReady ? <p style={{ color: "#92400e" }}>Award changes are unavailable in this build. You can still review the saved workflow and measurable results.</p> : null}
         {state && state.badge_definitions_ready !== true ? (
-          <p role="alert" style={{ color: "#b91c1c" }}>
-            Badge minting is blocked: found {state.badge_definition_count || 0} of {state.badge_definition_required_count || 4} required definitions.
-            {state.missing_badge_ids?.length ? <> Missing <code>{state.missing_badge_ids.join(", ")}</code>.</> : null}
-            {state.badge_seed_migration ? <> Apply the reviewed deployment equivalent of <code>{state.badge_seed_migration}</code> before the staging write smoke.</> : null}
-          </p>
+          <p role="alert" style={{ color: "#92400e" }}>Badge publishing is unavailable until all required award definitions are ready.</p>
         ) : null}
       </article>
 
       {state && wizard ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>2. Choose award categories</h2>
+          <h2 style={{ marginTop: 0 }}>Choose award categories</h2>
           <p style={{ color: "#475569" }}>
             Choose any measurable player or team result, the number of places to recognize, and the minimum sample required. Choices lock when the league is frozen.
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "0.75rem" }}>
             {(state.award_catalog || []).map((category) => {
               const draft = configDrafts[category.key] || { enabled: false, depth: "1" as const, minimum: "0" };
-              const disabled = busy || workflowStatus !== "not_started";
+              const disabled = busy || !writeReady || workflowStatus !== "not_started";
               return (
                 <fieldset key={category.key} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: draft.enabled ? "#f0fdf4" : "#f8fafc" }}>
                   <legend style={{ fontWeight: 800 }}>{category.label}</legend>
@@ -518,7 +525,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
 
       {wizard && workflowStatus === "not_started" ? (
         <article style={{ ...cardStyle, borderColor: "#fed7aa" }}>
-          <h2 style={{ marginTop: 0 }}>3. Freeze league</h2>
+          <h2 style={{ marginTop: 0 }}>Freeze league</h2>
           <p style={{ color: "#7c2d12" }}>Freezing marks the league ended and locks the award snapshot workflow. Match corrections must happen before this step or through Match Log and Replay History.</p>
           <ConfirmAction
             triggerLabel={busy ? "Working…" : "Freeze and save"}
@@ -527,7 +534,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
             confirmLabel="Yes, freeze league"
             confirmationText="FREEZE LEAGUE AWARDS"
             tone="danger"
-            disabled={!writeReady}
+            disabled={!writeReady || !hasMeasurableResults}
             busy={busy}
             onConfirm={(confirmationText) => runAction("freeze", confirmationText)}
           />
@@ -536,15 +543,15 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
 
       {wizard && ["frozen", "previewed", "overrides_confirmed"].includes(workflowStatus) && Number(wizard.mint?.attempt_count || 0) === 0 ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>4. Persist award preview</h2>
-          <p style={{ color: "#475569" }}>FastAPI recomputes the Python-authoritative top performers and stores the exact rows and fingerprint used by later steps.</p>
-          <button type="button" onClick={() => void runAction("preview").catch(() => undefined)} disabled={busy || !writeReady} style={buttonStyle}>{wizard.preview ? "Recompute and replace preview" : "Compute and save preview"}</button>
+          <h2 style={{ marginTop: 0 }}>Save award preview</h2>
+          <p style={{ color: "#475569" }}>Recompute the top performers and save the exact result set used by the remaining review steps.</p>
+          <button type="button" onClick={() => void runAction("preview").catch(() => undefined)} disabled={busy || !writeReady || !hasMeasurableResults} style={buttonStyle}>{wizard.preview ? "Recompute and replace preview" : "Compute and save preview"}</button>
         </article>
       ) : null}
 
       {wizard?.preview ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>5. Review and document overrides</h2>
+          <h2 style={{ marginTop: 0 }}>Review and document overrides</h2>
           <p style={{ color: "#475569" }}>Preview fingerprint <code>{wizard.preview.fingerprint?.slice(0, 16)}…</code>. Changing a winner requires a reason of at least eight characters; both are persisted and audit-attributed.</p>
           {displayAwards.length ? (
             <div style={{ display: "grid", gap: "0.75rem" }}>
@@ -558,8 +565,8 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
                     <legend style={{ fontWeight: 800 }}>{award.category_label || award.category_key} #{award.rank || 1}{award.is_co_winner ? " · co-winner" : ""}</legend>
                     <p style={{ color: "#475569" }}>Computed: {award.recipient_name || award.team_name || award.player_name || (award.player_id ? `Player ${award.player_id}` : "—")} · {award.metric_display || "—"} · Minimum sample {award.min_games ?? "—"}</p>
                     {isTeamAward ? <p style={{ color: "#64748b" }}>Team awards follow the frozen team standings and are recorded without a player-badge reassignment.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.75rem" }}>
-                      <label>Winner<br /><select value={draft.playerId} onChange={(event) => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, playerId: Number(event.target.value) } }))} disabled={Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle}>{(state?.eligible_players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} (#{player.player_id})</option>)}</select></label>
-                      <label>Override reason {changed ? "(required)" : "(not needed)"}<br /><input value={draft.reason} onChange={(event) => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, reason: event.target.value } }))} disabled={!changed || Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle} /></label>
+                      <label>Winner<br /><select value={draft.playerId} onChange={(event) => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, playerId: Number(event.target.value) } }))} disabled={!writeReady || Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle}>{(state?.eligible_players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} (#{player.player_id})</option>)}</select></label>
+                      <label>Override reason {changed ? "(required)" : "(not needed)"}<br /><input value={draft.reason} onChange={(event) => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, reason: event.target.value } }))} disabled={!writeReady || !changed || Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle} /></label>
                     </div>}
                   </fieldset>
                 );
@@ -573,8 +580,8 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
 
       {wizard && ["overrides_confirmed", "minting", "mint_failed"].includes(workflowStatus) ? (
         <article style={{ ...cardStyle, borderColor: workflowStatus === "mint_failed" ? "#fecaca" : "#bfdbfe" }}>
-          <h2 style={{ marginTop: 0 }}>6. Mint and verify badges</h2>
-          <p style={{ color: "#334155" }}>A mint is successful only after FastAPI reads back every expected <code>player_badges</code> row. Partial or unavailable writes remain <strong>mint failed</strong> and can be retried with the retained idempotency key.</p>
+          <h2 style={{ marginTop: 0 }}>Publish and verify badges</h2>
+          <p style={{ color: "#334155" }}>Publishing succeeds only after every expected badge is verified. An incomplete attempt remains recoverable and can be retried safely.</p>
           {wizard.mint?.last_error ? <p style={{ color: "#b91c1c" }}>Last verified failure: {wizard.mint.last_error}</p> : null}
           <p style={{ color: "#475569" }}>Attempts: {wizard.mint?.attempt_count || 0} · Expected: {wizard.mint?.expected_count ?? "—"} · Verified: {wizard.mint?.verified_count ?? "—"}</p>
           <ConfirmAction
@@ -592,7 +599,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
 
       {wizard && ["minted", "archived"].includes(workflowStatus) ? (
         <article style={{ ...cardStyle, borderColor: "#bbf7d0" }}>
-          <h2 style={{ marginTop: 0 }}>7. Archive</h2>
+          <h2 style={{ marginTop: 0 }}>Archive</h2>
           <p style={{ color: "#166534" }}>Mint result: <strong>{wizard.mint?.status}</strong> · Verified {wizard.mint?.verified_count || 0} of {wizard.mint?.expected_count || 0} expected row(s).</p>
           {workflowStatus === "archived" ? <p><strong>Archived.</strong> This workflow is read-only and remains recoverable for audit review.</p> : (
             <ConfirmAction
@@ -610,7 +617,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
         </article>
       ) : null}
 
-      {state?.warnings?.length ? <article style={{ ...cardStyle, background: "#fffbeb" }}><strong>Warnings</strong><ul>{state.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></article> : null}
+      {state?.warnings?.length ? <article style={{ ...cardStyle, background: "#fffbeb" }}><strong>Warnings</strong><ul>{state.warnings.map((warning, index) => <li key={`${index}:${warning}`}>{humanizeAwardWarning(warning)}</li>)}</ul></article> : null}
     </div>
   );
 }
