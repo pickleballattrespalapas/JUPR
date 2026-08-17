@@ -75,6 +75,15 @@ function scoreIsValid(score: ScoreDraft): boolean {
   return Number.isInteger(a) && Number.isInteger(b) && a >= 0 && b >= 0 && a !== b && a + b > 0;
 }
 
+function leagueLiveOperatorMessage(value: unknown, fallback: string): string {
+  const raw = value instanceof Error ? value.message : typeof value === "string" ? value : fallback;
+  return raw
+    .replace(/FastAPI\s*\/\s*Python|Python\s*\/\s*FastAPI/gi, "League Live")
+    .replace(/Python-authoritative League Live/gi, "League Live")
+    .replace(/\bPython\b/gi, "League Live")
+    .replace(/\bFastAPI\b/gi, "the League Live service");
+}
+
 class LeagueLiveRequestError extends Error {
   readonly status: number;
   readonly uncertain: boolean;
@@ -260,7 +269,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     if (!response.ok) {
       const detail = payload?.detail;
       const detailRecord = detail && typeof detail === "object" ? detail as Record<string, unknown> : null;
-      const errorMessage = typeof detail === "string" ? detail : String(detailRecord?.message || `API error (${response.status})`);
+      const errorMessage = leagueLiveOperatorMessage(
+        typeof detail === "string" ? detail : detailRecord?.message,
+        `League Live error (${response.status})`
+      );
       const explicitlyFailed = detailRecord?.kind === "failed" && detailRecord?.recovery_required !== true;
       const uncertainStatus = response.status >= 500 || [408, 425, 429].includes(response.status);
       throw new LeagueLiveRequestError(
@@ -485,7 +497,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       setDetail(payload);
       setLoadedLeagueName(selectedLeague);
       applyRosterSuggestion(suggestion);
-      setMessage(`Python suggested ${suggestion.courts.length} court(s) and ${suggestion.bench.length} bench player(s). Review before creating the session.`);
+      setMessage(`Roster plan suggested ${suggestion.courts.length} court(s) and ${suggestion.bench.length} bench player(s). Review before creating the session.`);
     } catch (error) {
       if (leagueDetailRequest.isCurrent(generation)) {
         clearPersistedSessionBinding();
@@ -517,7 +529,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
 
   async function refreshRosterSuggestion() {
     if (!detail || detail.league.league_name !== leagueName) {
-      setMessage("Load a league roster before requesting another Python roster suggestion.");
+      setMessage("Load a league roster before requesting another roster suggestion.");
       return;
     }
     const generation = leagueDetailRequest.begin();
@@ -527,16 +539,16 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       const suggestion = await fetchRosterSuggestion(detail, benchOverrideIds, benchOverrideReason);
       if (!leagueDetailRequest.isCurrent(generation)) return;
       applyRosterSuggestion(suggestion);
-      setMessage(`Python refreshed ${suggestion.courts.length} court(s); ${suggestion.bench.length} player(s) are benched.`);
+      setMessage(`Roster plan refreshed ${suggestion.courts.length} court(s); ${suggestion.bench.length} player(s) are benched.`);
     } catch (error) {
-      if (leagueDetailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to refresh the Python roster suggestion.");
+      if (leagueDetailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to refresh the roster suggestion.");
     } finally {
       if (leagueDetailRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
   async function applyRecoveredLiveSession(recovered: LeagueLiveCreateReconcileResponse) {
-    if (!recovered.session) throw new Error("The completed operation did not include an authoritative League Live session.");
+    if (!recovered.session) throw new Error("The completed operation did not include its League Live session.");
     applySession(recovered.session, recovered.courts || [], recovered.rounds || []);
     setLiveSessions((current) => [
       ...current.filter((row) => row.id !== recovered.session?.id),
@@ -572,7 +584,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       if (operationStatus === "completed" && recovered?.ok !== false) {
         await applyRecoveredLiveSession(recovered || { ok: true });
         clearCreateRecovery();
-        const successMessage = `Exact League Live operation ${retainedRecovery.operationKey} completed. Its authoritative session is now loaded.`;
+        const successMessage = `League Live recovery ${retainedRecovery.operationKey} completed. Its session is now loaded.`;
         setMessage(successMessage);
         return actionSuccess("League Live session reconciled", successMessage);
       }
@@ -584,7 +596,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         return actionSuccess("League Live operation checked", failedMessage);
       }
 
-      const pending = { ...retainedRecovery, status: operationStatus, message: operation.error || retainedRecovery.message };
+      const pending = {
+        ...retainedRecovery,
+        status: operationStatus,
+        message: leagueLiveOperatorMessage(operation.error || retainedRecovery.message, "Unable to verify the League Live session.")
+      };
       retainCreateRecovery(pending);
       return actionUncertain(
         "League Live session still needs verification",
@@ -613,7 +629,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   async function createSession(confirmationText: string): Promise<ActionCompletion> {
     if (createRecovery) throw new Error(`Resolve exact operation ${createRecovery.operationKey} before creating another League Live session.`);
     if (!leagueName || !detail || loadedLeagueName !== leagueName || !rosterSuggestion || !sessionRoster.length) {
-      const error = new Error("Load the selected league roster and Python court suggestion before creating a persisted session.");
+      const error = new Error("Load the selected league roster and court suggestion before creating a saved session.");
       setMessage(error.message);
       throw error;
     }
@@ -827,10 +843,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   async function previewPythonMovement() {
-    if (!requireCurrentSession("previewing Python movement")) return;
+    if (!requireCurrentSession("previewing next-round movement")) return;
     const matches = buildScoredMatches();
     if (!matches.length) {
-      setMessage("Enter at least one valid non-tied score before previewing Python movement.");
+      setMessage("Enter at least one valid non-tied score before previewing next-round movement.");
       return;
     }
     const generation = actionRequest.begin();
@@ -854,11 +870,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       if (!actionRequest.isCurrent(generation)) return;
       setMovementPlan(payload);
       setMovementPlanStale(false);
-      setMessage(`Python-authoritative plan ${payload.operation_key.slice(0, 12)}… is ready for Round ${payload.next_round}.`);
+      setMessage(`Next-round plan ${payload.operation_key.slice(0, 12)}… is ready for Round ${payload.next_round}.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
         setMovementPlanStale(true);
-        setMessage(error instanceof Error ? error.message : "Unable to preview Python court movement.");
+        setMessage(error instanceof Error ? error.message : "Unable to preview court movement.");
       }
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
@@ -874,7 +890,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       throw error;
     }
     if (!movementPlan || movementPlanStale) {
-      const error = new Error("Preview the current Python movement plan before submitting. Any score, roster, bench, or override change makes the previous plan stale.");
+      const error = new Error("Preview the current movement plan before submitting. Any score, roster, bench, or override change makes the previous plan stale.");
       setMessage(error.message);
       throw error;
     }
@@ -920,7 +936,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       }
       setRatingReview(payload.rating_review || null);
       const movementText = plannedMovement?.applied ? ` Applied ${plannedMovement.rows.filter((row) => row.direction !== "stay").length} court movement(s) for the next round.` : " No court movement was required.";
-      const successMessage = `${payload.idempotent_replay ? "Reconciled" : "Published"} ${payload.published_match_ids?.length ?? matches.length} league match(es) through one durable Python operation.${movementText}`;
+      const successMessage = `${payload.idempotent_replay ? "Reconciled" : "Published"} ${payload.published_match_ids?.length ?? matches.length} league match(es) through one durable publish operation.${movementText}`;
       setMessage(successMessage);
       return actionSuccess(payload.idempotent_replay ? "League round reconciled" : "League round published", successMessage);
     } catch (error) {
@@ -967,7 +983,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       setGuestName("");
       setGuestReason("");
       markPlanStale();
-      const successMessage = `${payload.idempotent_replay ? "Recovered" : "Created"} guest ${guest.name}. Select add or substitute, then preview Python movement again.`;
+      const successMessage = `${payload.idempotent_replay ? "Recovered" : "Created"} guest ${guest.name}. Select add or substitute, then preview movement again.`;
       setMessage(successMessage);
       return actionSuccess(payload.idempotent_replay ? "Guest recovered" : "Guest created", successMessage);
     } catch (error) {
@@ -1081,7 +1097,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
         <h2 style={{ marginTop: 0 }}>Admin session</h2>
         <p style={{ color: "#475569" }}>{adminSessionLabel(session)}</p>
-        <p style={{ color: "#166534" }}><strong>Movement authority:</strong> {liveDomainStatus.movement_authority === "python_fastapi" ? "Python / FastAPI" : liveDomainStatus.movement_authority || "unavailable"}. The browser displays plans but never ranks players.</p>
+        <p style={{ color: "#166534" }}><strong>Movement planning:</strong> {liveDomainStatus.movement_authority === "python_fastapi" ? "Ready" : "Unavailable"}. League Live calculates the plan; this page only displays it.</p>
         <p style={{ color: liveDomainStatus.submit_enabled ? "#166534" : "#92400e" }}><strong>Result publishing:</strong> {liveDomainStatus.submit_enabled ? "Available" : "Unavailable in this build"}.</p>
         <p style={{ color: "#475569" }}><strong>Recovery:</strong> Interrupted operations can be reviewed below before play resumes.</p>
         {sessionLoading ? <p>Checking session…</p> : null}
@@ -1093,7 +1109,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           <h2 style={{ marginTop: 0 }}>Session create needs exact-operation recovery</h2>
           <p style={{ color: "#92400e" }}>Do not create another persisted League Live session until this exact operation is reconciled.</p>
           <p><strong>Operation key:</strong> <code style={{ overflowWrap: "anywhere" }}>{createRecovery.operationKey}</code><br /><strong>Last known status:</strong> {createRecovery.status.replace(/_/g, " ")}</p>
-          <p>{createRecovery.message}</p>
+          <p>{leagueLiveOperatorMessage(createRecovery.message, "Unable to verify the League Live session.")}</p>
           <button type="button" onClick={() => void reconcileCreateSession()} disabled={checkingCreateRecovery || !accessToken} style={ghostButtonStyle}>
             {checkingCreateRecovery ? "Checking and reconciling…" : "Check and reconcile exact operation"}
           </button>
@@ -1139,8 +1155,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         </div>
         {rosterSuggestion ? (
           <section style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #dbeafe", borderRadius: "12px", background: "#eff6ff" }}>
-            <h3 style={{ marginTop: 0 }}>Python roster and bench suggestion</h3>
-            <p style={{ color: "#475569" }}>Uncheck or check bench assignments, explain any non-default choice, then ask Python to validate and rebuild the courts.</p>
+            <h3 style={{ marginTop: 0 }}>Roster and bench suggestion</h3>
+            <p style={{ color: "#475569" }}>Uncheck or check bench assignments, explain any non-default choice, then validate and rebuild the courts.</p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.35rem" }}>
               {rosterSuggestion.roster.map((row) => (
                 <label key={row.player_id} style={{ display: "flex", gap: "0.45rem", alignItems: "center" }}>
@@ -1158,8 +1174,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
               ))}
             </div>
             <div data-responsive-bench-controls style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
-              <label>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="Required when changing Python's default bench" style={inputStyle} /></label>
-              <button type="button" onClick={refreshRosterSuggestion} disabled={busy} style={ghostButtonStyle}>Refresh Python roster suggestion</button>
+              <label>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="Required when changing the default bench" style={inputStyle} /></label>
+              <button type="button" onClick={refreshRosterSuggestion} disabled={busy} style={ghostButtonStyle}>Refresh roster suggestion</button>
             </div>
             <small style={{ color: "#64748b" }}>Roster fingerprint: {rosterSuggestion.fingerprint.slice(0, 16)}…</small>
           </section>
@@ -1218,7 +1234,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
                 <tbody>{publishOperations.map((operation) => (
                   <tr key={operation.id}>
                     <td>{operation.round_number}</td><td>{operation.status}</td><td align="right">{operation.attempt_count}</td><td align="right">{operation.published_match_ids?.length || 0}</td>
-                    <td>{operation.status === "completed" ? "Verified" : operation.error_text || "Retry the original publish with the same plan key."}</td>
+                    <td>{operation.status === "completed" ? "Verified" : leagueLiveOperatorMessage(operation.error_text, "Retry the original publish with the same plan key.")}</td>
                   </tr>
                 ))}</tbody>
               </table>
@@ -1242,7 +1258,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           {publishOperations.some((operation) => ["published", "reconciling", "recovery_required"].includes(operation.status)) ? (
             <details style={{ marginTop: "0.75rem" }}>
               <summary>Record completed Match Log / Replay History compensation</summary>
-              <p style={{ color: "#92400e" }}>Use this only after recovery removed or soft-excluded every deterministic match context and ratings replay is complete. FastAPI verifies that no active context remains.</p>
+              <p style={{ color: "#92400e" }}>Use this only after recovery removed or excluded every related match and the ratings rebuild is complete. The recovery check confirms that no active match remains.</p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
                 <label>Recovery reference<br /><input value={compensationReference} onChange={(event) => setCompensationReference(event.target.value)} disabled={busy} placeholder="Match Log / replay operation ID" style={inputStyle} /></label>
                 <label>Reason<br /><input value={compensationReason} onChange={(event) => setCompensationReason(event.target.value)} disabled={busy} placeholder="At least 10 characters" style={inputStyle} /></label>
@@ -1278,7 +1294,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       {preview?.courts?.length ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>3. Enter scores</h2>
-          <p style={{ color: "#475569" }}>Every generated match must have a valid non-tied score. FastAPI/Python publishes the whole round, recomputes statistics and movement, and reconciles its snapshot under one durable idempotency key.</p>
+          <p style={{ color: "#475569" }}>Every generated match must have a valid non-tied score. League Live publishes the whole round, recalculates statistics and movement, and safely resumes the same publish if interrupted.</p>
           <div style={{ display: "grid", gap: "0.75rem" }}>
             {(preview.courts as AdminMatchUploaderRoundRobinCourt[]).map((court) => (
               <section key={court.court} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem" }}>
@@ -1304,7 +1320,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
             {liveDomainStatus.submit_enabled ? (
               <details style={{ marginTop: "0.75rem" }}>
                 <summary>Create a guest player for this session</summary>
-                <p style={{ color: "#475569" }}>Guest creation makes a real club player record so ratings and Match Log recovery remain authoritative. Use Player Editor to retire an abandoned guest.</p>
+                <p style={{ color: "#475569" }}>Guest creation makes a real club player record so ratings and Match Log recovery stay linked. Use Player Editor to retire an abandoned guest.</p>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
                   <label>Guest name<br /><input value={guestName} onChange={(event) => setGuestName(event.target.value)} disabled={busy} style={inputStyle} /></label>
                   <label>Starting JUPR<br /><input value={guestJupr} onChange={(event) => setGuestJupr(event.target.value)} disabled={busy} type="number" min="1" max="7" step="0.1" style={inputStyle} /></label>
@@ -1312,7 +1328,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
                   <ConfirmAction
                     triggerLabel="Create guest"
                     title="Create this guest player?"
-                    description="This creates a real club player record for authoritative ratings and Match Log recovery."
+                    description="This creates a real club player record linked to ratings and Match Log recovery."
                     confirmLabel="Yes, create guest"
                     confirmationText="CREATE LIVE GUEST"
                     disabled={busy || !sessionIsCurrentLeague || !guestName.trim() || guestReason.trim().length < 10}
@@ -1334,18 +1350,18 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           </section>
           {movementPlan ? (
             <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "0.75rem" }}>
-              <strong>Python next-round movement plan:</strong> {movementPlan.movement.applied ? `${movementPlan.movement.rows.filter((row) => row.direction !== "stay").length} player movement(s)` : "no court movement required"} for Round {movementPlan.movement.next_round}.
-              <p style={{ color: movementPlanStale ? "#b91c1c" : "#166534" }}>{movementPlanStale ? "This plan is stale. Preview Python movement again before submitting." : `Verified operation key ${movementPlan.operation_key.slice(0, 16)}…`}</p>
+              <strong>Next-round movement plan:</strong> {movementPlan.movement.applied ? `${movementPlan.movement.rows.filter((row) => row.direction !== "stay").length} player movement(s)` : "no court movement required"} for Round {movementPlan.movement.next_round}.
+              <p style={{ color: movementPlanStale ? "#b91c1c" : "#166534" }}>{movementPlanStale ? "This plan is stale. Preview movement again before submitting." : `Verified operation key ${movementPlan.operation_key.slice(0, 16)}…`}</p>
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead><tr><th align="left">Player</th><th align="right">Wins</th><th align="right">Diff</th><th align="left">From</th><th align="left">Python</th><th align="left">Final target</th></tr></thead>
+                  <thead><tr><th align="left">Player</th><th align="right">Wins</th><th align="right">Diff</th><th align="left">From</th><th align="left">Planned</th><th align="left">Final target</th></tr></thead>
                   <tbody>{movementPlan.movement.rows.map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{row.wins}</td><td align="right">{row.differential}</td><td>Court {row.from_court}</td><td>Court {row.suggested_court}</td><td><select aria-label={`Final court for ${row.player_name}`} value={movementOverrides[row.player_id] || String(row.to_court)} onChange={(event) => { setMovementOverrides((current) => ({ ...current, [row.player_id]: event.target.value })); setMovementPlanStale(true); }} disabled={busy} style={inputStyle}>{courts.map((court) => <option key={court.court} value={court.court}>Court {court.court}</option>)}</select></td></tr>)}</tbody>
                 </table>
               </div>
-              <label style={{ display: "block", marginTop: "0.75rem" }}>Manual movement override reason<br /><input value={overrideReason} onChange={(event) => { setOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="At least 10 characters when changing a Python target" style={inputStyle} /></label>
+              <label style={{ display: "block", marginTop: "0.75rem" }}>Manual movement override reason<br /><input value={overrideReason} onChange={(event) => { setOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="At least 10 characters when changing a planned target" style={inputStyle} /></label>
             </article>
           ) : null}
-          <p><button type="button" onClick={previewPythonMovement} disabled={busy || validScoreCount !== allPreviewMatches.length || !sessionIsCurrentLeague} style={ghostButtonStyle}>{busy ? "Planning…" : "Preview Python movement"}</button></p>
+          <p><button type="button" onClick={previewPythonMovement} disabled={busy || validScoreCount !== allPreviewMatches.length || !sessionIsCurrentLeague} style={ghostButtonStyle}>{busy ? "Planning…" : "Preview movement"}</button></p>
           <ConfirmAction
             triggerLabel="Publish complete league round"
             title="Publish this complete league round?"

@@ -5,11 +5,14 @@ from types import SimpleNamespace
 import pytest
 
 from jupr_app.services.team_league_service import (
+    CREATE_TEAM_CONFIRMATION,
     PAIR_WAITLIST_CONFIRMATION,
     SAVE_SETTINGS_CONFIRMATION,
     TEAM_SIGNUP_CONFIRMATION,
     _enforce_team_category,
+    admin_team_league_roster_action,
     admin_team_league_waitlist_action,
+    create_admin_team_league_team,
     get_public_team_league,
     list_public_team_leagues,
     register_public_team_league,
@@ -138,13 +141,17 @@ def _save_settings(monkeypatch, settings: dict) -> tuple[dict, _CompositionSupab
     return result, supabase
 
 
-def test_admin_settings_persist_fixed_pair_policy(monkeypatch) -> None:
+def test_admin_settings_persist_normalized_roster_policy(monkeypatch) -> None:
     result, supabase = _save_settings(
         monkeypatch,
         {
             "registration_open": True,
-            "team_size": 2,
+            "team_size": 3,
             "team_category": "Mixed",
+            "max_alternates": 2,
+            "substitute_pool_enabled": True,
+            "mixed_required_men": 1,
+            "mixed_required_women": 2,
             "allow_substitutes": True,
             "timezone": "America/Chicago",
         },
@@ -152,23 +159,31 @@ def test_admin_settings_persist_fixed_pair_policy(monkeypatch) -> None:
 
     assert result["committed"] is True
     rpc_name, params = supabase.rpc_calls[0]
-    assert rpc_name == "team_league_save_settings_v1"
-    assert params["p_settings"]["team_size"] == 2
+    assert rpc_name == "team_league_save_settings_v2"
+    assert params["p_settings"]["team_size"] == 3
     assert params["p_settings"]["team_category"] == "mixed"
+    assert params["p_settings"]["max_alternates"] == 2
+    assert params["p_settings"]["substitute_pool_enabled"] is True
+    assert params["p_settings"]["mixed_required_men"] == 1
+    assert params["p_settings"]["mixed_required_women"] == 2
     assert params["p_settings"]["allow_substitutes"] is True
-    for unsupported in (
-        "allow_alternates",
-        "max_alternates",
-        "substitute_pool_enabled",
-    ):
-        assert unsupported not in params["p_settings"]
+    assert "allow_alternates" not in params["p_settings"]
 
 
 @pytest.mark.parametrize(
     "settings,message",
     [
-        ({"team_size": 3}, "Team size"),
+        ({"team_size": 5}, "Team size"),
         ({"team_category": "juniors"}, "Choose Open"),
+        (
+            {
+                "team_size": 3,
+                "team_category": "mixed",
+                "mixed_required_men": 1,
+                "mixed_required_women": 1,
+            },
+            "Mixed roster counts",
+        ),
     ],
 )
 def test_admin_settings_reject_unsupported_composition_policy(
@@ -211,20 +226,268 @@ def test_public_legacy_settings_receive_safe_fixed_pair_defaults() -> None:
     assert league["team_category"] == "open"
     assert league["online_team_registration_supported"] is True
     assert league["registration_open"] is True
-    for unsupported in (
-        "allow_alternates",
-        "max_alternates",
-        "substitute_pool_enabled",
-    ):
-        assert unsupported not in league
+    assert league["max_alternates"] == 0
+    assert league["substitute_pool_enabled"] is False
+    assert league["mixed_required_men"] == 1
+    assert league["mixed_required_women"] == 1
+    assert "allow_alternates" not in league
     assert "alternate_management_supported" not in detail["registration"]
     assert "substitute_pool_registration_supported" not in detail["registration"]
+
+
+def test_public_multi_player_registration_remains_fail_closed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "jupr_app.services.team_league_service._assert_public_write_enabled",
+        lambda: None,
+    )
+    supabase = _CompositionSupabase(
+        settings={
+            "team_size": 3,
+            "max_alternates": 1,
+            "substitute_pool_enabled": True,
+            "allow_substitutes": True,
+        },
+        players=[
+            {"id": 1, "club_id": "club", "gender": "Woman"},
+            {"id": 2, "club_id": "club", "gender": "Man"},
+        ],
+    )
+
+    listing = list_public_team_leagues(supabase, club_id="club")["leagues"][0]
+    detail = get_public_team_league(supabase, club_id="club", league_name="Open")
+
+    assert listing["registration_configured_open"] is True
+    assert listing["registration_open"] is False
+    assert listing["online_team_registration_supported"] is False
+    assert detail["registration"]["open"] is False
+    assert detail["registration"]["signup_types"] == []
+    assert "Contact league staff" in detail["registration"]["unavailable_reason"]
+    with pytest.raises(ValueError, match="not available yet"):
+        register_public_team_league(
+            supabase,
+            club_id="club",
+            league_name="Open",
+            signup_type="team",
+            player_id=1,
+            partner_player_id=2,
+            contact_email="alex@example.com",
+            partner_email="partner@example.com",
+            team_name="Partial Team",
+            idempotency_key="register:multi:closed",
+            confirmation_text=TEAM_SIGNUP_CONFIRMATION,
+            public_base_url="https://example.test/clubs/club",
+            club_name="Test Club",
+        )
+    assert supabase.rpc_calls == []
+
+
+def test_admin_can_create_a_forming_three_player_team(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "jupr_app.services.team_league_service._assert_admin_write_enabled",
+        lambda: None,
+    )
+    supabase = _CompositionSupabase(
+        settings={
+            "team_size": 3,
+            "team_category": "mixed",
+            "mixed_required_men": 1,
+            "mixed_required_women": 2,
+            "max_alternates": 1,
+            "roster_version": 7,
+        },
+        players=[
+            {"id": 1, "club_id": "club", "name": "Captain", "gender": "Man"},
+            {"id": 2, "club_id": "club", "name": "Primary", "gender": "Woman"},
+        ],
+    )
+
+    result = create_admin_team_league_team(
+        supabase,
+        club_id="club",
+        league_name="Open",
+        team_name="Forming Aces",
+        captain_player_id=1,
+        captain_contact_email="captain@example.com",
+        initial_primary_player_id=2,
+        initial_primary_contact_email="primary@example.com",
+        expected_roster_version=7,
+        idempotency_key="create:forming:team",
+        confirmation_text=CREATE_TEAM_CONFIRMATION,
+        actor_email="admin@example.com",
+        actor_role="admin",
+    )
+
+    assert result["committed"] is True
+    rpc_name, params = supabase.rpc_calls[0]
+    assert rpc_name == "team_league_create_team_v1"
+    assert params["p_team_name"] == "Forming Aces"
+    assert params["p_captain_player_id"] == 1
+    assert params["p_initial_primary_player_id"] == 2
+    assert params["p_expected_roster_version"] == 7
+
+
+def test_create_team_retry_reaches_database_receipt_after_team_exists(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "jupr_app.services.team_league_service._assert_admin_write_enabled",
+        lambda: None,
+    )
+    supabase = _CompositionSupabase(
+        settings={
+            "team_size": 3,
+            "team_category": "mixed",
+            "mixed_required_men": 1,
+            "mixed_required_women": 2,
+            "max_alternates": 1,
+            "roster_version": 9,
+        },
+        players=[
+            {"id": 1, "club_id": "club", "name": "Captain", "gender": "Man"},
+            {"id": 2, "club_id": "club", "name": "Primary", "gender": "Woman"},
+        ],
+    )
+    team_id = "00000000-0000-0000-0000-000000000002"
+    supabase.tables["team_league_teams"] = [
+        {
+            "id": team_id,
+            "club_id": "club",
+            "league_name": "Open",
+            "team_name": "Forming Aces",
+            "status": "pending_partner",
+            "captain_player_id": 1,
+            "partner_player_id": 2,
+        }
+    ]
+    supabase.tables["team_league_team_members"] = [
+        {
+            "id": "member-1",
+            "team_id": team_id,
+            "club_id": "club",
+            "league_name": "Open",
+            "player_id": 1,
+            "role": "captain",
+            "status": "active",
+        },
+        {
+            "id": "member-2",
+            "team_id": team_id,
+            "club_id": "club",
+            "league_name": "Open",
+            "player_id": 2,
+            "role": "primary",
+            "status": "active",
+        },
+    ]
+
+    create_admin_team_league_team(
+        supabase,
+        club_id="club",
+        league_name="Open",
+        team_name="Forming Aces",
+        captain_player_id=1,
+        captain_contact_email="captain@example.com",
+        initial_primary_player_id=2,
+        initial_primary_contact_email="primary@example.com",
+        expected_roster_version=7,
+        idempotency_key="create:forming:team",
+        confirmation_text=CREATE_TEAM_CONFIRMATION,
+        actor_email="admin@example.com",
+        actor_role="admin",
+    )
+
+    rpc_name, params = supabase.rpc_calls[0]
+    assert rpc_name == "team_league_create_team_v1"
+    assert params["p_expected_roster_version"] == 7
+    assert params["p_idempotency_key"] == "create:forming:team"
+
+
+def test_roster_retry_forwards_stale_version_to_database_receipt(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "jupr_app.services.team_league_service._assert_admin_write_enabled",
+        lambda: None,
+    )
+    supabase = _CompositionSupabase(
+        settings={"max_alternates": 1, "roster_version": 9},
+        players=[
+            {"id": 1, "club_id": "club", "name": "Captain", "gender": "Man"},
+            {"id": 2, "club_id": "club", "name": "Primary", "gender": "Woman"},
+            {"id": 3, "club_id": "club", "name": "Alternate", "gender": "Woman"},
+        ],
+    )
+    supabase.tables["team_league_teams"] = [
+        {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "club_id": "club",
+            "league_name": "Open",
+            "team_name": "Aces",
+            "status": "confirmed",
+            "captain_player_id": 1,
+            "partner_player_id": 2,
+        }
+    ]
+    supabase.tables["team_league_team_members"] = [
+        {
+            "id": "member-1",
+            "team_id": "00000000-0000-0000-0000-000000000001",
+            "club_id": "club",
+            "league_name": "Open",
+            "player_id": 1,
+            "role": "captain",
+            "status": "active",
+        },
+        {
+            "id": "member-2",
+            "team_id": "00000000-0000-0000-0000-000000000001",
+            "club_id": "club",
+            "league_name": "Open",
+            "player_id": 2,
+            "role": "primary",
+            "status": "active",
+        },
+    ]
+
+    admin_team_league_roster_action(
+        supabase,
+        club_id="club",
+        league_name="Open",
+        action="add_member",
+        team_id="00000000-0000-0000-0000-000000000001",
+        player_id=3,
+        member_role="alternate",
+        member_status="active",
+        expected_roster_version=2,
+        idempotency_key="roster:receipt:retry",
+        confirmation_text="UPDATE TEAM ROSTER",
+        actor_email="admin@example.com",
+        actor_role="admin",
+    )
+
+    rpc_name, params = supabase.rpc_calls[0]
+    assert rpc_name == "team_league_apply_roster_action_v1"
+    assert params["p_expected_roster_version"] == 2
+
+    with pytest.raises(ValueError, match="captain role"):
+        admin_team_league_roster_action(
+            supabase,
+            club_id="club",
+            league_name="Open",
+            action="add_member",
+            team_id="00000000-0000-0000-0000-000000000001",
+            player_id=1,
+            member_role="alternate",
+            member_status="active",
+            expected_roster_version=9,
+            idempotency_key="roster:captain:demote",
+            confirmation_text="UPDATE TEAM ROSTER",
+            actor_email="admin@example.com",
+            actor_role="admin",
+        )
+    assert len(supabase.rpc_calls) == 1
 
 
 @pytest.mark.parametrize(
     "category,genders,message",
     [
-        ("mixed", ("Men", "Male"), "one male and one female"),
+        ("mixed", ("Men", "Male"), "one man and one woman"),
         ("womens", ("Women", "Prefer not to say"), "cannot verify"),
     ],
 )
@@ -288,7 +551,7 @@ def test_gender_aliases_are_normalized_for_fixed_pair_categories(
     "genders,error",
     [
         (("Woman", "MAN"), None),
-        (("Men", "Male"), "one male and one female"),
+        (("Men", "Male"), "one man and one woman"),
         (("Women", "Unknown"), "cannot verify"),
     ],
 )

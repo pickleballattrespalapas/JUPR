@@ -31,7 +31,7 @@ export default async function TeamLeaguesPage({ params }: Props) {
           <article key={league.league_name} style={card}>
             <h2 style={{ marginTop: 0 }}>{league.league_name}</h2>
             <p>{league.venue || "Venue to be announced"}</p>
-            <p>{categoryLabel(league.team_category)} · 2-player roster</p>
+            <p>{categoryLabel(league.team_category)} · {league.team_size}-player primary roster{league.max_alternates ? ` · up to ${league.max_alternates} alternate${league.max_alternates === 1 ? "" : "s"}` : ""}</p>
             <p>
               {league.registration_open
                 ? "Registration open"

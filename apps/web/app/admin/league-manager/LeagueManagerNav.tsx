@@ -24,7 +24,9 @@ type NavLink = {
 const navStyle = {
   display: "flex",
   gap: "0.55rem",
-  flexWrap: "wrap" as const,
+  flexWrap: "nowrap" as const,
+  overflowX: "auto" as const,
+  paddingBottom: "0.2rem",
   margin: "0 0 1rem"
 };
 
@@ -85,7 +87,8 @@ export default function LeagueManagerNav({
               background: active ? "#dbeafe" : "white",
               textDecoration: "none",
               color: active ? "#1d4ed8" : "#0f172a",
-              fontWeight: 700
+              fontWeight: 700,
+              flex: "0 0 auto"
             }}
           >
             {label}

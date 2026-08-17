@@ -29,7 +29,7 @@ export default async function TeamLeagueDetailPage({ params }: Props) {
         <h1>{data.league.league_name}</h1>
         <p style={{ color: "#475569" }}>
           {data.league.venue || "Venue to be announced"} ·{" "}
-          {categoryLabel(data.league.team_category)} · 2-player roster ·{" "}
+          {categoryLabel(data.league.team_category)} · {data.league.team_size}-player primary roster ·{" "}
           {data.league.allow_substitutes ? "Substitutes allowed" : "No substitutes"} ·{" "}
           {data.league.playoff_format === "none" ? "Round robin season" : "Round robin plus playoffs"}
         </p>
@@ -43,7 +43,9 @@ export default async function TeamLeagueDetailPage({ params }: Props) {
           {data.teams.map((team) => (
             <div key={team.id} style={{ padding: "0.75rem", borderRadius: "10px", background: "#f8fafc", minWidth: 0, overflowWrap: "anywhere" }}>
               <strong>{team.team_name}</strong>
-              <div style={{ color: "#475569" }}>{team.players.map((player) => player.player_name).join(", ")}</div>
+              <div style={{ color: "#475569" }}>
+                {team.players.map((player) => `${player.player_name}${player.role === "alternate" ? " (alternate)" : ""}`).join(", ")}
+              </div>
             </div>
           ))}
         </div>

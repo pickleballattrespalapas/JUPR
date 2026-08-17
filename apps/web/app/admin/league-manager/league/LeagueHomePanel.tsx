@@ -79,6 +79,51 @@ function leagueHref(path: string, leagueId: string, leagueName: string, leagueTy
   return leagueRouteHref(path, { leagueId, leagueName, leagueType });
 }
 
+function moduleDescriptionsFor(status: string) {
+  if (status === "paused") {
+    return {
+      results: "Review standings, records, ratings, and weekly results while league play is paused.",
+      settings: "Review the saved schedule, courts, rules, ratings, and defaults before resuming.",
+      roster: "Review current members before resuming league play.",
+      live: "Review completed rounds and recovery history; new rounds stay paused.",
+      awards: "Review award readiness while league play is paused.",
+      teams: "Review teams, substitutes, schedules, standings, and playoff readiness before resuming.",
+      print: "Print the current schedule, standings, leaders, and roster checklist."
+    };
+  }
+  if (status === "ended") {
+    return {
+      results: "Review final standings, records, ratings, and weekly results.",
+      settings: "Review the final saved schedule, courts, rules, ratings, and defaults.",
+      roster: "Review the final league roster.",
+      live: "Review completed league-night rounds and recovery history.",
+      awards: "Review and finish end-of-league awards before archiving.",
+      teams: "Review final teams, schedules, standings, and playoff results.",
+      print: "Print the final schedule, standings, leaders, and roster checklist."
+    };
+  }
+  if (status === "archived") {
+    return {
+      results: "Review archived standings, records, ratings, and weekly results.",
+      settings: "Review the archived league configuration.",
+      roster: "Review the archived league roster.",
+      live: "Review archived league-night rounds and recovery history.",
+      awards: "Review archived award results and verification history.",
+      teams: "Review archived teams, schedules, standings, and playoff results.",
+      print: "Print the archived schedule, standings, leaders, and roster checklist."
+    };
+  }
+  return {
+    results: "Standings, records, ratings, and weekly results.",
+    settings: "Schedule, courts, rules, ratings, and defaults.",
+    roster: "Search, add, remove, and review league members.",
+    live: "Run and recover league-night scoring.",
+    awards: "Configure, review, mint, and archive awards.",
+    teams: "Registration, teams, substitutes, schedules, standings, and playoffs.",
+    print: "Open the printable schedule, standings, leaders, and roster checklist."
+  };
+}
+
 export default function LeagueHomePanel({ apiBase, clubId, status, initialLeagueId, initialLeague, initialLeagueType }: Props) {
   const router = useRouter();
   const { accessToken, loading: sessionLoading } = useAdminSession();
@@ -204,6 +249,25 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
   const leagueName = detail?.league.league_name || initialLeague;
   const leagueId = String(detail?.league.league_id || initialLeagueId || leagueName).trim();
   const lifecycleActions = detail?.capabilities?.lifecycle_actions || (detail ? lifecycleActionsFor(detail.league.status) : []);
+  const leagueStatus = String(detail?.league.status || "").trim().toLowerCase();
+  const moduleDescriptions = moduleDescriptionsFor(leagueStatus);
+  const hasLifecycleIntegrityError = Boolean(
+    detail?.validation?.errors?.some((item) =>
+      item.toLowerCase().startsWith("league lifecycle state is inconsistent")
+    )
+  );
+  const setupNotesAreHistorical = (leagueStatus === "ended" || leagueStatus === "archived")
+    && !hasLifecycleIntegrityError;
+  const setupAttentionHeading = leagueStatus === "paused"
+    ? "League setup needs attention before play resumes"
+    : setupNotesAreHistorical
+      ? `${leagueStatus === "archived" ? "Archived" : "Saved"} setup notes`
+      : "League setup needs attention";
+  const setupAttentionIntro = leagueStatus === "paused"
+    ? "Review these items before resuming league play."
+    : setupNotesAreHistorical
+      ? `These notes describe the ${leagueStatus} league's saved setup; no lifecycle action is required.`
+      : "Review these items before starting or continuing league play.";
 
   if (!status.enabled) {
     return <article style={{ ...cardStyle, background: "#f8fafc" }}>League Manager is currently unavailable.</article>;
@@ -250,13 +314,13 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
           <section aria-label={`${leagueName} modules`}>
             <h2>League tools</h2>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
-              <Link href={leagueHref("/admin/league-manager/results", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Results</strong><span style={{ color: "#475569" }}>Standings, records, ratings, and weekly results.</span></Link>
-              <Link href={leagueHref("/admin/league-manager/settings", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Settings</strong><span style={{ color: "#475569" }}>Schedule, courts, rules, ratings, and defaults.</span></Link>
-              <Link href={leagueHref("/admin/league-manager/roster", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Roster</strong><span style={{ color: "#475569" }}>Search, add, remove, and review league members.</span></Link>
-              <Link href={leagueHref("/admin/league-manager/live", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Live rounds</strong><span style={{ color: "#475569" }}>Run and recover league-night scoring.</span></Link>
-              <Link href={leagueHref("/admin/league-manager/awards", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Awards</strong><span style={{ color: "#475569" }}>Configure, review, mint, and archive awards.</span></Link>
-              {isTeamLeagueType(leagueType) ? <Link href={leagueHref("/admin/league-manager/teams", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Team league</strong><span style={{ color: "#475569" }}>Registration, teams, substitutes, schedules, standings, and playoffs.</span></Link> : null}
-              <Link href={leagueHref("/admin/league-manager/print", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>League night printout</strong><span style={{ color: "#475569" }}>Open the printable schedule, standings, leaders, and roster checklist.</span></Link>
+              <Link href={leagueHref("/admin/league-manager/results", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Results</strong><span style={{ color: "#475569" }}>{moduleDescriptions.results}</span></Link>
+              <Link href={leagueHref("/admin/league-manager/settings", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Settings</strong><span style={{ color: "#475569" }}>{moduleDescriptions.settings}</span></Link>
+              <Link href={leagueHref("/admin/league-manager/roster", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Roster</strong><span style={{ color: "#475569" }}>{moduleDescriptions.roster}</span></Link>
+              <Link href={leagueHref("/admin/league-manager/live", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Live rounds</strong><span style={{ color: "#475569" }}>{moduleDescriptions.live}</span></Link>
+              <Link href={leagueHref("/admin/league-manager/awards", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Awards</strong><span style={{ color: "#475569" }}>{moduleDescriptions.awards}</span></Link>
+              {isTeamLeagueType(leagueType) ? <Link href={leagueHref("/admin/league-manager/teams", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Team league</strong><span style={{ color: "#475569" }}>{moduleDescriptions.teams}</span></Link> : null}
+              <Link href={leagueHref("/admin/league-manager/print", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>League night printout</strong><span style={{ color: "#475569" }}>{moduleDescriptions.print}</span></Link>
             </div>
           </section>
 
@@ -300,9 +364,17 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
           </article>
 
           {detail.validation && !detail.validation.valid ? (
-            <article role="alert" style={{ ...cardStyle, background: "#fef2f2", borderColor: "#fecaca" }}>
-              <h2 style={{ marginTop: 0 }}>League setup needs attention</h2>
-              <ul style={{ color: "#b91c1c" }}>{detail.validation.errors.map((item) => <li key={item}>{item}</li>)}</ul>
+            <article
+              role={setupNotesAreHistorical ? undefined : "alert"}
+              style={{
+                ...cardStyle,
+                background: setupNotesAreHistorical ? "#f8fafc" : leagueStatus === "paused" ? "#fffbeb" : "#fef2f2",
+                borderColor: setupNotesAreHistorical ? "#cbd5e1" : leagueStatus === "paused" ? "#fde68a" : "#fecaca"
+              }}
+            >
+              <h2 style={{ marginTop: 0 }}>{setupAttentionHeading}</h2>
+              <p style={{ color: setupNotesAreHistorical ? "#475569" : leagueStatus === "paused" ? "#92400e" : "#7f1d1d" }}>{setupAttentionIntro}</p>
+              <ul style={{ color: setupNotesAreHistorical ? "#475569" : leagueStatus === "paused" ? "#92400e" : "#b91c1c" }}>{detail.validation.errors.map((item) => <li key={item}>{item}</li>)}</ul>
             </article>
           ) : null}
         </>

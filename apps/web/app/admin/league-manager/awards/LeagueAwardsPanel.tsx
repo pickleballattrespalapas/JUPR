@@ -587,7 +587,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
           <ConfirmAction
             triggerLabel={workflowStatus === "mint_failed" || workflowStatus === "minting" ? "Retry mint and verification" : "Mint and verify"}
             title="Mint and verify these league awards?"
-            description={`FastAPI will mint the reviewed award set and verify every expected badge row. Expected rows: ${wizard.mint?.expected_count ?? previewAwards.length}.`}
+            description={`The server will publish the reviewed award set and verify every expected badge record. Expected records: ${wizard.mint?.expected_count ?? previewAwards.length}.`}
             confirmLabel="Yes, mint and verify"
             confirmationText="MINT AWARDS"
             disabled={!mintReady}

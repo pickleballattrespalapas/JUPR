@@ -296,7 +296,7 @@ def test_process_matches_unrated_plan_has_match_but_no_aggregate_writes(
     assert sb.tables["matches"] == []
 
 
-def test_process_matches_without_rating_scope_keeps_legacy_league_updates(monkeypatch):
+def test_process_matches_without_metadata_does_not_create_unmanaged_league_ratings(monkeypatch):
     _patch_side_effects(monkeypatch)
     sb = _Supabase()
     sb.tables["players"] = _players_df().to_dict("records")
@@ -309,7 +309,8 @@ def test_process_matches_without_rating_scope_keeps_legacy_league_updates(monkey
         df_leagues=pd.DataFrame(),
         df_meta=pd.DataFrame(),
     )
-    assert len(sb.tables["league_ratings"]) == 4
+    assert sb.tables["league_ratings"] == []
+    assert len(sb.tables["matches"]) == 1
 
 
 def test_process_matches_insert_falls_back_when_rating_scope_column_missing(monkeypatch):

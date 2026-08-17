@@ -13,6 +13,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from jupr_app.data.load import load_data
 from jupr_app.domain.league_analytics import compute_team_league_standings
+from jupr_app.domain.team_league_roster import (
+    TEAM_LEAGUE_TEAM_SIZES,
+    normalize_player_gender,
+    normalize_roster_settings,
+    normalize_team_category,
+    validate_playing_lineup,
+    validate_team_members,
+)
 from jupr_app.domain.notifications.team_league_partner_invitation_email import (
     send_team_league_partner_invitation_email,
 )
@@ -30,6 +38,9 @@ from jupr_app.services.staging_write_guard import (
 TEAM_SIGNUP_CONFIRMATION = "REGISTER TEAM"
 SOLO_SIGNUP_CONFIRMATION = "JOIN PARTNER WAITLIST"
 SAVE_SETTINGS_CONFIRMATION = "SAVE TEAM LEAGUE"
+CREATE_TEAM_CONFIRMATION = "CREATE TEAM"
+UPDATE_ROSTER_CONFIRMATION = "UPDATE TEAM ROSTER"
+UPDATE_SUBSTITUTE_POOL_CONFIRMATION = "UPDATE SUBSTITUTE POOL"
 PAIR_WAITLIST_CONFIRMATION = "PAIR WAITLIST PLAYERS"
 WITHDRAW_WAITLIST_CONFIRMATION = "WITHDRAW WAITLIST PLAYERS"
 COMMIT_SCHEDULE_CONFIRMATION = "PUBLISH TEAM LEAGUE SCHEDULE"
@@ -50,8 +61,6 @@ PUBLIC_VISIBLE_STATUSES = {
     "archived",
 }
 PUBLIC_MANAGER_VISIBLE_STATUSES = {"active", "ended"}
-TEAM_LEAGUE_TEAM_SIZES = {2}
-TEAM_LEAGUE_CATEGORIES = {"open", "mens", "womens", "mixed"}
 
 
 class TeamLeagueConflictError(RuntimeError):
@@ -110,17 +119,42 @@ def _fingerprint(value: Any) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
 
 
-def confirmed_roster_fingerprint(teams: Sequence[Mapping[str, Any]]) -> str:
-    evidence = "|".join(
-        (
-            f"{team.get('id')}:{int(team['captain_player_id'])}:"
-            f"{int(team['partner_player_id'])}"
+def confirmed_roster_fingerprint(
+    teams: Sequence[Mapping[str, Any]],
+    members: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
+    confirmed_ids = {
+        str(row.get("id")) for row in teams if row.get("status") == "confirmed"
+    }
+    normalized = [
+        row
+        for row in (members or [])
+        if str(row.get("team_id")) in confirmed_ids
+        and str(row.get("status") or "").lower() == "active"
+    ]
+    if normalized:
+        evidence = "|".join(
+            f"{row.get('team_id')}:{int(row['player_id'])}:{row.get('role')}"
+            for row in sorted(
+                normalized,
+                key=lambda row: (
+                    str(row.get("team_id") or ""),
+                    str(row.get("role") or ""),
+                    int(row.get("player_id") or 0),
+                ),
+            )
         )
-        for team in sorted(
-            [row for row in teams if row.get("status") == "confirmed"],
-            key=lambda row: str(row.get("id") or ""),
+    else:
+        evidence = "|".join(
+            (
+                f"{team.get('id')}:{int(team['captain_player_id'])}:captain|"
+                f"{team.get('id')}:{int(team['partner_player_id'])}:primary"
+            )
+            for team in sorted(
+                [row for row in teams if row.get("status") == "confirmed"],
+                key=lambda row: str(row.get("id") or ""),
+            )
         )
-    )
     return hashlib.sha256(evidence.encode("utf-8")).hexdigest()
 
 
@@ -278,39 +312,13 @@ def _team_size(settings: Mapping[str, Any]) -> int:
 
 
 def _team_category(value: Any) -> str:
-    clean = _text(value, 20).lower().replace("’", "'")
-    aliases = {
-        "men": "mens",
-        "men's": "mens",
-        "male": "mens",
-        "women": "womens",
-        "women's": "womens",
-        "female": "womens",
-        "coed": "mixed",
-    }
-    return aliases.get(clean, clean or "open")
+    return normalize_team_category(value)
 
 
 def _normalized_player_gender(value: Any) -> str | None:
     """Normalize the legacy player gender spellings used by club imports."""
 
-    clean = _text(value, 40).lower().replace("’", "'").replace("_", " ")
-    aliases = {
-        "m": "male",
-        "man": "male",
-        "men": "male",
-        "male": "male",
-        "men's": "male",
-        "mens": "male",
-        "f": "female",
-        "w": "female",
-        "woman": "female",
-        "women": "female",
-        "female": "female",
-        "women's": "female",
-        "womens": "female",
-    }
-    return aliases.get(clean)
+    return normalize_player_gender(value)
 
 
 def _enforce_team_category(
@@ -318,47 +326,16 @@ def _enforce_team_category(
 ) -> None:
     """Fail closed when a two-player roster does not satisfy its category."""
 
-    clean_category = _team_category(category)
-    if clean_category == "open":
-        return
-    if len(player_rows) != 2:
-        raise ValueError("Team eligibility requires exactly two player profiles.")
-
-    genders = [_normalized_player_gender(row.get("gender")) for row in player_rows]
-    unresolved = [
-        _text(row.get("name"), 160) or f"Player {_int(row.get('id')) or ''}".strip()
-        for row, gender in zip(player_rows, genders)
-        if gender is None
-    ]
-    if unresolved:
-        names = ", ".join(unresolved)
-        raise ValueError(
-            f"Team eligibility cannot verify the gender for {names}. "
-            "Update the player profile gender and try again."
-        )
-
-    eligible = (
-        clean_category == "mens" and genders == ["male", "male"]
-    ) or (
-        clean_category == "womens" and genders == ["female", "female"]
-    ) or (
-        clean_category == "mixed" and set(genders) == {"male", "female"}
-    )
-    if not eligible:
+    try:
+        validate_playing_lineup(category=category, player_rows=player_rows)
+    except ValueError as exc:
+        clean_category = _team_category(category)
         label = {
             "mens": "Men's",
             "womens": "Women's",
             "mixed": "Mixed",
-        }[clean_category]
-        requirement = {
-            "mens": "two players marked Male",
-            "womens": "two players marked Female",
-            "mixed": "one male and one female player",
-        }[clean_category]
-        raise ValueError(
-            f"{label} team eligibility requires {requirement}. "
-            "Update the player profiles or choose eligible players."
-        )
+        }.get(clean_category, "Team")
+        raise ValueError(f"{label} team eligibility: {exc}") from exc
 
 
 def _online_team_registration_supported(settings: Mapping[str, Any]) -> bool:
@@ -400,12 +377,92 @@ def _public_settings(row: Mapping[str, Any]) -> dict[str, Any]:
     } | {
         "team_size": _team_size(row),
         "team_category": _team_category(row.get("team_category")),
+        "max_alternates": _int(row.get("max_alternates")) or 0,
+        "substitute_pool_enabled": bool(row.get("substitute_pool_enabled", False)),
+        "mixed_required_men": _int(row.get("mixed_required_men")) or 1,
+        "mixed_required_women": _int(row.get("mixed_required_women")) or 1,
         "allow_substitutes": bool(row.get("allow_substitutes", False)),
         "registration_configured_open": configured_open,
         "registration_open": configured_open
         and online_registration_supported,
         "online_team_registration_supported": online_registration_supported,
     }
+
+
+def _legacy_member_rows(teams: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for team in teams:
+        for role, field in (
+            ("captain", "captain_player_id"),
+            ("primary", "partner_player_id"),
+        ):
+            player_id = _int(team.get(field))
+            if player_id is None:
+                continue
+            rows.append(
+                {
+                    "id": f"legacy:{team.get('id')}:{player_id}",
+                    "team_id": str(team.get("id")),
+                    "club_id": team.get("club_id"),
+                    "league_name": team.get("league_name"),
+                    "player_id": player_id,
+                    "role": role,
+                    "status": (
+                        "active"
+                        if team.get("status") == "confirmed"
+                        or (
+                            team.get("status") == "pending_partner"
+                            and role == "captain"
+                        )
+                        else "invited"
+                        if team.get("status") == "pending_partner"
+                        else "declined"
+                        if team.get("status") == "declined"
+                        else "removed"
+                    ),
+                    "legacy_projection": True,
+                }
+            )
+    return rows
+
+
+def _normalized_members(
+    teams: Sequence[Mapping[str, Any]],
+    members: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    normalized = [dict(row) for row in members]
+    team_ids = {str(row.get("team_id")) for row in normalized}
+    normalized.extend(
+        row
+        for row in _legacy_member_rows(teams)
+        if str(row.get("team_id")) not in team_ids
+    )
+    return normalized
+
+
+def _team_members(
+    members: Sequence[Mapping[str, Any]], team_id: Any
+) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in members
+        if str(row.get("team_id")) == str(team_id)
+        and str(row.get("status") or "").lower() in {"invited", "active"}
+    ]
+
+
+def _team_roster_complete(
+    team: Mapping[str, Any],
+    members: Sequence[Mapping[str, Any]],
+    settings: Mapping[str, Any],
+) -> bool:
+    active_primary = [
+        row
+        for row in _team_members(members, team.get("id"))
+        if str(row.get("status") or "").lower() == "active"
+        and str(row.get("role") or "primary").lower() in {"captain", "primary"}
+    ]
+    return len(active_primary) == _team_size(settings)
 
 
 def _manager_league_status(row: Mapping[str, Any] | None) -> str:
@@ -496,7 +553,24 @@ def get_public_team_league(
         },
         order="team_name",
     )
-    confirmed = [row for row in teams if row.get("status") == "confirmed"]
+    member_rows = _normalized_members(
+        teams,
+        _fetch_rows(
+            supabase,
+            "team_league_team_members",
+            filters={
+                "club_id": str(club_id),
+                "league_name": _text(league_name, 120),
+            },
+            order="created_at",
+        ),
+    )
+    confirmed = [
+        row
+        for row in teams
+        if row.get("status") == "confirmed"
+        and _team_roster_complete(row, member_rows, settings)
+    ]
     fixtures = _fetch_rows(
         supabase,
         "team_league_fixtures",
@@ -506,14 +580,13 @@ def get_public_team_league(
         },
         order="scheduled_at",
     )
+    confirmed_ids = {str(team.get("id")) for team in confirmed}
     player_ids = {
-        int(player_id)
-        for team in confirmed
-        for player_id in (
-            _int(team.get("captain_player_id")),
-            _int(team.get("partner_player_id")),
-        )
-        if player_id is not None
+        int(row["player_id"])
+        for row in member_rows
+        if str(row.get("team_id")) in confirmed_ids
+        and str(row.get("status") or "").lower() == "active"
+        and _int(row.get("player_id")) is not None
     }
     all_player_rows = _fetch_rows(
         supabase, "players", filters={"club_id": str(club_id)}, order="name"
@@ -529,13 +602,26 @@ def get_public_team_league(
             "team_name": _text(team.get("team_name"), 120),
             "players": [
                 {
-                    "player_id": int(team[field]),
+                    "player_id": int(member["player_id"]),
                     "player_name": names.get(
-                        int(team[field]), f"Player {int(team[field])}"
+                        int(member["player_id"]),
+                        f"Player {int(member['player_id'])}",
                     ),
+                    "role": str(member.get("role") or "primary"),
                 }
-                for field in ("captain_player_id", "partner_player_id")
+                for member in sorted(
+                    _team_members(member_rows, team.get("id")),
+                    key=lambda row: (
+                        {"captain": 0, "primary": 1, "alternate": 2}.get(
+                            str(row.get("role")), 9
+                        ),
+                        int(row.get("player_id") or 0),
+                    ),
+                )
+                if str(member.get("status") or "").lower() == "active"
             ],
+            "team_size": _team_size(settings),
+            "roster_complete": True,
         }
         for team in confirmed
     ]
@@ -587,6 +673,7 @@ def get_public_team_league(
                     if row.get("rating") not in (None, "")
                     else None
                 ),
+                "gender": row.get("gender"),
             }
             for row in all_player_rows
             if _int(row.get("id")) is not None
@@ -901,6 +988,21 @@ def get_admin_team_league(
         filters={"club_id": str(club_id), "league_name": clean_league},
         order="team_name",
     )
+    members = _normalized_members(
+        teams,
+        _fetch_rows(
+            supabase,
+            "team_league_team_members",
+            filters={"club_id": str(club_id), "league_name": clean_league},
+            order="created_at",
+        ),
+    )
+    substitute_pool = _fetch_rows(
+        supabase,
+        "team_league_substitute_pool",
+        filters={"club_id": str(club_id), "league_name": clean_league},
+        order="created_at",
+    )
     waitlist = _fetch_rows(
         supabase,
         "team_league_solo_waitlist",
@@ -924,6 +1026,7 @@ def get_admin_team_league(
             "id": int(row["id"]),
             "name": _text(row.get("name"), 160),
             "rating": row.get("rating"),
+            "gender": row.get("gender"),
             "active": bool(row.get("active", True))
             and not bool(row.get("inactive_at")),
         }
@@ -949,11 +1052,28 @@ def get_admin_team_league(
         for operation in operations
         if operation.get("status") == "started"
     ]
-    roster_fingerprint = confirmed_roster_fingerprint(teams)
+    player_by_id = {int(row["id"]): row for row in players}
+    for team in teams:
+        team["members"] = [
+            {
+                **row,
+                "player_name": player_by_id.get(
+                    int(row.get("player_id") or 0), {}
+                ).get("name"),
+                "gender": player_by_id.get(
+                    int(row.get("player_id") or 0), {}
+                ).get("gender"),
+            }
+            for row in _team_members(members, team.get("id"))
+        ]
+        team["roster_complete"] = _team_roster_complete(team, members, settings)
+    roster_fingerprint = confirmed_roster_fingerprint(teams, members)
     return {
         "ok": True,
         "settings": settings,
         "teams": teams,
+        "members": members,
+        "substitute_pool": substitute_pool,
         "waitlist": waitlist,
         "players": players,
         "fixtures": fixtures,
@@ -980,21 +1100,22 @@ def save_admin_team_league_settings(
     _assert_admin_write_enabled()
     _confirm(confirmation_text, SAVE_SETTINGS_CONFIRMATION)
     key = _operation_key(idempotency_key)
-    team_size = _int(settings.get("team_size"))
-    if team_size is None:
-        team_size = 2
-    if team_size not in TEAM_LEAGUE_TEAM_SIZES:
-        raise ValueError(
-            "Team size is fixed at 2 players until multi-member rosters are supported."
-        )
-    team_category = _team_category(settings.get("team_category"))
-    if team_category not in TEAM_LEAGUE_CATEGORIES:
-        raise ValueError("Choose Open, Men's, Women's, or Mixed team eligibility.")
+    roster_policy = normalize_roster_settings(settings)
+    team_size = int(roster_policy["team_size"])
+    team_category = str(roster_policy["team_category"])
     allow_substitutes = bool(settings.get("allow_substitutes"))
+    if roster_policy["substitute_pool_enabled"] and not allow_substitutes:
+        raise ValueError("Enable substitutes before enabling the substitute pool.")
     clean = {
         "registration_open": bool(settings.get("registration_open")),
         "team_size": team_size,
         "team_category": team_category,
+        "max_alternates": int(roster_policy["max_alternates"]),
+        "substitute_pool_enabled": bool(
+            roster_policy["substitute_pool_enabled"]
+        ),
+        "mixed_required_men": int(roster_policy["mixed_required_men"]),
+        "mixed_required_women": int(roster_policy["mixed_required_women"]),
         "allow_substitutes": allow_substitutes,
         "playoff_format": _text(settings.get("playoff_format"), 80) or "none",
         "playoff_team_count": _int(settings.get("playoff_team_count")),
@@ -1026,7 +1147,7 @@ def save_admin_team_league_settings(
     }
     return _rpc(
         supabase,
-        "team_league_save_settings_v1",
+        "team_league_save_settings_v2",
         {
             "p_operation_id": str(uuid4()),
             "p_club_id": str(club_id),
@@ -1035,6 +1156,268 @@ def save_admin_team_league_settings(
             "p_request_fingerprint": _fingerprint(request),
             "p_expected_settings_version": int(expected_settings_version),
             "p_settings": clean,
+            "p_actor_email": _text(actor_email, 320),
+            "p_actor_role": _text(actor_role, 80),
+            "p_source": _text(source, 160),
+        },
+    )
+
+
+def create_admin_team_league_team(
+    supabase: Any,
+    *,
+    club_id: str,
+    league_name: str,
+    team_name: str,
+    captain_player_id: Any,
+    captain_contact_email: str,
+    expected_roster_version: int,
+    idempotency_key: str,
+    confirmation_text: str,
+    actor_email: str,
+    actor_role: str,
+    initial_primary_player_id: Any = None,
+    initial_primary_contact_email: str = "",
+    source: str = "next_team_league_create_team",
+) -> dict[str, Any]:
+    """Create a forming normalized team with a captain and optional primary."""
+
+    _assert_admin_write_enabled()
+    _confirm(confirmation_text, CREATE_TEAM_CONFIRMATION)
+    clean_name = _text(team_name, 120)
+    if not clean_name:
+        raise ValueError("Enter a team name.")
+    captain_id = _int(captain_player_id)
+    primary_id = _int(initial_primary_player_id)
+    if captain_id is None:
+        raise ValueError("Choose an active captain.")
+    if primary_id is not None and primary_id == captain_id:
+        raise ValueError("The captain and initial primary must be different players.")
+    captain_email = _email(captain_contact_email)
+    primary_email = (
+        _email(initial_primary_contact_email)
+        if str(initial_primary_contact_email or "").strip()
+        else ""
+    )
+    detail = get_admin_team_league(
+        supabase, club_id=str(club_id), league_name=league_name
+    )
+    player_by_id = {int(row["id"]): row for row in detail["players"]}
+    selected_ids = [captain_id] + ([primary_id] if primary_id is not None else [])
+    if any(
+        player_id not in player_by_id or not player_by_id[player_id].get("active")
+        for player_id in selected_ids
+    ):
+        raise ValueError("Choose active club players for the forming team.")
+    candidates = [
+        {
+            "player_id": captain_id,
+            "player_name": player_by_id[captain_id].get("name"),
+            "gender": player_by_id[captain_id].get("gender"),
+            "role": "captain",
+            "status": "active",
+        }
+    ]
+    if primary_id is not None:
+        candidates.append(
+            {
+                "player_id": primary_id,
+                "player_name": player_by_id[primary_id].get("name"),
+                "gender": player_by_id[primary_id].get("gender"),
+                "role": "primary",
+                "status": "active",
+            }
+        )
+    validate_team_members(
+        settings=detail["settings"],
+        members=candidates,
+        require_complete=len(candidates) == _team_size(detail["settings"]),
+    )
+    clean_league_name = _text(league_name, 120)
+    request = {
+        "league_name": clean_league_name,
+        "team_name": clean_name,
+        "captain_player_id": captain_id,
+        "captain_contact_email": captain_email,
+        "initial_primary_player_id": primary_id,
+        "initial_primary_contact_email": primary_email,
+        "expected_roster_version": int(expected_roster_version),
+    }
+    return _rpc(
+        supabase,
+        "team_league_create_team_v1",
+        {
+            "p_operation_id": str(uuid4()),
+            "p_club_id": str(club_id),
+            "p_league_name": clean_league_name,
+            "p_team_name": clean_name,
+            "p_captain_player_id": captain_id,
+            "p_captain_contact_email": captain_email,
+            "p_initial_primary_player_id": primary_id,
+            "p_initial_primary_contact_email": primary_email or None,
+            "p_expected_roster_version": int(expected_roster_version),
+            "p_idempotency_key": _operation_key(idempotency_key),
+            "p_request_fingerprint": _fingerprint(request),
+            "p_actor_email": _text(actor_email, 320),
+            "p_actor_role": _text(actor_role, 80),
+            "p_source": _text(source, 160),
+        },
+    )
+
+
+def admin_team_league_roster_action(
+    supabase: Any,
+    *,
+    club_id: str,
+    league_name: str,
+    action: str,
+    player_id: Any,
+    expected_roster_version: int,
+    idempotency_key: str,
+    confirmation_text: str,
+    actor_email: str,
+    actor_role: str,
+    team_id: str | None = None,
+    member_role: str = "primary",
+    member_status: str = "active",
+    contact_email: str = "",
+    note: str = "",
+    source: str = "next_team_league_roster",
+) -> dict[str, Any]:
+    """Apply one normalized assigned-roster or substitute-pool mutation."""
+
+    _assert_admin_write_enabled()
+    clean_action = _text(action, 40).lower()
+    if clean_action not in {"add_member", "remove_member", "set_pool"}:
+        raise ValueError("Choose add member, remove member, or update substitute pool.")
+    _confirm(
+        confirmation_text,
+        UPDATE_SUBSTITUTE_POOL_CONFIRMATION
+        if clean_action == "set_pool"
+        else UPDATE_ROSTER_CONFIRMATION,
+    )
+    clean_player_id = _int(player_id)
+    if clean_player_id is None:
+        raise ValueError("Choose an active club player.")
+    detail = get_admin_team_league(
+        supabase, club_id=str(club_id), league_name=league_name
+    )
+    player = next(
+        (row for row in detail["players"] if int(row["id"]) == clean_player_id),
+        None,
+    )
+    if not player or not player.get("active"):
+        raise ValueError("Choose an active club player.")
+
+    clean_team_id = str(team_id or "").strip() or None
+    clean_role = _text(member_role, 20).lower()
+    clean_status = _text(member_status, 20).lower()
+    if clean_action in {"add_member", "remove_member"}:
+        team = next(
+            (row for row in detail["teams"] if str(row.get("id")) == clean_team_id),
+            None,
+        )
+        if not team:
+            raise ValueError("Choose a team in this league.")
+        if clean_action == "add_member":
+            if clean_role not in {"captain", "primary", "alternate"}:
+                raise ValueError("Choose captain, primary, or alternate.")
+            if clean_role == "captain" and clean_player_id != int(
+                team.get("captain_player_id") or 0
+            ):
+                raise ValueError(
+                    "The legacy team captain is stable; add this player as a primary or alternate."
+                )
+            if clean_player_id == int(team.get("captain_player_id") or 0) and (
+                clean_role != "captain"
+            ):
+                raise ValueError(
+                    "The team captain must keep the captain role."
+                )
+            if clean_status not in {"invited", "active"}:
+                raise ValueError("Choose invited or active member status.")
+            if any(
+                int(row.get("player_id") or 0) == clean_player_id
+                and str(row.get("status") or "")
+                in {"available", "unavailable"}
+                for row in detail.get("substitute_pool") or []
+            ):
+                raise ValueError(
+                    "Withdraw this player from the substitute pool before assigning them to a team."
+                )
+            candidate = [
+                row
+                for row in _team_members(detail.get("members") or [], clean_team_id)
+                if int(row.get("player_id") or 0) != clean_player_id
+            ] + [
+                {
+                    "player_id": clean_player_id,
+                    "player_name": player.get("name"),
+                    "gender": player.get("gender"),
+                    "role": clean_role,
+                    "status": clean_status,
+                }
+            ]
+            active_primary_count = len(
+                [
+                    row
+                    for row in candidate
+                    if str(row.get("status")) == "active"
+                    and str(row.get("role")) in {"captain", "primary"}
+                ]
+            )
+            validate_team_members(
+                settings=detail["settings"],
+                members=candidate,
+                require_complete=active_primary_count
+                == _team_size(detail["settings"]),
+            )
+    else:
+        if clean_status not in {"available", "unavailable", "withdrawn"}:
+            raise ValueError("Choose available, unavailable, or withdrawn.")
+        if clean_status != "withdrawn" and not bool(
+            detail["settings"].get("substitute_pool_enabled")
+        ):
+            raise ValueError("Enable the substitute pool in Team League settings first.")
+        if clean_status != "withdrawn" and any(
+            int(row.get("player_id") or 0) == clean_player_id
+            and str(row.get("status") or "") in {"invited", "active"}
+            for row in detail.get("members") or []
+        ):
+            raise ValueError(
+                "A player assigned to a team cannot also join the substitute pool."
+            )
+
+    clean_email = _email(contact_email) if str(contact_email or "").strip() else ""
+    clean_league_name = _text(league_name, 120)
+    request = {
+        "league_name": clean_league_name,
+        "action": clean_action,
+        "team_id": clean_team_id,
+        "player_id": clean_player_id,
+        "member_role": clean_role if clean_action == "add_member" else None,
+        "member_status": clean_status,
+        "contact_email": clean_email,
+        "note": _text(note, 500),
+        "expected_roster_version": int(expected_roster_version),
+    }
+    return _rpc(
+        supabase,
+        "team_league_apply_roster_action_v1",
+        {
+            "p_operation_id": str(uuid4()),
+            "p_club_id": str(club_id),
+            "p_league_name": clean_league_name,
+            "p_action": clean_action,
+            "p_team_id": clean_team_id,
+            "p_player_id": clean_player_id,
+            "p_member_role": clean_role if clean_action == "add_member" else None,
+            "p_member_status": clean_status,
+            "p_contact_email": clean_email or None,
+            "p_note": request["note"] or None,
+            "p_expected_roster_version": int(expected_roster_version),
+            "p_idempotency_key": _operation_key(idempotency_key),
+            "p_request_fingerprint": _fingerprint(request),
             "p_actor_email": _text(actor_email, 320),
             "p_actor_role": _text(actor_role, 80),
             "p_source": _text(source, 160),
@@ -1083,6 +1466,11 @@ def admin_team_league_waitlist_action(
         )
         if not settings:
             raise ValueError("Team league not found.")
+        if _team_size(settings) != 2:
+            raise ValueError(
+                "Pairing two waitlisted players is available only for a two-player roster. "
+                "Manage larger team rosters directly until partial-team intake is implemented."
+            )
         if _team_category(settings.get("team_category")) != "open":
             waitlist_rows = [
                 _one(
@@ -1337,8 +1725,12 @@ def build_admin_team_league_schedule_preview(
     )
     settings = dict(detail["settings"])
     teams = [
-        row for row in detail["teams"] if str(row.get("status") or "") == "confirmed"
+        row
+        for row in detail["teams"]
+        if str(row.get("status") or "") == "confirmed"
+        and bool(row.get("roster_complete"))
     ]
+    roster_fingerprint = confirmed_roster_fingerprint(teams, detail.get("members"))
     clean_phase = _text(phase, 20).lower()
     if clean_phase == "regular":
         fixtures = generate_round_robin_fixtures(
@@ -1373,7 +1765,7 @@ def build_admin_team_league_schedule_preview(
             settings.get("standings_version") or 0
         ),
         "expected_roster_version": int(settings.get("roster_version") or 0),
-        "confirmed_roster_fingerprint": confirmed_roster_fingerprint(teams),
+        "confirmed_roster_fingerprint": roster_fingerprint,
         "preview_fingerprint": _fingerprint(
             {
                 "phase": clean_phase,
@@ -1383,9 +1775,7 @@ def build_admin_team_league_schedule_preview(
                     settings.get("standings_version") or 0
                 ),
                 "roster_version": int(settings.get("roster_version") or 0),
-                "confirmed_roster_fingerprint": confirmed_roster_fingerprint(
-                    teams
-                ),
+                "confirmed_roster_fingerprint": roster_fingerprint,
             }
         ),
     }
@@ -1489,7 +1879,11 @@ def _validate_fixture_players(
     fixture: Mapping[str, Any],
     team_a_player_ids: Sequence[int],
     team_b_player_ids: Sequence[int],
+    members: Sequence[Mapping[str, Any]],
+    substitute_pool: Sequence[Mapping[str, Any]],
+    team_category: Any,
     allow_substitutes: bool,
+    substitute_pool_enabled: bool,
 ) -> list[dict[str, Any]]:
     side_a = [int(value) for value in team_a_player_ids]
     side_b = [int(value) for value in team_b_player_ids]
@@ -1502,37 +1896,75 @@ def _validate_fixture_players(
     team_b = by_id.get(str(fixture.get("team_b_id")))
     if not team_a or not team_b:
         raise ValueError("Both scheduled teams are required.")
+    validate_playing_lineup(
+        category=team_category,
+        player_rows=[players[player_id] for player_id in side_a],
+    )
+    validate_playing_lineup(
+        category=team_category,
+        player_rows=[players[player_id] for player_id in side_b],
+    )
     roster_a = {
-        int(team_a["captain_player_id"]),
-        int(team_a["partner_player_id"]),
+        int(row["player_id"])
+        for row in _team_members(members, team_a.get("id"))
+        if str(row.get("status") or "") == "active"
     }
     roster_b = {
-        int(team_b["captain_player_id"]),
-        int(team_b["partner_player_id"]),
+        int(row["player_id"])
+        for row in _team_members(members, team_b.get("id"))
+        if str(row.get("status") or "") == "active"
     }
+    if not roster_a:
+        roster_a = {
+            int(team_a["captain_player_id"]),
+            int(team_a["partner_player_id"]),
+        }
+    if not roster_b:
+        roster_b = {
+            int(team_b["captain_player_id"]),
+            int(team_b["partner_player_id"]),
+        }
     active_team_players = {
-        int(team[field])
-        for team in teams
-        if team.get("status") in {"confirmed", "pending_partner"}
-        for field in ("captain_player_id", "partner_player_id")
+        int(row["player_id"])
+        for row in members
+        if str(row.get("status") or "") in {"invited", "active"}
+    }
+    if not active_team_players:
+        active_team_players = {
+            int(team[field])
+            for team in teams
+            if team.get("status") in {"confirmed", "pending_partner"}
+            for field in ("captain_player_id", "partner_player_id")
+        }
+    available_pool = {
+        int(row["player_id"])
+        for row in substitute_pool
+        if str(row.get("status") or "") == "available"
     }
     substitutions: list[dict[str, Any]] = []
-    for side, scheduled in ((side_a, roster_a), (side_b, roster_b)):
+    for team, side, scheduled in (
+        (team_a, side_a, roster_a),
+        (team_b, side_b, roster_b),
+    ):
         extras = set(side) - scheduled
-        missing = scheduled - set(side)
         if extras and not allow_substitutes:
             raise ValueError("Substitutes are disabled for this league.")
-        if len(extras) != len(missing):
-            raise ValueError("The submitted lineup does not match its team.")
-        for incoming, outgoing in zip(sorted(extras), sorted(missing)):
+        if extras and not substitute_pool_enabled:
+            raise ValueError("Enable the shared substitute pool before using a substitute.")
+        for incoming in sorted(extras):
             if incoming in active_team_players:
                 raise ValueError(
                     "A substitute cannot be registered to another team in this league."
                 )
+            if incoming not in available_pool:
+                raise ValueError(
+                    "Every substitute must be available in this league's substitute pool."
+                )
             substitutions.append(
                 {
                     "incoming_player_id": incoming,
-                    "outgoing_player_id": outgoing,
+                    "team_id": str(team.get("id")),
+                    "source": "substitute_pool",
                 }
             )
     return substitutions
@@ -1684,8 +2116,14 @@ def score_admin_team_league_fixture(
             fixture=fixture,
             team_a_player_ids=[int(value) for value in clean_a if value is not None],
             team_b_player_ids=[int(value) for value in clean_b if value is not None],
+            members=detail.get("members") or [],
+            substitute_pool=detail.get("substitute_pool") or [],
+            team_category=detail["settings"].get("team_category"),
             allow_substitutes=bool(
                 detail["settings"].get("allow_substitutes")
+            ),
+            substitute_pool_enabled=bool(
+                detail["settings"].get("substitute_pool_enabled")
             ),
         )
     else:

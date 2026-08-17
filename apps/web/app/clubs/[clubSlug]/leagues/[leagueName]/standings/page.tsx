@@ -80,9 +80,14 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
     <section>
       <style>{`
         @media print {
+          @page { margin: 8mm; }
           .no-print { display: none !important; }
-          body { background: white !important; }
+          body { background: white !important; font-size: 10pt; }
           a { color: inherit !important; text-decoration: none !important; }
+          main { max-width: none !important; margin: 0 !important; padding: 0 !important; }
+          article { padding: 3mm !important; break-inside: avoid; page-break-inside: avoid; }
+          h1 { font-size: 18pt; margin-bottom: 2mm !important; }
+          h2 { font-size: 13pt; margin: 3mm 0 2mm !important; }
         }
       `}</style>
 

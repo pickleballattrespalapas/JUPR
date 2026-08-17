@@ -44,6 +44,10 @@ def test_profile_renders_every_parity_projection_and_format_label():
     assert "Singles" in source
     assert "Doubles" in source
     assert "Contact details, legal names, social identity keys, and subscription records are never included" in source
+    assert 'data-rating-series={item.format}' in source
+    assert 'data-rating-point={item.format}' in source
+    assert "Each format has its own line" in source
+    assert "coordinates.filter(({ point }) => point.match_format === definition.format)" in source
     assert "{error}" not in source
 
 

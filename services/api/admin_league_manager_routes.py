@@ -124,6 +124,7 @@ class AdminLeagueManagerSchedulePreviewRequest(BaseModel):
 class AdminLeagueManagerRosterMembershipRequest(BaseModel):
     action: str
     starting_rating: float | None = None
+    idempotency_key: str = Field(default="", max_length=160)
     confirmation_text: str = ""
     source: str = "next_league_manager_roster_update"
 
@@ -1560,6 +1561,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
                 source=payload.source,
+                idempotency_key=payload.idempotency_key,
             )
         except Exception as exc:
             _handle_common(exc)

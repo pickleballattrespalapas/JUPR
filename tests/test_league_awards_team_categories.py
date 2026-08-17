@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from jupr_app.services.admin_league_awards_service import (
     freeze_admin_league_awards,
     persist_admin_league_awards_preview,
@@ -17,6 +19,8 @@ def _storage() -> dict[str, list[dict]]:
                 "league_name": "Open",
                 "status": "active",
                 "is_active": True,
+                "league_type": "Team",
+                "match_format": "doubles",
                 "min_games": 1,
                 "awards_config": {},
                 "awards_config_version": 0,
@@ -139,6 +143,67 @@ def test_team_award_category_survives_freeze_preview_and_confirmation(
     assert award["recipient_type"] == "team"
     assert award["team_id"] == "team-a"
     assert award["recipient_name"] == "Aces"
+
+
+def test_award_catalog_only_exposes_measures_supported_by_league_format(
+    monkeypatch,
+) -> None:
+    _enable(monkeypatch)
+    storage = _storage()
+    supabase = FakeSupabase(storage)
+
+    team = save_admin_league_awards_config(
+        supabase,
+        club_id="club",
+        league_name="Open",
+        awards_config={"categories": {}},
+        expected_config_version=0,
+        actor_email="owner@example.com",
+        actor_role="club_owner",
+    )
+    assert "team_champion" in {row["key"] for row in team["award_catalog"]}
+
+    storage["leagues_metadata"][0].update(
+        league_type="Individual", match_format="singles"
+    )
+    individual = save_admin_league_awards_config(
+        supabase,
+        club_id="club",
+        league_name="Open",
+        awards_config={"categories": {}},
+        expected_config_version=1,
+        actor_email="owner@example.com",
+        actor_role="club_owner",
+    )
+    keys = {row["key"] for row in individual["award_catalog"]}
+    assert "team_champion" not in keys
+    assert "best_partnership" not in keys
+    assert "partner_variety" not in keys
+
+
+def test_individual_league_rejects_team_only_award_configuration(
+    monkeypatch,
+) -> None:
+    _enable(monkeypatch)
+    storage = _storage()
+    storage["leagues_metadata"][0].update(
+        league_type="Individual", match_format="doubles"
+    )
+
+    with pytest.raises(ValueError, match="Unknown award categories: team_champion"):
+        save_admin_league_awards_config(
+            FakeSupabase(storage),
+            club_id="club",
+            league_name="Open",
+            awards_config={
+                "categories": {
+                    "team_champion": {"enabled": True, "depth": 1, "minimum": 1}
+                }
+            },
+            expected_config_version=0,
+            actor_email="owner@example.com",
+            actor_role="club_owner",
+        )
 
 
 def test_player_co_winners_survive_freeze_preview_and_confirmation(

@@ -588,6 +588,23 @@ def test_substitutes_follow_the_saved_setup_and_cannot_be_on_another_team() -> N
     ]
     fixture = {"team_a_id": "a", "team_b_id": "b"}
     active_players = {player_id: {"id": player_id} for player_id in range(1, 8)}
+    members = [
+        {
+            "team_id": team["id"],
+            "player_id": team[field],
+            "role": "captain" if field == "captain_player_id" else "primary",
+            "status": "active",
+        }
+        for team in teams
+        for field in ("captain_player_id", "partner_player_id")
+    ]
+    pool = [{"player_id": 7, "status": "available"}]
+    normalized = {
+        "members": members,
+        "substitute_pool": pool,
+        "team_category": "open",
+        "substitute_pool_enabled": True,
+    }
 
     with pytest.raises(ValueError, match="disabled"):
         _validate_fixture_players(
@@ -597,6 +614,7 @@ def test_substitutes_follow_the_saved_setup_and_cannot_be_on_another_team() -> N
             team_a_player_ids=[1, 7],
             team_b_player_ids=[3, 4],
             allow_substitutes=False,
+            **normalized,
         )
 
     assert _validate_fixture_players(
@@ -606,7 +624,8 @@ def test_substitutes_follow_the_saved_setup_and_cannot_be_on_another_team() -> N
         team_a_player_ids=[1, 7],
         team_b_player_ids=[3, 4],
         allow_substitutes=True,
-    ) == [{"incoming_player_id": 7, "outgoing_player_id": 2}]
+        **normalized,
+    ) == [{"incoming_player_id": 7, "team_id": "a", "source": "substitute_pool"}]
 
     with pytest.raises(ValueError, match="another team"):
         _validate_fixture_players(
@@ -616,6 +635,7 @@ def test_substitutes_follow_the_saved_setup_and_cannot_be_on_another_team() -> N
             team_a_player_ids=[1, 5],
             team_b_player_ids=[3, 4],
             allow_substitutes=True,
+            **normalized,
         )
     with pytest.raises(ValueError, match="active club player"):
         _validate_fixture_players(
@@ -625,6 +645,7 @@ def test_substitutes_follow_the_saved_setup_and_cannot_be_on_another_team() -> N
             team_a_player_ids=[1, 7],
             team_b_player_ids=[3, 4],
             allow_substitutes=True,
+            **normalized,
         )
 
 

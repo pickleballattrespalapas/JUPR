@@ -98,14 +98,21 @@ function RatingTrend({ points, clubSlug }: { points: PublicRatingHistoryPoint[];
     const y = height - padding - ((Number(point.rating_after_jupr) - min) / span) * (height - padding * 2);
     return { point, x, y };
   });
+  const series = [
+    { format: "doubles", label: "Doubles", color: "#2563eb" },
+    { format: "singles", label: "Singles", color: "#7c3aed" }
+  ].map((definition) => ({
+    ...definition,
+    coordinates: coordinates.filter(({ point }) => point.match_format === definition.format)
+  })).filter((item) => item.coordinates.length > 0);
   return (
     <div data-testid="player-rating-trend" style={{ overflowX: "auto" }}>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Overall and singles JUPR trend by rated match" style={{ width: "100%", minWidth: "560px", height: "auto", border: "1px solid #e2e8f0", borderRadius: "10px", background: "#f8fafc" }}>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Separate doubles and singles JUPR trends by rated match" style={{ width: "100%", minWidth: "560px", height: "auto", border: "1px solid #e2e8f0", borderRadius: "10px", background: "#f8fafc" }}>
         <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#cbd5e1" />
-        <polyline points={coordinates.map(({ x, y }) => `${x},${y}`).join(" ")} fill="none" stroke="#2563eb" strokeWidth="4" strokeLinejoin="round" />
-        {coordinates.map(({ point, x, y }) => <circle key={`${point.match_id ?? point.match_number}-${point.match_number}`} cx={x} cy={y} r="5" fill={point.match_format === "singles" ? "#7c3aed" : "#2563eb"}><title>{`${formatDate(point.date)} · ${point.match_format_label} · ${ratingLabel(point.rating_after_jupr)}`}</title></circle>)}
+        {series.map((item) => item.coordinates.length > 1 ? <polyline key={item.format} data-rating-series={item.format} points={item.coordinates.map(({ x, y }) => `${x},${y}`).join(" ")} fill="none" stroke={item.color} strokeWidth="4" strokeLinejoin="round" /> : null)}
+        {series.flatMap((item) => item.coordinates.map(({ point, x, y }) => <circle key={`${item.format}-${point.match_id ?? point.match_number}-${point.match_number}`} data-rating-point={item.format} cx={x} cy={y} r="5" fill={item.color}><title>{`${formatDate(point.date)} · ${item.label} · ${ratingLabel(point.rating_after_jupr)}`}</title></circle>))}
       </svg>
-      <p style={{ margin: "0.45rem 0 0", color: "#475569", fontSize: "0.88rem" }}>Blue/purple points use stored server-side rating snapshots. Open a point&apos;s match from the history table for context.</p>
+      <p style={{ margin: "0.45rem 0 0", color: "#475569", fontSize: "0.88rem" }}>{series.map((item, index) => <span key={item.format}>{index ? " · " : ""}<span aria-hidden="true" style={{ color: item.color }}>●</span> {item.label}</span>)}. Each format has its own line so a switch between doubles and singles never looks like a rating jump or drop.</p>
       <ul style={{ display: "none" }}>{known.map((point) => <li key={`trend-${point.match_id ?? point.match_number}`}><Link href={`/clubs/${clubSlug}/matches/${point.match_id}`}>{formatDate(point.date)} {point.match_format_label} {ratingLabel(point.rating_after_jupr)}</Link></li>)}</ul>
     </div>
   );

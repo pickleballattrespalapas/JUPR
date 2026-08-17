@@ -17,8 +17,12 @@ type TeamSettings = {
   league_name: string;
   status?: string;
   registration_open?: boolean;
-  team_size?: 2;
+  team_size?: 2 | 3 | 4;
   team_category?: "open" | "mens" | "womens" | "mixed";
+  max_alternates?: number;
+  substitute_pool_enabled?: boolean;
+  mixed_required_men?: number;
+  mixed_required_women?: number;
   allow_substitutes?: boolean;
   playoff_format?: string;
   playoff_team_count?: number | null;
@@ -38,11 +42,15 @@ type TeamRow = {
   team_name: string;
   status: string;
   captain_player_id: number;
-  partner_player_id: number;
+  partner_player_id?: number | null;
   invitation_delivery_status?: string;
+  roster_complete?: boolean;
+  members?: TeamMemberRow[];
 };
+type TeamMemberRow = { id: string; team_id: string; player_id: number; role: "captain" | "primary" | "alternate"; status: string; player_name?: string | null; gender?: string | null };
+type SubstitutePoolRow = { id: string; player_id: number; status: "available" | "unavailable" | "withdrawn"; note?: string | null };
 type WaitlistRow = { id: string; player_id: number; status: string; note?: string | null };
-type PlayerRow = { id: number; name: string; rating?: number | null; active?: boolean };
+type PlayerRow = { id: number; name: string; rating?: number | null; gender?: string | null; active?: boolean };
 type FixtureRow = {
   id: string;
   phase: "regular" | "playoff";
@@ -72,6 +80,8 @@ type TeamLeagueDetail = {
   ok: boolean;
   settings: TeamSettings;
   teams: TeamRow[];
+  members: TeamMemberRow[];
+  substitute_pool: SubstitutePoolRow[];
   waitlist: WaitlistRow[];
   players: PlayerRow[];
   fixtures: FixtureRow[];
@@ -101,7 +111,12 @@ type RecoveryEvidence = {
 type WriteResponse = { ok?: boolean; committed?: boolean; operation_id?: string; message?: string };
 type SettingsDraft = {
   registrationOpen: boolean;
+  teamSize: string;
   teamCategory: string;
+  maxAlternates: string;
+  substitutePoolEnabled: boolean;
+  mixedRequiredMen: string;
+  mixedRequiredWomen: string;
   allowSubstitutes: boolean;
   playoffFormat: string;
   playoffTeamCount: string;
@@ -153,7 +168,12 @@ async function refreshAfterConfirmedWrite(refresh: () => Promise<void>): Promise
 function settingsDraft(settings?: TeamSettings | null): SettingsDraft {
   return {
     registrationOpen: Boolean(settings?.registration_open),
+    teamSize: String(settings?.team_size || 2),
     teamCategory: String(settings?.team_category || "open"),
+    maxAlternates: String(settings?.max_alternates || 0),
+    substitutePoolEnabled: Boolean(settings?.substitute_pool_enabled),
+    mixedRequiredMen: String(settings?.mixed_required_men || 1),
+    mixedRequiredWomen: String(settings?.mixed_required_women || 1),
     allowSubstitutes: Boolean(settings?.allow_substitutes),
     playoffFormat: String(settings?.playoff_format || "none"),
     playoffTeamCount: settings?.playoff_team_count == null ? "" : String(settings.playoff_team_count),
@@ -173,6 +193,45 @@ function teamName(detail: TeamLeagueDetail, teamId?: string | null): string {
 
 function playerName(detail: TeamLeagueDetail, playerId: number): string {
   return detail.players.find((player) => player.id === playerId)?.name || `Player ${playerId}`;
+}
+
+function activeTeamMembers(team?: TeamRow): TeamMemberRow[] {
+  return (team?.members || []).filter((member) => member.status === "active");
+}
+
+function defaultPlayingLineup(team?: TeamRow): number[] {
+  const members = activeTeamMembers(team)
+    .filter((member) => member.role !== "alternate")
+    .slice(0, 2)
+    .map((member) => member.player_id);
+  if (members.length === 2) return members;
+  return team
+    ? [team.captain_player_id, team.partner_player_id]
+      .filter((playerId): playerId is number => typeof playerId === "number")
+      .slice(0, 2)
+    : [];
+}
+
+function playingOptions(detail: TeamLeagueDetail, team?: TeamRow): Array<PlayerRow & { sourceLabel: string }> {
+  if (!team) return [];
+  const roleByPlayer = new Map(
+    activeTeamMembers(team).map((member) => [member.player_id, member.role] as const)
+  );
+  const poolIds = new Set(
+    detail.settings.allow_substitutes && detail.settings.substitute_pool_enabled
+      ? detail.substitute_pool
+        .filter((entry) => entry.status === "available")
+        .map((entry) => entry.player_id)
+      : []
+  );
+  return detail.players
+    .filter((player) => player.active !== false && (roleByPlayer.has(player.id) || poolIds.has(player.id)))
+    .map((player) => ({
+      ...player,
+      sourceLabel: roleByPlayer.has(player.id)
+        ? String(roleByPlayer.get(player.id)).replace("primary", "roster")
+        : "substitute pool"
+    }));
 }
 
 function requestError(payload: unknown, statusCode: number): string {
@@ -207,12 +266,15 @@ function TeamSettingsForm({
   return (
     <article style={cardStyle}>
       <h2 style={{ marginTop: 0 }}>Registration and season setup</h2>
-      <p style={{ color: "#475569" }}>Configure team eligibility, substitute policy, weekly schedule, and optional playoffs. Teams currently use a fixed two-player primary roster.</p>
+      <p style={{ color: "#475569" }}>Configure a 2–4 player primary season roster, assigned alternates, a shared substitute pool, weekly schedule, and optional playoffs. Every match still uses a two-player doubles lineup.</p>
       <div style={gridStyle}>
         <label><input type="checkbox" checked={draft.registrationOpen} onChange={(event) => update("registrationOpen", event.target.checked)} /> <strong>Registration open</strong></label>
-        <p style={{ margin: 0 }}><strong>Primary roster</strong><br />2 players</p>
-        <label><strong>Team eligibility</strong><br /><select value={draft.teamCategory} onChange={(event) => update("teamCategory", event.target.value)} style={inputStyle}><option value="open">Open</option><option value="mens">Men&apos;s</option><option value="womens">Women&apos;s</option><option value="mixed">Mixed</option></select></label>
-        <label><input type="checkbox" checked={draft.allowSubstitutes} onChange={(event) => update("allowSubstitutes", event.target.checked)} /> <strong>Allow substitutes</strong></label>
+        <label><strong>Primary roster size</strong><br /><select value={draft.teamSize} onChange={(event) => { const size = Number(event.target.value); update("teamSize", event.target.value); update("mixedRequiredMen", String(Math.floor(size / 2))); update("mixedRequiredWomen", String(size - Math.floor(size / 2))); }} style={inputStyle}><option value="2">2 players</option><option value="3">3 players</option><option value="4">4 players</option></select></label>
+        <label><strong>Maximum alternates</strong><br /><select value={draft.maxAlternates} onChange={(event) => update("maxAlternates", event.target.value)} style={inputStyle}>{[0, 1, 2, 3, 4].map((count) => <option key={count} value={String(count)}>{count}</option>)}</select></label>
+        <label><strong>Team eligibility</strong><br /><select value={draft.teamCategory} onChange={(event) => { update("teamCategory", event.target.value); if (event.target.value === "mixed") { const size = Number(draft.teamSize); update("mixedRequiredMen", String(Math.floor(size / 2))); update("mixedRequiredWomen", String(size - Math.floor(size / 2))); } }} style={inputStyle}><option value="open">Open</option><option value="mens">Men&apos;s</option><option value="womens">Women&apos;s</option><option value="mixed">Mixed</option></select></label>
+        <label><input type="checkbox" checked={draft.allowSubstitutes} onChange={(event) => { update("allowSubstitutes", event.target.checked); if (!event.target.checked) update("substitutePoolEnabled", false); }} /> <strong>Allow substitutes</strong></label>
+        <label><input type="checkbox" checked={draft.substitutePoolEnabled} disabled={!draft.allowSubstitutes} onChange={(event) => update("substitutePoolEnabled", event.target.checked)} /> <strong>Shared substitute pool</strong></label>
+        {draft.teamCategory === "mixed" ? <><label><strong>Required men on primary roster</strong><br /><input type="number" min={1} max={3} value={draft.mixedRequiredMen} onChange={(event) => update("mixedRequiredMen", event.target.value)} style={inputStyle} /></label><label><strong>Required women on primary roster</strong><br /><input type="number" min={1} max={3} value={draft.mixedRequiredWomen} onChange={(event) => update("mixedRequiredWomen", event.target.value)} style={inputStyle} /></label></> : null}
         <label><strong>Playoffs</strong><br /><select value={draft.playoffFormat} onChange={(event) => update("playoffFormat", event.target.value)} style={inputStyle}><option value="none">No playoffs</option><option value="top_2_final">Top 2 final</option><option value="top_4_single_elimination">Top 4 single elimination</option><option value="all_team_single_elimination">All-team single elimination</option></select></label>
         {draft.playoffFormat === "all_team_single_elimination" ? <label><strong>Playoff team count</strong><br /><input type="number" min={2} max={128} value={draft.playoffTeamCount} onChange={(event) => update("playoffTeamCount", event.target.value)} style={inputStyle} /></label> : null}
         <label><strong>Season start</strong><br /><input type="date" value={draft.startDate} onChange={(event) => update("startDate", event.target.value)} style={inputStyle} /></label>
@@ -222,7 +284,7 @@ function TeamSettingsForm({
         <label><strong>Venue</strong><br /><input value={draft.venue} onChange={(event) => update("venue", event.target.value)} maxLength={240} style={inputStyle} /></label>
         <label><strong>Registration closes</strong><br /><input type="datetime-local" value={draft.registrationClosesAt} onChange={(event) => update("registrationClosesAt", event.target.value)} style={inputStyle} /></label>
       </div>
-      <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Save team league setup"} title="Save this team league setup?" description="This saves team eligibility, registration, substitute policy, weekly schedule, and playoff choices together." confirmLabel="Yes, save setup" confirmationText="SAVE TEAM LEAGUE" disabled={busy} busy={busy} onConfirm={(confirmationText) => onSave(draft, confirmationText)} /></p>
+      <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Save team league setup"} title="Save this team league setup?" description="This saves roster size, eligibility, alternates, substitute policy, weekly schedule, and playoff choices together." confirmLabel="Yes, save setup" confirmationText="SAVE TEAM LEAGUE" disabled={busy} busy={busy} onConfirm={(confirmationText) => onSave(draft, confirmationText)} /></p>
     </article>
   );
 }
@@ -244,14 +306,15 @@ function ScoreFixtureCard({
   const [scoreA, setScoreA] = useState("");
   const [scoreB, setScoreB] = useState("");
   const [winnerId, setWinnerId] = useState(String(fixture.team_a_id || ""));
-  const [playersA, setPlayersA] = useState<number[]>(teamA ? [teamA.captain_player_id, teamA.partner_player_id] : []);
-  const [playersB, setPlayersB] = useState<number[]>(teamB ? [teamB.captain_player_id, teamB.partner_player_id] : []);
+  const [playersA, setPlayersA] = useState<number[]>(() => defaultPlayingLineup(teamA));
+  const [playersB, setPlayersB] = useState<number[]>(() => defaultPlayingLineup(teamB));
   const [note, setNote] = useState("");
   const [scoreKey, setScoreKey] = useState(() => operationKey(`team-score-${fixture.id}`));
   const [reconcileKey, setReconcileKey] = useState(() => operationKey(`team-reconcile-${fixture.id}`));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const activePlayers = detail.players.filter((player) => player.active !== false);
+  const optionsA = playingOptions(detail, teamA);
+  const optionsB = playingOptions(detail, teamB);
 
   function updateLineup(side: "a" | "b", index: number, value: number) {
     const setter = side === "a" ? setPlayersA : setPlayersB;
@@ -323,8 +386,8 @@ function ScoreFixtureCard({
           </div>
           {resultStatus === "complete" ? (
             <div style={{ ...gridStyle, marginTop: "0.75rem" }}>
-              {[0, 1].map((index) => <label key={`a-${index}`}><strong>{teamName(detail, fixture.team_a_id)} player {index + 1}</strong><br /><select value={playersA[index] || ""} onChange={(event) => updateLineup("a", index, Number(event.target.value))} style={inputStyle}>{activePlayers.map((player) => <option key={player.id} value={player.id}>{player.name}{teamA && ![teamA.captain_player_id, teamA.partner_player_id].includes(player.id) ? " · substitute" : ""}</option>)}</select></label>)}
-              {[0, 1].map((index) => <label key={`b-${index}`}><strong>{teamName(detail, fixture.team_b_id)} player {index + 1}</strong><br /><select value={playersB[index] || ""} onChange={(event) => updateLineup("b", index, Number(event.target.value))} style={inputStyle}>{activePlayers.map((player) => <option key={player.id} value={player.id}>{player.name}{teamB && ![teamB.captain_player_id, teamB.partner_player_id].includes(player.id) ? " · substitute" : ""}</option>)}</select></label>)}
+              {[0, 1].map((index) => <label key={`a-${index}`}><strong>{teamName(detail, fixture.team_a_id)} player {index + 1}</strong><br /><select value={playersA[index] || ""} onChange={(event) => updateLineup("a", index, Number(event.target.value))} style={inputStyle}>{optionsA.map((player) => <option key={player.id} value={player.id}>{player.name} · {player.sourceLabel}</option>)}</select></label>)}
+              {[0, 1].map((index) => <label key={`b-${index}`}><strong>{teamName(detail, fixture.team_b_id)} player {index + 1}</strong><br /><select value={playersB[index] || ""} onChange={(event) => updateLineup("b", index, Number(event.target.value))} style={inputStyle}>{optionsB.map((player) => <option key={player.id} value={player.id}>{player.name} · {player.sourceLabel}</option>)}</select></label>)}
             </div>
           ) : null}
           <label><strong>Result note</strong><br /><input value={note} onChange={(event) => { setNote(event.target.value); setScoreKey(operationKey(`team-score-${fixture.id}`)); }} maxLength={500} style={inputStyle} /></label>
@@ -353,6 +416,21 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
   const [waitlistAction, setWaitlistAction] = useState<"pair" | "withdraw">("pair");
   const [waitlistTeamName, setWaitlistTeamName] = useState("");
   const [waitlistKey, setWaitlistKey] = useState(() => operationKey("team-waitlist"));
+  const [newTeamName, setNewTeamName] = useState("");
+  const [newCaptainId, setNewCaptainId] = useState("");
+  const [newCaptainEmail, setNewCaptainEmail] = useState("");
+  const [newInitialPrimaryId, setNewInitialPrimaryId] = useState("");
+  const [newInitialPrimaryEmail, setNewInitialPrimaryEmail] = useState("");
+  const [createTeamKey, setCreateTeamKey] = useState(() => operationKey("team-create"));
+  const [rosterTeamId, setRosterTeamId] = useState("");
+  const [rosterPlayerId, setRosterPlayerId] = useState("");
+  const [rosterRole, setRosterRole] = useState<"primary" | "alternate">("primary");
+  const [rosterStatus, setRosterStatus] = useState<"active" | "invited">("active");
+  const [rosterKey, setRosterKey] = useState(() => operationKey("team-roster"));
+  const [poolPlayerId, setPoolPlayerId] = useState("");
+  const [poolStatus, setPoolStatus] = useState<"available" | "unavailable" | "withdrawn">("available");
+  const [poolNote, setPoolNote] = useState("");
+  const [poolKey, setPoolKey] = useState(() => operationKey("team-substitute-pool"));
   const [recoveryId, setRecoveryId] = useState("");
   const [recoveryEvidence, setRecoveryEvidence] = useState<RecoveryEvidence | null>(null);
   const [recoveryResolution, setRecoveryResolution] = useState<"finalize" | "compensate">("finalize");
@@ -433,6 +511,18 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     setScheduleKey(operationKey("team-schedule"));
     setSettingsKey(operationKey("team-settings"));
     setWaitlistKey(operationKey("team-waitlist"));
+    setNewTeamName("");
+    setNewCaptainId("");
+    setNewCaptainEmail("");
+    setNewInitialPrimaryId("");
+    setNewInitialPrimaryEmail("");
+    setCreateTeamKey(operationKey("team-create"));
+    setRosterTeamId("");
+    setRosterPlayerId("");
+    setRosterKey(operationKey("team-roster"));
+    setPoolPlayerId("");
+    setPoolNote("");
+    setPoolKey(operationKey("team-substitute-pool"));
     setMessage(null);
     if (!selectedLeague || !rows.some((row) => row.league_name === selectedLeague)) return;
     setBusy(true);
@@ -442,6 +532,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
       );
       if (!detailRequest.isCurrent(generation)) return;
       setDetail(payload);
+      setWaitlistAction(payload.settings.team_size === 2 ? "pair" : "withdraw");
     } catch (error) {
       if (detailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load the team league.");
     } finally {
@@ -453,6 +544,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     if (!leagueName) return;
     const payload = await requestJson<TeamLeagueDetail>(teamLeaguePath());
     setDetail(payload);
+    setWaitlistAction(payload.settings.team_size === 2 ? waitlistAction : "withdraw");
     setTeamLeagueRows((current) => {
       const without = current.filter((row) => row.league_name !== leagueName);
       return [...without, payload.settings].sort((a, b) => a.league_name.localeCompare(b.league_name));
@@ -466,6 +558,36 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
       throw error;
     }
     const playoffCount = draft.playoffTeamCount ? Number(draft.playoffTeamCount) : null;
+    const teamSize = Number(draft.teamSize);
+    const maxAlternates = Number(draft.maxAlternates);
+    const mixedRequiredMen = Number(draft.mixedRequiredMen);
+    const mixedRequiredWomen = Number(draft.mixedRequiredWomen);
+    if (![2, 3, 4].includes(teamSize)) {
+      const error = new Error("Primary roster size must be 2, 3, or 4 players.");
+      setMessage(error.message);
+      throw error;
+    }
+    if (!Number.isInteger(maxAlternates) || maxAlternates < 0 || maxAlternates > 4) {
+      const error = new Error("Maximum alternates must be a whole number from 0 to 4.");
+      setMessage(error.message);
+      throw error;
+    }
+    if (draft.teamCategory === "mixed" && (
+      !Number.isInteger(mixedRequiredMen)
+      || !Number.isInteger(mixedRequiredWomen)
+      || mixedRequiredMen < 1
+      || mixedRequiredWomen < 1
+      || mixedRequiredMen + mixedRequiredWomen !== teamSize
+    )) {
+      const error = new Error("Mixed roster counts must each be at least one and total the primary roster size.");
+      setMessage(error.message);
+      throw error;
+    }
+    if (draft.substitutePoolEnabled && !draft.allowSubstitutes) {
+      const error = new Error("Enable substitutes before enabling the shared substitute pool.");
+      setMessage(error.message);
+      throw error;
+    }
     if (draft.playoffFormat === "all_team_single_elimination" && (!Number.isInteger(playoffCount) || Number(playoffCount) < 2 || Number(playoffCount) > 128)) {
       const error = new Error("Playoff team count must be a whole number from 2 to 128.");
       setMessage(error.message);
@@ -479,8 +601,12 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
         body: JSON.stringify({
           settings: {
             registration_open: draft.registrationOpen,
-            team_size: 2,
+            team_size: teamSize,
             team_category: draft.teamCategory,
+            max_alternates: maxAlternates,
+            substitute_pool_enabled: draft.substitutePoolEnabled,
+            mixed_required_men: mixedRequiredMen,
+            mixed_required_women: mixedRequiredWomen,
             allow_substitutes: draft.allowSubstitutes,
             playoff_format: draft.playoffFormat,
             playoff_team_count: playoffCount,
@@ -593,6 +719,140 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
+  async function createTeam(confirmationText: string): Promise<ActionCompletion> {
+    if (!detail || !newTeamName.trim() || !newCaptainId || !newCaptainEmail.trim()) {
+      const error = new Error("Enter a team name, captain, and captain email.");
+      setMessage(error.message);
+      throw error;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      await requestTeamWrite<WriteResponse>("/teams", {
+        team_name: newTeamName,
+        captain_player_id: Number(newCaptainId),
+        captain_contact_email: newCaptainEmail,
+        initial_primary_player_id: newInitialPrimaryId ? Number(newInitialPrimaryId) : null,
+        initial_primary_contact_email: newInitialPrimaryEmail,
+        expected_roster_version: Number(detail.settings.roster_version || 0),
+        idempotency_key: createTeamKey,
+        confirmation_text: confirmationText,
+        source: "next_team_league_create_team_page"
+      });
+      setNewTeamName("");
+      setNewCaptainId("");
+      setNewCaptainEmail("");
+      setNewInitialPrimaryId("");
+      setNewInitialPrimaryEmail("");
+      setCreateTeamKey(operationKey("team-create"));
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `The forming team was created.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess("Team created", successMessage);
+    } catch (error) {
+      setMessage(`${error instanceof Error ? error.message : "Unable to create the team."} The same request key is retained for retry.`);
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addRosterMember(confirmationText: string): Promise<ActionCompletion> {
+    if (!detail || !rosterTeamId || !rosterPlayerId) {
+      const error = new Error("Choose a team and player before updating the roster.");
+      setMessage(error.message);
+      throw error;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      await requestTeamWrite<WriteResponse>("/roster-actions", {
+        action: "add_member",
+        team_id: rosterTeamId,
+        player_id: Number(rosterPlayerId),
+        member_role: rosterRole,
+        member_status: rosterStatus,
+        expected_roster_version: Number(detail.settings.roster_version || 0),
+        idempotency_key: rosterKey,
+        confirmation_text: confirmationText,
+        source: "next_team_league_roster_page"
+      });
+      setRosterPlayerId("");
+      setRosterKey(operationKey("team-roster"));
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `The assigned team roster was updated.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess("Team roster updated", successMessage);
+    } catch (error) {
+      setMessage(`${error instanceof Error ? error.message : "Unable to update the roster."} The same request key is retained for retry.`);
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeRosterMember(teamId: string, playerId: number, confirmationText: string): Promise<ActionCompletion> {
+    if (!detail) throw new Error("Reload the team league before updating its roster.");
+    const key = operationKey("team-roster-remove");
+    setBusy(true);
+    setMessage(null);
+    try {
+      await requestTeamWrite<WriteResponse>("/roster-actions", {
+        action: "remove_member",
+        team_id: teamId,
+        player_id: playerId,
+        member_status: "active",
+        expected_roster_version: Number(detail.settings.roster_version || 0),
+        idempotency_key: key,
+        confirmation_text: confirmationText,
+        source: "next_team_league_roster_page"
+      });
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `The player was removed from the assigned roster.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess("Roster member removed", successMessage);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to remove the roster member.");
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateSubstitutePool(confirmationText: string): Promise<ActionCompletion> {
+    if (!detail || !poolPlayerId) {
+      const error = new Error("Choose a player before updating the substitute pool.");
+      setMessage(error.message);
+      throw error;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      await requestTeamWrite<WriteResponse>("/roster-actions", {
+        action: "set_pool",
+        player_id: Number(poolPlayerId),
+        member_status: poolStatus,
+        note: poolNote,
+        expected_roster_version: Number(detail.settings.roster_version || 0),
+        idempotency_key: poolKey,
+        confirmation_text: confirmationText,
+        source: "next_team_league_substitute_pool_page"
+      });
+      setPoolPlayerId("");
+      setPoolNote("");
+      setPoolKey(operationKey("team-substitute-pool"));
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `The shared substitute pool was updated.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess("Substitute pool updated", successMessage);
+    } catch (error) {
+      setMessage(`${error instanceof Error ? error.message : "Unable to update the substitute pool."} The same request key is retained for retry.`);
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function inspectRecovery(operationId = recoveryId) {
     const cleanId = operationId.trim();
     if (!cleanId) {
@@ -683,7 +943,8 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
                 <thead><tr><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Team</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Players</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Registration</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Standing</th></tr></thead>
                 <tbody>{detail.teams.map((team) => {
                   const standing = detail.standings.find((row) => row.team_id === team.id);
-                  return <tr key={team.id}><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><strong>{team.team_name}</strong></td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{playerName(detail, team.captain_player_id)} + {playerName(detail, team.partner_player_id)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{team.status}{team.invitation_delivery_status ? ` · ${team.invitation_delivery_status}` : ""}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{standing ? `#${standing.rank} · ${standing.wins}-${standing.losses} · ${standing.point_differential && standing.point_differential > 0 ? "+" : ""}${standing.point_differential || 0}` : "—"}</td></tr>;
+                  const members = (team.members || []).filter((member) => ["invited", "active"].includes(member.status));
+                  return <tr key={team.id}><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><strong>{team.team_name}</strong></td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{members.map((member) => <div key={member.id}>{playerName(detail, member.player_id)} · {member.role}{member.status === "invited" ? " · invited" : ""}{member.role !== "captain" ? <> · <ConfirmAction triggerLabel="Remove" title={`Remove ${playerName(detail, member.player_id)} from ${team.team_name}?`} description="The team becomes incomplete if it no longer has the configured number of active primary players." confirmLabel="Yes, remove player" confirmationText="UPDATE TEAM ROSTER" tone="danger" disabled={busy} busy={busy} onConfirm={(confirmationText) => removeRosterMember(team.id, member.player_id, confirmationText)} /></> : null}</div>)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{team.status}{team.roster_complete ? " · roster ready" : ` · needs ${detail.settings.team_size || 2} active primary players`}{team.invitation_delivery_status ? ` · ${team.invitation_delivery_status}` : ""}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{standing ? `#${standing.rank} · ${standing.wins}-${standing.losses} · ${standing.point_differential && standing.point_differential > 0 ? "+" : ""}${standing.point_differential || 0}` : "—"}</td></tr>;
                 })}</tbody>
               </table>
             </div>
@@ -691,9 +952,45 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
           </article>
 
           <article style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>Partner waitlist</h2>
+            <h2 style={{ marginTop: 0 }}>Assigned rosters and substitute pool</h2>
+            <p style={{ color: "#475569" }}>Primary players and alternates stay assigned for the season. Match-day replacements must come from the shared pool and still satisfy the league&apos;s lineup eligibility.</p>
+            <h3>Create a forming team</h3>
+            <p style={{ color: "#475569" }}>Start with a captain and optionally one initial primary. Add the remaining primary players below; the team becomes schedule-ready only when all {detail.settings.team_size || 2} primary slots are active.</p>
             <div style={gridStyle}>
-              <label><strong>Action</strong><br /><select value={waitlistAction} onChange={(event) => { setWaitlistAction(event.target.value as "pair" | "withdraw"); setWaitlistIds([]); setWaitlistKey(operationKey("team-waitlist")); }} style={inputStyle}><option value="pair">Pair two players</option><option value="withdraw">Withdraw selected</option></select></label>
+              <label><strong>Team name</strong><br /><input value={newTeamName} onChange={(event) => { setNewTeamName(event.target.value); setCreateTeamKey(operationKey("team-create")); }} maxLength={120} style={inputStyle} /></label>
+              <label><strong>Captain</strong><br /><select value={newCaptainId} onChange={(event) => { setNewCaptainId(event.target.value); if (newInitialPrimaryId === event.target.value) setNewInitialPrimaryId(""); setCreateTeamKey(operationKey("team-create")); }} style={inputStyle}><option value="">Choose an active player</option>{detail.players.filter((player) => player.active !== false).map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></label>
+              <label><strong>Captain email</strong><br /><input type="email" value={newCaptainEmail} onChange={(event) => { setNewCaptainEmail(event.target.value); setCreateTeamKey(operationKey("team-create")); }} style={inputStyle} /></label>
+              <label><strong>Initial primary (optional)</strong><br /><select value={newInitialPrimaryId} onChange={(event) => { setNewInitialPrimaryId(event.target.value); setCreateTeamKey(operationKey("team-create")); }} style={inputStyle}><option value="">Add later</option>{detail.players.filter((player) => player.active !== false && String(player.id) !== newCaptainId).map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></label>
+              {newInitialPrimaryId ? <label><strong>Initial primary email (optional)</strong><br /><input type="email" value={newInitialPrimaryEmail} onChange={(event) => { setNewInitialPrimaryEmail(event.target.value); setCreateTeamKey(operationKey("team-create")); }} style={inputStyle} /></label> : null}
+            </div>
+            <p><ConfirmAction triggerLabel={busy ? "Creating…" : "Create forming team"} title="Create this forming team?" description="The team starts incomplete unless its active primary roster already matches the configured size. Player uniqueness, substitute-pool exclusion, and eligibility are rechecked atomically." confirmLabel="Yes, create team" confirmationText="CREATE TEAM" disabled={busy || !newTeamName.trim() || !newCaptainId || !newCaptainEmail.trim()} busy={busy} onConfirm={createTeam} /></p>
+            <h3>Assign a team member</h3>
+            <div style={gridStyle}>
+              <label><strong>Team</strong><br /><select value={rosterTeamId} onChange={(event) => { setRosterTeamId(event.target.value); setRosterKey(operationKey("team-roster")); }} style={inputStyle}><option value="">Choose a team</option>{detail.teams.filter((team) => ["pending_partner", "confirmed"].includes(team.status)).map((team) => <option key={team.id} value={team.id}>{team.team_name}{team.roster_complete ? " · ready" : " · incomplete"}</option>)}</select></label>
+              <label><strong>Player</strong><br /><select value={rosterPlayerId} onChange={(event) => { setRosterPlayerId(event.target.value); setRosterKey(operationKey("team-roster")); }} style={inputStyle}><option value="">Choose an active player</option>{detail.players.filter((player) => player.active !== false).map((player) => <option key={player.id} value={player.id}>{player.name}{player.gender ? ` · ${player.gender}` : ""}</option>)}</select></label>
+              <label><strong>Season role</strong><br /><select value={rosterRole} onChange={(event) => { setRosterRole(event.target.value as "primary" | "alternate"); setRosterKey(operationKey("team-roster")); }} style={inputStyle}><option value="primary">Primary player</option><option value="alternate">Assigned alternate</option></select></label>
+              <label><strong>Member status</strong><br /><select value={rosterStatus} onChange={(event) => { setRosterStatus(event.target.value as "active" | "invited"); setRosterKey(operationKey("team-roster")); }} style={inputStyle}><option value="active">Active</option><option value="invited">Invited</option></select></label>
+            </div>
+            <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Assign player"} title="Update this assigned roster?" description="The server rechecks player uniqueness, roster capacity, category eligibility, and the current roster version before committing." confirmLabel="Yes, update roster" confirmationText="UPDATE TEAM ROSTER" disabled={busy || !rosterTeamId || !rosterPlayerId} busy={busy} onConfirm={addRosterMember} /></p>
+
+            <h3>Shared substitute pool</h3>
+            {detail.settings.substitute_pool_enabled ? <>
+              <div style={gridStyle}>
+                <label><strong>Player</strong><br /><select value={poolPlayerId} onChange={(event) => { setPoolPlayerId(event.target.value); setPoolKey(operationKey("team-substitute-pool")); }} style={inputStyle}><option value="">Choose an active player</option>{detail.players.filter((player) => player.active !== false).map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></label>
+                <label><strong>Availability</strong><br /><select value={poolStatus} onChange={(event) => { setPoolStatus(event.target.value as "available" | "unavailable" | "withdrawn"); setPoolKey(operationKey("team-substitute-pool")); }} style={inputStyle}><option value="available">Available</option><option value="unavailable">Unavailable</option><option value="withdrawn">Withdrawn</option></select></label>
+                <label><strong>Note</strong><br /><input value={poolNote} onChange={(event) => { setPoolNote(event.target.value); setPoolKey(operationKey("team-substitute-pool")); }} maxLength={500} style={inputStyle} /></label>
+              </div>
+              <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Update substitute pool"} title="Update this substitute pool entry?" description="Assigned team members cannot also be available in the shared substitute pool." confirmLabel="Yes, update pool" confirmationText="UPDATE SUBSTITUTE POOL" disabled={busy || !poolPlayerId} busy={busy} onConfirm={updateSubstitutePool} /></p>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>{detail.substitute_pool.filter((entry) => entry.status !== "withdrawn").map((entry) => <span key={entry.id} style={insetStyle}><strong>{playerName(detail, entry.player_id)}</strong> · {entry.status}{entry.note ? ` · ${entry.note}` : ""}</span>)}</div>
+              {!detail.substitute_pool.some((entry) => entry.status !== "withdrawn") ? <p style={{ color: "#64748b" }}>No players are in the shared substitute pool.</p> : null}
+            </> : <p style={{ color: "#64748b" }}>Enable substitutes and the shared substitute pool in season setup before adding pool players.</p>}
+          </article>
+
+          <article style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>Partner waitlist</h2>
+            {detail.settings.team_size !== 2 ? <p style={{ color: "#475569" }}>Two-person auto-pairing is closed for this roster size. Create a forming team above, then assign its remaining primary players. Existing waitlist entries can still be withdrawn safely.</p> : null}
+            <div style={gridStyle}>
+              <label><strong>Action</strong><br /><select value={waitlistAction} onChange={(event) => { setWaitlistAction(event.target.value as "pair" | "withdraw"); setWaitlistIds([]); setWaitlistKey(operationKey("team-waitlist")); }} style={inputStyle}>{detail.settings.team_size === 2 ? <option value="pair">Pair two players</option> : null}<option value="withdraw">Withdraw selected</option></select></label>
               {waitlistAction === "pair" ? <label><strong>New team name</strong><br /><input value={waitlistTeamName} onChange={(event) => { setWaitlistTeamName(event.target.value); setWaitlistKey(operationKey("team-waitlist")); }} maxLength={120} style={inputStyle} /></label> : null}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.6rem", marginTop: "0.75rem" }}>
