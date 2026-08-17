@@ -63,6 +63,35 @@ def test_live_workflow_uses_focused_routes_and_one_draw_scoped_shell() -> None:
     assert "initialDrawId={context.drawId}" in shell
 
 
+def test_live_runner_locks_tournament_scope_and_exposes_a_url_synced_draw_selector() -> None:
+    panel = read("app/admin/tournament-live/TournamentLivePanel.tsx")
+    css = read("app/admin/tournament-live/TournamentLivePanel.module.css")
+
+    assert "const lockedTournamentId = initialTournamentId;" in panel
+    assert 'aria-label="Tournament operating scope"' in panel
+    assert 'id="working-draw"' in panel
+    assert "Locked to this tournament workspace" in panel
+    assert "Refresh available draws" in panel
+    assert "Reload selected draw" in panel
+    assert "router.replace(tournamentRouteHref(pathname, nextContext), { scroll: false })" in panel
+    assert "Change or refresh selection" not in panel
+    assert "Include archived tournaments" not in panel
+    assert "Refresh tournaments" not in panel
+    assert "selectTournament" not in panel
+    assert "/tournaments/admin/ops/tournaments" not in panel
+    assert "const preferredDrawStillAvailable" in panel
+    assert ": !preferredDrawId && nextDraws.length === 1 ? nextDraws[0].id : \"\";" in panel
+    assert "if (!nextSelectedDrawId) {" in panel
+    assert "setSnapshot(null);" in panel
+    select_draw = panel.split("function selectDraw(drawId: string)", 1)[1].split("function selectScoreGame", 1)[0]
+    assert select_draw.index("boardRequest.invalidate") < select_draw.index("setSnapshot(null)") < select_draw.index("loadLiveBoard(drawId)")
+    assert "const generation = boardRequest.begin();" in panel
+    assert "if (!boardRequest.isCurrent(generation)) return;" in panel
+    assert "assertSnapshotIdentity(payload, tournamentId, drawId);" in panel
+    assert "assertSnapshotIdentity(payload, lockedTournamentId, drawId);" in panel
+    assert "@media (max-width: 1200px)" in css
+
+
 def test_live_runner_is_human_readable_and_validates_before_confirmation() -> None:
     panel = read("app/admin/tournament-live/TournamentLivePanel.tsx")
     css = read("app/admin/tournament-live/TournamentLivePanel.module.css")
@@ -87,7 +116,7 @@ def test_live_runner_is_human_readable_and_validates_before_confirmation() -> No
     assert '`#${playerId}`' not in panel
     assert "overflow-x: auto" in css
     assert "min-width: 0" in css
-    assert "@media (max-width: 900px)" in css
+    assert "@media (max-width: 1200px)" in css
 
 
 def test_authoritative_lifecycle_drives_home_results_publish_closeout_and_recovery() -> None:

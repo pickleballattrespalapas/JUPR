@@ -97,6 +97,7 @@
 }
 
 .controlGrid label,
+.scopeGrid label,
 .scoreGrid label,
 .commandCard label,
 .dangerCard label,
@@ -105,6 +106,79 @@
   gap: 0.35rem;
   color: #0f172a;
   font-weight: 700;
+}
+
+.scopePanel {
+  display: grid;
+  gap: 0.8rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  background: #eff6ff;
+}
+
+.scopeHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.scopeHeading h3,
+.scopeHeading p {
+  margin: 0;
+}
+
+.scopeHeading > p {
+  max-width: 420px;
+  color: #334155;
+}
+
+.scopeGrid {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.8fr) minmax(250px, 1.2fr) auto;
+  gap: 0.85rem;
+  align-items: end;
+}
+
+.lockedTournament {
+  display: grid;
+  gap: 0.2rem;
+  min-height: 44px;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #93c5fd;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.lockedTournament span {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.lockedTournament strong {
+  color: #0f172a;
+}
+
+.lockedTournament small,
+.scopeHelp {
+  color: #475569;
+}
+
+.scopeActions {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.scopeHelp {
+  margin: 0;
+  font-size: 0.9rem;
 }
 
 .checkboxLabel {
@@ -356,19 +430,10 @@
   margin-top: 0;
 }
 
-.selectionDetails {
-  margin-top: 0.85rem;
-}
-
-.selectionDetails summary,
 .root details summary {
   cursor: pointer;
   color: #334155;
   font-weight: 700;
-}
-
-.selectionDetails .controlGrid {
-  margin-top: 0.8rem;
 }
 
 .podiumGrid {
@@ -583,7 +648,15 @@
   color: #1e3a8a;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
+  .scopeGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .scopeActions {
+    grid-column: 1 / -1;
+  }
+
   .commandGrid {
     grid-template-columns: 1fr;
   }
@@ -602,6 +675,13 @@
 }
 
 @media (max-width: 760px) {
+  .scopeGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .scopeActions {
+    grid-column: auto;
+  }
 
   .mobileGames {
     display: grid;
@@ -634,6 +714,7 @@
   }
 
   .buttonRow > button,
+  .scopeActions > button,
   .controlGrid > button,
   .commandCard > button,
   .dangerCard > button {

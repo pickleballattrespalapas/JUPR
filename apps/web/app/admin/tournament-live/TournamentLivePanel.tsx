@@ -1,15 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess, actionUncertain } from "@/components/interaction";
 import type { ActionCompletion } from "@/components/interaction";
 import type {
-  AdminTournament,
   AdminTournamentDraw,
   AdminTournamentLifecycleReadiness,
-  AdminTournamentListResponse,
   AdminTournamentLiveOperation,
   AdminTournamentLiveReadiness,
   AdminTournamentLiveSnapshotResponse,
@@ -122,7 +121,9 @@ function gameLabel(game: Record<string, unknown>): string {
 }
 
 function drawLabel(draw: AdminTournamentDraw): string {
-  return `${draw.name || "Draw"} · ${draw.status || "draft"}`;
+  const normalizedStatus = String(draw.status || "draft").replace(/_/g, " ").toLowerCase();
+  const status = `${normalizedStatus.charAt(0).toUpperCase()}${normalizedStatus.slice(1)}`;
+  return `${draw.name || "Unnamed draw"} · ${status}`;
 }
 
 function playerLabel(snapshot: AdminTournamentLiveSnapshotResponse | null, playerId?: number | null): string {
@@ -212,11 +213,12 @@ export default function TournamentLivePanel({
   view = "scoring"
 }: Props) {
   const { accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
-  const [includeArchived, setIncludeArchived] = useState(false);
-  const [tournaments, setTournaments] = useState<AdminTournament[]>([]);
+  const router = useRouter();
+  const pathname = usePathname();
+  const lockedTournamentId = initialTournamentId;
+  const selectedTournamentId = lockedTournamentId;
   const [draws, setDraws] = useState<AdminTournamentDraw[]>([]);
-  const [selectedTournamentId, setSelectedTournamentId] = useState("");
-  const [selectedDrawId, setSelectedDrawId] = useState("");
+  const [selectedDrawId, setSelectedDrawId] = useState(initialDrawId || "");
   const [snapshot, setSnapshot] = useState<AdminTournamentLiveSnapshotResponse | null>(null);
   const [scoreGameId, setScoreGameId] = useState("");
   const [scoreA, setScoreA] = useState("");
@@ -230,13 +232,12 @@ export default function TournamentLivePanel({
   const [lastResult, setLastResult] = useState<AdminTournamentWriteResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const listRequest = useLatestRequestGuard(accessToken, clearProtectedLiveState);
-  const drawsRequest = useLatestRequestGuard(accessToken);
+  const drawsRequest = useLatestRequestGuard(`${accessToken}\u0000${lockedTournamentId}`, clearProtectedLiveState);
   const boardRequest = useLatestRequestGuard(accessToken);
   const actionScope = `${accessToken}\u0000${selectedTournamentId}\u0000${selectedDrawId}`;
   const actionRequest = useLatestRequestGuard(actionScope);
 
-  const selectedTournament = tournaments.find((tournament) => tournament.id === selectedTournamentId) || snapshot?.tournament || null;
+  const selectedTournament = snapshot?.tournament || null;
   const { teamsById, sortedGames } = useMemo(() => {
     const games = [...(snapshot?.games || [])].sort((left, right) => gameSortKey(left).localeCompare(gameSortKey(right)));
     return {
@@ -272,9 +273,9 @@ export default function TournamentLivePanel({
   }
 
   function clearProtectedLiveState() {
-    drawsRequest.invalidate(); boardRequest.invalidate(); actionRequest.invalidate();
+    boardRequest.invalidate(); actionRequest.invalidate();
     setBusy(false); setNotice(null);
-    setTournaments([]); setDraws([]); setSelectedTournamentId(""); setSelectedDrawId(""); setSnapshot(null);
+    setDraws([]); setSelectedDrawId(initialDrawId || ""); setSnapshot(null);
     setScoreGameId(""); setScoreA(""); setScoreB(""); setScoreConfirmation(false); setPendingCommand(null); setLastResult(null);
   }
 
@@ -288,101 +289,103 @@ export default function TournamentLivePanel({
   }
 
   async function fetchBoard(tournamentId: string, drawId: string): Promise<AdminTournamentLiveSnapshotResponse> {
-    return requestJson<AdminTournamentLiveSnapshotResponse>(
+    if (tournamentId !== lockedTournamentId) {
+      throw new Error("This retained request belongs to a different tournament workspace.");
+    }
+    const payload = await requestJson<AdminTournamentLiveSnapshotResponse>(
       `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(tournamentId)}/snapshot?draw_id=${encodeURIComponent(drawId)}`
     );
+    assertSnapshotIdentity(payload, tournamentId, drawId);
+    return payload;
+  }
+
+  function assertSnapshotIdentity(
+    payload: AdminTournamentLiveSnapshotResponse,
+    tournamentId: string,
+    drawId?: string
+  ) {
+    if (String(payload.tournament?.id || "") !== tournamentId) {
+      throw new Error("The response belongs to a different tournament workspace. Refresh from Tournament Manager.");
+    }
+    if (drawId && String(payload.draw_id || "") !== drawId) {
+      throw new Error("The returned draw does not match the working draw. Choose the draw again.");
+    }
   }
 
   function hydrateBoard(payload: AdminTournamentLiveSnapshotResponse, tournamentId: string, drawId: string) {
-    setSelectedTournamentId(tournamentId);
+    if (tournamentId !== lockedTournamentId) throw new Error("This retained request belongs to a different tournament workspace.");
+    assertSnapshotIdentity(payload, tournamentId, drawId);
     setSelectedDrawId(drawId);
     setSnapshot(payload);
     seedScoreEditor(payload);
     setPendingCommand(readPendingCommand(clubId, tournamentId, drawId));
   }
 
-  async function loadTournaments() {
-    const selectedTournamentBeforeRefresh = selectedTournamentId || initialTournamentId;
-    const selectedDrawBeforeRefresh = selectedDrawId || initialDrawId || "";
-    const generation = listRequest.begin();
-    drawsRequest.invalidate();
-    boardRequest.invalidate();
-    setBusy(true);
-    setNotice(null);
-    setSnapshot(null);
-    setDraws([]);
-    try {
-      const suffix = includeArchived ? "?include_archived=true" : "";
-      const payload = await requestJson<AdminTournamentListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/ops/tournaments${suffix}`);
-      if (!listRequest.isCurrent(generation)) return;
-      const nextTournaments = payload.tournaments || [];
-      const selectionStillAvailable = Boolean(selectedTournamentBeforeRefresh && nextTournaments.some((row) => row.id === selectedTournamentBeforeRefresh));
-      setTournaments(nextTournaments);
-      setNotice(nextTournaments.length
-        ? { tone: "success", text: `Loaded ${payload.count ?? nextTournaments.length} tournament(s).` }
-        : { tone: "info", text: "No tournaments match this view." });
-      if (selectionStillAvailable) await loadDraws(selectedTournamentBeforeRefresh, selectedDrawBeforeRefresh);
-      else {
-        setSelectedTournamentId("");
-        setSelectedDrawId("");
-        setPendingCommand(null);
-      }
-    } catch (error) {
-      if (listRequest.isCurrent(generation)) setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to load tournaments." });
-    } finally {
-      if (listRequest.isCurrent(generation)) setBusy(false);
-    }
+  function replaceDrawInUrl(drawId: string) {
+    const nextContext = {
+      tournamentId: lockedTournamentId,
+      tournamentName: selectedTournament?.name || initialTournamentName || "",
+      drawId
+    };
+    router.replace(tournamentRouteHref(pathname, nextContext), { scroll: false });
   }
 
-  async function loadDraws(tournamentId = selectedTournamentId, preferredDrawId = selectedDrawId) {
+  async function loadDraws(preferredDrawId = selectedDrawId, reloadBoard = true) {
     const generation = drawsRequest.begin();
     boardRequest.invalidate();
-    if (!tournamentId) {
-      setNotice({ tone: "error", text: "Select a tournament first." });
+    actionRequest.invalidate();
+    if (!lockedTournamentId) {
+      setNotice({ tone: "error", text: "Return to Tournament Manager and select a tournament first." });
       return;
     }
     let nextSelectedDrawId = "";
     setBusy(true);
     setNotice(null);
-    setSnapshot(null);
     try {
       const payload = await requestJson<AdminTournamentLiveSnapshotResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(tournamentId)}/snapshot`
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(lockedTournamentId)}/snapshot`
       );
       if (!drawsRequest.isCurrent(generation)) return;
+      assertSnapshotIdentity(payload, lockedTournamentId);
       const nextDraws = payload.draws || [];
       setDraws(nextDraws);
-      nextSelectedDrawId = preferredDrawId && nextDraws.some((row) => row.id === preferredDrawId)
+      const preferredDrawStillAvailable = Boolean(preferredDrawId && nextDraws.some((row) => row.id === preferredDrawId));
+      nextSelectedDrawId = preferredDrawStillAvailable
         ? preferredDrawId
-        : nextDraws.length === 1 ? nextDraws[0].id : "";
+        : !preferredDrawId && nextDraws.length === 1 ? nextDraws[0].id : "";
       setSelectedDrawId(nextSelectedDrawId);
       setNotice({ tone: nextDraws.length ? "success" : "info", text: nextDraws.length ? `Loaded ${nextDraws.length} prepared draw(s).` : "This tournament has no prepared draws. Build one in Tournament Ops." });
+      if (nextSelectedDrawId !== selectedDrawId) replaceDrawInUrl(nextSelectedDrawId);
+      if (!nextSelectedDrawId) {
+        setSnapshot(null);
+        setPendingCommand(null);
+      }
     } catch (error) {
       if (drawsRequest.isCurrent(generation)) setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to load tournament draws." });
     } finally {
       if (drawsRequest.isCurrent(generation)) setBusy(false);
     }
-    if (nextSelectedDrawId && drawsRequest.isCurrent(generation)) await loadLiveBoard(tournamentId, nextSelectedDrawId);
+    if (reloadBoard && nextSelectedDrawId && drawsRequest.isCurrent(generation)) await loadLiveBoard(nextSelectedDrawId);
   }
 
-  async function loadLiveBoard(tournamentId = selectedTournamentId, drawId = selectedDrawId) {
+  async function loadLiveBoard(drawId = selectedDrawId) {
     const generation = boardRequest.begin();
-    if (!tournamentId || !drawId) {
-      setNotice({ tone: "error", text: "Select a tournament draw first." });
+    if (!lockedTournamentId || !drawId) {
+      setNotice({ tone: "error", text: "Choose a working draw first." });
       return;
     }
     setBusy(true);
     setNotice(null);
     try {
       const payload = await requestJson<AdminTournamentLiveSnapshotResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(tournamentId)}/snapshot?draw_id=${encodeURIComponent(drawId)}`
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(lockedTournamentId)}/snapshot?draw_id=${encodeURIComponent(drawId)}`
       );
       if (!boardRequest.isCurrent(generation)) return;
-      setSelectedTournamentId(tournamentId);
+      assertSnapshotIdentity(payload, lockedTournamentId, drawId);
       setSelectedDrawId(drawId);
       setSnapshot(payload);
       seedScoreEditor(payload);
-      setPendingCommand(readPendingCommand(clubId, tournamentId, drawId));
+      setPendingCommand(readPendingCommand(clubId, lockedTournamentId, drawId));
       setNotice({ tone: "success", text: "Authoritative draw state loaded from FastAPI." });
     } catch (error) {
       if (boardRequest.isCurrent(generation)) setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to load Tournament Live board." });
@@ -391,27 +394,15 @@ export default function TournamentLivePanel({
     }
   }
 
-  function selectTournament(tournamentId: string) {
-    actionRequest.invalidate();
-    setSelectedTournamentId(tournamentId);
-    setSelectedDrawId("");
-    setDraws([]);
-    setSnapshot(null);
-    setPendingCommand(null);
-    if (tournamentId) void loadDraws(tournamentId, "");
-    else {
-      drawsRequest.invalidate();
-      boardRequest.invalidate();
-    }
-  }
-
   function selectDraw(drawId: string) {
+    drawsRequest.invalidate();
+    boardRequest.invalidate();
     actionRequest.invalidate();
     setSelectedDrawId(drawId);
     setSnapshot(null);
     setPendingCommand(null);
-    if (selectedTournamentId && drawId) void loadLiveBoard(selectedTournamentId, drawId);
-    else boardRequest.invalidate();
+    replaceDrawInUrl(drawId);
+    if (lockedTournamentId && drawId) void loadLiveBoard(drawId);
   }
 
   function selectScoreGame(game: Record<string, unknown>) {
@@ -712,7 +703,11 @@ export default function TournamentLivePanel({
     setNotice({ tone: "info", text: "Cleared the local request copy. No active server operation was attached to it." });
   }
 
-  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadTournaments, includeArchived ? "archived" : "active");
+  useAuthenticatedAutoLoad(
+    status.enabled ? accessToken : "",
+    () => loadDraws(initialDrawId || "", true),
+    `${lockedTournamentId}\u0000${initialDrawId || ""}`
+  );
 
   if (!status.enabled) {
     return (
@@ -843,9 +838,44 @@ export default function TournamentLivePanel({
       <article className={styles.card}>
         <div className={styles.headingRow}>
           <div><p className={styles.eyebrow}>Authoritative tournament state</p><h2>{selectedTournament?.name || initialTournamentName || "Selected tournament"}</h2></div>
-          <button type="button" className={styles.secondaryButton} onClick={() => void loadLiveBoard()} disabled={busy || !selectedTournamentId || !selectedDrawId}>Reload selected draw</button>
         </div>
         <p className={styles.muted}>This draw-scoped tournament runner is not JUPR Live. Tournament games become official only through the guarded Publish workflow.</p>
+        <section className={styles.scopePanel} aria-label="Tournament operating scope">
+          <div className={styles.scopeHeading}>
+            <div>
+              <p className={styles.eyebrow}>Working scope</p>
+              <h3>Choose the draw you are operating</h3>
+            </div>
+            <p>Changing the working draw keeps you inside this tournament.</p>
+          </div>
+          <div className={styles.scopeGrid}>
+            <div className={styles.lockedTournament}>
+              <span>Tournament</span>
+              <strong>{selectedTournament?.name || initialTournamentName || "Selected tournament"}</strong>
+              <small>Locked to this tournament workspace</small>
+            </div>
+            <label htmlFor="working-draw">
+              Working draw
+              <select
+                id="working-draw"
+                value={selectedDrawId}
+                onChange={(event) => selectDraw(event.target.value)}
+                className={styles.input}
+                disabled={busy || !draws.length}
+                aria-describedby="working-draw-help"
+              >
+                <option value="">Choose a draw…</option>
+                {selectedDrawId && !draws.some((draw) => draw.id === selectedDrawId) ? <option value={selectedDrawId}>Loading selected draw…</option> : null}
+                {draws.map((draw) => <option key={draw.id} value={draw.id}>{drawLabel(draw)}</option>)}
+              </select>
+            </label>
+            <div className={styles.scopeActions}>
+              <button type="button" className={styles.secondaryButton} onClick={() => void loadDraws(selectedDrawId, false)} disabled={busy || !accessToken}>{busy ? "Refreshing…" : "Refresh available draws"}</button>
+              <button type="button" className={styles.secondaryButton} onClick={() => void loadLiveBoard()} disabled={busy || !selectedDrawId}>Reload selected draw</button>
+            </div>
+          </div>
+          <p id="working-draw-help" className={styles.scopeHelp}>Choose the division or draw you want to review across schedule, scoring, corrections, podium, and publish.</p>
+        </section>
         <div className={styles.statsGrid}>
           <div><span>Draw</span><strong>{draws.find((draw) => draw.id === selectedDrawId)?.name || selectedLifecycleDraw?.name || "Select a draw"}</strong></div>
           <div><span>Scores</span><strong>{finalizedGames} of {totalGames}</strong></div>
@@ -854,15 +884,6 @@ export default function TournamentLivePanel({
           <div><span>Awards</span><strong>{counts?.verified_awards ?? snapshot?.progression?.verified_awards ?? 0} / {counts?.expected_awards ?? snapshot?.progression?.expected_awards ?? 0}</strong></div>
         </div>
         {snapshot?.state_fingerprint ? <details><summary>Technical state version</summary><code>{snapshot.state_fingerprint}</code></details> : null}
-        <details className={styles.selectionDetails}>
-          <summary>Change or refresh selection</summary>
-          <div className={styles.controlGrid}>
-            <label className={styles.checkboxLabel}><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} disabled={busy} />Include archived tournaments</label>
-            <button type="button" className={styles.secondaryButton} onClick={loadTournaments} disabled={busy || !accessToken}>{busy ? "Refreshing…" : "Refresh tournaments"}</button>
-            <label>Tournament<select value={selectedTournamentId} onChange={(event) => selectTournament(event.target.value)} disabled={busy} className={styles.input}><option value="">Choose tournament…</option>{tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name}</option>)}</select></label>
-            <label>Draw<select value={selectedDrawId} onChange={(event) => selectDraw(event.target.value)} className={styles.input} disabled={busy || !draws.length}><option value="">Choose draw…</option>{draws.map((draw) => <option key={draw.id} value={draw.id}>{drawLabel(draw)}</option>)}</select></label>
-          </div>
-        </details>
         {!accessToken && !sessionLoading ? <p className={styles.sessionWarning}>Admin sign-in required. <Link href="/admin/login">Open admin login</Link></p> : null}
         {sessionMessage ? <p className={styles.errorText}>{sessionMessage}</p> : null}
       </article>

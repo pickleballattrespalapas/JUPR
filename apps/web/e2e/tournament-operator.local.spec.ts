@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 const tournamentId = "tournament-1";
 const drawId = "draw-1";
+const secondDrawId = "draw-2";
 const selectedQuery = `tournament=${tournamentId}&tournament_name=Staging+Summer+Classic&name=Staging+Summer+Classic&draw=${drawId}`;
 
 const players = [
@@ -10,15 +11,15 @@ const players = [
   { id: 3, name: "Caleb Nguyen" },
   { id: 4, name: "Diego Alvarez" }
 ];
-const teams = [
-  { id: "team-a", draw_id: drawId, team_number: 1, player1_id: 1, player2_id: 2, updated_at: "2026-08-15T12:00:00Z" },
-  { id: "team-b", draw_id: drawId, team_number: 2, player1_id: 3, player2_id: 4, updated_at: "2026-08-15T12:00:00Z" }
+const teamsForDraw = (selectedDrawId: string) => [
+  { id: "team-a", draw_id: selectedDrawId, team_number: 1, player1_id: 1, player2_id: 2, updated_at: "2026-08-15T12:00:00Z" },
+  { id: "team-b", draw_id: selectedDrawId, team_number: 2, player1_id: 3, player2_id: 4, updated_at: "2026-08-15T12:00:00Z" }
 ];
 
-function games() {
+function games(selectedDrawId = drawId) {
   return Array.from({ length: 21 }, (_, index) => ({
     id: `game-${index + 1}`,
-    draw_id: drawId,
+    draw_id: selectedDrawId,
     stage: "ROUND_ROBIN",
     rr_round_number: Math.floor(index / 7) + 1,
     rr_slot_number: (index % 7) + 1,
@@ -35,8 +36,10 @@ function blocker(code: string, message: string, count?: number) {
   return { code, scope: "tournament", count, message };
 }
 
-function liveSnapshot() {
-  const rows = games();
+function liveSnapshot(selectedDrawId = drawId) {
+  const rows = games(selectedDrawId);
+  const teams = teamsForDraw(selectedDrawId);
+  const selectedDrawName = selectedDrawId === secondDrawId ? "Open Division Draw" : "Manual Acceptance Draw";
   const publishBlockers = [
     blocker("OPEN_GAMES", "20 tournament games still need a finalized, non-tied score.", 20),
     blocker("PODIUM_INCOMPLETE", "The podium is incomplete and has not been explicitly reviewed."),
@@ -61,9 +64,12 @@ function liveSnapshot() {
     authority: "python_fastapi",
     product_boundary: "draw_scoped_tournament_runner_not_jupr_live",
     tournament: { id: tournamentId, name: "Staging Summer Classic", status: "LIVE", updated_at: "2026-08-15T12:00:00Z" },
-    draw_id: drawId,
-    summary: { draws: 1, teams: 2, games: 21, podium: 0, completed_games: 1 },
-    draws: [{ id: drawId, tournament_id: tournamentId, name: "Manual Acceptance Draw", status: "LIVE", updated_at: "2026-08-15T12:00:00Z" }],
+    draw_id: selectedDrawId,
+    summary: { draws: 2, teams: 2, games: 21, podium: 0, completed_games: 1 },
+    draws: [
+      { id: drawId, tournament_id: tournamentId, name: "Manual Acceptance Draw", status: "LIVE", updated_at: "2026-08-15T12:00:00Z" },
+      { id: secondDrawId, tournament_id: tournamentId, name: "Open Division Draw", status: "DRAFT", updated_at: "2026-08-15T12:00:00Z" }
+    ],
     teams,
     games: rows,
     podium: [],
@@ -81,7 +87,7 @@ function liveSnapshot() {
       tournament: { id: tournamentId, name: "Staging Summer Classic", status: "LIVE", updated_at: "2026-08-15T12:00:00Z" },
       phase: "live_in_progress",
       counts: { draws: 1, teams: 2, games: 21, finalized_games: 1, open_games: 20, tied_games: 0, podium_entries: 0, expected_awards: 6, verified_awards: 0, unexpected_awards: 0, published_games: 0, unpublished_games: 21, duplicate_publications: 0, active_operations: 0, uncertain_operations: 0 },
-      draws: [{ draw_id: drawId, name: "Manual Acceptance Draw", status: "LIVE", protected: true, counts: { games: 21, finalized_games: 1, open_games: 20 }, standings: [], podium: [], states: {}, operations, review_evidence: null, readiness: { official_publish: { ready: false, blockers: publishBlockers }, archive: { ready: false, blockers: publishBlockers } } }],
+      draws: [{ draw_id: selectedDrawId, name: selectedDrawName, status: "LIVE", protected: true, counts: { games: 21, finalized_games: 1, open_games: 20 }, standings: [], podium: [], states: {}, operations, review_evidence: null, readiness: { official_publish: { ready: false, blockers: publishBlockers }, archive: { ready: false, blockers: publishBlockers } } }],
       domain_readiness: { official_publish: { ready: false, blockers: publishBlockers }, archive: { ready: false, blockers: [...publishBlockers, blocker("ARCHIVE_OFFICIAL_LINKS", "All tournament games require exactly one official Match Log link before archive.")] } },
       runtime_capability: { writes_enabled: true, official_publish_enabled: true },
       evidence: { operations }
@@ -219,7 +225,7 @@ async function installMockApi(page: Page) {
       return;
     }
     if (url.pathname.includes(`/tournament-live/tournaments/${tournamentId}/snapshot`)) {
-      await route.fulfill({ json: liveSnapshot() });
+      await route.fulfill({ json: liveSnapshot(url.searchParams.get("draw_id") || drawId) });
       return;
     }
     if (url.pathname.endsWith(`/tournament-live/tournaments/${tournamentId}/check-in`) && request.method() === "GET") {
@@ -246,6 +252,29 @@ test("Home shows authoritative 1 of 21 truth and preserves selected context", as
   const scoringHref = await page.getByRole("link", { name: "Continue scoring" }).getAttribute("href");
   expect(scoringHref).toContain(`tournament=${tournamentId}`);
   expect(scoringHref).toContain(`draw=${drawId}`);
+});
+
+test("Draw selection stays inside the tournament workspace and survives reload", async ({ page }) => {
+  await page.goto(`/admin/tournaments/live-operations/draws?${selectedQuery}`);
+  await expect(page.getByRole("region", { name: "Tournament operating scope" })).toBeVisible();
+  await expect(page.getByText("Locked to this tournament workspace")).toBeVisible();
+  await expect(page.getByLabel("Tournament")).toHaveCount(0);
+  await expect(page.getByText("Change or refresh selection")).toHaveCount(0);
+
+  const drawSelector = page.getByLabel("Working draw");
+  await expect(drawSelector).toHaveValue(drawId);
+  await drawSelector.selectOption(secondDrawId);
+  await expect(page).toHaveURL(new RegExp(`tournament=${tournamentId}`));
+  await expect(page).toHaveURL(new RegExp(`draw=${secondDrawId}`));
+  await expect(drawSelector).toHaveValue(secondDrawId);
+  await expect(page.getByRole("heading", { name: "Staging Summer Classic draws and schedule" })).toBeVisible();
+  await expect(page.getByText("Open Division Draw", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "Live scoring" })).toHaveAttribute("href", new RegExp(`tournament=${tournamentId}.*draw=${secondDrawId}`));
+
+  await page.getByRole("button", { name: "Refresh available draws" }).click();
+  await expect(drawSelector).toHaveValue(secondDrawId);
+  await page.reload();
+  await expect(page.getByLabel("Working draw")).toHaveValue(secondDrawId);
 });
 
 test("Preflight check-in changes day without retaining old cards or losing context", async ({ page }) => {
@@ -315,7 +344,7 @@ test("Publish and archive remain blocked even when runtime writes are available"
   await expect(page.getByText("Payments, extras, and fulfillment")).toBeVisible();
 });
 
-for (const width of [1280, 1440]) {
+for (const width of [1024, 1280, 1440]) {
   test(`operator routes have no page-level overflow at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     for (const path of ["/admin/tournaments/live-operations", "/admin/tournaments/live-operations/check-in", "/admin/tournament-live", "/admin/tournaments/live-operations/corrections", "/admin/tournaments/ops/publish"]) {
