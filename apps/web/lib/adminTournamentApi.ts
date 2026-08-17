@@ -280,6 +280,8 @@ export type AdminTournamentLifecycleCounts = {
   official_matches?: number;
   duplicate_publications?: number;
   duplicate_official_links?: number;
+  mismatched_official_matches?: number;
+  official_matches_without_publication_evidence?: number;
   active_operations?: number;
   uncertain_operations?: number;
   recovery_required_operations?: number;

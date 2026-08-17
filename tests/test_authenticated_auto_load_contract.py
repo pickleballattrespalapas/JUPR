@@ -169,8 +169,8 @@ def test_refresh_preserves_valid_tournament_selections_and_reloads_current_detai
     tournament_live = _read("apps/web/app/admin/tournament-live/TournamentLivePanel.tsx")
     assert "preferredDrawId = selectedDrawId" in tournament_live
     assert "const preferredDrawStillAvailable" in tournament_live
-    assert "preferredDrawId && nextDraws.some((row) => row.id === preferredDrawId)" in tournament_live
-    assert ': !preferredDrawId && nextDraws.length === 1 ? nextDraws[0].id : "";' in tournament_live
+    assert "preferredDrawId && operableDraws.some((row) => row.id === preferredDrawId)" in tournament_live
+    assert ': !preferredDrawId && operableDraws.length === 1 ? operableDraws[0].id : "";' in tournament_live
     assert "if (!nextSelectedDrawId) {" in tournament_live
     assert "onClick={() => void loadDraws(selectedDrawId, false)}" in tournament_live
 
