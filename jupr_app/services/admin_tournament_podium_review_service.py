@@ -98,7 +98,6 @@ def _draw_projection(draw: dict[str, Any]) -> dict[str, Any]:
             "status",
             "draw_kind",
             "hidden_from_primary_ops",
-            "updated_at",
         )
     }
 
@@ -420,6 +419,7 @@ def review_admin_tournament_draw_podium(
         "review_fingerprint": review_fingerprint,
         "state_fingerprint": current_state,
         "draw_updated_at": str(draw.get("updated_at") or ""),
+        "draw": _draw_projection(draw),
         "team_versions": current_team_versions,
         "game_versions": current_game_versions,
         "podium": sorted(

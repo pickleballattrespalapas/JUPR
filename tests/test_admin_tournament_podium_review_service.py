@@ -179,6 +179,44 @@ def test_podium_review_writes_current_immutable_audit_evidence(monkeypatch) -> N
     assert current["current"] is True
 
 
+def test_badge_induced_draw_timestamp_drift_keeps_review_current(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    tables = podium_review_tables()
+    supabase = FakeSupabase(tables)
+    result = _review(supabase, tables)
+
+    # Award badge triggers touch draw.updated_at. That timestamp is not podium
+    # truth; exact team/game/podium evidence remains the review authority.
+    tables["tournament_event_draws"][0]["updated_at"] = (
+        "2026-08-15T12:05:00Z"
+    )
+    after_badge_touch = build_admin_tournament_podium_review_fingerprint(
+        draw=tables["tournament_event_draws"][0],
+        teams=tables["tournament_teams"],
+        games=tables["tournament_games"],
+        podium=tables["tournament_podium"],
+    )
+    assert after_badge_touch == result["review_fingerprint"]
+    assert find_current_admin_tournament_podium_review(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+        review_fingerprint=after_badge_touch,
+    )["current"] is True
+
+    tables["tournament_teams"][0]["updated_at"] = "2026-08-15T12:06:00Z"
+    after_team_drift = build_admin_tournament_podium_review_fingerprint(
+        draw=tables["tournament_event_draws"][0],
+        teams=tables["tournament_teams"],
+        games=tables["tournament_games"],
+        podium=tables["tournament_podium"],
+    )
+    assert after_team_drift != result["review_fingerprint"]
+
+
 def test_team_game_or_podium_drift_invalidates_review(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
     tables = podium_review_tables()

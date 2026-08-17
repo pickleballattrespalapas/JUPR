@@ -87,9 +87,13 @@ function phaseItems(
   if (phase === "live") {
     return [
       {
-        label: "Live overview",
+        label: "Day workspace",
         href: tournamentRouteHref("/admin/tournaments/live-operations", context),
-        match: (pathname) => pathname === "/admin/tournaments/live-operations"
+        match: (pathname) =>
+          pathname === "/admin/tournaments/live-operations" ||
+          pathname === "/admin/tournaments/live-operations/draws" ||
+          pathname === "/admin/tournaments/ops/draws" ||
+          pathname === "/admin/tournament-live"
       },
       {
         label: "Preflight & check-in",
@@ -98,22 +102,12 @@ function phaseItems(
           pathname === "/admin/tournaments/live-operations/check-in"
       },
       {
-        label: "Draws & schedule",
-        href: tournamentRouteHref("/admin/tournaments/live-operations/draws", context),
-        match: (pathname) => pathname === "/admin/tournaments/live-operations/draws" || pathname === "/admin/tournaments/ops/draws"
-      },
-      {
-        label: "Live scoring",
-        href: tournamentRouteHref("/admin/tournament-live", context),
-        match: (pathname) => pathname === "/admin/tournament-live"
-      },
-      {
         label: "Corrections & recovery",
         href: tournamentRouteHref("/admin/tournaments/live-operations/corrections", context),
         match: (pathname) => pathname === "/admin/tournaments/live-operations/corrections" || pathname === "/admin/tournaments/status"
       },
       {
-        label: "Podium draft",
+        label: "Podium & awards",
         href: tournamentRouteHref("/admin/tournaments/live-operations/podium", context),
         match: (pathname) => pathname === "/admin/tournaments/live-operations/podium" || pathname === "/admin/tournaments/ops"
       }

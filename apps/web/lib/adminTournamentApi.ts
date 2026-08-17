@@ -328,6 +328,7 @@ export type AdminTournamentLiveSnapshotResponse = AdminTournamentOpsSnapshotResp
   authority: "python_fastapi";
   product_boundary: "draw_scoped_tournament_runner_not_jupr_live";
   state_fingerprint?: string | null;
+  ops_state_fingerprint?: string | null;
   runtime: AdminTournamentLiveStatusResponse;
   progression?: {
     phase: string;

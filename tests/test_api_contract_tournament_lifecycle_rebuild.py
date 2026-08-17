@@ -66,13 +66,13 @@ def test_lifecycle_phase_overviews_and_subnavigation_exist() -> None:
   assert "initialTournamentId={context.tournamentId}" in live_shell
   assert "initialDrawId={context.drawId}" in live_shell
   assert "SelectedTournamentPanelScope" not in live_shell
-  for page in (
-      "app/admin/tournaments/live-operations/page.tsx",
-      "app/admin/tournaments/publish/page.tsx",
-  ):
-      source = read(page)
-      assert "TournamentLiveRoute" in source
-      assert "searchParams={searchParams}" in source
+  live_entry = read("app/admin/tournaments/live-operations/page.tsx")
+  assert "TournamentDayWorkspaceRoute" in live_entry
+  assert "searchParams={searchParams}" in live_entry
+
+  publish_entry = read("app/admin/tournaments/publish/page.tsx")
+  assert "TournamentLiveRoute" in publish_entry
+  assert "searchParams={searchParams}" in publish_entry
 
   for label in (
       "Tournament basics and policies",

@@ -47,6 +47,7 @@ from jupr_app.services.admin_tournament_match_publish_service import (
     reconcile_admin_tournament_official_publish,
 )
 from jupr_app.services.admin_tournament_ops_service import (
+    get_admin_tournament_ops_state_fingerprint,
     get_admin_tournament_ops_snapshot,
     require_admin_tournament_official_publish_runtime,
 )
@@ -810,6 +811,7 @@ def build_admin_tournament_live_snapshot(
             "authority": "python_fastapi",
             "product_boundary": "draw_scoped_tournament_runner_not_jupr_live",
             "state_fingerprint": None,
+            "ops_state_fingerprint": None,
             "runtime": status,
             "lifecycle": lifecycle,
             "readiness": {},
@@ -819,6 +821,17 @@ def build_admin_tournament_live_snapshot(
         raise ValueError("draw not found for this tournament")
 
     warnings = list(base.get("warnings") or [])
+    try:
+        ops_state_fingerprint = get_admin_tournament_ops_state_fingerprint(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=str(tournament_id),
+        )
+    except Exception:
+        ops_state_fingerprint = None
+        warnings.append(
+            "Tournament Ops guarded state is unavailable; podium review remains closed."
+        )
     games = list(base.get("games") or [])
     teams = list(base.get("teams") or [])
     podium = list(base.get("podium") or [])
@@ -930,6 +943,7 @@ def build_admin_tournament_live_snapshot(
         "authority": "python_fastapi",
         "product_boundary": "draw_scoped_tournament_runner_not_jupr_live",
         "state_fingerprint": fingerprint,
+        "ops_state_fingerprint": ops_state_fingerprint,
         "runtime": status,
         "lifecycle": lifecycle,
         "progression": {

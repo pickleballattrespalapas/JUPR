@@ -1,16 +1,17 @@
-import { Suspense } from "react";
-import TournamentAdminNav from "@/components/TournamentAdminNav";
-import TournamentLiveRoute from "../tournaments/live-operations/TournamentLiveRoute";
+import { redirect } from "next/navigation";
+import { readTournamentRouteContext, tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
 export default function AdminTournamentLivePage({ searchParams }: Props) {
-  return (
-    <>
-      <Suspense fallback={<div aria-hidden="true" style={{ minHeight: "42px", marginBottom: "1rem" }} />}>
-        <TournamentAdminNav />
-      </Suspense>
-      <TournamentLiveRoute searchParams={searchParams} view="scoring" phase="live" kicker="Tournament Manager / Live Operations" title="live scoring" description="Enter and review human-readable matchup scores for the selected draw, one game at a time." />
-    </>
-  );
+  const context = readTournamentRouteContext(searchParams);
+  redirect(tournamentRouteHref(
+    "/admin/tournaments/live-operations",
+    context,
+    { panel: "queue", court: first(searchParams?.court), game: first(searchParams?.game) }
+  ));
+}
+
+function first(value: string | string[] | undefined): string {
+  return String(Array.isArray(value) ? value[0] || "" : value || "").trim();
 }

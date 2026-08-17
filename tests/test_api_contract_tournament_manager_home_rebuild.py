@@ -118,6 +118,14 @@ def test_selected_tournament_module_pages_require_context() -> None:
             assert "readTournamentRouteContext(searchParams)" in route, path
             assert "context.tournamentId" in route, path
             assert 'redirect("/admin/tournaments")' in route, path
+        elif "TournamentDayWorkspaceRoute" in source:
+            route = read("app/admin/tournaments/live-operations/TournamentDayWorkspaceRoute.tsx")
+            assert "readTournamentRouteContext(searchParams)" in route, path
+            assert "context.tournamentId" in route, path
+            assert 'redirect("/admin/tournaments")' in route, path
+        elif "tournamentRouteHref" in source and "tournamentId" not in source:
+            assert "readTournamentRouteContext(searchParams)" in source, path
+            assert "redirect(tournamentRouteHref(" in source, path
         else:
             assert "tournamentId" in source, path
             assert 'redirect("/admin/tournaments")' in source or 'redirect("/admin/tournaments/create")' in source, path

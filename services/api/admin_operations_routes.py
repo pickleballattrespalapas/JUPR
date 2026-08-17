@@ -27,6 +27,9 @@ from services.api.admin_tournament_checkin_routes import (
     install_admin_tournament_checkin_routes,
 )
 from services.api.admin_tournament_live_routes import install_admin_tournament_live_routes
+from services.api.admin_tournament_day_live_routes import (
+    install_admin_tournament_day_live_routes,
+)
 from services.api.admin_tournament_commerce_routes import (
     install_admin_tournament_commerce_routes,
 )
@@ -79,6 +82,9 @@ def install_admin_operations_routes(app, *, get_supabase_client=None) -> None:
             app, get_supabase_client=get_supabase_client
         )
         install_admin_tournament_live_routes(app, get_supabase_client=get_supabase_client)
+        install_admin_tournament_day_live_routes(
+            app, get_supabase_client=get_supabase_client
+        )
         install_admin_tournament_commerce_routes(
             app, get_supabase_client=get_supabase_client
         )
