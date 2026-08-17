@@ -44,6 +44,7 @@ from jupr_app.services.admin_league_live_submit_service import (
     reconcile_admin_league_live_round_publish,
     submit_admin_league_live_round_publish,
 )
+from jupr_app.services.admin_league_results_service import build_admin_league_results
 from jupr_app.services.admin_league_manager_create_service import (
     create_admin_league_manager_draft,
     duplicate_admin_league_manager_draft,
@@ -963,6 +964,40 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         )
         try:
             return list_admin_league_manager_leagues(supabase, club_id=str(club_id))
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.get(
+        "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/results"
+    )
+    def get_admin_league_manager_results(
+        club_id: str,
+        league_name: str,
+        week: int | None = Query(default=None, ge=1),
+        player: int | None = Query(default=None, ge=1),
+        weekly_min_games: int = Query(default=4, ge=1, le=20),
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_league_manager_results",
+        )
+        try:
+            return build_admin_league_results(
+                supabase,
+                club_id=str(club_id),
+                league_name=str(league_name),
+                week_num=week,
+                player_id=player,
+                weekly_min_games=weekly_min_games,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
             _handle_common(exc)
 
