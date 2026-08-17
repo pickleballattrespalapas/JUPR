@@ -52,7 +52,7 @@ def test_league_awards_mint_fails_closed_without_seeded_badge_definitions() -> N
     assert "mint was not attempted" in service
     assert TOP_PERFORMER_BADGE_SEED in service
     assert "badge_definitions_ready" in panel
-    assert "Badge minting is blocked" in panel
+    assert "Badge publishing is unavailable until all required award definitions are ready." in panel
 
 
 def test_league_awards_staging_gate_is_closed_at_rest_and_available_only_in_its_wave() -> None:
