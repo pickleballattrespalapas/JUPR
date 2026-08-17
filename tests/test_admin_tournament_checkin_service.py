@@ -7,6 +7,7 @@ import pytest
 
 from jupr_app.services.admin_tournament_checkin_service import (
     StaleTournamentCheckInError,
+    TournamentCheckInIdempotencyConflictError,
     build_admin_tournament_checkin_snapshot,
     update_admin_tournament_checkin,
 )
@@ -64,15 +65,69 @@ class FakeRpc:
         if self.name != "admin_upsert_tournament_registration_check_in":
             raise RuntimeError(f"unsupported RPC {self.name}")
         rows = self.client.tables["tournament_registration_check_ins"]
+        operation_current = next(
+            (
+                row
+                for row in rows
+                if str(row.get("last_operation_key"))
+                == str(self.params["p_operation_key"])
+            ),
+            None,
+        )
+        if operation_current is not None and (
+            str(operation_current.get("tournament_id"))
+            != str(self.params["p_tournament_id"])
+            or str(operation_current.get("registration_id"))
+            != str(self.params["p_registration_id"])
+            or str(operation_current.get("registration_day_id"))
+            != str(self.params["p_registration_day_id"])
+        ):
+            raise RuntimeError(
+                "JUPR_CHECK_IN_IDEMPOTENCY_CONFLICT: operation key is already bound to a different attendance row."
+            )
         current = next(
             (
                 row
                 for row in rows
                 if str(row.get("tournament_id")) == str(self.params["p_tournament_id"])
                 and str(row.get("registration_id")) == str(self.params["p_registration_id"])
+                and str(row.get("registration_day_id"))
+                == str(self.params["p_registration_day_id"])
             ),
             None,
         )
+        if current is not None and str(current.get("last_operation_key")) == str(
+            self.params["p_operation_key"]
+        ):
+            requested_fingerprint = {
+                "attendance_status": self.params["p_attendance_status"],
+                "waiver_verified": self.params["p_waiver_verified"],
+                "approved_substitute_player_id": self.params[
+                    "p_approved_substitute_player_id"
+                ],
+                "notes": self.params.get("p_notes"),
+            }
+            current_fingerprint = {
+                "attendance_status": current["attendance_status"],
+                "waiver_verified": current["waiver_verified"],
+                "approved_substitute_player_id": current.get(
+                    "approved_substitute_player_id"
+                ),
+                "notes": current.get("notes"),
+            }
+            if requested_fingerprint != current_fingerprint:
+                raise RuntimeError(
+                    "JUPR_CHECK_IN_IDEMPOTENCY_CONFLICT: operation key was reused with a different request."
+                )
+            return SimpleNamespace(
+                data={
+                    "ok": True,
+                    "check_in": dict(current),
+                    "attendee_identity_changed": False,
+                    "attendance_reset": False,
+                    "idempotent_replay": True,
+                }
+            )
         expected = self.params.get("p_expected_updated_at")
         if current is None and expected is not None:
             return SimpleNamespace(data={"ok": False, "code": "CHECK_IN_STALE"})
@@ -131,7 +186,17 @@ class FakeRpc:
             "id": str((current or {}).get("id") or "check-in-1"),
             "tournament_id": self.params["p_tournament_id"],
             "registration_id": self.params["p_registration_id"],
-            "checked_in": False if identity_changed else self.params["p_checked_in"],
+            "registration_day_id": self.params["p_registration_day_id"],
+            "attendance_status": (
+                "EXPECTED"
+                if identity_changed
+                else self.params["p_attendance_status"]
+            ),
+            "checked_in": (
+                False
+                if identity_changed
+                else self.params["p_attendance_status"] == "CHECKED_IN"
+            ),
             "waiver_verified": False
             if identity_changed
             else self.params["p_waiver_verified"],
@@ -140,6 +205,7 @@ class FakeRpc:
             "approved_substitute_name": substitute_name,
             "notes": self.params.get("p_notes"),
             "updated_by": self.params.get("p_updated_by"),
+            "last_operation_key": self.params.get("p_operation_key"),
             "updated_at": "2026-08-15T12:01:00Z",
         }
         if current is None:
@@ -153,6 +219,7 @@ class FakeRpc:
                 "check_in": dict(payload),
                 "attendee_identity_changed": identity_changed,
                 "attendance_reset": identity_changed,
+                "idempotent_replay": False,
             }
         )
 
@@ -224,6 +291,7 @@ def checkin_tables() -> dict[str, list[dict]]:
                 "id": "event-1",
                 "tournament_id": "tour-1",
                 "registration_day_id": "day-1",
+                "scheduled_day_ids": ["day-1"],
                 "label": "Women's 3.5",
                 "event_family_label": "Women's doubles",
                 "division_name": "3.5",
@@ -360,6 +428,8 @@ def checkin_tables() -> dict[str, list[dict]]:
                 "id": "check-in-1",
                 "tournament_id": "tour-1",
                 "registration_id": "reg-1",
+                "registration_day_id": "day-1",
+                "attendance_status": "CHECKED_IN",
                 "checked_in": True,
                 "waiver_verified": True,
                 "attendee_identity_key": "player:1",
@@ -367,9 +437,11 @@ def checkin_tables() -> dict[str, list[dict]]:
                 "approved_substitute_name": None,
                 "notes": "Approved by TD",
                 "updated_by": "admin@example.com",
+                "last_operation_key": "00000000-0000-4000-8000-000000000001",
                 "updated_at": "2026-08-15T12:00:00Z",
             }
         ],
+        "tournament_event_draws": [],
         "players": [
             {"id": 1, "club_id": "club-1", "name": "Alex Original", "active": True},
             {"id": 2, "club_id": "club-1", "name": "Blair Partner", "active": True},
@@ -390,8 +462,14 @@ def test_snapshot_is_operational_and_keeps_offline_payment_authoritative() -> No
     assert snapshot["summary"] == {
         "expected": 4,
         "checked_in": 1,
-        "absent": 3,
+        "absent": 0,
+        "not_checked_in": 3,
         "unresolved": 2,
+    }
+    assert snapshot["day_scope"]["selected_day_id"] == "day-1"
+    assert {row["attendance_status"] for row in snapshot["registrants"]} == {
+        "EXPECTED",
+        "CHECKED_IN",
     }
     alex = next(card for card in snapshot["registrants"] if card["registration_id"] == "reg-1")
     assert alex["payment"]["status"] == "PAID"
@@ -532,12 +610,15 @@ def test_snapshot_fails_closed_for_duplicate_saved_attendee_identity() -> None:
             "id": "check-in-2",
             "tournament_id": "tour-1",
             "registration_id": "reg-2",
+            "registration_day_id": "day-1",
+            "attendance_status": "CHECKED_IN",
             "checked_in": True,
             "waiver_verified": True,
             "attendee_identity_key": "player:10",
             "approved_substitute_player_id": 10,
             "approved_substitute_name": "Sam Substitute",
             "updated_by": "admin@example.com",
+            "last_operation_key": "00000000-0000-4000-8000-000000000002",
             "updated_at": "2026-08-15T12:02:00Z",
         }
     )
@@ -572,6 +653,240 @@ def test_snapshot_exposes_unlinked_and_needs_partner_participants() -> None:
     confirmed = next(card for card in snapshot["registrants"] if card["registration_id"] == "reg-1")
     assert confirmed["events"][0]["team_state"] == "CONFIRMED_LINK"
     assert confirmed["events"][0]["partner_name"] == "Blair Partner"
+
+
+def test_snapshot_scopes_players_unresolved_and_readiness_to_selected_day() -> None:
+    tables = checkin_tables()
+    tables["tournament_registration_days"].append(
+        {
+            "id": "day-2",
+            "tournament_id": "tour-1",
+            "label": "Friday",
+            "event_date": "2026-08-21",
+            "enabled": True,
+            "sort_order": 2,
+            "court_count": 2,
+            "court_labels": ["1", "2"],
+            "court_open_time": "09:00",
+            "court_close_time": "14:00",
+        }
+    )
+    tables["tournament_event_options"].append(
+        {
+            "id": "event-2",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-2",
+            "scheduled_day_ids": ["day-2"],
+            "label": "Friday singles",
+            "event_family_label": "Singles",
+            "division_name": "Open",
+            "event_type": "SINGLES",
+            "partner_required": False,
+            "team_allow_substitutes": False,
+            "enabled": True,
+            "sort_order": 1,
+        }
+    )
+    casey_selection = next(
+        row
+        for row in tables["tournament_registration_selections"]
+        if row["registration_id"] == "reg-3"
+    )
+    casey_selection.update(
+        {"registration_day_id": "day-2", "event_option_id": "event-2"}
+    )
+    tables["tournament_event_draws"].append(
+        {
+            "id": "draw-2",
+            "tournament_id": "tour-1",
+            "event_option_id": "event-2",
+            "name": "Friday singles draw",
+            "status": "ACTIVE",
+        }
+    )
+
+    thursday = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+    friday = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-2",
+    )
+
+    assert thursday["day_scope"]["selected_day_id"] == "day-1"
+    assert [row["id"] for row in thursday["day_scope"]["available_days"]] == [
+        "day-1",
+        "day-2",
+    ]
+    assert {row["registration_id"] for row in thursday["registrants"]} == {
+        "reg-1",
+        "reg-2",
+        "reg-4",
+    }
+    assert {row["registration_id"] for row in friday["registrants"]} == {"reg-3"}
+    assert thursday["unresolved_participants"][0]["registration_id"] == "reg-4"
+    assert friday["unresolved_participants"] == []
+    assert friday["readiness"]["draws"]["status"] == "COMPLETE"
+
+
+def test_multiday_event_membership_uses_scheduled_days_and_deduplicates_cards() -> None:
+    tables = checkin_tables()
+    tables["tournament_registration_days"].append(
+        {
+            "id": "day-2",
+            "tournament_id": "tour-1",
+            "label": "Friday",
+            "event_date": "2026-08-21",
+            "enabled": True,
+            "sort_order": 2,
+            "court_count": 2,
+            "court_labels": ["1", "2"],
+            "court_open_time": "09:00",
+            "court_close_time": "14:00",
+        }
+    )
+    tables["tournament_event_options"][0]["scheduled_day_ids"] = [
+        "day-1",
+        "day-2",
+    ]
+    tables["tournament_event_options"].extend(
+        [
+            {
+                "id": "event-2",
+                "tournament_id": "tour-1",
+                "registration_day_id": "day-2",
+                "scheduled_day_ids": ["day-2"],
+                "label": "Friday bonus singles",
+                "event_family_label": "Singles",
+                "division_name": "Open",
+                "event_type": "SINGLES",
+                "partner_required": False,
+                "team_allow_substitutes": False,
+                "enabled": True,
+                "sort_order": 2,
+            },
+            {
+                "id": "event-day-1-unresolved",
+                "tournament_id": "tour-1",
+                "registration_day_id": "day-1",
+                "scheduled_day_ids": ["day-1"],
+                "label": "Thursday unresolved doubles",
+                "event_family_label": "Doubles",
+                "division_name": "Open",
+                "event_type": "DOUBLES",
+                "partner_required": True,
+                "team_allow_substitutes": False,
+                "enabled": True,
+                "sort_order": 3,
+            },
+        ]
+    )
+    tables["tournament_registration_selections"].append(
+        {
+            "id": "sel-1-day-2-bonus",
+            "tournament_id": "tour-1",
+            "registration_id": "reg-1",
+            "registration_day_id": "day-2",
+            "event_option_id": "event-2",
+            "partner_mode": "NONE",
+        }
+    )
+    for selection in tables["tournament_registration_selections"]:
+        if selection["registration_id"] in {"reg-3", "reg-4"}:
+            selection["event_option_id"] = "event-day-1-unresolved"
+            selection["registration_day_id"] = "day-1"
+
+    day_one = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+    day_two = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-2",
+    )
+
+    assert sum(row["registration_id"] == "reg-1" for row in day_one["registrants"]) == 1
+    assert sum(row["registration_id"] == "reg-1" for row in day_two["registrants"]) == 1
+    day_two_alex = next(
+        row for row in day_two["registrants"] if row["registration_id"] == "reg-1"
+    )
+    assert {event["event_option_id"] for event in day_two_alex["events"]} == {
+        "event-1",
+        "event-2",
+    }
+    assert day_two_alex["attendance_status"] == "EXPECTED"
+    assert day_two["unresolved_participants"] == []
+    assert {
+        row["registration_id"] for row in day_one["unresolved_participants"]
+    } == {"reg-3", "reg-4"}
+
+
+def test_snapshot_rejects_disabled_or_foreign_day() -> None:
+    tables = checkin_tables()
+    tables["tournament_registration_days"][0]["enabled"] = False
+    with pytest.raises(ValueError, match="enabled event day"):
+        build_admin_tournament_checkin_snapshot(
+            FakeSupabase(tables),
+            club_id="club-1",
+            tournament_id="tour-1",
+            registration_day_id="day-1",
+        )
+
+
+def test_snapshot_fails_closed_for_malformed_scheduled_days() -> None:
+    tables = checkin_tables()
+    tables["tournament_event_options"][0]["scheduled_day_ids"] = {
+        "day": "day-1"
+    }
+
+    with pytest.raises(ValueError, match="scheduled days are malformed"):
+        build_admin_tournament_checkin_snapshot(
+            FakeSupabase(tables),
+            club_id="club-1",
+            tournament_id="tour-1",
+            registration_day_id="day-1",
+        )
+
+    tables = checkin_tables()
+    tables["tournament_registration_days"][0]["tournament_id"] = "tour-other"
+    with pytest.raises(ValueError, match="enabled event day"):
+        build_admin_tournament_checkin_snapshot(
+            FakeSupabase(tables),
+            club_id="club-1",
+            tournament_id="tour-1",
+            registration_day_id="day-1",
+        )
+
+
+def test_snapshot_never_infers_absent_from_not_checked_in() -> None:
+    tables = checkin_tables()
+    tables["tournament_registration_check_ins"][0].update(
+        {"attendance_status": "ABSENT", "checked_in": False}
+    )
+
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables), club_id="club-1", tournament_id="tour-1"
+    )
+
+    assert snapshot["summary"]["expected"] == 4
+    assert snapshot["summary"]["checked_in"] == 0
+    assert snapshot["summary"]["absent"] == 1
+    assert snapshot["summary"]["not_checked_in"] == 3
+    statuses = {
+        row["registration_id"]: row["attendance_status"]
+        for row in snapshot["registrants"]
+    }
+    assert statuses["reg-1"] == "ABSENT"
+    assert statuses["reg-2"] == "EXPECTED"
 
 
 def test_confirmed_link_is_not_complete_when_partner_registration_is_inactive() -> None:
@@ -630,8 +945,10 @@ def test_update_uses_sql_cas_and_resets_attendance_when_attendee_changes(monkeyp
         club_id="club-1",
         tournament_id="tour-1",
         registration_id="reg-1",
+        registration_day_id="day-1",
         expected_updated_at="2026-08-15T12:00:00Z",
-        checked_in=True,
+        attendance_status="CHECKED_IN",
+        operation_key="00000000-0000-4000-8000-000000000101",
         waiver_verified=True,
         approved_substitute_player_id=None,
         approved_substitute_name=None,
@@ -654,8 +971,10 @@ def test_update_rejects_stale_version(monkeypatch) -> None:
             club_id="club-1",
             tournament_id="tour-1",
             registration_id="reg-1",
+            registration_day_id="day-1",
             expected_updated_at="2026-08-15T11:59:00Z",
-            checked_in=False,
+            attendance_status="EXPECTED",
+            operation_key="00000000-0000-4000-8000-000000000102",
             waiver_verified=False,
             approved_substitute_player_id=None,
             approved_substitute_name=None,
@@ -663,6 +982,104 @@ def test_update_rejects_stale_version(monkeypatch) -> None:
             actor_email="admin@example.com",
             actor_role="club_owner",
         )
+
+
+def test_update_replays_same_operation_without_timestamp_bump(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENV", "local")
+    client = FakeSupabase(checkin_tables())
+
+    result = update_admin_tournament_checkin(
+        client,
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_id="reg-1",
+        registration_day_id="day-1",
+        expected_updated_at="2026-08-15T11:59:00Z",
+        attendance_status="CHECKED_IN",
+        operation_key="00000000-0000-4000-8000-000000000001",
+        waiver_verified=True,
+        approved_substitute_player_id=None,
+        approved_substitute_name=None,
+        notes="Approved by TD",
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+    )
+
+    assert result["idempotent_replay"] is True
+    assert result["check_in"]["updated_at"] == "2026-08-15T12:00:00Z"
+
+
+def test_update_rejects_operation_key_reuse_for_different_request(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENV", "local")
+    with pytest.raises(
+        TournamentCheckInIdempotencyConflictError,
+        match="different attendance request",
+    ):
+        update_admin_tournament_checkin(
+            FakeSupabase(checkin_tables()),
+            club_id="club-1",
+            tournament_id="tour-1",
+            registration_id="reg-1",
+            registration_day_id="day-1",
+            expected_updated_at="2026-08-15T12:00:00Z",
+            attendance_status="ABSENT",
+            operation_key="00000000-0000-4000-8000-000000000001",
+            waiver_verified=True,
+            approved_substitute_player_id=None,
+            approved_substitute_name=None,
+            notes="Approved by TD",
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+
+def test_update_rejects_operation_key_reuse_for_different_registration(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUPR_ENV", "local")
+    with pytest.raises(
+        TournamentCheckInIdempotencyConflictError,
+        match="different attendance request",
+    ):
+        update_admin_tournament_checkin(
+            FakeSupabase(checkin_tables()),
+            club_id="club-1",
+            tournament_id="tour-1",
+            registration_id="reg-2",
+            registration_day_id="day-1",
+            expected_updated_at=None,
+            attendance_status="EXPECTED",
+            operation_key="00000000-0000-4000-8000-000000000001",
+            waiver_verified=False,
+            approved_substitute_player_id=None,
+            approved_substitute_name=None,
+            notes="",
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+
+def test_update_rejects_non_uuid_operation_key_before_rpc(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENV", "local")
+    client = FakeSupabase(checkin_tables())
+    with pytest.raises(ValueError, match="UUID operation key"):
+        update_admin_tournament_checkin(
+            client,
+            club_id="club-1",
+            tournament_id="tour-1",
+            registration_id="reg-1",
+            registration_day_id="day-1",
+            expected_updated_at="2026-08-15T12:00:00Z",
+            attendance_status="EXPECTED",
+            operation_key="not-a-uuid",
+            waiver_verified=False,
+            approved_substitute_player_id=None,
+            approved_substitute_name=None,
+            notes="",
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+    assert client.rpc_calls == []
 
 
 def test_update_rejects_substitute_when_event_policy_is_disabled(monkeypatch) -> None:
@@ -675,8 +1092,10 @@ def test_update_rejects_substitute_when_event_policy_is_disabled(monkeypatch) ->
             club_id="club-1",
             tournament_id="tour-1",
             registration_id="reg-1",
+            registration_day_id="day-1",
             expected_updated_at="2026-08-15T12:00:00Z",
-            checked_in=False,
+            attendance_status="EXPECTED",
+            operation_key="00000000-0000-4000-8000-000000000103",
             waiver_verified=False,
             approved_substitute_player_id=10,
             approved_substitute_name=None,
@@ -696,8 +1115,10 @@ def test_update_rejects_name_only_substitute_without_calling_rpc(monkeypatch) ->
             club_id="club-1",
             tournament_id="tour-1",
             registration_id="reg-1",
+            registration_day_id="day-1",
             expected_updated_at="2026-08-15T12:00:00Z",
-            checked_in=True,
+            attendance_status="CHECKED_IN",
+            operation_key="00000000-0000-4000-8000-000000000104",
             waiver_verified=True,
             approved_substitute_player_id=None,
             approved_substitute_name="Name Only Guest",
@@ -721,8 +1142,10 @@ def test_update_disables_substitute_even_when_selected_event_policy_allows(
             club_id="club-1",
             tournament_id="tour-1",
             registration_id="reg-1",
+            registration_day_id="day-1",
             expected_updated_at="2026-08-15T12:00:00Z",
-            checked_in=False,
+            attendance_status="EXPECTED",
+            operation_key="00000000-0000-4000-8000-000000000105",
             waiver_verified=False,
             approved_substitute_player_id=10,
             approved_substitute_name=None,
@@ -747,8 +1170,14 @@ def test_update_rpc_revalidates_positive_registration_status_under_lock(
                 club_id="club-1",
                 tournament_id="tour-1",
                 registration_id="reg-1",
+                registration_day_id="day-1",
                 expected_updated_at="2026-08-15T12:00:00Z",
-                checked_in=True,
+                attendance_status="CHECKED_IN",
+                operation_key=(
+                    "00000000-0000-4000-8000-000000000106"
+                    if status == "WAITLIST"
+                    else "00000000-0000-4000-8000-000000000107"
+                ),
                 waiver_verified=True,
                 approved_substitute_player_id=None,
                 approved_substitute_name=None,
@@ -772,8 +1201,10 @@ def test_update_rejects_client_substitute_name_even_with_player_id(
             club_id="club-1",
             tournament_id="tour-1",
             registration_id="reg-1",
+            registration_day_id="day-1",
             expected_updated_at="2026-08-15T12:00:00Z",
-            checked_in=True,
+            attendance_status="CHECKED_IN",
+            operation_key="00000000-0000-4000-8000-000000000108",
             waiver_verified=True,
             approved_substitute_player_id=10,
             approved_substitute_name="Spoofed Browser Name",

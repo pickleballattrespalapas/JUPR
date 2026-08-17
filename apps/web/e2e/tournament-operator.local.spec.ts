@@ -100,36 +100,98 @@ const detail = {
   summary: { registrations: 32, selections: 32, by_registration_status: { confirmed: 32 }, by_payment_status: { offline: 32 } }
 };
 
-const checkInSnapshot = {
-  ok: true,
-  mode: "tournament_registration_check_in_snapshot",
-  authority: "python_fastapi",
-  tournament: { id: tournamentId, name: "Staging Summer Classic", status: "LIVE", start_date: "2026-09-01", end_date: "2026-09-02" },
-  summary: { expected: 7, checked_in: 1, absent: 6, unresolved: 1 },
-  registrants: [{
-    registration_id: "registration-1",
-    registration_status: "confirmed",
+const checkInDays = [
+  { id: "day-1", label: "Tuesday — Gender Doubles", event_date: "2026-09-01", sort_order: 0 },
+  { id: "day-2", label: "Wednesday — Mixed & Open Doubles", event_date: "2026-09-02", sort_order: 1 }
+];
+
+function checkInRegistrant(options: {
+  registrationId: string;
+  dayId: string;
+  playerId: number;
+  name: string;
+  status: "EXPECTED" | "CHECKED_IN" | "ABSENT";
+  eventLabel: string;
+}) {
+  return {
+    registration_id: options.registrationId,
+    registration_day_id: options.dayId,
+    registration_status: "CONFIRMED",
     registration_updated_at: "2026-08-15T12:00:00Z",
-    original_registrant: { player_id: 1, name: "Mateo Rivera" },
-    attendee: { player_id: 1, name: "Mateo Rivera", is_approved_substitute: false },
-    check_in: { checked_in: true, notes: null, updated_at: "2026-08-15T12:00:00Z", updated_by: "operator@example.invalid" },
-    waiver: { verified: true, subject: "attending_player", subject_name: "Mateo Rivera" },
-    payment: { status: "paid_offline", source: "offline", ready: true },
-    events: [{ selection_id: "selection-1", event_option_id: "event-1", event_label: "Men's Doubles", team_state: "paired", partner_name: "Liam Chen", entered_partner_name: "Liam Chen", blockers: [] }],
+    attendance_status: options.status,
+    original_registrant: { player_id: options.playerId, name: options.name },
+    attendee: { player_id: options.playerId, name: options.name, is_approved_substitute: false },
+    substitution: {
+      allowed: true,
+      event_policy_allows: true,
+      blocker: { code: "NONE", status: "COMPLETE", title: "Available", detail: "" }
+    },
+    check_in: {
+      registration_day_id: options.dayId,
+      attendance_status: options.status,
+      checked_in: options.status === "CHECKED_IN",
+      notes: null,
+      updated_at: "2026-08-15T12:00:00Z",
+      updated_by: "operator@example.invalid",
+      identity_current: true,
+      requires_reconfirmation: false
+    },
+    waiver: { verified: options.status === "CHECKED_IN", subject: "attending_player", subject_name: options.name },
+    payment: { status: "PAID", source: "offline_payment_tracking", ready: true },
+    events: [{
+      selection_id: `selection-${options.registrationId}`,
+      event_option_id: `event-${options.dayId}`,
+      event_label: options.eventLabel,
+      team_state: "NOT_REQUIRED",
+      partner_name: null,
+      entered_partner_name: null,
+      blockers: []
+    }],
     blockers: []
-  }],
-  player_options: players,
-  inactive_registrants: [],
-  unresolved_participants: [{ kind: "needs_partner", registration_id: "registration-8", registration_name: "Jordan Lee", selection_id: "selection-8", event_label: "Mixed Doubles", entered_partner_name: "", title: "Partner unresolved", detail: "Jordan Lee still needs a confirmed partner." }],
-  readiness: {
-    schedule: { status: "READY", timezone: "America/Chicago", active_day_count: 2, blockers: [], days: [] },
-    draws: { status: "READY", active_division_count: 7, draw_count: 1, blockers: [] },
-    staffing: { status: "NEEDS_REVIEW", source: "no_authoritative_staffing_record", blockers: ["Confirm court desk and score-entry staffing."] }
-  },
-  completed_items: ["Tournament dates and timezone are set."],
-  blockers: ["One participant has an unresolved partner.", "Confirm staffing."],
-  runtime: { writes_enabled: true }
-};
+  };
+}
+
+function checkInSnapshot(dayId: string) {
+  const selectedDay = checkInDays.find((day) => day.id === dayId) || checkInDays[0];
+  const dayOne = selectedDay.id === "day-1";
+  const registrants = dayOne
+    ? [
+        checkInRegistrant({ registrationId: "registration-1", dayId: selectedDay.id, playerId: 1, name: "Mateo Rivera", status: "CHECKED_IN", eventLabel: "Men's Doubles" }),
+        checkInRegistrant({ registrationId: "registration-8", dayId: selectedDay.id, playerId: 2, name: "Jordan Lee", status: "EXPECTED", eventLabel: "Mixed Doubles" })
+      ]
+    : [
+        checkInRegistrant({ registrationId: "registration-4", dayId: selectedDay.id, playerId: 4, name: "Diego Alvarez", status: "ABSENT", eventLabel: "Open Doubles" })
+      ];
+  const unresolvedParticipants = dayOne
+    ? [{ kind: "NEEDS_PARTNER", registration_id: "registration-8", registration_name: "Jordan Lee", selection_id: "selection-registration-8", event_label: "Mixed Doubles", entered_partner_name: "", title: "Partner unresolved", detail: "Jordan Lee still needs a confirmed partner." }]
+    : [];
+  return {
+    ok: true,
+    mode: "tournament_registration_check_in",
+    authority: "python_fastapi_supabase",
+    tournament: { id: tournamentId, name: "Staging Summer Classic", status: "LIVE", start_date: "2026-09-01", end_date: "2026-09-02" },
+    day_scope: { selected_day_id: selectedDay.id, selected_day: selectedDay, available_days: checkInDays },
+    summary: {
+      expected: registrants.length,
+      checked_in: registrants.filter((row) => row.attendance_status === "CHECKED_IN").length,
+      not_checked_in: registrants.filter((row) => row.attendance_status === "EXPECTED").length,
+      absent: registrants.filter((row) => row.attendance_status === "ABSENT").length,
+      unresolved: unresolvedParticipants.length
+    },
+    registrants,
+    player_options: players,
+    inactive_registrants: [],
+    unresolved_participants: unresolvedParticipants,
+    readiness: {
+      schedule: { status: "COMPLETE", timezone: "America/Chicago", active_day_count: 1, blockers: [], days: [selectedDay] },
+      draws: { status: "COMPLETE", active_division_count: 1, draw_count: 1, blockers: [] },
+      staffing: { status: "NEEDS_REVIEW", source: "no_authoritative_staffing_record", blockers: [{ code: "STAFFING_REVIEW_REQUIRED", status: "NEEDS_REVIEW", title: "Staffing needs review", detail: `Confirm staffing for ${selectedDay.label}.` }] }
+    },
+    completed_items: [],
+    blockers: [],
+    runtime: { writes_enabled: true }
+  };
+}
 
 async function installMockApi(page: Page) {
   await page.addInitScript(() => {
@@ -161,7 +223,7 @@ async function installMockApi(page: Page) {
       return;
     }
     if (url.pathname.endsWith(`/tournament-live/tournaments/${tournamentId}/check-in`) && request.method() === "GET") {
-      await route.fulfill({ json: checkInSnapshot });
+      await route.fulfill({ json: checkInSnapshot(url.searchParams.get("day_id") || "day-1") });
       return;
     }
     if (url.pathname.endsWith(`/tournament-live/tournaments/${tournamentId}/draws/${drawId}/commands`)) {
@@ -186,15 +248,32 @@ test("Home shows authoritative 1 of 21 truth and preserves selected context", as
   expect(scoringHref).toContain(`draw=${drawId}`);
 });
 
-test("Preflight and check-in shows durable attendance and unresolved truth", async ({ page }) => {
-  await page.goto(`/admin/tournaments/live-operations/check-in?${selectedQuery}`);
+test("Preflight check-in changes day without retaining old cards or losing context", async ({ page }) => {
+  await page.goto(`/admin/tournaments/live-operations/check-in?${selectedQuery}&day_id=day-1`);
   await expect(page.getByRole("heading", { name: "Staging Summer Classic preflight and check-in" })).toBeVisible();
-  await expect(page.getByText("Expected")).toBeVisible();
-  await expect(page.getByText("Checked in")).toBeVisible();
-  await expect(page.getByText("Absent")).toBeVisible();
-  await expect(page.getByText("Unresolved")).toBeVisible();
+  const summary = page.getByRole("region", { name: "Check-in summary" });
+  await expect(summary.getByText("Expected today")).toBeVisible();
+  await expect(summary.getByText("Checked in")).toBeVisible();
+  await expect(summary.getByText("Not checked in")).toBeVisible();
+  await expect(summary.getByText("Absent")).toBeVisible();
+  await expect(summary.getByText("Unresolved")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Player check-in" })).toBeVisible();
   await expect(page.getByText("Partner unresolved")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Mateo Rivera" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Diego Alvarez" })).toHaveCount(0);
+
+  await page.getByLabel("Tournament day").selectOption("day-2");
+  await expect(page).toHaveURL(/day_id=day-2/);
+  await expect(page).toHaveURL(new RegExp(`tournament=${tournamentId}`));
+  await expect(page).toHaveURL(new RegExp(`draw=${drawId}`));
+  await expect(page.getByRole("heading", { name: "Diego Alvarez" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Mateo Rivera" })).toHaveCount(0);
+  await expect(page.getByText("Partner unresolved")).toHaveCount(0);
+  await expect(page.getByText("Absent", { exact: true }).last()).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByLabel("Tournament day")).toHaveValue("day-2");
+  await expect(page.getByRole("heading", { name: "Diego Alvarez" })).toBeVisible();
   const scoring = page.getByRole("link", { name: "Live scoring" });
   await expect(scoring).toHaveAttribute("href", new RegExp(`tournament=${tournamentId}.*draw=${drawId}`));
 });
@@ -239,7 +318,7 @@ test("Publish and archive remain blocked even when runtime writes are available"
 for (const width of [1280, 1440]) {
   test(`operator routes have no page-level overflow at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
-    for (const path of ["/admin/tournaments/live-operations", "/admin/tournament-live", "/admin/tournaments/live-operations/corrections", "/admin/tournaments/ops/publish"]) {
+    for (const path of ["/admin/tournaments/live-operations", "/admin/tournaments/live-operations/check-in", "/admin/tournament-live", "/admin/tournaments/live-operations/corrections", "/admin/tournaments/ops/publish"]) {
       await page.goto(`${path}?${selectedQuery}`);
       await expect(page.locator("body")).toContainText("Staging Summer Classic");
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), path).toBe(true);

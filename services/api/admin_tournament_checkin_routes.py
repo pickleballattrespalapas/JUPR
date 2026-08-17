@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
+from uuid import UUID
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 from pydantic import BaseModel, Field
 
 from jupr_app.domain.admin.roles import PERMISSION_MANAGE_TOURNAMENTS
 from jupr_app.services.admin_tournament_checkin_service import (
     StaleTournamentCheckInError,
+    TournamentCheckInIdempotencyConflictError,
     build_admin_tournament_checkin_snapshot,
     update_admin_tournament_checkin,
 )
@@ -21,7 +23,8 @@ from services.api.auth import auth_header
 
 class AdminTournamentCheckInUpdateRequest(BaseModel):
     expected_updated_at: str | None = Field(default=None, max_length=120)
-    checked_in: bool = False
+    attendance_status: Literal["EXPECTED", "CHECKED_IN", "ABSENT"]
+    operation_key: UUID
     waiver_verified: bool = False
     approved_substitute_player_id: int | None = Field(default=None, ge=1)
     approved_substitute_name: str | None = Field(default=None, max_length=160)
@@ -35,6 +38,7 @@ def install_admin_tournament_checkin_routes(app, *, get_supabase_client) -> None
     def get_admin_tournament_check_in(
         club_id: str,
         tournament_id: str,
+        day_id: str | None = Query(default=None, min_length=1, max_length=160),
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         if not is_admin_tournament_admin_enabled():
@@ -53,6 +57,7 @@ def install_admin_tournament_checkin_routes(app, *, get_supabase_client) -> None
                 supabase,
                 club_id=str(club_id),
                 tournament_id=str(tournament_id),
+                registration_day_id=day_id,
             )
         except Exception as exc:
             _handle(exc)
@@ -65,6 +70,7 @@ def install_admin_tournament_checkin_routes(app, *, get_supabase_client) -> None
         tournament_id: str,
         registration_id: str,
         payload: AdminTournamentCheckInUpdateRequest,
+        day_id: str = Query(min_length=1, max_length=160),
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         if not is_admin_tournament_admin_enabled():
@@ -91,8 +97,10 @@ def install_admin_tournament_checkin_routes(app, *, get_supabase_client) -> None
                 club_id=str(club_id),
                 tournament_id=str(tournament_id),
                 registration_id=str(registration_id),
+                registration_day_id=day_id,
                 expected_updated_at=payload.expected_updated_at,
-                checked_in=payload.checked_in,
+                attendance_status=payload.attendance_status,
+                operation_key=str(payload.operation_key),
                 waiver_verified=payload.waiver_verified,
                 approved_substitute_player_id=payload.approved_substitute_player_id,
                 approved_substitute_name=payload.approved_substitute_name,
@@ -101,6 +109,8 @@ def install_admin_tournament_checkin_routes(app, *, get_supabase_client) -> None
                 actor_role=actor_role,
             )
         except StaleTournamentCheckInError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TournamentCheckInIdempotencyConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             _handle(exc)

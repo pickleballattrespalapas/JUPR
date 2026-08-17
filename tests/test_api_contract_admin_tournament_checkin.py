@@ -18,6 +18,13 @@ def test_check_in_routes_are_authenticated_and_installed() -> None:
     assert "_resolve_tournament_role_or_403" in source
     assert "PERMISSION_MANAGE_TOURNAMENTS" in source
     assert "install_admin_tournament_checkin_routes" in installer
+    assert "day_id: str | None = Query" in source
+    assert "day_id: str = Query" in source
+    assert "registration_day_id=day_id" in source
+    assert 'Literal["EXPECTED", "CHECKED_IN", "ABSENT"]' in source
+    assert 'Literal["EXPECTED", "CHECKED_IN", "ABSENT"] = "EXPECTED"' not in source
+    assert "operation_key: UUID" in source
+    assert "TournamentCheckInIdempotencyConflictError" in source
 
 
 def test_check_in_update_queries_only_real_registration_columns() -> None:

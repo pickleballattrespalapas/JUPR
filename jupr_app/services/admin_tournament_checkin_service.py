@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import UUID
 
 from jupr_app.services.admin_tournament_guarded_operation import (
     require_tournament_admin_mutation_runtime,
@@ -15,10 +16,15 @@ ACTIVE_REGISTRATION_STATUSES = {"ACTIVE", "APPROVED", "CONFIRMED", "REGISTERED"}
 INACTIVE_REGISTRATION_STATUSES = {"CANCELLED", "CANCELED", "WITHDRAWN", "REJECTED"}
 ACTIVE_TEAM_LINK_STATUSES = {"CONFIRMED", "ADMIN_CONFIRMED"}
 PAYMENT_READY_STATUSES = {"PAID", "WAIVED"}
+ATTENDANCE_STATUSES = {"EXPECTED", "CHECKED_IN", "ABSENT"}
 
 
 class StaleTournamentCheckInError(ValueError):
     """The event-day state changed after the operator loaded it."""
+
+
+class TournamentCheckInIdempotencyConflictError(ValueError):
+    """An operation key was reused for a different attendance request."""
 
 
 def _safe_rows(response: Any) -> list[dict[str, Any]]:
@@ -170,6 +176,53 @@ def _event_label(event: dict[str, Any]) -> str:
     return division or family or "Unlabeled division"
 
 
+def _scheduled_day_ids(event: dict[str, Any]) -> list[str]:
+    """Return canonical scheduled days, falling back to the primary day only."""
+
+    parsed = event.get("scheduled_day_ids")
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed)
+        except Exception as exc:
+            raise ValueError(
+                "Tournament event scheduled days are malformed. Repair the event before check-in."
+            ) from exc
+    if parsed is not None and not isinstance(parsed, list):
+        raise ValueError(
+            "Tournament event scheduled days are malformed. Repair the event before check-in."
+        )
+    values = parsed if isinstance(parsed, list) else []
+    scheduled: list[str] = []
+    for value in values:
+        day_id = _clean(value, limit=160)
+        if day_id and day_id not in scheduled:
+            scheduled.append(day_id)
+    if scheduled:
+        return scheduled
+    primary_day_id = _clean(event.get("registration_day_id"), limit=160)
+    return [primary_day_id] if primary_day_id else []
+
+
+def _event_is_active(event: dict[str, Any]) -> bool:
+    if event.get("enabled") is not True:
+        return False
+    return _upper(event.get("status")) not in {
+        "CANCELLED",
+        "CANCELED",
+        "ARCHIVED",
+        "DISABLED",
+    }
+
+
+def _day_summary(day: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": _clean(day.get("id"), limit=160),
+        "label": _clean(day.get("label"), limit=120) or "Event day",
+        "event_date": day.get("event_date"),
+        "sort_order": _safe_int(day.get("sort_order")) or 0,
+    }
+
+
 def _court_labels(value: Any) -> list[str]:
     parsed = value
     if isinstance(value, str):
@@ -272,7 +325,7 @@ def _draw_readiness(
     event_options: list[dict[str, Any]],
     draws: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    active_events = [row for row in event_options if row.get("enabled") is not False]
+    active_events = [row for row in event_options if _event_is_active(row)]
     draw_event_ids = {
         _clean(row.get("event_option_id"), limit=160)
         for row in draws
@@ -464,6 +517,7 @@ def build_admin_tournament_checkin_snapshot(
     *,
     club_id: str,
     tournament_id: str,
+    registration_day_id: str | None = None,
 ) -> dict[str, Any]:
     tournaments = _query_rows(
         supabase.table("tournaments")
@@ -496,10 +550,26 @@ def build_admin_tournament_checkin_snapshot(
         .order("sort_order"),
         label="schedule",
     )
+    available_days = [row for row in days if row.get("enabled") is True]
+    requested_day_id = _clean(registration_day_id, limit=160)
+    selected_day = next(
+        (
+            row
+            for row in available_days
+            if not requested_day_id
+            or _clean(row.get("id"), limit=160) == requested_day_id
+        ),
+        None,
+    )
+    if selected_day is None:
+        raise ValueError(
+            "Select an enabled event day that belongs to this tournament."
+        )
+    selected_day_id = _clean(selected_day.get("id"), limit=160)
     event_options = _query_rows(
         supabase.table("tournament_event_options")
         .select(
-            "id,tournament_id,registration_day_id,label,event_family_label,division_name,event_type,partner_required,team_allow_substitutes,enabled,status,sort_order"
+            "id,tournament_id,registration_day_id,scheduled_day_ids,label,event_family_label,division_name,event_type,partner_required,team_allow_substitutes,enabled,status,sort_order"
         )
         .eq("tournament_id", str(tournament_id))
         .order("sort_order"),
@@ -541,9 +611,10 @@ def build_admin_tournament_checkin_snapshot(
     check_ins = _query_rows(
         supabase.table("tournament_registration_check_ins")
         .select(
-            "id,tournament_id,registration_id,checked_in,waiver_verified,attendee_identity_key,approved_substitute_player_id,approved_substitute_name,notes,updated_by,created_at,updated_at"
+            "id,tournament_id,registration_id,registration_day_id,attendance_status,checked_in,waiver_verified,attendee_identity_key,approved_substitute_player_id,approved_substitute_name,notes,updated_by,last_operation_key,created_at,updated_at"
         )
-        .eq("tournament_id", str(tournament_id)),
+        .eq("tournament_id", str(tournament_id))
+        .eq("registration_day_id", selected_day_id),
         label="durable state",
     )
     players = _query_rows(
@@ -566,6 +637,27 @@ def build_admin_tournament_checkin_snapshot(
         .order("updated_at", desc=True)
     )
 
+    selected_day_event_options = [
+        row
+        for row in event_options
+        if _event_is_active(row) and selected_day_id in _scheduled_day_ids(row)
+    ]
+    selected_day_event_ids = {
+        _clean(row.get("id"), limit=160)
+        for row in selected_day_event_options
+        if _clean(row.get("id"), limit=160)
+    }
+    selected_day_selections = [
+        row
+        for row in selections
+        if _clean(row.get("event_option_id"), limit=160)
+        in selected_day_event_ids
+    ]
+    scheduled_registration_ids = {
+        _clean(row.get("registration_id"), limit=160)
+        for row in selected_day_selections
+        if _clean(row.get("registration_id"), limit=160)
+    }
     registrations_by_id = {
         _clean(row.get("id"), limit=160): row
         for row in registrations
@@ -573,7 +665,7 @@ def build_admin_tournament_checkin_snapshot(
     }
     events_by_id = {
         _clean(row.get("id"), limit=160): row
-        for row in event_options
+        for row in selected_day_event_options
         if _clean(row.get("id"), limit=160)
     }
     players_by_id = {
@@ -587,14 +679,24 @@ def build_admin_tournament_checkin_snapshot(
     payment_by_registration = _payment_map(registrations, orders)
     events_by_registration, unresolved_participants = _relationship_projection(
         registrations_by_id=registrations_by_id,
-        selections=selections,
+        selections=selected_day_selections,
         events_by_id=events_by_id,
         links=links,
         members=members,
     )
 
-    active_registrations = [row for row in registrations if _registration_is_active(row)]
-    inactive_registrations = [row for row in registrations if not _registration_is_active(row)]
+    active_registrations = [
+        row
+        for row in registrations
+        if _clean(row.get("id"), limit=160) in scheduled_registration_ids
+        and _registration_is_active(row)
+    ]
+    inactive_registrations = [
+        row
+        for row in registrations
+        if _clean(row.get("id"), limit=160) in scheduled_registration_ids
+        and not _registration_is_active(row)
+    ]
     active_registration_ids = {
         _clean(row.get("id"), limit=160) for row in active_registrations
     }
@@ -608,7 +710,7 @@ def build_admin_tournament_checkin_snapshot(
                 active_attendee_identity_counts.get(identity_key, 0) + 1
             )
     registration_ids_by_player: dict[int, set[str]] = {}
-    for registration in registrations:
+    for registration in active_registrations:
         player_id = _safe_int(registration.get("player_id"))
         registration_id = _clean(registration.get("id"), limit=160)
         if player_id is not None and registration_id:
@@ -619,7 +721,7 @@ def build_admin_tournament_checkin_snapshot(
         registration_id = _clean(registration.get("id"), limit=160)
         substitution = _substitution_policy(
             registration_id=registration_id,
-            selections=selections,
+            selections=selected_day_selections,
             events_by_id=events_by_id,
         )
         state = check_ins_by_registration.get(registration_id, {})
@@ -696,7 +798,16 @@ def build_admin_tournament_checkin_snapshot(
             and not duplicate_attendee_identity
         )
         requires_reconfirmation = bool(has_saved_state and not identity_current)
-        checked_in = bool(state.get("checked_in")) and identity_current
+        stored_attendance_status = _upper(
+            state.get("attendance_status"),
+            "CHECKED_IN" if bool(state.get("checked_in")) else "EXPECTED",
+        )
+        if stored_attendance_status not in ATTENDANCE_STATUSES:
+            stored_attendance_status = "EXPECTED"
+        attendance_status = (
+            stored_attendance_status if identity_current else "EXPECTED"
+        )
+        checked_in = attendance_status == "CHECKED_IN"
         waiver_verified = bool(state.get("waiver_verified")) and identity_current
         payment = payment_by_registration[registration_id]
         card_events = events_by_registration.get(registration_id, [])
@@ -761,6 +872,7 @@ def build_admin_tournament_checkin_snapshot(
         registrants.append(
             {
                 "registration_id": registration_id,
+                "registration_day_id": selected_day_id,
                 "registration_status": _registration_status(registration),
                 "registration_updated_at": registration.get("updated_at"),
                 "original_registrant": {
@@ -772,8 +884,11 @@ def build_admin_tournament_checkin_snapshot(
                     "name": attendee_name,
                     "is_approved_substitute": is_approved_substitute,
                 },
+                "attendance_status": attendance_status,
                 "substitution": substitution,
                 "check_in": {
+                    "registration_day_id": selected_day_id,
+                    "attendance_status": attendance_status,
                     "checked_in": checked_in,
                     "notes": _clean(state.get("notes"), limit=1000) or None,
                     "updated_at": state.get("updated_at"),
@@ -794,19 +909,37 @@ def build_admin_tournament_checkin_snapshot(
 
     registrants.sort(
         key=lambda row: (
-            not bool((row.get("check_in") or {}).get("checked_in")),
+            {"EXPECTED": 0, "ABSENT": 1, "CHECKED_IN": 2}.get(
+                str(row.get("attendance_status")), 3
+            ),
             str((row.get("attendee") or {}).get("name") or "").lower(),
         )
     )
     checked_in_count = sum(
-        1 for row in registrants if bool((row.get("check_in") or {}).get("checked_in"))
+        1 for row in registrants if row.get("attendance_status") == "CHECKED_IN"
+    )
+    absent_count = sum(
+        1 for row in registrants if row.get("attendance_status") == "ABSENT"
+    )
+    not_checked_in_count = sum(
+        1 for row in registrants if row.get("attendance_status") == "EXPECTED"
     )
     unresolved_registration_ids = {
         _clean(row.get("registration_id"), limit=160)
         for row in unresolved_participants
     }
-    schedule = _schedule_readiness(tournament=tournament, settings=settings, days=days)
-    draw_readiness = _draw_readiness(event_options=event_options, draws=draws)
+    schedule = _schedule_readiness(
+        tournament=tournament, settings=settings, days=[selected_day]
+    )
+    selected_day_draws = [
+        row
+        for row in draws
+        if _clean(row.get("event_option_id"), limit=160)
+        in selected_day_event_ids
+    ]
+    draw_readiness = _draw_readiness(
+        event_options=selected_day_event_options, draws=selected_day_draws
+    )
     staffing = {
         "status": "NEEDS_REVIEW",
         "source": "no_authoritative_staffing_record",
@@ -866,10 +999,16 @@ def build_admin_tournament_checkin_snapshot(
             "start_date": tournament.get("start_date"),
             "end_date": tournament.get("end_date"),
         },
+        "day_scope": {
+            "selected_day_id": selected_day_id,
+            "selected_day": _day_summary(selected_day),
+            "available_days": [_day_summary(day) for day in available_days],
+        },
         "summary": {
             "expected": len(registrants),
             "checked_in": checked_in_count,
-            "absent": max(0, len(registrants) - checked_in_count),
+            "absent": absent_count,
+            "not_checked_in": not_checked_in_count,
             "unresolved": len(unresolved_registration_ids),
         },
         "registrants": registrants,
@@ -921,7 +1060,12 @@ def _public_check_in_row(row: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "registration_id": _clean(row.get("registration_id"), limit=160),
-        "checked_in": bool(row.get("checked_in")),
+        "registration_day_id": _clean(
+            row.get("registration_day_id"), limit=160
+        ),
+        "attendance_status": _upper(row.get("attendance_status"), "EXPECTED"),
+        "checked_in": _upper(row.get("attendance_status"), "EXPECTED")
+        == "CHECKED_IN",
         "waiver_verified": bool(row.get("waiver_verified")),
         "approved_substitute_player_id": _safe_int(
             row.get("approved_substitute_player_id")
@@ -942,8 +1086,10 @@ def update_admin_tournament_checkin(
     club_id: str,
     tournament_id: str,
     registration_id: str,
+    registration_day_id: str,
     expected_updated_at: str | None,
-    checked_in: bool,
+    attendance_status: str,
+    operation_key: str,
     waiver_verified: bool,
     approved_substitute_player_id: int | None,
     approved_substitute_name: str | None,
@@ -964,6 +1110,19 @@ def update_admin_tournament_checkin(
     )
     if not tournaments:
         raise ValueError("Tournament was not found for this club.")
+    selected_day_id = _clean(registration_day_id, limit=160)
+    days = _query_rows(
+        supabase.table("tournament_registration_days")
+        .select("id,tournament_id,enabled")
+        .eq("tournament_id", str(tournament_id))
+        .eq("id", selected_day_id)
+        .limit(1),
+        label="event-day scope",
+    )
+    if not days or days[0].get("enabled") is not True:
+        raise ValueError(
+            "Select an enabled event day that belongs to this tournament."
+        )
     registrations = _query_rows(
         supabase.table("tournament_registrations")
         .select("id,tournament_id,player_id,status")
@@ -979,6 +1138,49 @@ def update_admin_tournament_checkin(
             "Only active, approved, confirmed, or registered entries can be checked in."
         )
 
+    normalized_attendance_status = _upper(attendance_status)
+    if normalized_attendance_status not in ATTENDANCE_STATUSES:
+        raise ValueError(
+            "Attendance status must be EXPECTED, CHECKED_IN, or ABSENT."
+        )
+    try:
+        normalized_operation_key = str(UUID(str(operation_key)))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError(
+            "A UUID operation key is required for this check-in save."
+        ) from exc
+
+    policy_selections = _query_rows(
+        supabase.table("tournament_registration_selections")
+        .select("id,tournament_id,registration_id,registration_day_id,event_option_id")
+        .eq("tournament_id", str(tournament_id))
+        .eq("registration_id", str(registration_id)),
+        label="event-day registration entries",
+    )
+    policy_events = _query_rows(
+        supabase.table("tournament_event_options")
+        .select(
+            "id,tournament_id,registration_day_id,scheduled_day_ids,enabled,status,team_allow_substitutes"
+        )
+        .eq("tournament_id", str(tournament_id)),
+        label="event-day event policy",
+    )
+    selected_day_events_by_id = {
+        _clean(row.get("id"), limit=160): row
+        for row in policy_events
+        if _event_is_active(row) and selected_day_id in _scheduled_day_ids(row)
+    }
+    selected_day_selections = [
+        row
+        for row in policy_selections
+        if _clean(row.get("event_option_id"), limit=160)
+        in selected_day_events_by_id
+    ]
+    if not selected_day_selections:
+        raise ValueError(
+            "Registration is not entered in an active event scheduled for this day."
+        )
+
     substitute_id = _safe_int(approved_substitute_player_id)
     requested_substitute_name = _clean(approved_substitute_name, limit=160) or None
     if approved_substitute_player_id is not None and substitute_id is None:
@@ -988,25 +1190,10 @@ def update_admin_tournament_checkin(
             "Select an active club player as the approved substitute; a typed name is not authoritative."
         )
     if substitute_id is not None:
-        policy_selections = _query_rows(
-            supabase.table("tournament_registration_selections")
-            .select("id,tournament_id,registration_id,event_option_id")
-            .eq("tournament_id", str(tournament_id))
-            .eq("registration_id", str(registration_id)),
-            label="substitute event selections",
-        )
-        policy_events = _query_rows(
-            supabase.table("tournament_event_options")
-            .select("id,tournament_id,team_allow_substitutes")
-            .eq("tournament_id", str(tournament_id)),
-            label="substitute event policy",
-        )
         policy = _substitution_policy(
             registration_id=str(registration_id),
-            selections=policy_selections,
-            events_by_id={
-                _clean(row.get("id"), limit=160): row for row in policy_events
-            },
+            selections=selected_day_selections,
+            events_by_id=selected_day_events_by_id,
         )
         raise ValueError(str(policy["blocker"]["detail"]))
 
@@ -1014,10 +1201,12 @@ def update_admin_tournament_checkin(
         "p_club_id": str(club_id),
         "p_tournament_id": str(tournament_id),
         "p_registration_id": str(registration_id),
+        "p_registration_day_id": selected_day_id,
         "p_expected_updated_at": str(expected_updated_at)
         if expected_updated_at
         else None,
-        "p_checked_in": bool(checked_in),
+        "p_attendance_status": normalized_attendance_status,
+        "p_operation_key": normalized_operation_key,
         "p_waiver_verified": bool(waiver_verified),
         "p_approved_substitute_player_id": substitute_id,
         # Kept as a null RPC argument for signature compatibility. PostgreSQL
@@ -1035,11 +1224,19 @@ def update_admin_tournament_checkin(
             raise StaleTournamentCheckInError(
                 "Check-in changed after it was loaded. Reload the player before saving again."
             ) from exc
+        if "jupr_check_in_idempotency_conflict" in lowered:
+            raise TournamentCheckInIdempotencyConflictError(
+                "This save operation key was already used for a different attendance request. Reload before saving again."
+            ) from exc
         if "jupr_check_in_not_found" in lowered:
             raise ValueError("Registration was not found for this tournament.") from exc
         if "jupr_check_in_inactive" in lowered:
             raise ValueError(
                 "Only active, approved, confirmed, or registered entries can be checked in."
+            ) from exc
+        if "jupr_check_in_day" in lowered:
+            raise ValueError(
+                "Registration is not entered in an active event scheduled for this enabled day."
             ) from exc
         if "jupr_check_in_substitute" in lowered:
             if "atomicity" in lowered:
@@ -1077,6 +1274,7 @@ def update_admin_tournament_checkin(
             payload.get("attendee_identity_changed")
         ),
         "attendance_reset": bool(payload.get("attendance_reset")),
+        "idempotent_replay": bool(payload.get("idempotent_replay")),
         "message": (
             "Attending player changed. Check-in and waiver verification were reset for safety."
             if payload.get("attendance_reset")
@@ -1087,6 +1285,7 @@ def update_admin_tournament_checkin(
 
 __all__ = [
     "CHECK_IN_RPC",
+    "TournamentCheckInIdempotencyConflictError",
     "StaleTournamentCheckInError",
     "build_admin_tournament_checkin_snapshot",
     "update_admin_tournament_checkin",
