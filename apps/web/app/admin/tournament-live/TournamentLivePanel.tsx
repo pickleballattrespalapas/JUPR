@@ -123,6 +123,7 @@ function gameLabel(game: Record<string, unknown>): string {
 }
 
 function drawLabel(draw: AdminTournamentDraw, lifecycleDraw?: AdminTournamentLifecycleDraw): string {
+  // Operational progress comes from authoritative match and publish evidence; the setup status may remain DRAFT.
   return `${draw.name || "Unnamed draw"} · ${drawOperationalStatus(draw, lifecycleDraw)}`;
 }
 
