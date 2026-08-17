@@ -433,6 +433,10 @@ def test_closed_official_publish_gate_blocks_before_live_intent(monkeypatch) -> 
 
 def test_draw_snapshot_is_stable_python_authority_with_progression_and_readiness(monkeypatch) -> None:
     _enable_live(monkeypatch)
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tournament_live_service.get_admin_tournament_ops_state_fingerprint",
+        lambda *_args, **_kwargs: "c" * 64,
+    )
     supabase = FakeSupabase(live_tables())
 
     first = build_admin_tournament_live_snapshot(
@@ -453,6 +457,8 @@ def test_draw_snapshot_is_stable_python_authority_with_progression_and_readiness
     assert first["product_boundary"] == "draw_scoped_tournament_runner_not_jupr_live"
     assert first["state_fingerprint"] == second["state_fingerprint"]
     assert len(first["state_fingerprint"]) == 64
+    assert first["ops_state_fingerprint"] == "c" * 64
+    assert first["ops_state_fingerprint"] != first["state_fingerprint"]
     assert first["readiness"]["save_score"]["ready"] is True
     assert first["readiness"]["generate_playoffs"]["ready"] is False
     assert first["progression"] == {

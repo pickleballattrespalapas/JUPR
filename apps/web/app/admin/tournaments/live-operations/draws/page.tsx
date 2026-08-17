@@ -1,7 +1,12 @@
-import TournamentLiveRoute from "../TournamentLiveRoute";
+import { redirect } from "next/navigation";
+import { readTournamentRouteContext, tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
 export default function TournamentDrawsSchedulePage({ searchParams }: Props) {
-  return <TournamentLiveRoute searchParams={searchParams} view="draws" phase="live" kicker="Tournament Manager / Live Operations" title="draws and schedule" description="Review prepared rounds and court slots, then progress the selected draw only when its prerequisites are complete." />;
+  redirect(tournamentRouteHref(
+    "/admin/tournaments/live-operations",
+    readTournamentRouteContext(searchParams),
+    { panel: "draws" }
+  ));
 }

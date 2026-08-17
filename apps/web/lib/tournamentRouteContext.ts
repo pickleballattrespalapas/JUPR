@@ -2,6 +2,11 @@ export type TournamentRouteContext = {
   tournamentId: string;
   tournamentName: string;
   drawId: string;
+  dayId: string;
+};
+
+type TournamentRouteContextInput = Omit<TournamentRouteContext, "dayId"> & {
+  dayId?: string;
 };
 
 type SearchValue = string | string[] | undefined;
@@ -41,12 +46,13 @@ export function readTournamentRouteContext(
   const tournamentId = readValue(searchParams, "tournament") || legacyTournamentId;
   const tournamentName = readValue(searchParams, "tournament_name") || readValue(searchParams, "name");
   const drawId = readValue(searchParams, "draw") || legacyDrawId;
-  return { tournamentId, tournamentName, drawId };
+  const dayId = readValue(searchParams, "day") || readValue(searchParams, "day_id");
+  return { tournamentId, tournamentName, drawId, dayId };
 }
 
 export function tournamentRouteHref(
   path: string,
-  context: TournamentRouteContext,
+  context: TournamentRouteContextInput,
   extra?: Record<string, string | number | boolean | null | undefined>
 ): string {
   const params = new URLSearchParams();
@@ -56,6 +62,7 @@ export function tournamentRouteHref(
     params.set("name", context.tournamentName);
   }
   if (context.drawId) params.set("draw", context.drawId);
+  if (context.dayId) params.set("day", context.dayId);
   Object.entries(extra || {}).forEach(([key, value]) => {
     if (value != null && value !== "") params.set(key, String(value));
   });

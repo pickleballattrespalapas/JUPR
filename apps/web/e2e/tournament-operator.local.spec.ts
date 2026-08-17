@@ -3,7 +3,8 @@ import { expect, test, type Page } from "@playwright/test";
 const tournamentId = "tournament-1";
 const drawId = "draw-1";
 const secondDrawId = "draw-2";
-const selectedQuery = `tournament=${tournamentId}&tournament_name=Staging+Summer+Classic&name=Staging+Summer+Classic&draw=${drawId}`;
+const dayId = "day-1";
+const selectedQuery = `tournament=${tournamentId}&tournament_name=Staging+Summer+Classic&name=Staging+Summer+Classic&draw=${drawId}&day=${dayId}`;
 
 const players = [
   { id: 1, name: "Mateo Rivera" },
@@ -66,14 +67,16 @@ function liveSnapshot(selectedDrawId = drawId) {
     draw_id: selectedDrawId,
     summary: { draws: 2, teams: 2, games: 21, podium: 0, completed_games: 1 },
     draws: [
-      { id: drawId, tournament_id: tournamentId, name: "Manual Acceptance Draw", status: "DRAFT", updated_at: "2026-08-15T12:00:00Z" },
-      { id: secondDrawId, tournament_id: tournamentId, name: "Open Division Draw", status: "DRAFT", updated_at: "2026-08-15T12:00:00Z" }
+      { id: drawId, tournament_id: tournamentId, registration_day_id: dayId, name: "Manual Acceptance Draw", status: "DRAFT", updated_at: "2026-08-15T12:00:00Z" },
+      { id: secondDrawId, tournament_id: tournamentId, registration_day_id: dayId, name: "Open Division Draw", status: "DRAFT", updated_at: "2026-08-15T12:00:00Z" }
     ],
+    registration_days: checkInDays,
     teams,
     games: rows,
     podium: [],
     players,
     state_fingerprint: "b".repeat(64),
+    ops_state_fingerprint: "c".repeat(64),
     runtime: { enabled: true, status: "staging_write_ready", authority: "python_fastapi", product_boundary: "draw_scoped_tournament_runner_not_jupr_live", club_id: "tres_palapas", environment: "local_test_harness", staging_only: true, writes_enabled: true, service_role_ready: true, operation_store_ready: true, audit_store_ready: true, write_flag: { name: "LOCAL", enabled: true }, streamlit_fallback_url: "#", warnings: [] },
     progression: { phase: "live", open_games: 20, completed_games: 1, published_games: 0, expected_awards: 6, verified_awards: 0 },
     readiness,
@@ -201,7 +204,176 @@ function checkInSnapshot(dayId: string) {
   };
 }
 
+function dayGame(options: {
+  id: string;
+  drawId: string;
+  drawName: string;
+  round: string;
+  slot: string;
+  teamA: string[];
+  teamB: string[];
+}) {
+  return {
+    id: options.id,
+    draw_id: options.drawId,
+    draw_name: options.drawName,
+    state: "READY",
+    stage: "ROUND_ROBIN",
+    round_label: options.round,
+    slot_label: options.slot,
+    team_a: { name: options.teamA.join(" / "), participant_names: options.teamA },
+    team_b: { name: options.teamB.join(" / "), participant_names: options.teamB },
+    score_a: null as number | null,
+    score_b: null as number | null,
+    winner_name: null as string | null,
+    updated_at: "2026-08-17T09:00:00Z",
+    version: `${options.id}-v1`,
+    blockers: [],
+    correction_readiness: dayReadiness(false, "CORRECT COMPLETED SCORE", "Only released completed results are correctable.")
+  };
+}
+
+function dayReadiness(ready: boolean, confirmation: string, message = "") {
+  return {
+    ready,
+    confirmation,
+    blockers: ready || !message ? [] : [{ code: "NOT_READY", message }]
+  };
+}
+
+function dayWorkspaceSnapshot() {
+  const dayGames = [
+    dayGame({ id: "day-game-a", drawId, drawName: "Manual Acceptance Draw", round: "Round 1", slot: "Match 1", teamA: ["Mateo Rivera", "Liam Chen"], teamB: ["Caleb Nguyen", "Diego Alvarez"] }),
+    dayGame({ id: "day-game-b", drawId: secondDrawId, drawName: "Open Division Draw", round: "Round 1", slot: "Match 2", teamA: ["Avery Patel", "Jordan Lee"], teamB: ["Morgan Diaz", "Riley Smith"] }),
+    dayGame({ id: "day-game-c", drawId, drawName: "Manual Acceptance Draw", round: "Round 2", slot: "Match 1", teamA: ["Nora Williams", "Sofia Kim"], teamB: ["Emma Davis", "Mia Johnson"] }),
+    dayGame({ id: "day-game-held", drawId: secondDrawId, drawName: "Open Division Draw", round: "Round 2", slot: "Match 2", teamA: ["Taylor Reed", "Casey Brooks"], teamB: ["Jamie Flores", "Skyler Moore"] }),
+    dayGame({ id: "day-game-blocked", drawId, drawName: "Manual Acceptance Draw", round: "Round 3", slot: "Match 1", teamA: ["Quinn Parker", "Alexis Bell"], teamB: ["Cameron Price", "Robin Ward"] }),
+    {
+      ...dayGame({ id: "day-game-completed", drawId: secondDrawId, drawName: "Open Division Draw", round: "Round 3", slot: "Match 2", teamA: ["Avery Patel", "Jordan Lee"], teamB: ["Morgan Diaz", "Riley Smith"] }),
+      state: "COMPLETED",
+      score_a: 11,
+      score_b: 7,
+      winner_name: "Avery Patel / Jordan Lee",
+      correction_readiness: dayReadiness(true, "CORRECT COMPLETED SCORE")
+    }
+  ];
+  return {
+    ok: true,
+    mode: "tournament_day_live",
+    scope: { club_id: "tres_palapas", tournament_id: tournamentId, registration_day_id: dayId },
+    tournament: { id: tournamentId, name: "Staging Summer Classic", status: "LIVE" },
+    day_scope: {
+      selected_day_id: dayId,
+      selected_day: checkInDays[0],
+      available_days: checkInDays
+    },
+    day_run: {
+      id: "day-run-1",
+      registration_day_id: dayId,
+      state: "ACTIVE",
+      version: "7",
+      updated_at: "2026-08-17T09:00:00Z"
+    },
+    state_fingerprint: "d".repeat(64),
+    queue_version: "11",
+    generated_at: "2026-08-17T09:05:00Z",
+    summary: {
+      courts: 10,
+      available_courts: 9,
+      active_draws: 2,
+      eligible_games: 2,
+      held_games: 1,
+      completed_games: 4
+    },
+    draws: [
+      {
+        id: drawId,
+        name: "Manual Acceptance Draw",
+        state: "ACTIVE",
+        activation_state: "ACTIVE",
+        version: "3",
+        stage: "Round robin",
+        total_games: 8,
+        finalized_games: 4,
+        queued_games: 1,
+        active_games: 1,
+        held_games: 0,
+        readiness: {
+          activate: dayReadiness(false, "ACTIVATE DRAW", "This draw is already active."),
+          pause: dayReadiness(true, "PAUSE DRAW"),
+          resume: dayReadiness(false, "RESUME DRAW", "Pause this draw before resuming it."),
+          generate_playoffs: { ...dayReadiness(false, "GENERATE PLAYOFFS", "Finish four open round-robin matchups."), allowed_advance_counts: [4], default_advance_count: null },
+          podium: dayReadiness(false, "OPEN PODIUM", "Generate and finish playoffs first.")
+        }
+      },
+      {
+        id: secondDrawId,
+        name: "Open Division Draw",
+        state: "ACTIVE",
+        activation_state: "ACTIVE",
+        version: "4",
+        stage: "Round robin complete",
+        total_games: 6,
+        finalized_games: 6,
+        queued_games: 1,
+        active_games: 0,
+        held_games: 1,
+        readiness: {
+          activate: dayReadiness(false, "ACTIVATE DRAW", "This draw is already active."),
+          pause: dayReadiness(true, "PAUSE DRAW"),
+          resume: dayReadiness(false, "RESUME DRAW", "Pause this draw before resuming it."),
+          generate_playoffs: { ...dayReadiness(true, "GENERATE PLAYOFFS"), allowed_advance_counts: [4, 5, 6], default_advance_count: null },
+          podium: dayReadiness(false, "OPEN PODIUM", "Generate playoffs first.")
+        }
+      }
+    ],
+    courts: Array.from({ length: 10 }, (_, index) => ({
+      id: `day-court-${index + 1}`,
+      label: `Court ${index + 1}`,
+      position: index + 1,
+      state: index === 0 ? "ON_COURT" : "AVAILABLE",
+      version: `court-${index + 1}-v2`,
+      current_assignment: index === 0 ? {
+        id: "assignment-a",
+        game_id: "day-game-a",
+        state: "ON_COURT",
+        version: "assignment-v5",
+        assigned_at: "2026-08-17T09:01:00Z",
+        started_at: "2026-08-17T09:02:00Z" as string | null
+      } : null
+    })),
+    games: dayGames,
+    eligible_queue: [
+      { game_id: "day-game-b", draw_id: secondDrawId, position: 1, priority: 50, state: "WAITING", version: "queue-b-v3", eligible_since: "2026-08-17T08:58:00Z", reason: "First eligible across active draws", blockers: [] },
+      { game_id: "day-game-c", draw_id: drawId, position: 2, priority: 40, state: "WAITING", version: "queue-c-v2", eligible_since: "2026-08-17T08:59:00Z", reason: "Second eligible across active draws", blockers: [] }
+    ],
+    held_games: [
+      { game_id: "day-game-held", draw_id: secondDrawId, state: "HELD", reason: "Operator hold awaiting participant arrival", note: null, held_at: "2026-08-17T09:03:00Z", version: "held-v1", blockers: [] }
+    ],
+    blocked_games: [
+      { game_id: "day-game-blocked", draw_id: drawId, state: "BLOCKED", reason: "Check-in review required", note: null, held_at: null, version: "blocked-v1", blockers: [{ code: "CHECK_IN_REQUIRED", message: "One participant has not completed check-in." }] }
+    ],
+    operations: [] as Array<{
+      operation_key: string;
+      client_idempotency_key: string;
+      action: string;
+      status: string;
+      entity_label: string;
+      updated_at: string;
+    }>,
+    readiness: {
+      activate_day: dayReadiness(false, "ACTIVATE DAY", "This day is already active."),
+      auto_fill_courts: dayReadiness(true, "AUTO FILL COURTS"),
+      close_day: dayReadiness(false, "CLOSE TOURNAMENT DAY", "Finish the day before close."),
+      correct_completed_score: dayReadiness(true, "CORRECT COMPLETED SCORE")
+    },
+    runtime: { writes_enabled: true, warnings: [] },
+    warnings: []
+  };
+}
+
 async function installMockApi(page: Page) {
+  let currentDaySnapshot = dayWorkspaceSnapshot();
   await page.addInitScript(() => {
     window.localStorage.setItem("jupr_admin_session_v1", JSON.stringify({
       access_token: "local-operator-token",
@@ -224,6 +396,94 @@ async function installMockApi(page: Page) {
     }
     if (url.pathname.endsWith(`/tournaments/admin/tournaments/${tournamentId}`) && request.method() === "GET") {
       await route.fulfill({ json: detail });
+      return;
+    }
+    const dayWorkspaceBase = `/admin/clubs/tres_palapas/tournament-live/tournaments/${tournamentId}/days/${dayId}`;
+    if (url.pathname === `${dayWorkspaceBase}/snapshot` && request.method() === "GET") {
+      await route.fulfill({ json: currentDaySnapshot });
+      return;
+    }
+    if (url.pathname === `${dayWorkspaceBase}/commands` && request.method() === "POST") {
+      const command = request.postDataJSON() as {
+        action: string;
+        client_idempotency_key: string;
+        confirmation_text: string;
+        payload: { draw_id?: string; advance_count?: number; game_id?: string; score_a?: number; score_b?: number };
+      };
+      const refreshed = structuredClone(currentDaySnapshot);
+      if (command.action === "score_and_release") {
+        const completedGame = refreshed.games.find((game) => game.id === command.payload.game_id);
+        if (completedGame) {
+          completedGame.score_a = command.payload.score_a ?? null;
+          completedGame.score_b = command.payload.score_b ?? null;
+          completedGame.winner_name = Number(command.payload.score_a) > Number(command.payload.score_b)
+            ? completedGame.team_a.name
+            : completedGame.team_b.name;
+          completedGame.state = "COMPLETED";
+          completedGame.version = `${completedGame.id}-v2`;
+        }
+        refreshed.courts[0].current_assignment = {
+          id: "assignment-b",
+          game_id: "day-game-b",
+          state: "ON_COURT",
+          version: "assignment-b-v1",
+          assigned_at: "2026-08-17T09:06:00Z",
+          started_at: null
+        };
+        refreshed.eligible_queue = refreshed.eligible_queue.filter((entry) => entry.game_id !== "day-game-b");
+        refreshed.summary.completed_games += 1;
+      }
+      if (command.action === "correct_completed_score") {
+        const correctedGame = refreshed.games.find((game) => game.id === command.payload.game_id);
+        if (correctedGame) {
+          correctedGame.score_a = command.payload.score_a ?? null;
+          correctedGame.score_b = command.payload.score_b ?? null;
+          correctedGame.winner_name = Number(command.payload.score_a) > Number(command.payload.score_b)
+            ? correctedGame.team_a.name
+            : correctedGame.team_b.name;
+          correctedGame.version = `${correctedGame.id}-v2`;
+        }
+      }
+      refreshed.state_fingerprint = "e".repeat(64);
+      refreshed.queue_version = "12";
+      refreshed.generated_at = "2026-08-17T09:06:00Z";
+      refreshed.operations = [{
+        operation_key: "day-operation-1",
+        client_idempotency_key: command.client_idempotency_key,
+        action: command.action,
+        status: "completed",
+        entity_label: "Tournament day",
+        updated_at: refreshed.generated_at
+      }];
+      currentDaySnapshot = refreshed;
+      await route.fulfill({
+        json: {
+          command: {
+            action: command.action,
+            confirmation_text: command.confirmation_text,
+            idempotent_replay: false
+          },
+          operation: {
+            operation_key: "day-operation-1",
+            client_idempotency_key: command.client_idempotency_key,
+            action: command.action,
+            status: "completed",
+            entity_label: "Tournament day",
+            updated_at: refreshed.generated_at
+          },
+          snapshot: refreshed
+        }
+      });
+      return;
+    }
+    if (url.pathname.startsWith(`${dayWorkspaceBase}/operations/`) && url.pathname.endsWith("/reconcile")) {
+      await route.fulfill({
+        json: {
+          command: { action: "auto_fill_courts", confirmation_text: "RECONCILE DAY OPERATIONS", idempotent_replay: true },
+          operation: { operation_key: "day-operation-1", client_idempotency_key: "reconciled", action: "auto_fill_courts", status: "completed" },
+          snapshot: currentDaySnapshot
+        }
+      });
       return;
     }
     if (url.pathname.includes(`/tournament-live/tournaments/${tournamentId}/snapshot`)) {
@@ -256,32 +516,75 @@ test("Home shows authoritative 1 of 21 truth and preserves selected context", as
   expect(scoringHref).toContain(`draw=${drawId}`);
 });
 
-test("Draw selection stays inside the tournament workspace and survives reload", async ({ page }) => {
+test("legacy draw route opens the authoritative 10-court day workspace", async ({ page }) => {
   await page.goto(`/admin/tournaments/live-operations/draws?${selectedQuery}`);
-  await expect(page.getByRole("region", { name: "Tournament operating scope" })).toBeVisible();
-  await expect(page.getByText("Locked to this tournament workspace")).toBeVisible();
-  await expect(page.getByLabel("Tournament")).toHaveCount(0);
-  await expect(page.getByText("Change or refresh selection")).toHaveCount(0);
+  await expect(page).toHaveURL(/\/admin\/tournaments\/live-operations\?/);
+  await expect(page).toHaveURL(/panel=draws/);
+  await expect(page).toHaveURL(new RegExp(`day=${dayId}`));
+  await expect(page.getByRole("heading", { name: "Staging Summer Classic day workspace" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Tournament day scope" }).getByLabel("Tournament day")).toHaveValue(dayId);
+  await expect(page.getByRole("heading", { name: /^Court \d+$/ })).toHaveCount(10);
+  await expect(page.getByRole("region", { name: "Court board" }).getByText("Mateo Rivera / Liam Chen vs Caleb Nguyen / Diego Alvarez")).toBeVisible();
 
-  const drawSelector = page.getByLabel("Working draw");
-  await expect(drawSelector).toHaveValue(drawId);
-  await expect(drawSelector.locator(`option[value="${drawId}"]`)).toHaveText("Manual Acceptance Draw · In progress · 1 of 21 scored");
-  await drawSelector.selectOption(secondDrawId);
-  await expect(page).toHaveURL(new RegExp(`tournament=${tournamentId}`));
-  await expect(page).toHaveURL(new RegExp(`draw=${secondDrawId}`));
-  await expect(drawSelector).toHaveValue(secondDrawId);
-  await expect(page.getByRole("heading", { name: "Staging Summer Classic draws and schedule" })).toBeVisible();
-  await expect(page.getByText("Open Division Draw", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("link", { name: "Live scoring" })).toHaveAttribute("href", new RegExp(`tournament=${tournamentId}.*draw=${secondDrawId}`));
+  const queueRows = page.getByRole("region", { name: "Eligible match queue" }).locator("ol > li");
+  await expect(queueRows).toHaveCount(2);
+  expect(await queueRows.allTextContents()).toEqual([
+    expect.stringContaining("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith"),
+    expect.stringContaining("Nora Williams / Sofia Kim vs Emma Davis / Mia Johnson")
+  ]);
+  await expect(queueRows.nth(0)).toContainText("#1");
+  await expect(queueRows.nth(1)).toContainText("#2");
+  await expect(page.getByRole("heading", { name: "Held and blocked matches" })).toBeVisible();
+  await expect(page.getByText("Operator hold awaiting participant arrival")).toBeVisible();
+  await expect(page.getByText("One participant has not completed check-in.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Pause draw" })).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Generate playoffs" })).toHaveCount(2);
 
-  await page.getByRole("button", { name: "Refresh available draws" }).click();
-  await expect(drawSelector).toHaveValue(secondDrawId);
   await page.reload();
-  await expect(page.getByLabel("Working draw")).toHaveValue(secondDrawId);
+  await expect(page.getByRole("region", { name: "Tournament day scope" }).getByLabel("Tournament day")).toHaveValue(dayId);
+});
+
+test("playoff generation requires an explicit server-reviewed advance count", async ({ page }) => {
+  const commands: Array<Record<string, unknown>> = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
+    commands.push(request.postDataJSON() as Record<string, unknown>);
+  });
+  await page.goto(`/admin/tournaments/live-operations?${selectedQuery}&panel=draws`);
+  const drawCard = page.getByRole("heading", { name: "Open Division Draw", level: 3 }).locator("xpath=ancestor::article[1]");
+  const advanceCount = drawCard.getByLabel("Advancing teams");
+  await expect(advanceCount).toHaveValue("");
+  await expect(drawCard.getByRole("button", { name: "Generate playoffs" })).toBeDisabled();
+  await advanceCount.selectOption("5");
+  await expect(drawCard.getByRole("button", { name: "Generate playoffs" })).toBeEnabled();
+  await drawCard.getByRole("button", { name: "Generate playoffs" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Generate playoffs for Open Division Draw?" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Yes, generate playoffs" }).click();
+  await expect.poll(() => commands.length).toBe(1);
+  expect(commands[0]).toMatchObject({
+    action: "generate_playoffs",
+    confirmation_text: "GENERATE PLAYOFFS",
+    expected: {
+      day_run_version: "7",
+      state_fingerprint: "d".repeat(64),
+      queue_version: "11",
+      draw_version: "4"
+    },
+    payload: { draw_id: secondDrawId, advance_count: 5 }
+  });
+});
+
+test("legacy score route retains day context and focuses the unified queue", async ({ page }) => {
+  await page.goto(`/admin/tournament-live?${selectedQuery}`);
+  await expect(page).toHaveURL(/\/admin\/tournaments\/live-operations\?/);
+  await expect(page).toHaveURL(/panel=queue/);
+  await expect(page).toHaveURL(new RegExp(`day=${dayId}`));
+  await expect(page.getByRole("heading", { name: "Unified eligible queue" })).toBeVisible();
 });
 
 test("Preflight check-in changes day without retaining old cards or losing context", async ({ page }) => {
-  await page.goto(`/admin/tournaments/live-operations/check-in?${selectedQuery}&day_id=day-1`);
+  await page.goto(`/admin/tournaments/live-operations/check-in?${selectedQuery}`);
   await expect(page.getByRole("heading", { name: "Staging Summer Classic preflight and check-in" })).toBeVisible();
   const summary = page.getByRole("region", { name: "Check-in summary" });
   await expect(summary.getByText("Expected today")).toBeVisible();
@@ -295,7 +598,7 @@ test("Preflight check-in changes day without retaining old cards or losing conte
   await expect(page.getByRole("heading", { name: "Diego Alvarez" })).toHaveCount(0);
 
   await page.getByLabel("Tournament day").selectOption("day-2");
-  await expect(page).toHaveURL(/day_id=day-2/);
+  await expect(page).toHaveURL(/day=day-2/);
   await expect(page).toHaveURL(new RegExp(`tournament=${tournamentId}`));
   await expect(page).toHaveURL(new RegExp(`draw=${drawId}`));
   await expect(page.getByRole("heading", { name: "Diego Alvarez" })).toBeVisible();
@@ -306,34 +609,90 @@ test("Preflight check-in changes day without retaining old cards or losing conte
   await page.reload();
   await expect(page.getByLabel("Tournament day")).toHaveValue("day-2");
   await expect(page.getByRole("heading", { name: "Diego Alvarez" })).toBeVisible();
-  const scoring = page.getByRole("link", { name: "Live scoring" });
-  await expect(scoring).toHaveAttribute("href", new RegExp(`tournament=${tournamentId}.*draw=${drawId}`));
+  const dayWorkspace = page.getByRole("link", { name: "Day workspace" });
+  await expect(dayWorkspace).toHaveAttribute("href", new RegExp(`tournament=${tournamentId}.*draw=${drawId}.*day=day-2`));
 });
 
-test("A 9–9 tie never opens confirmation; a valid score shows the full scorecard", async ({ page }) => {
-  await page.goto(`/admin/tournament-live?${selectedQuery}`);
-  await expect(page.getByText(/Mateo Rivera \/ Liam Chen.*Caleb Nguyen \/ Diego Alvarez/).first()).toBeVisible();
-  await page.getByRole("button", { name: "Enter score" }).first().click();
-  await page.getByLabel("Team A score").fill("9");
-  await page.getByLabel("Team B score").fill("9");
+test("A 9–9 tie is rejected before inline score-and-release submits the exact day fence", async ({ page }) => {
+  const commands: Array<Record<string, unknown>> = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
+    commands.push(request.postDataJSON() as Record<string, unknown>);
+  });
+  await page.goto(`/admin/tournaments/live-operations?${selectedQuery}`);
+  await page.getByRole("button", { name: /Enter score for Mateo Rivera \/ Liam Chen vs Caleb Nguyen \/ Diego Alvarez on Court 1/ }).click();
+  await page.getByLabel("Mateo Rivera / Liam Chen score").fill("9");
+  await page.getByLabel("Caleb Nguyen / Diego Alvarez score").fill("9");
   await page.getByRole("button", { name: "Review score" }).click();
-  await expect(page.getByText(/tied or invalid score cannot be reviewed or saved/i)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Confirm & save" })).toHaveCount(0);
-  await page.getByLabel("Team A score").fill("11");
-  await page.getByLabel("Team B score").fill("7");
+  await expect(page.getByText("Tournament games cannot be saved with a tied score.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Confirm & release court" })).toHaveCount(0);
+  await page.getByLabel("Mateo Rivera / Liam Chen score").fill("11");
+  await page.getByLabel("Caleb Nguyen / Diego Alvarez score").fill("7");
   await page.getByRole("button", { name: "Review score" }).click();
-  await expect(page.getByText("Proposed winner:")).toBeVisible();
+  await expect(page.getByText("Winner:")).toBeVisible();
+  await expect(page.getByText("Mateo Rivera / Liam Chen", { exact: true }).last()).toBeVisible();
   await expect(page.getByRole("button", { name: "Edit score" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Confirm & save" })).toBeVisible();
+  await expect(page.getByText(/refills from the server-ordered eligible queue/)).toBeVisible();
+
+  await page.getByRole("button", { name: "Confirm & release court" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Confirm this score and release the court?" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Confirm & release court" }).click();
+  await expect(dialog.getByRole("heading", { name: "Tournament-day operation complete" })).toBeVisible();
+  await expect(dialog.getByText("Score saved, court released, and the authoritative day queue refreshed.")).toBeVisible();
+  await expect.poll(() => commands.length).toBe(1);
+  expect(commands[0]).toMatchObject({
+    action: "score_and_release",
+    confirmation_text: "SAVE SCORE AND RELEASE COURT",
+    expected: {
+      day_run_version: "7",
+      state_fingerprint: "d".repeat(64),
+      queue_version: "11",
+      draw_version: "3",
+      game_version: "day-game-a-v1",
+      court_version: "court-1-v2"
+    },
+    payload: { game_id: "day-game-a", score_a: 11, score_b: 7 }
+  });
+  await expect(page.getByRole("region", { name: "Court board" }).getByText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith")).toBeVisible();
 });
 
-test("Corrections & recovery shows before/after and durable evidence", async ({ page }) => {
+test("Corrections & recovery submits an exact versioned day correction with before/after evidence", async ({ page }) => {
+  const commands: Array<Record<string, unknown>> = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
+    commands.push(request.postDataJSON() as Record<string, unknown>);
+  });
   await page.goto(`/admin/tournaments/live-operations/corrections?${selectedQuery}`);
-  await page.getByRole("button", { name: "Correct score" }).first().click();
-  await expect(page.getByText(/Before correction:/)).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Recent operations and reconciliation" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Corrections & recovery" })).toBeVisible();
+  await page.getByRole("button", { name: "Correct completed score for Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith" }).click();
+  await expect(page.getByRole("heading", { name: "Before correction" })).toBeVisible();
+  await expect(page.getByText("11–7")).toBeVisible();
+  await page.getByLabel("Morgan Diaz / Riley Smith score").fill("8");
+  await page.getByRole("button", { name: "Review correction" }).click();
+  await expect(page.getByText(/Before:/)).toContainText("11–7");
+  await expect(page.getByText(/After:/)).toContainText("11–8");
+  await page.getByRole("button", { name: "Confirm correction" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Confirm this exact completed-score correction?" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Confirm & save correction" }).click();
+  await expect(dialog.getByRole("heading", { name: "Tournament-day operation complete" })).toBeVisible();
+  await expect(dialog.getByText("Completed score corrected. The authoritative day result and all reviewed versions were refreshed.")).toBeVisible();
+  await expect.poll(() => commands.length).toBe(1);
+  expect(commands[0]).toMatchObject({
+    action: "correct_completed_score",
+    confirmation_text: "CORRECT COMPLETED SCORE",
+    expected: {
+      day_run_version: "7",
+      state_fingerprint: "d".repeat(64),
+      queue_version: "11",
+      draw_version: "4",
+      game_version: "day-game-completed-v1"
+    },
+    payload: { game_id: "day-game-completed", score_a: 11, score_b: 8 }
+  });
+  await expect(page.getByRole("heading", { name: "Recent day operations and recovery evidence" })).toBeVisible();
   await expect(page.getByText("Technical operation evidence").first()).toBeVisible();
-  await expect(page.getByText(/Match Log corrections are for official published matches/)).toBeVisible();
 });
 
 test("Publish and archive remain blocked even when runtime writes are available", async ({ page }) => {

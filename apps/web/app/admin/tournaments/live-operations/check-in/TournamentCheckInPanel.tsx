@@ -10,6 +10,10 @@ import type {
   TournamentCheckInRegistrant,
   TournamentCheckInSnapshot
 } from "@/lib/adminTournamentCheckInApi";
+import {
+  readTournamentRouteContext,
+  tournamentRouteHref
+} from "@/lib/tournamentRouteContext";
 import { useAdminSession } from "@/lib/useAdminSession";
 import styles from "./TournamentCheckInPanel.module.css";
 
@@ -95,12 +99,18 @@ export default function TournamentCheckInPanel({
   const preserveDayInUrl = useCallback(
     (dayId: string) => {
       if (!dayId) return;
-      const params = new URLSearchParams(searchParams.toString());
-      if (params.get("day_id") === dayId) return;
-      params.set("day_id", dayId);
-      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+      const context = readTournamentRouteContext(searchParams);
+      if (context.dayId === dayId && searchParams.get("day") === dayId) return;
+      router.replace(
+        tournamentRouteHref(pathname, {
+          ...context,
+          tournamentId,
+          dayId
+        }),
+        { scroll: false }
+      );
     },
-    [pathname, router, searchParams]
+    [pathname, router, searchParams, tournamentId]
   );
 
   const loadSnapshot = useCallback(

@@ -42,6 +42,7 @@ type Props = {
   initialTournamentId?: string;
   initialTournamentName?: string | null;
   initialDrawId?: string | null;
+  initialDayId?: string;
   view?: TournamentOperatorView;
 };
 type LiveCommand = "save_score" | "generate_round_robin" | "generate_playoffs" | "generate_podium" | "award_podium" | "publish_official_matches";
@@ -117,7 +118,7 @@ function gameSortKey(game: Record<string, unknown>): string {
 function gameLabel(game: Record<string, unknown>): string {
   const stage = String(game.stage || "").toUpperCase();
   const rr = game.rr_round_number ? `Round ${game.rr_round_number}` : "";
-  const slot = game.rr_slot_number ? `Court/Slot ${game.rr_slot_number}` : "";
+  const slot = game.rr_slot_number ? `Match slot ${game.rr_slot_number}` : "";
   const playoff = [game.playoff_round, game.playoff_game_code].map(shortValue).filter((item) => item !== "—").join(" ");
   return [stage === "PLAYOFF" ? "Playoff" : "", rr, slot, playoff].filter(Boolean).join(" · ") || "Scheduled game";
 }
@@ -211,6 +212,7 @@ export default function TournamentLivePanel({
   initialTournamentId = "",
   initialTournamentName = null,
   initialDrawId = "",
+  initialDayId = "",
   view = "scoring"
 }: Props) {
   const { accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
@@ -234,7 +236,7 @@ export default function TournamentLivePanel({
   const [lastResult, setLastResult] = useState<AdminTournamentWriteResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const drawsRequest = useLatestRequestGuard(`${accessToken}\u0000${lockedTournamentId}`, clearProtectedLiveState);
+  const drawsRequest = useLatestRequestGuard(`${accessToken}\u0000${lockedTournamentId}\u0000${initialDayId}`, clearProtectedLiveState);
   const boardRequest = useLatestRequestGuard(accessToken);
   const actionScope = `${accessToken}\u0000${selectedTournamentId}\u0000${selectedDrawId}`;
   const actionRequest = useLatestRequestGuard(actionScope);
@@ -313,8 +315,8 @@ export default function TournamentLivePanel({
     if (String(payload.tournament?.id || "") !== tournamentId) {
       throw new Error("The response belongs to a different tournament workspace. Refresh from Tournament Manager.");
     }
-    if (drawId && String(payload.draw_id || "") !== drawId) {
-      throw new Error("The returned draw does not match the working draw. Choose the draw again.");
+    if (drawId && (payload.scope !== "draw" || String(payload.draw_id || "") !== drawId)) {
+      throw new Error("The returned draw-scoped snapshot does not match the working draw. Choose the draw again.");
     }
   }
 
@@ -332,7 +334,8 @@ export default function TournamentLivePanel({
     const nextContext = {
       tournamentId: lockedTournamentId,
       tournamentName: selectedTournament?.name || initialTournamentName || "",
-      drawId
+      drawId,
+      dayId: initialDayId
     };
     router.replace(tournamentRouteHref(pathname, nextContext), { scroll: false });
   }
@@ -354,7 +357,9 @@ export default function TournamentLivePanel({
       );
       if (!drawsRequest.isCurrent(generation)) return;
       assertSnapshotIdentity(payload, lockedTournamentId);
-      const nextDraws = payload.draws || [];
+      const nextDraws = (payload.draws || []).filter((draw) => (
+        !initialDayId || String(draw.registration_day_id || "") === initialDayId
+      ));
       setDraws(nextDraws);
       setDrawLifecycle(payload.lifecycle?.draws || []);
       const operableDrawIds = new Set((payload.lifecycle?.draws || []).map((draw) => draw.draw_id));
@@ -615,16 +620,18 @@ export default function TournamentLivePanel({
   }
 
   async function reviewPodium(confirmationText: string): Promise<ActionCompletion> {
-    if (!snapshot?.state_fingerprint || !selectedTournamentId || !selectedDrawId) {
-      throw new Error("Reload the selected draw before reviewing its podium.");
+    const reviewedSnapshot = snapshot;
+    const opsStateFingerprint = String(reviewedSnapshot?.ops_state_fingerprint || "");
+    if (!reviewedSnapshot || !opsStateFingerprint || !selectedTournamentId || !selectedDrawId) {
+      throw new Error("Podium review needs the current Tournament Ops fingerprint. Reload after the server exposes that guarded state version.");
     }
-    const reviewedDraw = snapshot.draws.find((draw) => draw.id === selectedDrawId);
+    const reviewedDraw = reviewedSnapshot.draws.find((draw) => draw.id === selectedDrawId);
     const versionRows = (rows: Array<{ id?: unknown; updated_at?: unknown }>) =>
       rows
         .map((row) => ({ id: String(row.id || ""), updated_at: String(row.updated_at || "") }))
         .sort((left, right) => left.id.localeCompare(right.id));
-    const expectedTeamVersions = versionRows(snapshot.teams);
-    const expectedGameVersions = versionRows(snapshot.games);
+    const expectedTeamVersions = versionRows(reviewedSnapshot.teams);
+    const expectedGameVersions = versionRows(reviewedSnapshot.games);
     if (!reviewedDraw?.updated_at || expectedTeamVersions.some((row) => !row.id || !row.updated_at) || expectedGameVersions.some((row) => !row.id || !row.updated_at)) {
       throw new Error("The reviewed draw, team, or game versions are incomplete. Reload before reviewing the podium.");
     }
@@ -637,12 +644,12 @@ export default function TournamentLivePanel({
         {
           method: "POST",
           body: JSON.stringify({
-            expected_state_fingerprint: snapshot.state_fingerprint,
+            expected_state_fingerprint: opsStateFingerprint,
             expected_draw_updated_at: reviewedDraw.updated_at,
             expected_team_versions: expectedTeamVersions,
             expected_source_game_versions: expectedGameVersions,
             confirmation_text: confirmationText,
-            source: "next_tournament_podium_review"
+            source: "next_tournament_admin_review_podium"
           })
         }
       );
@@ -722,7 +729,7 @@ export default function TournamentLivePanel({
   useAuthenticatedAutoLoad(
     status.enabled ? accessToken : "",
     () => loadDraws(initialDrawId || "", true),
-    `${lockedTournamentId}\u0000${initialDrawId || ""}`
+    `${lockedTournamentId}\u0000${initialDayId}\u0000${initialDrawId || ""}`
   );
 
   if (!status.enabled) {
@@ -744,7 +751,8 @@ export default function TournamentLivePanel({
   const routeContext = {
     tournamentId: selectedTournamentId || initialTournamentId,
     tournamentName: selectedTournament?.name || initialTournamentName || "",
-    drawId: selectedDrawId || initialDrawId || ""
+    drawId: selectedDrawId || initialDrawId || "",
+    dayId: initialDayId
   };
   const counts = lifecycle?.counts;
   const totalGames = counts?.games ?? sortedGames.length;
@@ -762,6 +770,8 @@ export default function TournamentLivePanel({
     selectedLifecycleDraw?.review_evidence
       && (selectedLifecycleDraw.review_evidence.current ?? selectedLifecycleDraw.review_evidence.reviewed)
   );
+  const podiumOpsFingerprint = String(snapshot?.ops_state_fingerprint || "");
+  const legacyDayCorrectionsBlocked = view === "corrections" && Boolean(initialDayId);
   const publishActuallyReady = Boolean(officialReadiness?.ready && publishReadiness.ready);
   const runtimeCanPublish = Boolean(
     status.writes_enabled
@@ -933,7 +943,15 @@ export default function TournamentLivePanel({
         </>
       ) : null}
 
-      {snapshot && (view === "scoring" || view === "corrections") ? (
+      {snapshot && legacyDayCorrectionsBlocked ? (
+        <article className={styles.recoveryCard} role="alert">
+          <h2>Use guarded tournament-day correction</h2>
+          <p>Day-owned completed scores must use the guarded tournament-day correction workspace. The legacy draw correction command is closed because it cannot preserve day-run, queue, draw, and game versions together.</p>
+          <Link className={styles.secondaryLink} href={tournamentRouteHref("/admin/tournaments/live-operations/corrections", routeContext)}>Open Corrections &amp; recovery</Link>
+        </article>
+      ) : null}
+
+      {snapshot && (view === "scoring" || (view === "corrections" && !legacyDayCorrectionsBlocked)) ? (
         <>
           <article className={styles.card}><div className={styles.headingRow}><div><h2>{view === "corrections" ? "Scored games with current results" : "Round and court matchups"}</h2><p className={styles.muted}>{view === "corrections" ? "Choose a finalized game to review its before/after correction." : "Choose a matchup for inline score entry."}</p></div><div className={styles.filterRow}><label>Round<select className={styles.input} value={roundFilter} onChange={(event) => setRoundFilter(event.target.value)}><option value="all">All rounds</option>{roundOptions.map((round) => <option key={round} value={round}>{round}</option>)}</select></label><label>Status<select className={styles.input} value={gameStatusFilter} onChange={(event) => setGameStatusFilter(event.target.value)}><option value="all">All games</option><option value="open">Open</option><option value="final">Final</option></select></label></div></div>{gameCards(view === "corrections" ? filteredGames.filter(isScored) : filteredGames, true)}</article>
           {scoreWorkspace}
@@ -943,7 +961,7 @@ export default function TournamentLivePanel({
       ) : null}
 
       {snapshot && view === "podium" ? (
-        <article className={styles.card}><h2>Podium draft</h2><p className={styles.muted}>Generate placements, review the current teams/games/podium explicitly, then award the reviewed podium.</p><div className={styles.podiumGrid}>{(snapshot.podium || []).map((row, index) => { const teamId = String(row.team_id || row.tournament_team_id || ""); return <div key={String(row.id || `${teamId}:${index}`)} className={styles.podiumCard}><span>Place {shortValue(row.place || row.placement || index + 1)}</span><strong>{teamLabel(teamsById.get(teamId), snapshot)}</strong></div>; })}</div>{!snapshot.podium.length ? <p>No podium entries yet.</p> : null}<div className={styles.commandGrid}><section className={styles.commandCard}><h3>Generate podium</h3><CommandBlockers readiness={podiumReadiness} /><ConfirmAction triggerLabel="Generate podium" title="Generate podium placements?" description="Calculate placements from the reviewed final results." confirmLabel="Yes, generate podium" confirmationText={podiumReadiness.confirmation || CONFIRMATIONS.generate_podium} disabled={!podiumReadiness.ready} busy={busy} onConfirm={(text) => submitCommand("generate_podium", text)} /></section><section className={styles.commandCard}><h3>Explicit review</h3><p>{currentPodiumReview ? "Current review evidence is present." : "A current explicit review is required; any team, game, or podium change makes it stale."}</p><ConfirmAction triggerLabel="Review podium" title="Review this exact podium?" description="This records immutable evidence for the current teams, games, and placements." confirmLabel="Yes, review podium" confirmationText="REVIEW PODIUM" disabled={!snapshot.podium.length || currentPodiumReview} busy={busy} onConfirm={reviewPodium} /></section><section className={styles.commandCard}><h3>Awards</h3><CommandBlockers readiness={awardReadiness} /><ConfirmAction triggerLabel="Award podium" title="Award this reviewed podium?" description="Mint only the exact expected linked-player tournament awards." confirmLabel="Yes, award podium" confirmationText={awardReadiness.confirmation || CONFIRMATIONS.award_podium} disabled={!awardReadiness.ready || !currentPodiumReview} busy={busy} onConfirm={(text) => submitCommand("award_podium", text)} /></section></div></article>
+        <article className={styles.card}><h2>Podium draft</h2><p className={styles.muted}>Generate placements, review the current teams/games/podium explicitly, then award the reviewed podium.</p><div className={styles.podiumGrid}>{(snapshot.podium || []).map((row, index) => { const teamId = String(row.team_id || row.tournament_team_id || ""); return <div key={String(row.id || `${teamId}:${index}`)} className={styles.podiumCard}><span>Place {shortValue(row.place || row.placement || index + 1)}</span><strong>{teamLabel(teamsById.get(teamId), snapshot)}</strong></div>; })}</div>{!snapshot.podium.length ? <p>No podium entries yet.</p> : null}<div className={styles.commandGrid}><section className={styles.commandCard}><h3>Generate podium</h3><CommandBlockers readiness={podiumReadiness} /><ConfirmAction triggerLabel="Generate podium" title="Generate podium placements?" description="Calculate placements from the reviewed final results." confirmLabel="Yes, generate podium" confirmationText={podiumReadiness.confirmation || CONFIRMATIONS.generate_podium} disabled={!podiumReadiness.ready} busy={busy} onConfirm={(text) => submitCommand("generate_podium", text)} /></section><section className={styles.commandCard}><h3>Explicit review</h3><p>{currentPodiumReview ? "Current review evidence is present." : "A current explicit review is required; any team, game, or podium change makes it stale."}</p>{!podiumOpsFingerprint ? <p className={styles.errorText}>Podium review needs the current Tournament Ops fingerprint. Reload after the guarded snapshot exposes it.</p> : null}<ConfirmAction triggerLabel="Review podium" title="Review this exact podium?" description="This records immutable evidence for the current teams, games, and placements." confirmLabel="Yes, review podium" confirmationText="REVIEW PODIUM" disabled={!snapshot.podium.length || currentPodiumReview || !podiumOpsFingerprint} disabledReason={!podiumOpsFingerprint ? "The guarded Tournament Ops fingerprint is unavailable." : undefined} busy={busy} onConfirm={reviewPodium} /></section><section className={styles.commandCard}><h3>Awards</h3><CommandBlockers readiness={awardReadiness} /><ConfirmAction triggerLabel="Award podium" title="Award this reviewed podium?" description="Mint only the exact expected linked-player tournament awards." confirmLabel="Yes, award podium" confirmationText={awardReadiness.confirmation || CONFIRMATIONS.award_podium} disabled={!awardReadiness.ready || !currentPodiumReview} busy={busy} onConfirm={(text) => submitCommand("award_podium", text)} /></section></div></article>
       ) : null}
 
       {snapshot && view === "results" ? (

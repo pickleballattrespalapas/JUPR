@@ -1,0 +1,590 @@
+.root {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+.scopeBar,
+.workspaceSection,
+.activationCard,
+.recoveryCard,
+.emptyState {
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid #dbe3ef;
+  border-radius: 16px;
+  padding: clamp(0.85rem, 1.8vw, 1.2rem);
+  background: #fff;
+}
+
+.scopeBar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(220px, 0.8fr) auto;
+  align-items: end;
+  gap: 1rem;
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.scopeBar h2,
+.scopeBar p,
+.workspaceSection h2,
+.activationCard h2,
+.activationCard p,
+.recoveryCard h2,
+.recoveryCard p {
+  margin-top: 0;
+}
+
+.scopeStatus {
+  display: grid;
+  justify-items: start;
+  gap: 0.45rem;
+}
+
+.field,
+.scoreGrid label {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  color: #0f172a;
+  font-weight: 750;
+}
+
+.field select,
+.scoreGrid input {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  border: 1px solid #94a3b8;
+  border-radius: 9px;
+  padding: 0.55rem 0.65rem;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
+}
+
+.eyebrow {
+  margin: 0 0 0.25rem;
+  color: #1d4ed8;
+  font-size: 0.74rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.muted {
+  color: #475569;
+}
+
+.viewNav {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.viewNav button,
+.primaryButton,
+.secondaryButton {
+  min-height: 44px;
+  box-sizing: border-box;
+  border: 1px solid #0f172a;
+  border-radius: 999px;
+  padding: 0.55rem 0.85rem;
+  background: #0f172a;
+  color: #fff;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.viewNav button[aria-pressed="true"] {
+  border-color: #2563eb;
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.secondaryButton {
+  background: #fff;
+  color: #0f172a;
+}
+
+.viewNav button:focus-visible,
+.primaryButton:focus-visible,
+.secondaryButton:focus-visible,
+.field select:focus-visible,
+.scoreGrid input:focus-visible,
+.root a:focus-visible {
+  outline: 3px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.viewNav button:disabled,
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.field select:disabled,
+.scoreGrid input:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.summaryGrid article {
+  min-width: 0;
+  border: 1px solid #dbe3ef;
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: #fff;
+}
+
+.summaryGrid span,
+.summaryGrid strong {
+  display: block;
+}
+
+.summaryGrid span {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.summaryGrid strong {
+  margin-top: 0.2rem;
+  font-size: 1.35rem;
+}
+
+.activationCard {
+  border-color: #fbbf24;
+  background: #fffbeb;
+}
+
+.sectionHeading,
+.cardHeading,
+.recoveryRow,
+.buttonRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.sectionHeading > *,
+.cardHeading > *,
+.recoveryRow > * {
+  min-width: 0;
+}
+
+.focusedSection {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px #dbeafe;
+}
+
+.courtBoard {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+}
+
+.courtCard,
+.drawCard,
+.exceptionCard,
+.correctionCard,
+.scoreEditor {
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid #dbe3ef;
+  border-radius: 13px;
+  padding: 0.8rem;
+  background: #fff;
+}
+
+.courtCard {
+  display: grid;
+  align-content: start;
+  gap: 0.55rem;
+}
+
+.courtCard h3,
+.courtCard p,
+.drawCard h3,
+.drawCard h4,
+.drawCard p,
+.exceptionCard p {
+  margin: 0;
+}
+
+.availableCourt {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.occupiedCourt {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.matchup,
+.stage,
+.drawCard,
+.exceptionCard,
+.technicalDetails code {
+  overflow-wrap: anywhere;
+}
+
+.matchup {
+  font-weight: 800;
+}
+
+.stage {
+  color: #475569;
+  font-size: 0.88rem;
+}
+
+.availableText,
+.ready {
+  color: #166534;
+  font-weight: 750;
+}
+
+.scoreEditor {
+  margin-top: 1rem;
+  border: 2px solid #2563eb;
+  background: #f8fbff;
+}
+
+.scoreGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: 0.7rem;
+  margin: 0.85rem 0;
+}
+
+.scoreGrid > span {
+  padding-bottom: 0.7rem;
+  font-size: 1.3rem;
+  font-weight: 850;
+}
+
+.scoreConfirmation {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.8rem;
+  border: 1px solid #93c5fd;
+  border-radius: 12px;
+  padding: 0.8rem;
+  background: #eff6ff;
+}
+
+.scoreConfirmation > div:not(.buttonRow) {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.scoreConfirmation > p,
+.scoreConfirmation > .buttonRow {
+  grid-column: 1 / -1;
+}
+
+.scoreConfirmation span {
+  font-size: 1.5rem;
+  font-weight: 900;
+}
+
+.lowerGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  gap: 1rem;
+  min-width: 0;
+}
+
+.queueList {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.8rem 0 0;
+  padding-left: 2.2rem;
+}
+
+.queueList li {
+  position: relative;
+  min-width: 0;
+  border: 1px solid #dbe3ef;
+  border-radius: 11px;
+  padding: 0.7rem;
+  background: #f8fafc;
+}
+
+.queueList li > div,
+.queueList p,
+.queueList small {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.positionBadge {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  color: #1d4ed8;
+  font-weight: 850;
+}
+
+.exceptionCard {
+  margin-top: 0.65rem;
+  border-color: #fbbf24;
+  background: #fffbeb;
+}
+
+.drawGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 285px), 1fr));
+  gap: 0.8rem;
+  margin-top: 0.85rem;
+}
+
+.correctionGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 0.8rem;
+  margin-top: 0.85rem;
+}
+
+.correctionCard {
+  display: grid;
+  align-content: start;
+  gap: 0.65rem;
+}
+
+.correctionCard p,
+.correctionComparison h4,
+.correctionComparison p {
+  margin: 0;
+}
+
+.correctionComparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin: 0.85rem 0;
+}
+
+.correctionComparison > section {
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 0.8rem;
+  background: #fff;
+}
+
+.operationHistory {
+  min-width: 0;
+  margin-top: 1rem;
+  border-top: 1px solid #dbe3ef;
+  padding-top: 0.85rem;
+}
+
+.operationHistory h3 {
+  margin-top: 0;
+}
+
+.largeScore {
+  margin: 0.45rem 0 !important;
+  font-size: 1.7rem;
+  font-weight: 900;
+}
+
+.drawCard {
+  display: grid;
+  align-content: start;
+  gap: 0.65rem;
+}
+
+.drawCard hr {
+  width: 100%;
+  margin: 0.2rem 0;
+  border: 0;
+  border-top: 1px solid #dbe3ef;
+}
+
+.blockers {
+  margin: 0.45rem 0;
+  padding-left: 1.2rem;
+  color: #92400e;
+  font-size: 0.9rem;
+}
+
+.successBadge,
+.activeBadge,
+.neutralBadge,
+.warningBadge,
+.positionBadge {
+  white-space: nowrap;
+}
+
+.successBadge,
+.activeBadge,
+.neutralBadge,
+.warningBadge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #86efac;
+  border-radius: 999px;
+  padding: 0.18rem 0.48rem;
+  background: #dcfce7;
+  color: #166534;
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.activeBadge {
+  border-color: #93c5fd;
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.neutralBadge {
+  border-color: #cbd5e1;
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.warningBadge {
+  border-color: #fbbf24;
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.recoveryCard {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.recoveryRow {
+  margin-top: 0.65rem;
+  border-top: 1px solid #fde68a;
+  padding-top: 0.65rem;
+}
+
+.notice {
+  margin: 0;
+  border: 1px solid #bfdbfe;
+  border-radius: 11px;
+  padding: 0.7rem;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-weight: 700;
+}
+
+.error,
+.errorText {
+  color: #b91c1c;
+}
+
+.error {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.forfeitBoundary {
+  border-left: 4px solid #f59e0b;
+  padding-left: 0.65rem;
+}
+
+.textLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #1d4ed8;
+  font-weight: 800;
+}
+
+.disabledLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #64748b;
+  font-weight: 800;
+  opacity: 0.65;
+}
+
+.technicalDetails summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+@media (max-width: 1320px) {
+  .courtBoard {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .summaryGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1050px) {
+  .scopeBar,
+  .lowerGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .courtBoard {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .courtBoard {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .summaryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .scoreGrid,
+  .scoreConfirmation,
+  .correctionComparison {
+    grid-template-columns: 1fr;
+  }
+
+  .scoreGrid > span {
+    display: none;
+  }
+
+  .scoreConfirmation > p,
+  .scoreConfirmation > .buttonRow {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .courtBoard,
+  .summaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .viewNav {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .viewNav button,
+  .buttonRow > button,
+  .scopeStatus > button {
+    width: 100%;
+  }
+}

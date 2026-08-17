@@ -12,8 +12,6 @@ type Props = {
 export default function TournamentCheckInPage({ searchParams }: Props) {
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
-  const rawDay = searchParams?.day_id;
-  const initialDayId = String(Array.isArray(rawDay) ? rawDay[0] || "" : rawDay || "").trim();
 
   return (
     <section style={{ minWidth: 0 }}>
@@ -32,7 +30,7 @@ export default function TournamentCheckInPage({ searchParams }: Props) {
         <TournamentCheckInPanel
           apiBase={getAdminTournamentApiBaseUrl()}
           clubId="tres_palapas"
-          initialDayId={initialDayId}
+          initialDayId={context.dayId}
           tournamentId={context.tournamentId}
         />
       </Suspense>

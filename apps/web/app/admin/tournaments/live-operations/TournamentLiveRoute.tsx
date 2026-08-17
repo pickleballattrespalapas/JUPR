@@ -48,6 +48,7 @@ export default async function TournamentLiveRoute({
           initialTournamentId={context.tournamentId}
           initialTournamentName={context.tournamentName || null}
           initialDrawId={context.drawId}
+          initialDayId={context.dayId}
           view={view}
         />
       ) : null}

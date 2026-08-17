@@ -1,7 +1,7 @@
-import TournamentLiveRoute from "./TournamentLiveRoute";
+import TournamentDayWorkspaceRoute from "./TournamentDayWorkspaceRoute";
 
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
 export default function TournamentLiveOperationsPhasePage({ searchParams }: Props) {
-  return <TournamentLiveRoute searchParams={searchParams} view="overview" phase="live" kicker="Tournament Manager / Live Operations" title="live operations" description="Move through tournament-day work in focused modules while preserving the selected tournament and draw." />;
+  return <TournamentDayWorkspaceRoute searchParams={searchParams} />;
 }

@@ -95,6 +95,8 @@ def test_every_unsafe_fastapi_route_has_an_exact_nonstale_wave_classification() 
         ("PUT", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/check-in/{registration_id}"),
         ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/draws/{draw_id}/commands"),
         ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/draws/{draw_id}/operations/{operation_key}/reconcile"),
+        ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/days/{day_id}/commands"),
+        ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/days/{day_id}/operations/{operation_key}/reconcile"),
     }
     expected_overlaps = {
         **{
