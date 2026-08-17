@@ -383,11 +383,22 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
         source="test",
     )["session"]
 
+    league_rows = object()
     monkeypatch.setattr(
         service,
         "load_data",
         lambda *_args, **_kwargs: (
-            None, None, None, None, None, None, None, {}, {}, False, None
+            None,
+            None,
+            league_rows,
+            None,
+            None,
+            None,
+            None,
+            {},
+            {},
+            False,
+            None,
         ),
     )
     calls = []
@@ -420,5 +431,7 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
     assert {"t1_p1", "t1_p2", "t2_p1", "t2_p2"} <= doubles_payload.keys()
     assert {"t1_p1", "t2_p1"} <= singles_payload.keys()
     assert "t1_p2" not in singles_payload
+    assert calls[0]["df_leagues"] is league_rows
+    assert calls[1]["df_leagues"] is league_rows
     assert calls[0]["idempotency_key"] != calls[1]["idempotency_key"]
     assert len(published["session"]["official_publish"]["published_match_ids"]) == 3

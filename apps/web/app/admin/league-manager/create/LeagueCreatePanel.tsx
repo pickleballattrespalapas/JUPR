@@ -9,6 +9,7 @@ import type {
   AdminLeagueManagerStatusResponse,
   AdminLeagueManagerWriteResponse
 } from "@/lib/adminLeagueManagerApi";
+import { leagueRouteHref, normalizeLeagueType } from "@/lib/leagueRouteContext";
 import { useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
 
@@ -36,9 +37,8 @@ function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
 }
 
-function leagueHomeHref(leagueName: string, leagueType: string): string {
-  const params = new URLSearchParams({ league: leagueName, mode: leagueType });
-  return `/admin/league-manager/league?${params.toString()}`;
+function leagueHomeHref(leagueId: string, leagueName: string, leagueType: string): string {
+  return leagueRouteHref("/admin/league-manager/league", { leagueId, leagueName, leagueType });
 }
 
 export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
@@ -53,6 +53,12 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
   const [kFactor, setKFactor] = useState("32");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const createMatchFormat = leagueType === "Team" ? "doubles" : matchFormat;
+
+  function changeLeagueType(nextLeagueType: "Individual" | "Team") {
+    setLeagueType(nextLeagueType);
+    if (nextLeagueType === "Team") setMatchFormat("doubles");
+  }
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -85,6 +91,11 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
       setMessage(error.message);
       throw error;
     }
+    if (leagueType === "Team" && matchFormat !== "doubles") {
+      const error = new Error("Team leagues must use Doubles.");
+      setMessage(error.message);
+      throw error;
+    }
 
     const generation = actionRequest.begin();
     setBusy(true);
@@ -97,7 +108,7 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
           body: JSON.stringify({
             league_name: cleanName,
             league_type: leagueType,
-            match_format: matchFormat,
+            match_format: createMatchFormat,
             description,
             min_games: minimum,
             k_factor: factor,
@@ -108,8 +119,9 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
       );
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the created league response was applied.");
       const createdName = payload.league?.league_name || payload.league_name || cleanName;
-      const createdType = String(payload.league?.league_type || leagueType);
-      router.push(leagueHomeHref(createdName, createdType));
+      const createdId = String(payload.league?.league_id || createdName).trim();
+      const createdType = normalizeLeagueType(payload.league?.league_type || leagueType) || leagueType;
+      router.push(leagueHomeHref(createdId, createdName, createdType));
       return actionSuccess("League created", `${createdName} was created as an inactive league draft.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
@@ -140,8 +152,21 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
     <article style={cardStyle}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
         <label><strong>League name</strong><br /><input value={name} onChange={(event) => setName(event.target.value)} maxLength={120} style={inputStyle} /></label>
-        <label><strong>League mode</strong><br /><select value={leagueType} onChange={(event) => setLeagueType(event.target.value as "Individual" | "Team")} style={inputStyle}><option value="Individual">Individual</option><option value="Team">Team</option></select></label>
-        <label><strong>League format</strong><br /><select value={matchFormat} onChange={(event) => setMatchFormat(event.target.value as "doubles" | "singles")} style={inputStyle}><option value="doubles">Doubles</option><option value="singles">Singles</option></select></label>
+        <label><strong>League mode</strong><br /><select value={leagueType} onChange={(event) => changeLeagueType(event.target.value as "Individual" | "Team")} style={inputStyle}><option value="Individual">Individual</option><option value="Team">Team</option></select></label>
+        <label>
+          <strong>League format</strong><br />
+          <select
+            value={createMatchFormat}
+            onChange={(event) => setMatchFormat(event.target.value as "doubles" | "singles")}
+            disabled={leagueType === "Team"}
+            aria-describedby={leagueType === "Team" ? "team-league-format-note" : undefined}
+            style={inputStyle}
+          >
+            <option value="doubles">Doubles</option>
+            {leagueType === "Individual" ? <option value="singles">Singles</option> : null}
+          </select>
+          {leagueType === "Team" ? <small id="team-league-format-note" style={{ color: "#64748b" }}>Team leagues use Doubles.</small> : null}
+        </label>
         <label><strong>Minimum games</strong><br /><input type="number" value={minGames} onChange={(event) => setMinGames(event.target.value)} min={0} max={1000} style={inputStyle} /></label>
         <label><strong>K-factor</strong><br /><input type="number" value={kFactor} onChange={(event) => setKFactor(event.target.value)} min={1} max={128} style={inputStyle} /></label>
       </div>
@@ -150,10 +175,10 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
         <ConfirmAction
           triggerLabel={busy ? "Creating…" : "Create league"}
           title="Create this league draft?"
-          description={`Create ${name.trim() || "this league"} as an inactive ${leagueType.toLowerCase()} ${matchFormat} league.`}
+          description={`Create ${name.trim() || "this league"} as an inactive ${leagueType.toLowerCase()} ${createMatchFormat} league.`}
           confirmLabel="Yes, create league"
           confirmationText="CREATE LEAGUE"
-          disabled={!name.trim()}
+          disabled={!name.trim() || (leagueType === "Team" && matchFormat !== "doubles")}
           busy={busy}
           onConfirm={createLeague}
         />

@@ -63,7 +63,7 @@ def test_page_fetches_python_domain_readiness_and_fails_closed() -> None:
     assert "getAdminLeagueLiveStatus" in page
     assert "liveDomainStatus={liveDomainStatus}" in page
     assert "!liveDomainStatus.enabled" in panel
-    assert "Streamlit League Manager" in panel
+    assert "Live round scoring remains unavailable in this build." in panel
 
 
 def test_fastapi_contract_requires_service_role_stale_guard_and_operation_key() -> None:

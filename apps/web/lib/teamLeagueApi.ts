@@ -2,6 +2,10 @@ export type TeamLeagueSettings = {
   league_name: string;
   status: string;
   registration_open: boolean;
+  registration_configured_open?: boolean;
+  online_team_registration_supported?: boolean;
+  team_size: 2;
+  team_category: "open" | "mens" | "womens" | "mixed";
   allow_substitutes: boolean;
   playoff_format: string;
   playoff_team_count?: number | null;
@@ -45,6 +49,8 @@ export type PublicTeamLeagueDetail = {
     payment_mode: "offline";
     signup_types: string[];
     partner_confirmation_required: boolean;
+    online_team_registration_supported: boolean;
+    unavailable_reason?: string | null;
   };
   registration_players: Array<{
     player_id: number;

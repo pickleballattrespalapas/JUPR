@@ -1070,15 +1070,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   if (!leagueStatus.enabled || !uploaderStatus.enabled || !liveDomainStatus.enabled) {
     return (
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
-        <h2 style={{ marginTop: 0 }}>League Live is disabled</h2>
-        <p style={{ color: "#475569" }}>League Live fails closed until League Manager, Match Uploader, the Python Live domain flag, and FastAPI service-role storage are all ready. Keep using the Streamlit League Manager fallback meanwhile.</p>
-        <ul style={{ color: "#475569" }}>
-          <li>League Manager: {leagueStatus.status}</li>
-          <li>Match Uploader: {uploaderStatus.status}</li>
-          <li>Python Live domain: {liveDomainStatus.status}</li>
-          <li>Service role: {liveDomainStatus.service_role_configured ? "configured on FastAPI" : "not configured"}</li>
-        </ul>
-        <p style={{ color: "#475569" }}>Required staging flag: <code>JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN=true</code></p>
+        <h2 style={{ marginTop: 0 }}>League Live is not available yet</h2>
+        <p style={{ color: "#475569" }}>Live round scoring remains unavailable in this build. Continue using the existing League Manager scoring workflow for league night.</p>
       </article>
     );
   }
@@ -1089,8 +1082,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         <h2 style={{ marginTop: 0 }}>Admin session</h2>
         <p style={{ color: "#475569" }}>{adminSessionLabel(session)}</p>
         <p style={{ color: "#166534" }}><strong>Movement authority:</strong> {liveDomainStatus.movement_authority === "python_fastapi" ? "Python / FastAPI" : liveDomainStatus.movement_authority || "unavailable"}. The browser displays plans but never ranks players.</p>
-        <p style={{ color: liveDomainStatus.submit_enabled ? "#166534" : "#92400e" }}><strong>Publish authority:</strong> {liveDomainStatus.submit_enabled ? "Python / FastAPI durable all-match operation" : "guarded off; staging must apply both League Live migrations and enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT"}.</p>
-        <p style={{ color: "#475569" }}><strong>Recovery:</strong> Streamlit League Manager remains the fallback until this staging workflow is manually accepted.</p>
+        <p style={{ color: liveDomainStatus.submit_enabled ? "#166534" : "#92400e" }}><strong>Result publishing:</strong> {liveDomainStatus.submit_enabled ? "Available" : "Unavailable in this build"}.</p>
+        <p style={{ color: "#475569" }}><strong>Recovery:</strong> Interrupted operations can be reviewed below before play resumes.</p>
         {sessionLoading ? <p>Checking session…</p> : null}
         {sessionMessage ? <p style={{ color: "#64748b" }}>{sessionMessage}</p> : null}
       </article>

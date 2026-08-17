@@ -221,11 +221,11 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
         except Exception as exc:
             _error(exc)
 
-    @app.post(
+    @app.get(
         "/admin/clubs/{club_id}/league-manager/team-leagues/"
         "{league_name}/schedule-preview/{phase}"
     )
-    def post_admin_team_league_schedule_preview(
+    def get_admin_team_league_schedule_preview(
         club_id: str,
         league_name: str,
         phase: str,

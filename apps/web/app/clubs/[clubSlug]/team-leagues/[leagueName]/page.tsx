@@ -5,6 +5,10 @@ import TeamLeagueRegistrationForm from "./TeamLeagueRegistrationForm";
 type Props = { params: { clubSlug: string; leagueName: string } };
 const card = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white", minWidth: 0 };
 
+function categoryLabel(category: string): string {
+  return ({ mens: "Men's", womens: "Women's", mixed: "Mixed", open: "Open" } as Record<string, string>)[category] || "Open";
+}
+
 export default async function TeamLeagueDetailPage({ params }: Props) {
   const leagueName = decodeURIComponent(params.leagueName);
   const { data, error } = await getPublicTeamLeague(params.clubSlug, leagueName);
@@ -25,6 +29,7 @@ export default async function TeamLeagueDetailPage({ params }: Props) {
         <h1>{data.league.league_name}</h1>
         <p style={{ color: "#475569" }}>
           {data.league.venue || "Venue to be announced"} ·{" "}
+          {categoryLabel(data.league.team_category)} · 2-player roster ·{" "}
           {data.league.allow_substitutes ? "Substitutes allowed" : "No substitutes"} ·{" "}
           {data.league.playoff_format === "none" ? "Round robin season" : "Round robin plus playoffs"}
         </p>
@@ -38,11 +43,11 @@ export default async function TeamLeagueDetailPage({ params }: Props) {
           {data.teams.map((team) => (
             <div key={team.id} style={{ padding: "0.75rem", borderRadius: "10px", background: "#f8fafc", minWidth: 0, overflowWrap: "anywhere" }}>
               <strong>{team.team_name}</strong>
-              <div style={{ color: "#475569" }}>{team.players.map((player) => player.player_name).join(" & ")}</div>
+              <div style={{ color: "#475569" }}>{team.players.map((player) => player.player_name).join(", ")}</div>
             </div>
           ))}
         </div>
-        {!data.teams.length ? <p>No partner-confirmed teams yet.</p> : null}
+        {!data.teams.length ? <p>No confirmed teams yet.</p> : null}
       </article>
       <article style={card}>
         <h2 style={{ marginTop: 0 }}>Standings</h2>

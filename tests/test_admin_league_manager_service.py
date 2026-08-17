@@ -3,6 +3,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from jupr_app.services.admin_league_manager_service import (
+    LEAGUE_MANAGER_EXTENDED_SELECT,
+    LEAGUE_MANAGER_MINIMAL_SELECT,
+    _league_row_payload,
     build_admin_league_manager_status,
     build_league_schedule_ics,
     get_admin_league_manager_detail,
@@ -60,6 +63,7 @@ def fake_storage():
         "leagues_metadata": [
             {
                 "club_id": "club",
+                "id": 101,
                 "league_name": "Open",
                 "is_active": True,
                 "status": "active",
@@ -70,7 +74,7 @@ def fake_storage():
                 "rules_config": {"move_up_down": True},
                 "awards_config": {"default_depth": 1},
             },
-            {"club_id": "club", "league_name": "Advanced", "is_active": False, "status": "ended", "k_factor": 24},
+            {"club_id": "club", "id": 102, "league_name": "Advanced", "is_active": False, "status": "ended", "k_factor": 24},
         ],
         "players": [
             {"club_id": "club", "id": 1, "name": "Alex", "active": True, "last_game_at": "2026-07-08T18:00:00Z"},
@@ -117,7 +121,11 @@ def test_league_manager_list_and_detail(monkeypatch) -> None:
     detail = get_admin_league_manager_detail(supabase, club_id="club", league_name="Open")
 
     assert listing["count"] == 2
+    assert LEAGUE_MANAGER_EXTENDED_SELECT.split(",")[0] == "id"
+    assert LEAGUE_MANAGER_MINIMAL_SELECT.split(",")[0] == "id"
     assert listing["leagues"][1]["league_name"] == "Open"
+    assert listing["leagues"][1]["league_id"] == "101"
+    assert detail["league"]["league_id"] == "101"
     assert detail["league"]["status"] == "active"
     assert len(detail["schedule_preview"]) == 3
     assert detail["schedule_ics"].count("BEGIN:VEVENT") == 3
@@ -135,6 +143,15 @@ def test_league_manager_list_and_detail(monkeypatch) -> None:
     assert detail["capabilities"]["settings_mode"] == "description_only"
     assert detail["capabilities"]["roster_mutable"] is True
     assert detail["capabilities"]["lifecycle_actions"] == ["pause", "end"]
+
+
+def test_legacy_inactive_status_is_always_a_draft() -> None:
+    for is_active in (True, False, None):
+        assert _league_row_payload({"status": " INACTIVE ", "is_active": is_active})["status"] == "draft"
+
+
+def test_legacy_false_active_flag_without_a_status_remains_ended() -> None:
+    assert _league_row_payload({"is_active": False})["status"] == "ended"
 
 
 def test_league_schedule_ics_matches_preview_blackouts_and_escapes_text() -> None:

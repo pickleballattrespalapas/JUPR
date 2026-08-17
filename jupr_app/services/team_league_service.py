@@ -49,6 +49,9 @@ PUBLIC_VISIBLE_STATUSES = {
     "complete",
     "archived",
 }
+PUBLIC_MANAGER_VISIBLE_STATUSES = {"active", "ended"}
+TEAM_LEAGUE_TEAM_SIZES = {2}
+TEAM_LEAGUE_CATEGORIES = {"open", "mens", "womens", "mixed"}
 
 
 class TeamLeagueConflictError(RuntimeError):
@@ -267,13 +270,122 @@ def _registration_is_open(settings: Mapping[str, Any]) -> bool:
     return closes_at is None or closes_at > _now()
 
 
+def _team_size(settings: Mapping[str, Any]) -> int:
+    """Return the backward-compatible configured primary roster size."""
+
+    value = _int(settings.get("team_size"))
+    return value if value in TEAM_LEAGUE_TEAM_SIZES else 2
+
+
+def _team_category(value: Any) -> str:
+    clean = _text(value, 20).lower().replace("’", "'")
+    aliases = {
+        "men": "mens",
+        "men's": "mens",
+        "male": "mens",
+        "women": "womens",
+        "women's": "womens",
+        "female": "womens",
+        "coed": "mixed",
+    }
+    return aliases.get(clean, clean or "open")
+
+
+def _normalized_player_gender(value: Any) -> str | None:
+    """Normalize the legacy player gender spellings used by club imports."""
+
+    clean = _text(value, 40).lower().replace("’", "'").replace("_", " ")
+    aliases = {
+        "m": "male",
+        "man": "male",
+        "men": "male",
+        "male": "male",
+        "men's": "male",
+        "mens": "male",
+        "f": "female",
+        "w": "female",
+        "woman": "female",
+        "women": "female",
+        "female": "female",
+        "women's": "female",
+        "womens": "female",
+    }
+    return aliases.get(clean)
+
+
+def _enforce_team_category(
+    category: Any, player_rows: Sequence[Mapping[str, Any]]
+) -> None:
+    """Fail closed when a two-player roster does not satisfy its category."""
+
+    clean_category = _team_category(category)
+    if clean_category == "open":
+        return
+    if len(player_rows) != 2:
+        raise ValueError("Team eligibility requires exactly two player profiles.")
+
+    genders = [_normalized_player_gender(row.get("gender")) for row in player_rows]
+    unresolved = [
+        _text(row.get("name"), 160) or f"Player {_int(row.get('id')) or ''}".strip()
+        for row, gender in zip(player_rows, genders)
+        if gender is None
+    ]
+    if unresolved:
+        names = ", ".join(unresolved)
+        raise ValueError(
+            f"Team eligibility cannot verify the gender for {names}. "
+            "Update the player profile gender and try again."
+        )
+
+    eligible = (
+        clean_category == "mens" and genders == ["male", "male"]
+    ) or (
+        clean_category == "womens" and genders == ["female", "female"]
+    ) or (
+        clean_category == "mixed" and set(genders) == {"male", "female"}
+    )
+    if not eligible:
+        label = {
+            "mens": "Men's",
+            "womens": "Women's",
+            "mixed": "Mixed",
+        }[clean_category]
+        requirement = {
+            "mens": "two players marked Male",
+            "womens": "two players marked Female",
+            "mixed": "one male and one female player",
+        }[clean_category]
+        raise ValueError(
+            f"{label} team eligibility requires {requirement}. "
+            "Update the player profiles or choose eligible players."
+        )
+
+
+def _online_team_registration_supported(settings: Mapping[str, Any]) -> bool:
+    """The durable public registration record still confirms one pair only."""
+
+    return _team_size(settings) == 2
+
+
+def _registration_unavailable_reason(settings: Mapping[str, Any]) -> str | None:
+    if not _registration_is_open(settings):
+        return "Registration is closed. The schedule and results remain available below."
+    if not _online_team_registration_supported(settings):
+        return (
+            f"Online registration for {_team_size(settings)}-player team rosters "
+            "is not available yet. Contact league staff to register the full roster."
+        )
+    return None
+
+
 def _public_settings(row: Mapping[str, Any]) -> dict[str, Any]:
+    configured_open = _registration_is_open(row)
+    online_registration_supported = _online_team_registration_supported(row)
     return {
         key: row.get(key)
         for key in (
             "league_name",
             "status",
-            "allow_substitutes",
             "playoff_format",
             "playoff_team_count",
             "start_date",
@@ -285,7 +397,44 @@ def _public_settings(row: Mapping[str, Any]) -> dict[str, Any]:
             "schedule_version",
             "standings_version",
         )
-    } | {"registration_open": _registration_is_open(row)}
+    } | {
+        "team_size": _team_size(row),
+        "team_category": _team_category(row.get("team_category")),
+        "allow_substitutes": bool(row.get("allow_substitutes", False)),
+        "registration_configured_open": configured_open,
+        "registration_open": configured_open
+        and online_registration_supported,
+        "online_team_registration_supported": online_registration_supported,
+    }
+
+
+def _manager_league_status(row: Mapping[str, Any] | None) -> str:
+    if not row:
+        return "draft"
+    status = _text(row.get("status"), 40).lower()
+    if status in {"active", "running", "live"}:
+        return "active"
+    if status in {"ended", "complete", "completed", "done"}:
+        return "ended"
+    if status == "archived":
+        return "archived"
+    if status == "paused":
+        return "paused"
+    if status in {"draft", "planned"}:
+        return "draft"
+    if row.get("ended_at"):
+        return "ended"
+    return "active" if bool(row.get("is_active")) else "draft"
+
+
+def _manager_league_is_public(row: Mapping[str, Any] | None) -> bool:
+    """Keep draft, paused, and archived manager records off public routes."""
+
+    return _manager_league_status(row) in PUBLIC_MANAGER_VISIBLE_STATUSES
+
+
+def _manager_league_accepts_registration(row: Mapping[str, Any] | None) -> bool:
+    return _manager_league_status(row) == "active"
 
 
 def list_public_team_leagues(
@@ -297,14 +446,24 @@ def list_public_team_leagues(
         filters={"club_id": str(club_id)},
         order="start_date",
     )
+    manager_rows = _fetch_rows(
+        supabase,
+        "leagues_metadata",
+        filters={"club_id": str(club_id)},
+        order="league_name",
+    )
+    manager_by_name = {
+        _text(row.get("league_name"), 120).casefold(): row
+        for row in manager_rows
+        if _text(row.get("league_name"), 120)
+    }
     visible = [
         _public_settings(row)
         for row in settings
-        if str(row.get("status") or "") in PUBLIC_VISIBLE_STATUSES
-        or (
-            str(row.get("status") or "") == "draft"
-            and _registration_is_open(row)
+        if _manager_league_is_public(
+            manager_by_name.get(_text(row.get("league_name"), 120).casefold())
         )
+        and str(row.get("status") or "") in PUBLIC_VISIBLE_STATUSES
     ]
     return {"ok": True, "leagues": visible, "league_count": len(visible)}
 
@@ -317,9 +476,15 @@ def get_public_team_league(
         "team_league_settings",
         filters={"club_id": str(club_id), "league_name": _text(league_name, 120)},
     )
-    if not settings or (
-        str(settings.get("status") or "") not in PUBLIC_VISIBLE_STATUSES
-        and not _registration_is_open(settings)
+    manager = _one(
+        supabase,
+        "leagues_metadata",
+        filters={"club_id": str(club_id), "league_name": _text(league_name, 120)},
+    )
+    if (
+        not settings
+        or not _manager_league_is_public(manager)
+        or str(settings.get("status") or "") not in PUBLIC_VISIBLE_STATUSES
     ):
         raise ValueError("Team league not found.")
     teams = _fetch_rows(
@@ -395,6 +560,8 @@ def get_public_team_league(
         }
         for fixture in fixtures
     ]
+    registration_supported = _online_team_registration_supported(settings)
+    registration_open = _registration_is_open(settings) and registration_supported
     return {
         "ok": True,
         "league": _public_settings(settings),
@@ -402,10 +569,14 @@ def get_public_team_league(
         "fixtures": public_fixtures,
         "standings": compute_team_league_standings(fixtures, confirmed),
         "registration": {
-            "open": _registration_is_open(settings),
+            "open": registration_open,
             "payment_mode": "offline",
-            "signup_types": ["team", "solo_waitlist"],
-            "partner_confirmation_required": True,
+            "signup_types": (
+                ["team", "solo_waitlist"] if registration_open else []
+            ),
+            "partner_confirmation_required": registration_supported,
+            "online_team_registration_supported": registration_supported,
+            "unavailable_reason": _registration_unavailable_reason(settings),
         },
         "registration_players": [
             {
@@ -443,6 +614,28 @@ def register_public_team_league(
     club_name: str,
 ) -> dict[str, Any]:
     _assert_public_write_enabled()
+    clean_league_name = _text(league_name, 120)
+    settings = _one(
+        supabase,
+        "team_league_settings",
+        filters={"club_id": str(club_id), "league_name": clean_league_name},
+    )
+    manager = _one(
+        supabase,
+        "leagues_metadata",
+        filters={"club_id": str(club_id), "league_name": clean_league_name},
+    )
+    if (
+        not settings
+        or not _manager_league_accepts_registration(manager)
+        or not _registration_is_open(settings)
+    ):
+        raise ValueError("Registration is not open for this team league.")
+    if not _online_team_registration_supported(settings):
+        raise ValueError(
+            f"Online registration for {_team_size(settings)}-player team rosters "
+            "is not available yet. Contact league staff to register the full roster."
+        )
     clean_type = _text(signup_type, 20).lower()
     if clean_type not in {"team", "solo"}:
         raise ValueError("Choose team registration or the solo partner waitlist.")
@@ -460,6 +653,24 @@ def register_public_team_league(
         clean_partner_id is None or clean_partner_id == clean_player_id
     ):
         raise ValueError("Choose a different partner profile.")
+    if clean_type == "team" and _team_category(settings.get("team_category")) != "open":
+        player_rows = [
+            _one(
+                supabase,
+                "players",
+                filters={"club_id": str(club_id), "id": selected_player_id},
+            )
+            for selected_player_id in (clean_player_id, clean_partner_id)
+        ]
+        if any(row is None for row in player_rows):
+            raise ValueError(
+                "Team eligibility could not load both player profiles. "
+                "Choose active club players and try again."
+            )
+        _enforce_team_category(
+            settings.get("team_category"),
+            [row for row in player_rows if row is not None],
+        )
     clean_email = _email(contact_email)
     clean_partner_email = _email(partner_email) if clean_type == "team" else ""
     clean_team_name = _text(team_name, 120) if clean_type == "team" else ""
@@ -470,7 +681,7 @@ def register_public_team_league(
     expires_at = _now() + timedelta(days=7)
     request = {
         "club_id": str(club_id),
-        "league_name": _text(league_name, 120),
+        "league_name": clean_league_name,
         "signup_type": clean_type,
         "player_id": clean_player_id,
         "partner_player_id": clean_partner_id,
@@ -769,9 +980,22 @@ def save_admin_team_league_settings(
     _assert_admin_write_enabled()
     _confirm(confirmation_text, SAVE_SETTINGS_CONFIRMATION)
     key = _operation_key(idempotency_key)
+    team_size = _int(settings.get("team_size"))
+    if team_size is None:
+        team_size = 2
+    if team_size not in TEAM_LEAGUE_TEAM_SIZES:
+        raise ValueError(
+            "Team size is fixed at 2 players until multi-member rosters are supported."
+        )
+    team_category = _team_category(settings.get("team_category"))
+    if team_category not in TEAM_LEAGUE_CATEGORIES:
+        raise ValueError("Choose Open, Men's, Women's, or Mixed team eligibility.")
+    allow_substitutes = bool(settings.get("allow_substitutes"))
     clean = {
         "registration_open": bool(settings.get("registration_open")),
-        "allow_substitutes": bool(settings.get("allow_substitutes")),
+        "team_size": team_size,
+        "team_category": team_category,
+        "allow_substitutes": allow_substitutes,
         "playoff_format": _text(settings.get("playoff_format"), 80) or "none",
         "playoff_team_count": _int(settings.get("playoff_team_count")),
         "start_date": _text(settings.get("start_date"), 20) or None,
@@ -843,10 +1067,64 @@ def admin_team_league_waitlist_action(
         else WITHDRAW_WAITLIST_CONFIRMATION,
     )
     ids = [str(value) for value in waitlist_ids if str(value).strip()]
-    if clean_action == "pair" and len(ids) != 2:
+    if clean_action == "pair" and (len(ids) != 2 or len(set(ids)) != 2):
         raise ValueError("Select exactly two waiting players to pair.")
     if clean_action == "withdraw" and not ids:
         raise ValueError("Select at least one waitlist entry.")
+    clean_league_name = _text(league_name, 120)
+    if clean_action == "pair":
+        settings = _one(
+            supabase,
+            "team_league_settings",
+            filters={
+                "club_id": str(club_id),
+                "league_name": clean_league_name,
+            },
+        )
+        if not settings:
+            raise ValueError("Team league not found.")
+        if _team_category(settings.get("team_category")) != "open":
+            waitlist_rows = [
+                _one(
+                    supabase,
+                    "team_league_solo_waitlist",
+                    filters={
+                        "id": waitlist_id,
+                        "club_id": str(club_id),
+                        "league_name": clean_league_name,
+                    },
+                )
+                for waitlist_id in ids
+            ]
+            if any(
+                row is None or _text(row.get("status"), 40).lower() != "waiting"
+                for row in waitlist_rows
+            ):
+                raise ValueError(
+                    "One or more selected waitlist entries are no longer available. "
+                    "Reload the league and try again."
+                )
+            player_rows = [
+                _one(
+                    supabase,
+                    "players",
+                    filters={
+                        "club_id": str(club_id),
+                        "id": _int(row.get("player_id")),
+                    },
+                )
+                for row in waitlist_rows
+                if row is not None
+            ]
+            if len(player_rows) != 2 or any(row is None for row in player_rows):
+                raise ValueError(
+                    "Team eligibility could not load both waitlisted player profiles. "
+                    "Reload the league and try again."
+                )
+            _enforce_team_category(
+                settings.get("team_category"),
+                [row for row in player_rows if row is not None],
+            )
     request = {
         "action": clean_action,
         "waitlist_ids": sorted(ids),
@@ -858,7 +1136,7 @@ def admin_team_league_waitlist_action(
         {
             "p_operation_id": str(uuid4()),
             "p_club_id": str(club_id),
-            "p_league_name": _text(league_name, 120),
+            "p_league_name": clean_league_name,
             "p_action": clean_action,
             "p_waitlist_ids": ids,
             "p_team_name": request["team_name"] or None,

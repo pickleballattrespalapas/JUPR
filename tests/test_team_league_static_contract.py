@@ -91,9 +91,19 @@ def test_all_team_league_mutation_decorators_are_static_literals_and_gated() -> 
                 route_path = ast.literal_eval(decorator.args[0])
                 assert isinstance(route_path, str)
                 body = ast.get_source_segment(source, node) or ""
-                if not route_path.endswith("/schedule-preview/{phase}"):
-                    assert gate in body
+                assert gate in body
         assert unsafe_count >= 2
+
+
+def test_team_schedule_preview_is_a_read_only_get_route() -> None:
+    routes = _read("services/api/admin_team_league_routes.py")
+    panel = _read("apps/web/app/admin/league-manager/teams/TeamLeaguesPanel.tsx")
+    write_waves = _read("scripts/staging_write_waves.py")
+
+    assert '@app.get(\n        "/admin/clubs/{club_id}/league-manager/team-leagues/"\n        "{league_name}/schedule-preview/{phase}"' in routes
+    assert 'teamLeaguePath(`/schedule-preview/${phase}`)' in panel
+    assert 'teamLeaguePath(`/schedule-preview/${phase}`), { method: "POST" }' not in panel
+    assert '("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/schedule-preview/{phase}")' not in write_waves
 
 
 def test_every_team_league_route_checks_feature_gate_before_any_data_access() -> None:

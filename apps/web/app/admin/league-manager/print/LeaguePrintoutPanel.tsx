@@ -69,7 +69,11 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status, initialLe
       if (!detailRequest.isCurrent(generation)) return;
       setPrintout(payload);
       setWeekNum(payload.selected_week == null ? "" : String(payload.selected_week));
-      setMessage(`Printout loaded${payload.selected_week ? ` for Week ${payload.selected_week}` : ""}.`);
+      setMessage(
+        payload.has_printable_data
+          ? `Printout loaded${payload.selected_week ? ` for Week ${payload.selected_week}` : ""}.`
+          : "Nothing to print yet. Add a schedule, league roster, or scored results before printing."
+      );
     } catch (error) {
       if (detailRequest.isCurrent(generation)) {
         setMessage(error instanceof Error ? error.message : "Unable to load league printout.");
@@ -101,6 +105,9 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status, initialLe
     );
   }
 
+  const hasPrintableData = Boolean(printout?.has_printable_data);
+  const isTeamLeague = String(printout?.detail.league.league_type || "").trim().toLowerCase() === "team";
+
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
       <style>{`@media print { nav, header, footer, .no-print { display: none !important; } body { background: white !important; } [data-print-surface] { display: block !important; } .print-section { break-inside: avoid; page-break-inside: avoid; } .print-break-before { break-before: page; page-break-before: always; } table { font-size: 11px; } thead { display: table-header-group; } tr { break-inside: avoid; page-break-inside: avoid; } @page { size: auto; margin: 10mm; } }`}</style>
@@ -109,12 +116,21 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status, initialLe
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
           <label><strong>Scored week</strong><br /><select value={weekNum} onChange={(event) => selectWeek(event.target.value)} disabled={busy || !printout?.available_weeks.length} style={inputStyle}><option value="">Latest scored week</option>{(printout?.available_weeks || []).map((week) => <option key={week} value={String(week)}>Week {week}</option>)}</select></label>
           <button type="button" onClick={() => void loadDetail()} disabled={busy} style={buttonStyle}>{busy ? "Loading…" : "Reload printout"}</button>
-          <button type="button" onClick={() => window.print()} disabled={busy || !printout} style={buttonStyle}>Print or save PDF</button>
+          <button type="button" onClick={() => window.print()} disabled={busy || !hasPrintableData} style={buttonStyle}>Print or save PDF</button>
         </div>
-        {message ? <p role="status" style={{ color: /unable|error|required/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+        {message ? <p role="status" style={{ color: /unable|error|required/i.test(message) ? "#b91c1c" : /^Printout loaded/.test(message) ? "#166534" : "#475569" }}>{message}</p> : null}
       </article>
 
-      {printout ? (
+      {printout && !hasPrintableData ? (
+        <article className="no-print" style={{ ...cardStyle, background: "#f8fafc" }}>
+          <h2 style={{ marginTop: 0 }}>No league-night printout available yet</h2>
+          <p style={{ marginBottom: 0, color: "#475569" }}>
+            {printout.detail.league.league_name} has no schedule, league roster, or scored results to print.
+          </p>
+        </article>
+      ) : null}
+
+      {printout && hasPrintableData ? (
         <section data-print-surface="league-night">
           <h1 style={{ marginBottom: "0.25rem" }}>{printout.detail.league.league_name} league night printout</h1>
           <p style={{ color: "#475569" }}>Status: {printout.detail.league.status} · {printout.selected_week ? `Week ${printout.selected_week}` : "No scored week"} · K-factor: {printout.detail.league.k_factor ?? "—"} · Min games: {printout.detail.league.min_games ?? "—"}</p>
@@ -139,12 +155,18 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status, initialLe
           </article>
 
           <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
-            <h2 style={{ marginTop: 0 }}>Standings</h2>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Rank</th><th align="left">Player</th><th align="right">JUPR</th><th align="right">Record</th><th align="right">Matches</th></tr></thead><tbody>{printout.detail.standings.map((row) => <tr key={row.player_id}><td>{row.rank}</td><td>{row.player_name}</td><td align="right">{ratingLabel(row.rating_jupr)}</td><td align="right">{row.wins ?? 0}-{row.losses ?? 0}</td><td align="right">{row.matches_played ?? 0}</td></tr>)}</tbody></table>
+            <h2 style={{ marginTop: 0 }}>{isTeamLeague ? "Team standings" : "Standings"}</h2>
+            {isTeamLeague ? (
+              <p style={{ color: "#64748b" }}>
+                Team standings are not represented by individual player-rating rows. Open Team league to review the current team table.
+              </p>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Rank</th><th align="left">Player</th><th align="right">JUPR</th><th align="right">Record</th><th align="right">Matches</th></tr></thead><tbody>{printout.detail.standings.map((row) => <tr key={row.player_id}><td>{row.rank}</td><td>{row.player_name}</td><td align="right">{ratingLabel(row.rating_jupr)}</td><td align="right">{row.wins ?? 0}-{row.losses ?? 0}</td><td align="right">{row.matches_played ?? 0}</td></tr>)}</tbody></table>
+            )}
           </article>
 
           <article className="print-section print-break-before" style={{ ...cardStyle, marginTop: "1rem" }}>
-            <h2 style={{ marginTop: 0 }}>Roster checklist</h2>
+            <h2 style={{ marginTop: 0 }}>{isTeamLeague ? "Team league player checklist" : "Roster checklist"}</h2>
             <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Player</th><th align="right">JUPR</th><th align="right">Record</th><th align="left">Present</th><th align="left">Notes</th></tr></thead><tbody>{(printout.detail.roster || []).filter((row) => row.in_league).map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{ratingLabel(row.rating_jupr)}</td><td align="right">{row.wins ?? 0}-{row.losses ?? 0}</td><td>□</td><td>________________</td></tr>)}</tbody></table>
           </article>
         </section>

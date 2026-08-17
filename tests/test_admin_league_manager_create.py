@@ -94,6 +94,29 @@ def test_create_league_draft_rejects_case_insensitive_duplicate(monkeypatch) -> 
     assert tables["admin_activity_log"] == []
 
 
+def test_create_league_draft_rejects_team_singles(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = league_create_tables()
+
+    with pytest.raises(ValueError, match=r"Team \+ Singles is not supported"):
+        create_admin_league_manager_draft(
+            FakeSupabase(tables),
+            club_id="club",
+            league_name="Invalid Team Singles",
+            description="",
+            min_games=6,
+            k_factor=32,
+            league_type="Team",
+            match_format="singles",
+            actor_email="owner@example.com",
+            actor_role="club_owner",
+            confirmation_text="CREATE LEAGUE",
+        )
+
+    assert [row["league_name"] for row in tables["leagues_metadata"]] == ["Existing League"]
+    assert tables["admin_activity_log"] == []
+
+
 def test_duplicate_league_draft_copies_configuration_without_history(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
     tables = league_create_tables()
@@ -199,6 +222,26 @@ def test_create_league_draft_api_requires_confirmation(monkeypatch) -> None:
     assert len(tables["leagues_metadata"]) == 1
 
 
+def test_create_league_draft_api_rejects_team_singles(monkeypatch) -> None:
+    tables = league_create_tables()
+    _install_api(monkeypatch, FakeSupabase(tables))
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/league-manager/leagues",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "league_name": "Invalid Team Singles",
+            "league_type": "Team",
+            "match_format": "singles",
+            "confirmation_text": "CREATE LEAGUE",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Team + Singles is not supported" in response.json()["detail"]
+    assert len(tables["leagues_metadata"]) == 1
+
+
 def test_duplicate_league_draft_api_contract(monkeypatch) -> None:
     tables = league_create_tables()
     _install_api(monkeypatch, FakeSupabase(tables))
@@ -218,6 +261,28 @@ def test_duplicate_league_draft_api_contract(monkeypatch) -> None:
     assert payload["source_league_name"] == "Existing League"
     assert payload["roster_copied"] is False
     assert len(tables["leagues_metadata"]) == 2
+
+
+def test_duplicate_league_draft_rejects_legacy_team_singles_without_write(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = league_create_tables()
+    tables["leagues_metadata"][0].update(
+        {"league_type": "Team", "match_format": "singles"}
+    )
+
+    with pytest.raises(ValueError, match="Team \\+ Singles is not supported"):
+        duplicate_admin_league_manager_draft(
+            FakeSupabase(tables),
+            club_id="club",
+            source_league_name="Existing League",
+            target_league_name="Existing League Fall",
+            actor_email="owner@example.com",
+            actor_role="club_owner",
+            confirmation_text="DUPLICATE LEAGUE",
+        )
+
+    assert len(tables["leagues_metadata"]) == 1
+    assert tables["admin_activity_log"] == []
 
 
 def test_duplicate_league_draft_api_requires_confirmation(monkeypatch) -> None:

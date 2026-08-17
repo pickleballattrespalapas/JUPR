@@ -953,7 +953,7 @@ def publish_play_generator_matches(
             source=source,
             name_to_id=name_to_id,
             df_players_all=df_players_all,
-            df_leagues=df_leagues if match_format == "doubles" else None,
+            df_leagues=df_leagues,
             df_meta=df_meta,
         )
     result: Any = (

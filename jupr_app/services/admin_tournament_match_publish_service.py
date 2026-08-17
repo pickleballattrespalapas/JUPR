@@ -941,6 +941,7 @@ def publish_admin_tournament_draw_matches(
                 club_id=str(club_id),
                 name_to_id={},
                 df_players_all=df_players_all,
+                df_leagues=df_leagues,
                 df_meta=df_meta,
                 build_write_plan_only=True,
             )
@@ -1027,6 +1028,7 @@ def publish_admin_tournament_draw_matches(
                 club_id=str(club_id),
                 name_to_id={},
                 df_players_all=df_players_all,
+                df_leagues=df_leagues,
                 df_meta=df_meta,
             )
             process_result["singles"] = singles_result

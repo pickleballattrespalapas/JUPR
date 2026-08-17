@@ -184,7 +184,10 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
             # League ratings
             l_resp = (
                 supabase.table("league_ratings")
-                .select("id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active")
+                .select(
+                    "id,player_id,league_name,rating,starting_rating,wins,losses,"
+                    "matches_played,is_active,inactive_at"
+                )
                 .eq("club_id", club_id)
                 .execute()
             )

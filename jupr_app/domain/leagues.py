@@ -19,7 +19,7 @@ from jupr_app.domain.gamification.badges_repo import upsert_player_badges
 
 _COMPLETED_STATUSES = {"archived", "completed", "complete", "done", "ended"}
 _ACTIVE_STATUSES = {"active", "running", "live"}
-_DRAFT_STATUSES = {"draft", "planned"}
+_DRAFT_STATUSES = {"draft", "planned", "inactive"}
 _PAUSED_STATUSES = {"paused"}
 _ARCHIVED_STATUSES = {"archived"}
 _ENDED_STATUSES = {"ended", "completed", "complete", "done"}

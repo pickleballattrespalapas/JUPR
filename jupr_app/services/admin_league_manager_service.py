@@ -9,8 +9,8 @@ from jupr_app.services.staging_write_guard import staging_league_manager_writes_
 from jupr_app.domain.leagues import normalize_league_status
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
-LEAGUE_MANAGER_EXTENDED_SELECT = "league_name,league_type,match_format,description,min_weeks,is_active,status,started_at,ended_at,ended_by,schedule_config,court_board_defaults,rules_config,awards_config,k_factor,min_games,event_tags"
-LEAGUE_MANAGER_MINIMAL_SELECT = "league_name,is_active,k_factor,min_games"
+LEAGUE_MANAGER_EXTENDED_SELECT = "id,league_name,league_type,match_format,description,min_weeks,is_active,status,started_at,ended_at,ended_by,schedule_config,court_board_defaults,rules_config,awards_config,k_factor,min_games,event_tags"
+LEAGUE_MANAGER_MINIMAL_SELECT = "id,league_name,is_active,k_factor,min_games"
 LEAGUE_LIFECYCLE_ACTIONS = {
     "draft": ["start"],
     "active": ["pause", "end"],
@@ -212,6 +212,7 @@ def build_admin_league_schedule_preview(schedule_config: Any, *, league_name: An
 def _league_row_payload(row: dict[str, Any]) -> dict[str, Any]:
     league_name = _clean_text(row.get("league_name"), limit=120)
     return {
+        "league_id": _clean_text(row.get("id") or row.get("league_id"), limit=160),
         "league_name": league_name,
         "league_type": _clean_text(row.get("league_type"), limit=80) or "Standard",
         "match_format": "singles" if str(row.get("match_format") or "").strip().casefold() == "singles" else "doubles",

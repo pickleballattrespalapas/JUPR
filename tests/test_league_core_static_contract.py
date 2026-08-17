@@ -29,7 +29,9 @@ def test_league_printout_renders_true_leaders_and_print_contract() -> None:
     assert "Refresh leagues" not in panel
     assert "Reload printout" in panel
     assert "Load selected" not in panel
-    assert 'disabled={busy || !printout}' in panel
+    assert 'disabled={busy || !hasPrintableData}' in panel
+    assert "Nothing to print yet" in panel
+    assert "Team standings are not represented by individual player-rating rows" in panel
     assert "Weekly leaders" in panel
     assert "Season leaders" in panel
     assert "data-print-surface" in panel
