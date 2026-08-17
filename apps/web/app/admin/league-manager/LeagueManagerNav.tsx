@@ -2,8 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import {
+  isTeamLeagueType,
+  leagueRouteHref,
+  normalizeLeagueType,
+  type LeagueRouteContext
+} from "@/lib/leagueRouteContext";
 
 type Props = {
+  leagueId?: string | null;
   leagueName?: string | null;
   leagueType?: string | null;
   managerOnly?: boolean;
@@ -21,32 +28,39 @@ const navStyle = {
   margin: "0 0 1rem"
 };
 
-function leagueHref(path: string, leagueName: string, leagueType?: string | null): string {
-  const params = new URLSearchParams({ league: leagueName });
-  if (leagueType) params.set("mode", leagueType);
-  return `${path}?${params.toString()}`;
+function leagueHref(path: string, context: LeagueRouteContext): string {
+  return leagueRouteHref(path, context);
 }
 
-export default function LeagueManagerNav({ leagueName, leagueType, managerOnly = false }: Props) {
+export default function LeagueManagerNav({
+  leagueId: providedLeagueId,
+  leagueName: providedLeagueName,
+  leagueType: providedLeagueType,
+  managerOnly = false
+}: Props) {
   const pathname = usePathname() || "";
-  const hasLeague = Boolean(leagueName && !managerOnly);
+  const leagueId = String(providedLeagueId || providedLeagueName || "").trim();
+  const leagueName = String(providedLeagueName || leagueId).trim();
+  const leagueType = normalizeLeagueType(providedLeagueType);
+  const context = { leagueId, leagueName, leagueType };
+  const hasLeague = Boolean(leagueId && leagueName && !managerOnly);
   const links: NavLink[] = [
     { href: "/admin/league-manager", label: "League Manager Home" }
   ];
 
   if (hasLeague && leagueName) {
     links.push(
-      { href: leagueHref("/admin/league-manager/league", leagueName, leagueType), label: "League Home" },
-      { href: leagueHref("/admin/league-manager/results", leagueName, leagueType), label: "Results" },
-      { href: leagueHref("/admin/league-manager/settings", leagueName, leagueType), label: "Settings" },
-      { href: leagueHref("/admin/league-manager/roster", leagueName, leagueType), label: "Roster" },
-      { href: leagueHref("/admin/league-manager/live", leagueName, leagueType), label: "Live rounds" },
-      { href: leagueHref("/admin/league-manager/awards", leagueName, leagueType), label: "Awards" },
-      { href: leagueHref("/admin/league-manager/print", leagueName, leagueType), label: "League night printout" }
+      { href: leagueHref("/admin/league-manager/league", context), label: "League Home" },
+      { href: leagueHref("/admin/league-manager/results", context), label: "Results" },
+      { href: leagueHref("/admin/league-manager/settings", context), label: "Settings" },
+      { href: leagueHref("/admin/league-manager/roster", context), label: "Roster" },
+      { href: leagueHref("/admin/league-manager/live", context), label: "Live rounds" },
+      { href: leagueHref("/admin/league-manager/awards", context), label: "Awards" },
+      { href: leagueHref("/admin/league-manager/print", context), label: "League night printout" }
     );
-    if (String(leagueType || "Individual") === "Team") {
+    if (isTeamLeagueType(leagueType)) {
       links.splice(5, 0, {
-        href: leagueHref("/admin/league-manager/teams", leagueName, leagueType),
+        href: leagueHref("/admin/league-manager/teams", context),
         label: "Team league"
       });
     }
