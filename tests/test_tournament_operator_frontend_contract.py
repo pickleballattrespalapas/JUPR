@@ -80,7 +80,7 @@ def test_live_runner_locks_tournament_scope_and_exposes_a_url_synced_draw_select
     assert "selectTournament" not in panel
     assert "/tournaments/admin/ops/tournaments" not in panel
     assert "const preferredDrawStillAvailable" in panel
-    assert ": !preferredDrawId && nextDraws.length === 1 ? nextDraws[0].id : \"\";" in panel
+    assert ": !preferredDrawId && operableDraws.length === 1 ? operableDraws[0].id : \"\";" in panel
     assert "if (!nextSelectedDrawId) {" in panel
     assert "setSnapshot(null);" in panel
     select_draw = panel.split("function selectDraw(drawId: string)", 1)[1].split("function selectScoreGame", 1)[0]
@@ -90,6 +90,34 @@ def test_live_runner_locks_tournament_scope_and_exposes_a_url_synced_draw_select
     assert "assertSnapshotIdentity(payload, tournamentId, drawId);" in panel
     assert "assertSnapshotIdentity(payload, lockedTournamentId, drawId);" in panel
     assert "@media (max-width: 1200px)" in css
+
+
+def test_live_draw_selector_uses_authoritative_progress_instead_of_stale_draft_status() -> None:
+    panel = read("app/admin/tournament-live/TournamentLivePanel.tsx")
+    status_helper = read("lib/tournamentDrawOperationalStatus.mjs")
+
+    draw_label = status_helper.split("export function drawOperationalStatus(", 1)[1]
+    assert 'from "@/lib/tournamentDrawOperationalStatus.mjs"' in panel
+    assert "lifecycleDraw" in draw_label
+    assert 'liveOperations === "in_progress"' in draw_label
+    assert 'liveOperations === "complete"' in draw_label
+    assert 'officialPublish === "complete"' in draw_label
+    assert 'return `Not started · ${games} ${gameWord}`' in draw_label
+    assert 'return `In progress · ${finalizedGames} of ${games} scored`' in draw_label
+    assert 'return `Scores complete · ${finalizedGames} of ${games} scored`' in draw_label
+    assert 'return `Published · ${publishedGames} official ${matchWord}`' in draw_label
+    assert 'return `Publish recovery needed · ${publishedGames} of ${games} official`' in draw_label
+    assert 'return "No games scheduled"' in draw_label
+    assert 'return "Status unavailable"' in draw_label
+    assert "INACTIVE_DRAW_STATUSES.has" in draw_label
+    assert "draw.status || \"draft\"" not in draw_label
+    assert "setDrawLifecycle(payload.lifecycle?.draws || [])" in panel
+    assert "drawLifecycleById.get(draw.id)" in panel
+    assert "selectedLifecycleDraw?.counts" in panel
+    assert "disabled={inactive || !lifecycleDraw}" in panel
+    assert "`${selectedFinalizedGames} of ${selectedTotalGames} games scored; ${selectedOpenGames} open.`" in panel
+    assert "{selectedFinalizedGames} of {selectedTotalGames} games finalized" in panel
+    assert "{selectedDrawCounts?.published_games || 0} official matches" in panel
 
 
 def test_live_runner_is_human_readable_and_validates_before_confirmation() -> None:

@@ -39,7 +39,6 @@ function blocker(code: string, message: string, count?: number) {
 function liveSnapshot(selectedDrawId = drawId) {
   const rows = games(selectedDrawId);
   const teams = teamsForDraw(selectedDrawId);
-  const selectedDrawName = selectedDrawId === secondDrawId ? "Open Division Draw" : "Manual Acceptance Draw";
   const publishBlockers = [
     blocker("OPEN_GAMES", "20 tournament games still need a finalized, non-tied score.", 20),
     blocker("PODIUM_INCOMPLETE", "The podium is incomplete and has not been explicitly reviewed."),
@@ -67,7 +66,7 @@ function liveSnapshot(selectedDrawId = drawId) {
     draw_id: selectedDrawId,
     summary: { draws: 2, teams: 2, games: 21, podium: 0, completed_games: 1 },
     draws: [
-      { id: drawId, tournament_id: tournamentId, name: "Manual Acceptance Draw", status: "LIVE", updated_at: "2026-08-15T12:00:00Z" },
+      { id: drawId, tournament_id: tournamentId, name: "Manual Acceptance Draw", status: "DRAFT", updated_at: "2026-08-15T12:00:00Z" },
       { id: secondDrawId, tournament_id: tournamentId, name: "Open Division Draw", status: "DRAFT", updated_at: "2026-08-15T12:00:00Z" }
     ],
     teams,
@@ -86,8 +85,11 @@ function liveSnapshot(selectedDrawId = drawId) {
       scope: "tournament",
       tournament: { id: tournamentId, name: "Staging Summer Classic", status: "LIVE", updated_at: "2026-08-15T12:00:00Z" },
       phase: "live_in_progress",
-      counts: { draws: 1, teams: 2, games: 21, finalized_games: 1, open_games: 20, tied_games: 0, podium_entries: 0, expected_awards: 6, verified_awards: 0, unexpected_awards: 0, published_games: 0, unpublished_games: 21, duplicate_publications: 0, active_operations: 0, uncertain_operations: 0 },
-      draws: [{ draw_id: selectedDrawId, name: selectedDrawName, status: "LIVE", protected: true, counts: { games: 21, finalized_games: 1, open_games: 20 }, standings: [], podium: [], states: {}, operations, review_evidence: null, readiness: { official_publish: { ready: false, blockers: publishBlockers }, archive: { ready: false, blockers: publishBlockers } } }],
+      counts: { draws: 2, teams: 4, games: 42, finalized_games: 2, open_games: 40, tied_games: 0, podium_entries: 0, expected_awards: 12, verified_awards: 0, unexpected_awards: 0, published_games: 0, unpublished_games: 42, duplicate_publications: 0, active_operations: 0, uncertain_operations: 0 },
+      draws: [
+        { draw_id: drawId, name: "Manual Acceptance Draw", status: "DRAFT", protected: false, counts: { games: 21, finalized_games: 1, open_games: 20, published_games: 0, duplicate_publications: 0 }, standings: [], podium: [], states: { live_operations: "in_progress", official_publish: "blocked" }, operations, review_evidence: null, readiness: { official_publish: { ready: false, blockers: publishBlockers }, archive: { ready: false, blockers: publishBlockers } } },
+        { draw_id: secondDrawId, name: "Open Division Draw", status: "DRAFT", protected: false, counts: { games: 21, finalized_games: 1, open_games: 20, published_games: 0, duplicate_publications: 0 }, standings: [], podium: [], states: { live_operations: "in_progress", official_publish: "blocked" }, operations, review_evidence: null, readiness: { official_publish: { ready: false, blockers: publishBlockers }, archive: { ready: false, blockers: publishBlockers } } }
+      ],
       domain_readiness: { official_publish: { ready: false, blockers: publishBlockers }, archive: { ready: false, blockers: [...publishBlockers, blocker("ARCHIVE_OFFICIAL_LINKS", "All tournament games require exactly one official Match Log link before archive.")] } },
       runtime_capability: { writes_enabled: true, official_publish_enabled: true },
       evidence: { operations }
@@ -263,6 +265,7 @@ test("Draw selection stays inside the tournament workspace and survives reload",
 
   const drawSelector = page.getByLabel("Working draw");
   await expect(drawSelector).toHaveValue(drawId);
+  await expect(drawSelector.locator(`option[value="${drawId}"]`)).toHaveText("Manual Acceptance Draw · In progress · 1 of 21 scored");
   await drawSelector.selectOption(secondDrawId);
   await expect(page).toHaveURL(new RegExp(`tournament=${tournamentId}`));
   await expect(page).toHaveURL(new RegExp(`draw=${secondDrawId}`));
