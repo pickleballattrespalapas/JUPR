@@ -8,6 +8,7 @@ import type {
   AdminLeagueManagerListResponse,
   AdminLeagueManagerStatusResponse
 } from "@/lib/adminLeagueManagerApi";
+import { isTeamLeagueType } from "@/lib/leagueRouteContext";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -16,6 +17,8 @@ type TeamSettings = {
   league_name: string;
   status?: string;
   registration_open?: boolean;
+  team_size?: 2;
+  team_category?: "open" | "mens" | "womens" | "mixed";
   allow_substitutes?: boolean;
   playoff_format?: string;
   playoff_team_count?: number | null;
@@ -98,6 +101,7 @@ type RecoveryEvidence = {
 type WriteResponse = { ok?: boolean; committed?: boolean; operation_id?: string; message?: string };
 type SettingsDraft = {
   registrationOpen: boolean;
+  teamCategory: string;
   allowSubstitutes: boolean;
   playoffFormat: string;
   playoffTeamCount: string;
@@ -149,6 +153,7 @@ async function refreshAfterConfirmedWrite(refresh: () => Promise<void>): Promise
 function settingsDraft(settings?: TeamSettings | null): SettingsDraft {
   return {
     registrationOpen: Boolean(settings?.registration_open),
+    teamCategory: String(settings?.team_category || "open"),
     allowSubstitutes: Boolean(settings?.allow_substitutes),
     playoffFormat: String(settings?.playoff_format || "none"),
     playoffTeamCount: settings?.playoff_team_count == null ? "" : String(settings.playoff_team_count),
@@ -202,9 +207,11 @@ function TeamSettingsForm({
   return (
     <article style={cardStyle}>
       <h2 style={{ marginTop: 0 }}>Registration and season setup</h2>
-      <p style={{ color: "#475569" }}>Partners remain together for the season. Registration and substitutes are separate choices, and playoffs are optional.</p>
+      <p style={{ color: "#475569" }}>Configure team eligibility, substitute policy, weekly schedule, and optional playoffs. Teams currently use a fixed two-player primary roster.</p>
       <div style={gridStyle}>
         <label><input type="checkbox" checked={draft.registrationOpen} onChange={(event) => update("registrationOpen", event.target.checked)} /> <strong>Registration open</strong></label>
+        <p style={{ margin: 0 }}><strong>Primary roster</strong><br />2 players</p>
+        <label><strong>Team eligibility</strong><br /><select value={draft.teamCategory} onChange={(event) => update("teamCategory", event.target.value)} style={inputStyle}><option value="open">Open</option><option value="mens">Men&apos;s</option><option value="womens">Women&apos;s</option><option value="mixed">Mixed</option></select></label>
         <label><input type="checkbox" checked={draft.allowSubstitutes} onChange={(event) => update("allowSubstitutes", event.target.checked)} /> <strong>Allow substitutes</strong></label>
         <label><strong>Playoffs</strong><br /><select value={draft.playoffFormat} onChange={(event) => update("playoffFormat", event.target.value)} style={inputStyle}><option value="none">No playoffs</option><option value="top_2_final">Top 2 final</option><option value="top_4_single_elimination">Top 4 single elimination</option><option value="all_team_single_elimination">All-team single elimination</option></select></label>
         {draft.playoffFormat === "all_team_single_elimination" ? <label><strong>Playoff team count</strong><br /><input type="number" min={2} max={128} value={draft.playoffTeamCount} onChange={(event) => update("playoffTeamCount", event.target.value)} style={inputStyle} /></label> : null}
@@ -215,7 +222,7 @@ function TeamSettingsForm({
         <label><strong>Venue</strong><br /><input value={draft.venue} onChange={(event) => update("venue", event.target.value)} maxLength={240} style={inputStyle} /></label>
         <label><strong>Registration closes</strong><br /><input type="datetime-local" value={draft.registrationClosesAt} onChange={(event) => update("registrationClosesAt", event.target.value)} style={inputStyle} /></label>
       </div>
-      <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Save team league setup"} title="Save this team league setup?" description="This saves registration, fixed-partner season, substitute, weekly schedule, and playoff choices together." confirmLabel="Yes, save setup" confirmationText="SAVE TEAM LEAGUE" disabled={busy} busy={busy} onConfirm={(confirmationText) => onSave(draft, confirmationText)} /></p>
+      <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Save team league setup"} title="Save this team league setup?" description="This saves team eligibility, registration, substitute policy, weekly schedule, and playoff choices together." confirmLabel="Yes, save setup" confirmationText="SAVE TEAM LEAGUE" disabled={busy} busy={busy} onConfirm={(confirmationText) => onSave(draft, confirmationText)} /></p>
     </article>
   );
 }
@@ -400,7 +407,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
         requestJson<TeamLeagueListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/team-leagues`)
       ]);
       if (!listRequest.isCurrent(generation)) return;
-      const names = Array.from(new Set([...(base.leagues || []).filter((league) => String(league.league_type || "Individual") === "Team").map((league) => league.league_name), ...(team.leagues || []).map((league) => league.league_name)])).sort();
+      const names = Array.from(new Set([...(base.leagues || []).filter((league) => isTeamLeagueType(league.league_type)).map((league) => league.league_name), ...(team.leagues || []).map((league) => league.league_name)])).sort();
       setLeagueNames(names);
       setTeamLeagueRows(team.leagues || []);
       if (leagueName && names.includes(leagueName)) await selectLeague(leagueName, team.leagues || []);
@@ -472,6 +479,8 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
         body: JSON.stringify({
           settings: {
             registration_open: draft.registrationOpen,
+            team_size: 2,
+            team_category: draft.teamCategory,
             allow_substitutes: draft.allowSubstitutes,
             playoff_format: draft.playoffFormat,
             playoff_team_count: playoffCount,
@@ -490,7 +499,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
       });
       setSettingsKey(operationKey("team-settings"));
       const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
-      const successMessage = `Registration, partner, substitute, schedule, and playoff settings were saved together.${refreshWarning}`;
+      const successMessage = `Team eligibility, registration, substitute, schedule, and playoff settings were saved together.${refreshWarning}`;
       setMessage(successMessage);
       return actionSuccess("Team league setup saved", successMessage);
     } catch (error) {
@@ -506,7 +515,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<SchedulePreview>(teamLeaguePath(`/schedule-preview/${phase}`), { method: "POST" });
+      const payload = await requestJson<SchedulePreview>(teamLeaguePath(`/schedule-preview/${phase}`));
       setPreview(payload);
       setScheduleKey(operationKey(`team-schedule-${phase}`));
       setMessage(`Previewed ${payload.proposed_fixtures.length} ${phase} fixture(s).`);
