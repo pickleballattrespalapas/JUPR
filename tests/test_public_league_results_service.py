@@ -356,3 +356,106 @@ def test_public_league_results_returns_empty_payload_when_no_leagues() -> None:
     assert payload["standings"] == []
     assert payload["weekly_results"] == []
     assert payload["recent_matches"] == []
+
+
+def test_public_league_results_never_substitutes_an_explicit_missing_league() -> None:
+    payload = build_public_league_results(
+        fake_supabase(),
+        club_id="club",
+        league_name="Spring League",
+    )
+
+    assert payload["selected_league"] is None
+    assert payload["standings"] == []
+    assert payload["weekly_results"] == []
+
+
+def test_public_league_results_does_not_resolve_exact_archived_deep_link() -> None:
+    payload = build_public_league_results(
+        fake_supabase(),
+        club_id="club",
+        league_name="Archived",
+    )
+
+    assert payload["selected_league"] is None
+    assert payload["league"] is None
+    assert payload["standings"] == []
+    assert payload["weekly_results"] == []
+    assert [row["name"] for row in payload["leagues"]] == ["Open"]
+
+
+def test_public_exact_links_reject_every_historical_lifecycle_status() -> None:
+    for status in ("paused", "ended", "archived"):
+        league_name = f"Historical {status}"
+        payload = build_public_league_results(
+            FakeSupabase(
+                {
+                    "leagues_metadata": [
+                        {
+                            "club_id": "club",
+                            "league_name": league_name,
+                            "is_active": status == "paused",
+                            "status": status,
+                        }
+                    ],
+                    "league_ratings": [
+                        {
+                            "club_id": "club",
+                            "league_name": league_name,
+                            "is_active": status == "paused",
+                        }
+                    ],
+                    "matches": [
+                        {
+                            "club_id": "club",
+                            "league": league_name,
+                            "match_type": "Live Match",
+                            "score_t1": 11,
+                            "score_t2": 7,
+                            "deleted_at": None,
+                        }
+                    ],
+                }
+            ),
+            club_id="club",
+            league_name=league_name,
+        )
+
+        assert payload["selected_league"] is None
+        assert payload["standings"] == []
+
+
+def test_inactive_metadata_blocks_match_and_rating_fallback_from_public_overview() -> None:
+    supabase = FakeSupabase(
+        {
+            "leagues_metadata": [
+                {
+                    "club_id": "club",
+                    "league_name": "Archived",
+                    "is_active": False,
+                    "status": "archived",
+                }
+            ],
+            "league_ratings": [
+                {
+                    "club_id": "club",
+                    "league_name": "Archived",
+                    "is_active": True,
+                }
+            ],
+            "matches": [
+                {
+                    "club_id": "club",
+                    "league": "Archived",
+                    "match_type": "Live Match",
+                    "score_t1": 11,
+                    "score_t2": 7,
+                    "deleted_at": None,
+                }
+            ],
+        }
+    )
+
+    assert get_public_league_results_overview(supabase, club_id="club") == {
+        "leagues": []
+    }
