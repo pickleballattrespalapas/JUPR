@@ -95,6 +95,28 @@ def _clean_text(value: Any, *, limit: int = 240) -> str:
     return str(value or "").replace("<", "").replace(">", "").strip()[:limit]
 
 
+def _award_catalog_for_league(
+    meta_row: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Return only award measures that exist for this league's format."""
+
+    league_type = _clean_text(meta_row.get("league_type"), limit=40).casefold()
+    match_format = _clean_text(meta_row.get("match_format"), limit=20).casefold()
+    is_team = league_type in {"team", "team league", "team_league"}
+    unavailable: set[str] = set()
+    if not is_team:
+        unavailable.update(
+            {"team_champion", "team_wins", "team_point_differential"}
+        )
+    if match_format == "singles":
+        unavailable.update({"best_partnership", "partner_variety"})
+    return [
+        dict(row)
+        for row in award_category_catalog()
+        if str(row.get("key")) not in unavailable
+    ]
+
+
 def _json_value(value: Any, default: Any) -> Any:
     if value in (None, ""):
         return default
@@ -287,7 +309,7 @@ def _award_inputs(
     )
     team_analytics = compute_team_league_analytics(fixture_rows, team_rows)
     analytics_context = {
-        "catalog": award_category_catalog(),
+        "catalog": _award_catalog_for_league(meta_row),
         "measurable_player_stats": list(
             player_analytics["players"][0].keys()
             if player_analytics["players"]
@@ -435,6 +457,8 @@ def _league_payload(row: dict[str, Any]) -> dict[str, Any]:
         "status": normalize_league_status(row),
         "is_active": bool(row.get("is_active", False)),
         "min_games": row.get("min_games"),
+        "league_type": row.get("league_type"),
+        "match_format": row.get("match_format"),
         "awards_config": _json_value(row.get("awards_config"), {}) or {},
         "awards_config_version": int(row.get("awards_config_version") or 0),
         "ended_at": row.get("ended_at"),
@@ -813,7 +837,9 @@ def _response(
         "badge_verified_count": int(mint.get("verified_count") or 0),
         "idempotent_replay": bool(idempotent_replay),
         "warnings": list(warnings or []),
-        "award_catalog": analytics.get("catalog", award_category_catalog()),
+        "award_catalog": analytics.get(
+            "catalog", _award_catalog_for_league(meta_row)
+        ),
         "measurable_player_stats": analytics.get(
             "measurable_player_stats", []
         ),
@@ -886,7 +912,12 @@ def save_admin_league_awards_config(
     categories = config.get("categories", {})
     if not isinstance(categories, dict):
         raise ValueError("awards_config.categories must be an object.")
-    known = {row["key"] for row in award_category_catalog()}
+    meta_row = _fetch_league_meta_row(
+        supabase, club_id=str(club_id), league_name=clean_league
+    )
+    if not meta_row:
+        raise ValueError("league not found")
+    known = {row["key"] for row in _award_catalog_for_league(meta_row)}
     unknown = sorted(set(categories) - known)
     if unknown:
         raise ValueError(

@@ -4,8 +4,12 @@ export type TeamLeagueSettings = {
   registration_open: boolean;
   registration_configured_open?: boolean;
   online_team_registration_supported?: boolean;
-  team_size: 2;
+  team_size: 2 | 3 | 4;
   team_category: "open" | "mens" | "womens" | "mixed";
+  max_alternates?: number;
+  substitute_pool_enabled?: boolean;
+  mixed_required_men?: number;
+  mixed_required_women?: number;
   allow_substitutes: boolean;
   playoff_format: string;
   playoff_team_count?: number | null;
@@ -21,7 +25,13 @@ export type TeamLeagueSettings = {
 export type TeamLeagueTeam = {
   id: string;
   team_name: string;
-  players: Array<{ player_id: number; player_name: string }>;
+  players: Array<{
+    player_id: number;
+    player_name: string;
+    role: "captain" | "primary" | "alternate";
+  }>;
+  team_size?: 2 | 3 | 4;
+  roster_complete?: boolean;
 };
 
 export type TeamLeagueFixture = {
@@ -56,6 +66,7 @@ export type PublicTeamLeagueDetail = {
     player_id: number;
     player_name: string;
     rating_jupr?: number | null;
+    gender?: string | null;
   }>;
 };
 

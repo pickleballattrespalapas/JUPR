@@ -137,7 +137,7 @@ def test_successful_match_log_mutations_refetch_parent_owned_data() -> None:
     assert "getAdminReplayStatus(clubId, { accessToken, apiBase })" in page
     assert "Match and replay status refreshed from the server." in page
     assert "replay status could not be reloaded" in page
-    assert "matchIdParam,\n    reloadNonce,\n    selectedFilterParam" in page
+    assert "matchIdsParam,\n    reloadNonce,\n    selectedFilterParam" in page
     assert page.count("onMutationComplete={handleMutationComplete}") == 4
 
     for child in (panel, bulk_exclude, recovery, quick_replay):

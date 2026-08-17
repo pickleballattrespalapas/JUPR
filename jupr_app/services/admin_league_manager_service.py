@@ -404,7 +404,7 @@ def build_admin_league_manager_validation(
         "warnings": warnings,
         "capabilities": {
             "settings_mode": settings_mode,
-            "roster_mutable": status in {"draft", "active", "paused"},
+            "roster_mutable": status in {"draft", "active"},
             "lifecycle_actions": list(LEAGUE_LIFECYCLE_ACTIONS.get(status, [])),
             "printable": True,
         },

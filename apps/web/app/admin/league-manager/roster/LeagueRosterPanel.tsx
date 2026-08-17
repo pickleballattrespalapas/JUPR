@@ -44,7 +44,7 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
   const { accessToken, loading: sessionLoading } = useAdminSession();
   const [detail, setDetail] = useState<AdminLeagueManagerDetailResponse | null>(null);
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<RosterFilter>("in_league");
+  const [filter, setFilter] = useState<RosterFilter>("not_in_league");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [action, setAction] = useState<"activate" | "deactivate">("activate");
   const [startingRating, setStartingRating] = useState("3.5");
@@ -70,7 +70,8 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
     actionRequest.invalidate();
     setDetail(null);
     setSelectedIds([]);
-    setFilter("in_league");
+    setFilter("not_in_league");
+    setAction("activate");
     setBusy(false);
     setMessage(null);
   }
@@ -86,7 +87,8 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
       if (!detailRequest.isCurrent(generation)) return;
       setDetail(payload);
       setSelectedIds([]);
-      setFilter("in_league");
+      setFilter(payload.capabilities?.roster_mutable === false ? "in_league" : "not_in_league");
+      setAction(payload.capabilities?.roster_mutable === false ? "deactivate" : "activate");
       setIdempotencyKey(operationKey());
     } catch (error) {
       if (detailRequest.isCurrent(generation)) {
@@ -103,6 +105,15 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
     setIdempotencyKey(operationKey());
     setMessage(null);
     setFilter(nextAction === "activate" ? "not_in_league" : "in_league");
+  }
+
+  function changeFilter(nextFilter: RosterFilter) {
+    setFilter(nextFilter);
+    setSelectedIds([]);
+    setIdempotencyKey(operationKey());
+    setMessage(null);
+    if (nextFilter === "not_in_league") setAction("activate");
+    if (nextFilter === "in_league") setAction("deactivate");
   }
 
   async function saveBatch(confirmationText: string): Promise<ActionCompletion> {
@@ -167,7 +178,9 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
       return true;
     });
   }, [filter, query, roster]);
-  const visibleSelectable = visibleRows.filter((row) => row.player_active !== false).map((row) => row.player_id);
+  const rowSelectable = (row: AdminLeagueManagerRosterRow) => row.player_active !== false
+    && (action === "activate" ? !row.in_league : row.in_league);
+  const visibleSelectable = visibleRows.filter(rowSelectable).map((row) => row.player_id);
   const allVisibleSelected = Boolean(visibleSelectable.length && visibleSelectable.every((id) => selectedIds.includes(id)));
   const rosterMutable = detail?.capabilities?.roster_mutable !== false;
 
@@ -191,10 +204,10 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
       {busy && !detail ? <p role="status">Loading {initialLeague} roster…</p> : null}
       {detail ? (
         <article style={cardStyle}>
-          {!rosterMutable ? <p style={{ color: "#92400e" }}>This closed league roster is available for review only.</p> : null}
+          {!rosterMutable ? <p style={{ color: "#92400e" }}>This roster is available for review only while the league is {detail.league.status}.</p> : null}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
             <label><strong>Search players</strong><br /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name or player ID" style={inputStyle} /></label>
-            <label><strong>Show</strong><br /><select value={filter} onChange={(event) => setFilter(event.target.value as RosterFilter)} style={inputStyle}><option value="in_league">In this league</option><option value="not_in_league">Add players</option><option value="all">All club players</option><option value="inactive">Inactive club players</option></select></label>
+            <label><strong>Show</strong><br /><select value={filter} onChange={(event) => changeFilter(event.target.value as RosterFilter)} style={inputStyle}><option value="not_in_league">Eligible to add</option><option value="in_league">Current members</option><option value="all">All club players</option><option value="inactive">Inactive club players</option></select></label>
             {rosterMutable ? <label><strong>Action</strong><br /><select value={action} onChange={(event) => resetOperation(event.target.value as "activate" | "deactivate")} style={inputStyle}><option value="activate">Add players</option><option value="deactivate">Remove players</option></select></label> : null}
             {rosterMutable && action === "activate" ? <label><strong>Starting JUPR or Elo for newly added players</strong><br /><input value={startingRating} onChange={(event) => { setStartingRating(event.target.value); setIdempotencyKey(operationKey()); }} style={inputStyle} /><br /><small style={{ color: "#64748b" }}>Applied only when adding the selected players; this is not a roster filter.</small></label> : null}
           </div>
@@ -209,7 +222,7 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
               <thead><tr>{rosterMutable ? <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Select</th> : null}<th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Membership</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Rating</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Record</th></tr></thead>
               <tbody>{visibleRows.map((row: AdminLeagueManagerRosterRow) => {
                 const selected = selectedIds.includes(row.player_id);
-                return <tr key={row.player_id}>{rosterMutable ? <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input aria-label={`Select ${row.player_name}`} type="checkbox" checked={selected} disabled={row.player_active === false} onChange={(event) => { setSelectedIds((current) => event.target.checked ? [...current, row.player_id] : current.filter((id) => id !== row.player_id)); setIdempotencyKey(operationKey()); }} /></td> : null}<td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.player_name}<br /><small>#{row.player_id}{row.player_active === false ? " · inactive" : ""}</small></td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.in_league ? "In league" : "Not in league"}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.rating_jupr == null ? "—" : Number(row.rating_jupr).toFixed(2)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}-{row.losses ?? 0}</td></tr>;
+                return <tr key={row.player_id}>{rosterMutable ? <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input aria-label={`Select ${row.player_name}`} type="checkbox" checked={selected} disabled={!rowSelectable(row)} onChange={(event) => { setSelectedIds((current) => event.target.checked ? [...current, row.player_id] : current.filter((id) => id !== row.player_id)); setIdempotencyKey(operationKey()); }} /></td> : null}<td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.player_name}<br /><small>#{row.player_id}{row.player_active === false ? " · inactive" : ""}</small></td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.in_league ? "In league" : "Not in league"}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.rating_jupr == null ? "—" : Number(row.rating_jupr).toFixed(2)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}-{row.losses ?? 0}</td></tr>;
               })}</tbody>
             </table>
           </div>

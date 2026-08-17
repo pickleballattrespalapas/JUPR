@@ -106,11 +106,10 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status, initialLe
   }
 
   const hasPrintableData = Boolean(printout?.has_printable_data);
-  const isTeamLeague = String(printout?.detail.league.league_type || "").trim().toLowerCase() === "team";
 
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
-      <style>{`@media print { nav, header, footer, .no-print { display: none !important; } body { background: white !important; } [data-print-surface] { display: block !important; } .print-section { break-inside: avoid; page-break-inside: avoid; } .print-break-before { break-before: page; page-break-before: always; } table { font-size: 11px; } thead { display: table-header-group; } tr { break-inside: avoid; page-break-inside: avoid; } @page { size: auto; margin: 10mm; } }`}</style>
+      <style>{`@media print { nav, header, footer, .no-print { display: none !important; } body { background: white !important; font-size: 10pt; } [data-print-surface] { display: block !important; } [data-print-surface] h1 { font-size: 18pt; margin: 0 0 2mm !important; } [data-print-surface] h2 { font-size: 13pt; margin-bottom: 2mm !important; } [data-print-surface] h3 { font-size: 11pt; margin: 2mm 0 !important; } .print-section { padding: 3mm !important; margin-top: 3mm !important; } table { font-size: 9pt; } th, td { padding: 1mm 1.5mm; } thead { display: table-header-group; } tr, h1, h2, h3 { break-inside: avoid; page-break-inside: avoid; } @page { size: auto; margin: 8mm; } }`}</style>
 
       <article className="no-print" style={cardStyle}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
@@ -136,39 +135,48 @@ export default function LeaguePrintoutPanel({ apiBase, clubId, status, initialLe
           <p style={{ color: "#475569" }}>Status: {printout.detail.league.status} · {printout.selected_week ? `Week ${printout.selected_week}` : "No scored week"} · K-factor: {printout.detail.league.k_factor ?? "—"} · Min games: {printout.detail.league.min_games ?? "—"}</p>
           {printout.warnings.length ? <ul className="no-print" style={{ color: "#92400e" }}>{printout.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
 
-          <article className="print-section" style={cardStyle}>
+          {printout.printable_sections.schedule ? <article className="print-section" style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Schedule</h2>
-            {printout.detail.schedule_preview?.length ? <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Session</th><th align="left">Date</th><th align="left">Start</th><th align="left">End</th></tr></thead><tbody>{printout.detail.schedule_preview.map((row) => <tr key={`${row.session}-${row.date}`}><td>{row.session}</td><td>{row.date}</td><td>{row.start || "—"}</td><td>{row.end || "—"}</td></tr>)}</tbody></table> : <p style={{ color: "#64748b" }}>No schedule preview configured.</p>}
-          </article>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Session</th><th align="left">Date</th><th align="left">Start</th><th align="left">End</th></tr></thead><tbody>{printout.detail.schedule_preview.map((row) => <tr key={`${row.session}-${row.date}`}><td>{row.session}</td><td>{row.date}</td><td>{row.start || "—"}</td><td>{row.end || "—"}</td></tr>)}</tbody></table>
+          </article> : null}
 
-          <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
+          {printout.printable_sections.weekly_leaders ? <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
             <h2 style={{ marginTop: 0 }}>Weekly leaders</h2>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
               <div><h3>Highest rating gained</h3>{printout.weekly_rating_leaders.length ? <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Player</th><th align="right">Δ JUPR</th><th align="right">Games</th></tr></thead><tbody>{printout.weekly_rating_leaders.map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{signedRatingDelta(row.rating_delta_jupr)}</td><td align="right">{row.games}</td></tr>)}</tbody></table> : <p>No rating leaders for this week.</p>}</div>
               <div><h3>Most wins</h3>{printout.weekly_win_leaders.length ? <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Player</th><th align="right">Wins</th><th align="right">Games</th></tr></thead><tbody>{printout.weekly_win_leaders.map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{row.wins}</td><td align="right">{row.games}</td></tr>)}</tbody></table> : <p>No win leaders for this week.</p>}</div>
             </div>
-          </article>
+          </article> : null}
 
-          <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
+          {printout.printable_sections.season_leaders ? <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
             <h2 style={{ marginTop: 0 }}>Season leaders</h2>
-            {printout.season_top_performers.length ? <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Category</th><th align="right">Place</th><th align="left">Player</th><th align="right">Metric</th><th align="right">Min games</th></tr></thead><tbody>{printout.season_top_performers.map((row) => <tr key={`${row.category_key}-${row.rank}-${row.player_id}`}><td>{row.category_label}</td><td align="right">{row.rank}</td><td>{row.player_name}</td><td align="right">{row.metric_display}</td><td align="right">{row.min_games}</td></tr>)}</tbody></table> : <p>No configured season leaders are eligible yet.</p>}
-          </article>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Category</th><th align="right">Place</th><th align="left">Recipient</th><th align="right">Metric</th><th align="right">Min games</th></tr></thead><tbody>{printout.season_top_performers.map((row) => <tr key={`${row.category_key}-${row.rank}-${row.recipient_type || "player"}-${row.team_id || row.player_id}`}><td>{row.category_label}</td><td align="right">{row.rank}</td><td>{row.recipient_name || row.team_name || row.player_name || "—"}</td><td align="right">{row.metric_display}</td><td align="right">{row.min_games}</td></tr>)}</tbody></table>
+          </article> : null}
 
-          <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
-            <h2 style={{ marginTop: 0 }}>{isTeamLeague ? "Team standings" : "Standings"}</h2>
-            {isTeamLeague ? (
-              <p style={{ color: "#64748b" }}>
-                Team standings are not represented by individual player-rating rows. Open Team league to review the current team table.
-              </p>
-            ) : (
+          {printout.printable_sections.standings ? <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
+            <h2 style={{ marginTop: 0 }}>Standings</h2>
               <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Rank</th><th align="left">Player</th><th align="right">JUPR</th><th align="right">Record</th><th align="right">Matches</th></tr></thead><tbody>{printout.detail.standings.map((row) => <tr key={row.player_id}><td>{row.rank}</td><td>{row.player_name}</td><td align="right">{ratingLabel(row.rating_jupr)}</td><td align="right">{row.wins ?? 0}-{row.losses ?? 0}</td><td align="right">{row.matches_played ?? 0}</td></tr>)}</tbody></table>
-            )}
-          </article>
+          </article> : null}
 
-          <article className="print-section print-break-before" style={{ ...cardStyle, marginTop: "1rem" }}>
-            <h2 style={{ marginTop: 0 }}>{isTeamLeague ? "Team league player checklist" : "Roster checklist"}</h2>
+          {printout.printable_sections.team_standings ? <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
+            <h2 style={{ marginTop: 0 }}>Team standings</h2>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Rank</th><th align="left">Team</th><th align="right">Record</th><th align="right">Played</th><th align="right">Points</th><th align="right">Diff.</th></tr></thead><tbody>{printout.team_print.standings.map((row) => <tr key={row.team_id}><td>{row.rank}</td><td>{row.team_name}</td><td align="right">{row.wins}-{row.losses}</td><td align="right">{row.games_played}</td><td align="right">{row.points_for}-{row.points_against}</td><td align="right">{row.point_differential >= 0 ? "+" : ""}{row.point_differential}</td></tr>)}</tbody></table>
+          </article> : null}
+
+          {printout.printable_sections.roster ? <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
+            <h2 style={{ marginTop: 0 }}>Roster checklist</h2>
             <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Player</th><th align="right">JUPR</th><th align="right">Record</th><th align="left">Present</th><th align="left">Notes</th></tr></thead><tbody>{(printout.detail.roster || []).filter((row) => row.in_league).map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{ratingLabel(row.rating_jupr)}</td><td align="right">{row.wins ?? 0}-{row.losses ?? 0}</td><td>□</td><td>________________</td></tr>)}</tbody></table>
-          </article>
+          </article> : null}
+
+          {printout.printable_sections.team_rosters ? <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
+            <h2 style={{ marginTop: 0 }}>Team rosters and availability</h2>
+            {printout.team_print.teams.map((team) => <section key={team.team_id} style={{ marginTop: "0.75rem" }}><h3>{team.team_name} · {team.roster_complete ? "Ready" : "Forming"}</h3><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Player</th><th align="left">Role</th><th align="left">Status</th><th align="left">Present</th><th align="left">Notes</th></tr></thead><tbody>{team.members.map((member) => <tr key={`${team.team_id}-${member.player_id}`}><td>{member.player_name}</td><td>{member.role}</td><td>{member.status}</td><td>□</td><td>________________</td></tr>)}</tbody></table></section>)}
+          </article> : null}
+
+          {printout.printable_sections.substitute_pool ? <article className="print-section" style={{ ...cardStyle, marginTop: "1rem" }}>
+            <h2 style={{ marginTop: 0 }}>Shared substitute pool</h2>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Player</th><th align="left">Availability</th><th align="left">Contacted</th><th align="left">Notes</th></tr></thead><tbody>{printout.team_print.substitute_pool.map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td>{row.status}</td><td>□</td><td>{row.note || "________________"}</td></tr>)}</tbody></table>
+          </article> : null}
         </section>
       ) : null}
     </div>

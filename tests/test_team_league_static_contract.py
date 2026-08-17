@@ -132,7 +132,7 @@ def test_every_team_league_route_checks_feature_gate_before_any_data_access() ->
             assert isinstance(first.value, ast.Call)
             assert isinstance(first.value.func, ast.Name)
             assert first.value.func.id == "require_team_leagues_enabled_or_403"
-    assert route_count == 14
+    assert route_count == 16
 
     feature_gate = _read("services/api/team_league_feature.py")
     assert "JUPR_ENABLE_TEAM_LEAGUES" in feature_gate

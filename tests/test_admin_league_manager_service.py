@@ -145,6 +145,19 @@ def test_league_manager_list_and_detail(monkeypatch) -> None:
     assert detail["capabilities"]["lifecycle_actions"] == ["pause", "end"]
 
 
+def test_paused_league_roster_is_review_only(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    storage = fake_storage()
+    storage["leagues_metadata"][0].update(status="paused", is_active=False)
+
+    detail = get_admin_league_manager_detail(
+        FakeSupabase(storage), club_id="club", league_name="Open"
+    )
+
+    assert detail["league"]["status"] == "paused"
+    assert detail["capabilities"]["roster_mutable"] is False
+
+
 def test_legacy_inactive_status_is_always_a_draft() -> None:
     for is_active in (True, False, None):
         assert _league_row_payload({"status": " INACTIVE ", "is_active": is_active})["status"] == "draft"

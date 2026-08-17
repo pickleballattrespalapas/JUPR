@@ -15,7 +15,7 @@ def test_browser_does_not_own_league_live_movement_math() -> None:
     assert "/plan`" in panel
     assert "expected_operation_key" in panel
     assert "movement_overrides" in panel
-    assert "The browser displays plans but never ranks players" in panel
+    assert "League Live calculates the plan; this page only displays it." in panel
 
 
 def test_league_selection_auto_loads_roster_without_showing_stale_detail() -> None:

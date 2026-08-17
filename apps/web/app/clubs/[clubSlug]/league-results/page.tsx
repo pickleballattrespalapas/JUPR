@@ -31,8 +31,7 @@ const cardStyle = {
 };
 
 const sectionStyle = {
-  marginTop: "1.25rem",
-  pageBreakInside: "avoid" as const
+  marginTop: "1.25rem"
 };
 
 const sectionLabels: Record<SectionKey, string> = {
@@ -408,13 +407,20 @@ export default async function LeagueResultsPage({ params, searchParams }: League
     <section>
       <style>{`
         @media print {
-          @page { margin: 10mm; }
+          @page { margin: 8mm; }
           header, footer, nav, .no-print { display: none !important; }
-          body { background: white !important; }
+          body { background: white !important; font-size: 10pt; }
           a { color: inherit !important; text-decoration: none !important; }
           main { max-width: none !important; margin: 0 !important; padding: 0 !important; }
           section { color: #0f172a; }
-          article, table, h1, h2, h3 { break-inside: avoid; }
+          article { padding: 3mm !important; }
+          h1 { font-size: 18pt; margin-bottom: 2mm !important; }
+          h2 { font-size: 13pt; margin: 3mm 0 2mm !important; }
+          h3 { font-size: 11pt; margin: 2mm 0 !important; }
+          table { font-size: 9pt; }
+          th, td { padding: 1mm 1.5mm !important; }
+          thead { display: table-header-group; }
+          tr, h1, h2, h3 { break-inside: avoid; page-break-inside: avoid; }
           section > section { break-inside: auto; }
         }
       `}</style>

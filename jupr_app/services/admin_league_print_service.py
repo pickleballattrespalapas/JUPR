@@ -12,6 +12,7 @@ from jupr_app.services.admin_league_manager_service import (
     get_admin_league_manager_detail,
     is_admin_league_manager_enabled,
 )
+from jupr_app.services.team_league_service import get_admin_team_league
 
 PREVIOUS_MONTH_MIN_GAMES = 10
 DEFAULT_TOP_PLAYERS_LIMIT = 50
@@ -88,6 +89,34 @@ def _participant_ids(match: dict[str, Any]) -> tuple[int, int, int, int] | None:
     if any(value is None for value in values):
         return None
     return values  # type: ignore[return-value]
+
+
+def _league_participant_slots(match: dict[str, Any]) -> tuple[str, ...] | None:
+    """Return canonical participant slots for a complete league match.
+
+    The previous-month Top Players printable intentionally consumes doubles /
+    overall matches only, so its four-player ``_participant_ids`` contract stays
+    unchanged. League-night printouts also support canonical singles rows, where
+    both partner slots are null.
+    """
+
+    primary_slots = ("t1_p1", "t2_p1")
+    if any(_safe_int(match.get(slot)) is None for slot in primary_slots):
+        return None
+
+    partner_ids = (_safe_int(match.get("t1_p2")), _safe_int(match.get("t2_p2")))
+    match_format = _clean_text(match.get("match_format"), limit=40).casefold()
+    if match_format == "singles":
+        # A row declared as singles must not quietly accept stray partners.
+        return primary_slots if partner_ids == (None, None) else None
+    if match_format == "doubles" and any(player_id is None for player_id in partner_ids):
+        return None
+    if partner_ids == (None, None):
+        # Preserve legacy singles rows that predate the explicit format column.
+        return primary_slots
+    if any(player_id is None for player_id in partner_ids):
+        return None
+    return ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
 
 
 def _scored_match(match: dict[str, Any]) -> bool:
@@ -218,13 +247,18 @@ def _league_matches(supabase: Any, *, club_id: str, league_name: str) -> list[di
             continue
         if _clean_text(match.get("match_type"), limit=80).lower() == "popup":
             continue
-        participants = _participant_ids(match)
-        if participants is None or not _scored_match(match):
+        participant_slots = _league_participant_slots(match)
+        if participant_slots is None or not _scored_match(match):
             continue
+        participant_ids = tuple(_safe_int(match.get(slot)) for slot in participant_slots)
+        if any(player_id is None for player_id in participant_ids):
+            continue
+        participants = tuple(int(player_id) for player_id in participant_ids if player_id is not None)
         clean = dict(match)
         clean["week_num"] = _parse_week_num(match.get("week_tag"))
         clean["_played_at"] = _utc_datetime(match.get("date_dt") or match.get("date"))
         clean["_participants"] = participants
+        clean["_participant_slots"] = participant_slots
         rows.append(clean)
     rows.sort(
         key=lambda row: (
@@ -257,12 +291,13 @@ def _weekly_player_rows(
     ratings = dict(initial_ratings)
     weekly: dict[int, dict[str, Any]] = {}
     replayed_match_count = 0
-    slots = ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
     selected_positions = [index for index, match in enumerate(matches) if match.get("week_num") == selected_week]
     relevant_matches = matches[: max(selected_positions) + 1] if selected_positions else []
 
     for match in relevant_matches:
         participants = match["_participants"]
+        slots = match["_participant_slots"]
+        team_size = len(participants) // 2
         score_1 = _safe_int(match.get("score_t1"), 0) or 0
         score_2 = _safe_int(match.get("score_t2"), 0) or 0
         snapshots = [_snapshot_pair(match, slot) for slot in slots]
@@ -282,15 +317,15 @@ def _weekly_player_rows(
                 if snapshot is not None:
                     ratings[player_id] = snapshot[1]
             delta_1, delta_2 = calculate_hybrid_elo(
-                (starts[0] + starts[1]) / 2.0,
-                (starts[2] + starts[3]) / 2.0,
+                sum(starts[:team_size]) / float(team_size),
+                sum(starts[team_size:]) / float(team_size),
                 score_1,
                 score_2,
                 k_factor=float(k_factor),
                 min_win_delta=float(MIN_WIN_DELTA_ELO),
                 cap_loser_gain=float(CAP_LOSER_GAIN_ELO),
             )
-            deltas = [delta_1, delta_1, delta_2, delta_2]
+            deltas = ([delta_1] * team_size) + ([delta_2] * team_size)
             for player_id, start, delta in zip(participants, starts, deltas):
                 ratings[player_id] = start + float(delta)
             replayed_match_count += 1
@@ -312,7 +347,9 @@ def _weekly_player_rows(
             item["games"] += 1
             item["rating_delta_elo"] += float(deltas[index])
             if score_1 != score_2:
-                won = (index < 2 and score_1 > score_2) or (index >= 2 and score_2 > score_1)
+                won = (index < team_size and score_1 > score_2) or (
+                    index >= team_size and score_2 > score_1
+                )
                 item["wins" if won else "losses"] += 1
 
     output: list[dict[str, Any]] = []
@@ -404,6 +441,74 @@ def build_admin_league_printout(
 
     league = detail.get("league") or {}
     is_team_league = _clean_text(league.get("league_type"), limit=80).casefold() == "team"
+    team_print = {
+        "standings": [],
+        "teams": [],
+        "substitute_pool": [],
+    }
+    if is_team_league:
+        try:
+            team_detail = get_admin_team_league(
+                supabase,
+                club_id=str(club_id),
+                league_name=clean_league,
+            )
+        except ValueError:
+            # A metadata-only Team draft may not have its Team League settings
+            # row yet. Keep the print model empty instead of mislabeling generic
+            # player ratings as team standings or assigned rosters.
+            team_detail = None
+        if team_detail is not None:
+            player_names = {
+                int(row["id"]): _clean_text(row.get("name"), limit=160)
+                or f"Player {int(row['id'])}"
+                for row in team_detail.get("players") or []
+                if _safe_int(row.get("id")) is not None
+            }
+            team_print["standings"] = list(team_detail.get("standings") or [])
+            team_print["teams"] = [
+                {
+                    "team_id": str(team.get("id") or ""),
+                    "team_name": _clean_text(team.get("team_name"), limit=160)
+                    or "Team",
+                    "status": _clean_text(team.get("status"), limit=40),
+                    "roster_complete": bool(team.get("roster_complete")),
+                    "members": [
+                        {
+                            "player_id": int(member["player_id"]),
+                            "player_name": _clean_text(
+                                member.get("player_name")
+                                or player_names.get(int(member["player_id"])),
+                                limit=160,
+                            )
+                            or f"Player {int(member['player_id'])}",
+                            "role": _clean_text(member.get("role"), limit=24),
+                            "status": _clean_text(member.get("status"), limit=24),
+                        }
+                        for member in team.get("members") or []
+                        if _safe_int(member.get("player_id")) is not None
+                        and _clean_text(member.get("status"), limit=24)
+                        in {"active", "invited"}
+                    ],
+                }
+                for team in team_detail.get("teams") or []
+                if _clean_text(team.get("status"), limit=40)
+                in {"confirmed", "pending_partner"}
+            ]
+            team_print["substitute_pool"] = [
+                {
+                    "player_id": int(row["player_id"]),
+                    "player_name": player_names.get(
+                        int(row["player_id"]), f"Player {int(row['player_id'])}"
+                    ),
+                    "status": _clean_text(row.get("status"), limit=24),
+                    "note": _clean_text(row.get("note"), limit=240),
+                }
+                for row in team_detail.get("substitute_pool") or []
+                if _safe_int(row.get("player_id")) is not None
+                and _clean_text(row.get("status"), limit=24)
+                in {"available", "unavailable"}
+            ]
     active_roster = [row for row in detail.get("roster") or [] if row.get("in_league")]
     printable_sections = {
         "schedule": bool(detail.get("schedule_preview")),
@@ -412,7 +517,10 @@ def build_admin_league_printout(
         # League-rating rows are player standings. They must not be advertised as
         # team standings until the print model carries the actual team table.
         "standings": bool(detail.get("standings")) and not is_team_league,
-        "roster": bool(active_roster),
+        "roster": bool(active_roster) and not is_team_league,
+        "team_standings": bool(team_print["standings"]),
+        "team_rosters": bool(team_print["teams"]),
+        "substitute_pool": bool(team_print["substitute_pool"]),
     }
     has_printable_data = any(printable_sections.values())
     if not has_printable_data:
@@ -432,6 +540,7 @@ def build_admin_league_printout(
         "weekly_win_leaders": win_leaders,
         "season_top_performers": awards,
         "season_top_performer_count": len(awards),
+        "team_print": team_print,
         "has_printable_data": has_printable_data,
         "printable_sections": printable_sections,
         "rating_source": "stored_snapshots" if replayed_match_count == 0 else "stored_snapshots_with_python_replay",

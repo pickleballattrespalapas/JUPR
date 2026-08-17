@@ -145,8 +145,12 @@ export type AdminLeaguePrintLeader = {
 export type AdminLeagueTopPerformer = {
   category_key: string;
   category_label: string;
-  player_id: number;
-  player_name: string;
+  recipient_type?: "player" | "team";
+  player_id?: number | null;
+  team_id?: string | null;
+  player_name?: string | null;
+  team_name?: string | null;
+  recipient_name?: string | null;
   metric_value?: number | null;
   metric_display: string;
   rank: number;
@@ -164,6 +168,37 @@ export type AdminLeaguePrintoutResponse = {
   weekly_win_leaders: AdminLeaguePrintLeader[];
   season_top_performers: AdminLeagueTopPerformer[];
   season_top_performer_count: number;
+  team_print: {
+    standings: Array<{
+      rank: number;
+      team_id: string;
+      team_name: string;
+      games_played: number;
+      wins: number;
+      losses: number;
+      points_for: number;
+      points_against: number;
+      point_differential: number;
+    }>;
+    teams: Array<{
+      team_id: string;
+      team_name: string;
+      status: string;
+      roster_complete: boolean;
+      members: Array<{
+        player_id: number;
+        player_name: string;
+        role: string;
+        status: string;
+      }>;
+    }>;
+    substitute_pool: Array<{
+      player_id: number;
+      player_name: string;
+      status: string;
+      note: string;
+    }>;
+  };
   has_printable_data: boolean;
   printable_sections: {
     schedule: boolean;
@@ -171,6 +206,9 @@ export type AdminLeaguePrintoutResponse = {
     season_leaders: boolean;
     standings: boolean;
     roster: boolean;
+    team_standings: boolean;
+    team_rosters: boolean;
+    substitute_pool: boolean;
   };
   rating_source: "stored_snapshots" | "stored_snapshots_with_python_replay";
   warnings: string[];
