@@ -1056,7 +1056,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       if (leagueLiveWriteIsUncertain(error)) {
         return actionUncertain(
           "League round publish needs verification",
-          "The durable publish may have completed. Retry with the same movement-plan operation reference to reconcile without duplicating matches.",
+          "The first request did not finish cleanly. Retry these exact scores; League Live verifies any existing matches before it writes anything, so this cannot duplicate the round.",
           roundOperationKey,
           "Retry exact league-round publish",
           () => submitRound(confirmationText)

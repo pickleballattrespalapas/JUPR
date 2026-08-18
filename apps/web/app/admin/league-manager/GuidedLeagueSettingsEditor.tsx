@@ -13,6 +13,7 @@ type SettingsPatch = Record<string, unknown>;
 type LeagueFormat = "ladder" | "round_robin" | "rotating_partner" | "fixed_team" | "flex_challenge";
 type SessionMode = "scheduled_rounds" | "live_court_board" | "self_scheduled";
 type SeriesPreset = "one_game" | "two_games" | "best_of_3" | "three_games" | "best_of_5" | "custom_fixed" | "custom_best_of";
+type LadderPodSize = "2" | "3" | "4" | "5" | "6" | "7" | "8";
 type FormState = {
   description: string;
   divisions: string;
@@ -32,7 +33,7 @@ type FormState = {
   totalCourts: string;
   courtIdentifiers: string;
   maxUsedCourts: string;
-  ladderPodSize: "4" | "5" | "6+";
+  ladderPodSize: LadderPodSize;
   ladderMoveUp: string;
   ladderMoveDown: string;
   seriesPreset: SeriesPreset;
@@ -60,6 +61,8 @@ const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: 
 const detailsStyle = { border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.75rem", background: "white" };
 const gridStyle = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem", alignItems: "end" };
 const timezoneOptions = ["America/Mazatlan", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/New_York", "UTC"];
+const singlesPodSizes = ["2", "3", "4", "5", "6", "7", "8"] as const;
+const doublesPodSizes = ["4", "5", "6", "7", "8"] as const;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -93,6 +96,17 @@ function downloadTextFile(filename: string, content: string) {
 }
 function isTeamLeague(detail: AdminLeagueManagerDetailResponse): boolean {
   return String(detail.league.league_type || "").trim().toLowerCase() === "team";
+}
+function ladderPodSizes(detail: AdminLeagueManagerDetailResponse): readonly LadderPodSize[] {
+  return detail.league.match_format === "singles" ? singlesPodSizes : doublesPodSizes;
+}
+function ladderPodDefault(detail: AdminLeagueManagerDetailResponse): LadderPodSize {
+  return detail.league.match_format === "singles" ? "2" : "4";
+}
+function normalizeLadderPodSize(value: unknown, detail: AdminLeagueManagerDetailResponse): LadderPodSize {
+  const options = ladderPodSizes(detail);
+  const legacyValue = String(value) === "6+" ? "6" : value;
+  return optionValue(legacyValue, options, ladderPodDefault(detail));
 }
 function structurePreset(value: unknown): { preset: SeriesPreset; games: string } {
   const structure = asRecord(value);
@@ -150,7 +164,7 @@ function formFromDetail(detail: AdminLeagueManagerDetailResponse): FormState {
     totalCourts: numberText(courts.total_courts, 0),
     courtIdentifiers: listText(courts.court_identifiers),
     maxUsedCourts: numberText(courts.max_used_courts, 0),
-    ladderPodSize: optionValue(courts.players_per_court, ["4", "5", "6+"] as const, "4"),
+    ladderPodSize: normalizeLadderPodSize(courts.players_per_court, detail),
     ladderMoveUp: numberText(operation.move_up_count, 1),
     ladderMoveDown: numberText(operation.move_down_count, 1),
     seriesPreset: series.preset,
@@ -189,6 +203,10 @@ function buildDraftPatch(form: FormState, detail: AdminLeagueManagerDetailRespon
   const leagueFormat = isTeamLeague(detail) ? "fixed_team" : form.leagueFormat;
   if (leagueFormat === "ladder" && form.sessionMode === "self_scheduled") throw new Error("Ladder leagues need scheduled rounds or a live court board.");
   if (leagueFormat === "flex_challenge" && form.sessionMode !== "self_scheduled") throw new Error("Flex challenge leagues use self-scheduled play.");
+  const ladderPodSize = Number(form.ladderPodSize);
+  if (leagueFormat === "ladder" && (moveUp >= ladderPodSize || moveDown >= ladderPodSize)) {
+    throw new Error(`Move counts must be less than the ${ladderPodSize}-player pod size.`);
+  }
   if (totalCourts && maxUsedCourts > totalCourts) throw new Error("Max used courts cannot exceed total courts.");
   const rules = asRecord(detail.league.rules_config);
   const overview = asRecord(rules.overview);
@@ -231,6 +249,8 @@ export function GuidedLeagueSettingsEditor({ detail, saving, canWrite, onSave, o
   const isDraft = status === "draft";
   const isClosed = status === "ended" || status === "archived";
   const team = isTeamLeague(detail);
+  const podSizes = ladderPodSizes(detail);
+  const podMovementMaximum = Math.max(1, Number(form.ladderPodSize) - 1);
   const hasChanges = JSON.stringify(form) !== JSON.stringify(formFromDetail(detail));
   const timezones = timezoneOptions.includes(form.timezone) ? timezoneOptions : [form.timezone, ...timezoneOptions];
 
@@ -285,7 +305,7 @@ export function GuidedLeagueSettingsEditor({ detail, saving, canWrite, onSave, o
 
         <details open style={detailsStyle}><summary style={{ cursor: "pointer", fontWeight: 800 }}>Schedule</summary><div style={{ ...gridStyle, marginTop: "0.75rem" }}><label><strong>Start date</strong><br /><input type="date" value={form.startDate} onChange={(event) => updateScheduleField("startDate", event.target.value)} style={inputStyle} /></label><label><strong>Weeks (or use an end date)</strong><br /><input type="number" min={1} max={260} value={form.weeks} onChange={(event) => updateScheduleField("weeks", event.target.value)} style={inputStyle} /></label><label><strong>Weekday</strong><br /><select value={form.weekday} onChange={(event) => updateScheduleField("weekday", event.target.value)} style={inputStyle}><option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option></select></label><label><strong>Timezone</strong><br /><select value={form.timezone} onChange={(event) => updateScheduleField("timezone", event.target.value)} style={inputStyle}>{timezones.map((timezone) => <option key={timezone} value={timezone}>{timezone}</option>)}</select></label><label><strong>Start time</strong><br /><input type="time" value={form.timeStart} onChange={(event) => updateScheduleField("timeStart", event.target.value)} style={inputStyle} /></label><label><strong>End time</strong><br /><input type="time" value={form.timeEnd} onChange={(event) => updateScheduleField("timeEnd", event.target.value)} style={inputStyle} /></label><label><strong>Session capacity</strong><br /><input type="number" min={0} max={1000} value={form.sessionCapacity} onChange={(event) => updateScheduleField("sessionCapacity", event.target.value)} style={inputStyle} /></label><label style={{ alignSelf: "center" }}><input type="checkbox" checked={form.useEndDate} onChange={(event) => updateScheduleField("useEndDate", event.target.checked)} /> <strong>Use end date</strong></label>{form.useEndDate ? <label><strong>End date</strong><br /><input type="date" value={form.endDate} onChange={(event) => updateScheduleField("endDate", event.target.value)} style={inputStyle} /></label> : null}</div><label><strong>Blackout dates</strong><br /><textarea value={form.blackoutDates} onChange={(event) => updateScheduleField("blackoutDates", event.target.value)} placeholder="2026-08-03, 2026-09-07" rows={2} style={inputStyle} /></label><p><button type="button" onClick={previewSchedule} disabled={saving || !canWrite} style={ghostButtonStyle}>{saving ? "Working…" : "Preview schedule without saving"}</button></p><SchedulePreview preview={preview} /></details>
 
-        <details style={detailsStyle}><summary style={{ cursor: "pointer", fontWeight: 800 }}>Courts &amp; live operation</summary><div style={{ ...gridStyle, marginTop: "0.75rem" }}><label><strong>Total courts available</strong><br /><input type="number" min={0} max={100} value={form.totalCourts} onChange={(event) => updateField("totalCourts", event.target.value)} style={inputStyle} /></label><label><strong>Maximum courts this league may use</strong><br /><input type="number" min={0} max={100} value={form.maxUsedCourts} onChange={(event) => updateField("maxUsedCourts", event.target.value)} style={inputStyle} /></label>{form.leagueFormat === "ladder" ? <label><strong>Ladder pod size</strong><br /><select value={form.ladderPodSize} onChange={(event) => updateField("ladderPodSize", event.target.value as FormState["ladderPodSize"])} style={inputStyle}><option value="4">4 players</option><option value="5">5 players</option><option value="6+">6+ players</option></select></label> : null}{form.leagueFormat === "ladder" ? <label><strong>Move up each round</strong><br /><input type="number" min={0} max={20} value={form.ladderMoveUp} onChange={(event) => updateField("ladderMoveUp", event.target.value)} style={inputStyle} /></label> : null}{form.leagueFormat === "ladder" ? <label><strong>Move down each round</strong><br /><input type="number" min={0} max={20} value={form.ladderMoveDown} onChange={(event) => updateField("ladderMoveDown", event.target.value)} style={inputStyle} /></label> : null}</div><label><strong>Optional custom court labels</strong><br /><input value={form.courtIdentifiers} onChange={(event) => updateField("courtIdentifiers", event.target.value)} placeholder="1, 2, Championship" style={inputStyle} /></label><p style={{ color: "#475569", marginBottom: 0 }}>Court limits and operation mode shape live court assignment. Normal pickleball scoring is fixed; point caps and time caps are intentionally not league settings.</p></details>
+        <details style={detailsStyle}><summary style={{ cursor: "pointer", fontWeight: 800 }}>Courts &amp; live operation</summary><div style={{ ...gridStyle, marginTop: "0.75rem" }}><label><strong>Total courts available</strong><br /><input type="number" min={0} max={100} value={form.totalCourts} onChange={(event) => updateField("totalCourts", event.target.value)} style={inputStyle} /></label><label><strong>Maximum courts this league may use</strong><br /><input type="number" min={0} max={100} value={form.maxUsedCourts} onChange={(event) => updateField("maxUsedCourts", event.target.value)} style={inputStyle} /></label>{form.leagueFormat === "ladder" ? <label><strong>Ladder pod size</strong><br /><select value={form.ladderPodSize} onChange={(event) => updateField("ladderPodSize", event.target.value as LadderPodSize)} style={inputStyle}>{podSizes.map((size) => <option key={size} value={size}>{size} players</option>)}</select></label> : null}{form.leagueFormat === "ladder" ? <label><strong>Move up each round</strong><br /><input type="number" min={0} max={podMovementMaximum} value={form.ladderMoveUp} onChange={(event) => updateField("ladderMoveUp", event.target.value)} style={inputStyle} /></label> : null}{form.leagueFormat === "ladder" ? <label><strong>Move down each round</strong><br /><input type="number" min={0} max={podMovementMaximum} value={form.ladderMoveDown} onChange={(event) => updateField("ladderMoveDown", event.target.value)} style={inputStyle} /></label> : null}</div><label><strong>Optional custom court labels</strong><br /><input value={form.courtIdentifiers} onChange={(event) => updateField("courtIdentifiers", event.target.value)} placeholder="1, 2, Championship" style={inputStyle} /></label><p style={{ color: "#475569", marginBottom: 0 }}>{detail.league.match_format === "singles" ? "Singles pods can run from 2 through 8 players; doubles pods run from 4 through 8 players." : "Doubles pods can run from 4 through 8 players."} Movement counts are limited by the selected pod size. Normal pickleball scoring is fixed; point caps and time caps are intentionally not league settings.</p></details>
 
         <details style={detailsStyle}><summary style={{ cursor: "pointer", fontWeight: 800 }}>Match, standings &amp; correction rules</summary><div style={{ ...gridStyle, marginTop: "0.75rem" }}><label><strong>Match structure</strong><br /><select value={form.seriesPreset} onChange={(event) => updateField("seriesPreset", event.target.value as SeriesPreset)} style={inputStyle}><option value="one_game">1 game</option><option value="two_games">2 games — count each game</option><option value="best_of_3">2 out of 3</option><option value="three_games">3 games — count each game</option><option value="best_of_5">3 out of 5</option><option value="custom_fixed">Custom number of games</option><option value="custom_best_of">Custom best-of format</option></select></label>{form.seriesPreset === "custom_fixed" || form.seriesPreset === "custom_best_of" ? <label><strong>{form.seriesPreset === "custom_best_of" ? "Best-of games (odd)" : "Number of games"}</strong><br /><input type="number" min={form.seriesPreset === "custom_best_of" ? 3 : 1} max={9} value={form.customSeriesGames} onChange={(event) => updateField("customSeriesGames", event.target.value)} style={inputStyle} /></label> : null}<label><strong>Standings tie-break</strong><br /><select value={form.standingsTiebreak} onChange={(event) => updateField("standingsTiebreak", event.target.value as FormState["standingsTiebreak"])} style={inputStyle}><option value="wins_then_point_differential">Wins → point differential</option><option value="wins_then_total_points">Wins → total points</option><option value="points_then_point_differential">Total points → point differential</option></select></label><label><strong>Score correction window</strong><br /><select value={form.correctionWindow} onChange={(event) => updateField("correctionWindow", event.target.value as FormState["correctionWindow"])} style={inputStyle}><option value="until_next_round">Until the next round</option><option value="same_day">Same day</option><option value="seven_days">Within 7 days</option></select></label><label><strong>Score submission</strong><br /><select value={form.scoreSubmissionPolicy} onChange={(event) => updateField("scoreSubmissionPolicy", event.target.value as FormState["scoreSubmissionPolicy"])} style={inputStyle}><option value="admin_only">Admin only</option><option value="captain_or_admin">Captain or admin</option><option value="rostered_player_or_admin">Rostered player or admin</option></select></label><label><strong>Postseason</strong><br /><select value={form.playoffFormat} onChange={(event) => updateField("playoffFormat", event.target.value as FormState["playoffFormat"])} style={inputStyle}><option value="none">No playoffs</option><option value="single_elimination">Single-elimination playoffs</option><option value="double_elimination">Double-elimination playoffs</option></select></label></div><p style={{ color: "#475569", marginBottom: 0 }}>{form.seriesPreset === "best_of_3" || form.seriesPreset === "best_of_5" || form.seriesPreset === "custom_best_of" ? "Best-of series finish when one side clinches the required wins; every played game still counts as an official league game." : "Fixed two- and three-game series create a separate league result for every game."} All leagues use standard pickleball scoring.</p></details>
 

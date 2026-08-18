@@ -126,6 +126,22 @@ def _league_match_structure(supabase: Any, *, club_id: str, league_name: str) ->
     return normalize_league_match_structure(competition.get("match_structure"))
 
 
+def _league_match_format(supabase: Any, *, club_id: str, league_name: str) -> str:
+    """Resolve the immutable Singles or Doubles modality used by League Live."""
+    try:
+        row = _first_row(
+            supabase.table("leagues_metadata")
+            .select("match_format")
+            .eq("club_id", str(club_id))
+            .eq("league_name", str(league_name))
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise LeagueLivePersistenceError("Unable to load the league match format before scoring.") from exc
+    return "singles" if str((row or {}).get("match_format") or "").strip().casefold() == "singles" else "doubles"
+
+
 def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(row.get("id") or ""),

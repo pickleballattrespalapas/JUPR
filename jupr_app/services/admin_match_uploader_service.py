@@ -1103,10 +1103,14 @@ def submit_admin_match_uploader_batch(
     actor_email: str,
     actor_role: str,
     idempotency_key: str,
+    match_format: str = "doubles",
     source: str = "next_match_uploader",
 ) -> dict[str, Any]:
     if not is_admin_match_uploader_enabled():
         raise PermissionError("Next Match Uploader is disabled.")
+    clean_match_format = str(match_format or "").strip().casefold()
+    if clean_match_format not in {"singles", "doubles"}:
+        raise ValueError("match_format must be singles or doubles.")
     clean_matches = _apply_event_contexts(supabase, club_id=str(club_id), matches=_normalize_batch(matches))
     (
         df_players_all,
@@ -1125,7 +1129,7 @@ def submit_admin_match_uploader_batch(
         supabase,
         club_id=str(club_id),
         matches=clean_matches,
-        match_format="doubles",
+        match_format=clean_match_format,
         idempotency_key=str(idempotency_key),
         actor_email=str(actor_email or ""),
         actor_role=str(actor_role or ""),

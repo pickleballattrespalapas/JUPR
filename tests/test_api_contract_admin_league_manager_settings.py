@@ -234,7 +234,7 @@ def test_admin_league_manager_structured_match_and_operation_rules_drive_saved_d
         ("schedule_config", {"time_start": "20:00", "time_end": "18:00"}, "time_end must be after"),
         ("schedule_config", {"timezone": "America/Chicago\nBAD"}, "unsupported characters"),
         ("court_board_defaults", {"total_courts": 3, "max_used_courts": 4}, "cannot exceed total_courts"),
-        ("court_board_defaults", {"players_per_court": "8"}, "must be 4, 5, or 6+"),
+        ("court_board_defaults", {"players_per_court": "9"}, "whole number from 2 through 8"),
         ("rules_config", {"overview": {"divisions": "Open"}}, "divisions must be a list"),
         ("rules_config", {"competition": {"match_structure": {"kind": "best_of", "games": 4}}}, "odd game count"),
         ("rules_config", {"overview": {"league_format": "ladder"}, "operation": {"session_mode": "self_scheduled"}}, "Ladder leagues need scheduled rounds"),
