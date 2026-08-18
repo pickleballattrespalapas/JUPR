@@ -173,6 +173,9 @@ def test_team_league_and_award_admin_pages_are_complete_and_responsive() -> None
     team_panel = _read(
         "apps/web/app/admin/league-manager/teams/TeamLeaguesPanel.tsx"
     )
+    team_setup = _read(
+        "apps/web/app/admin/league-manager/settings/TeamLeagueSetupPanel.tsx"
+    )
     roster_panel = _read(
         "apps/web/app/admin/league-manager/roster/LeagueRosterPanel.tsx"
     )
@@ -193,6 +196,9 @@ def test_team_league_and_award_admin_pages_are_complete_and_responsive() -> None
         "Allow substitutes",
         "No playoffs",
         "weekly schedule",
+    ):
+        assert phrase in team_setup
+    for phrase in (
         "SAVE TEAM LEAGUE RESULT",
         "RECONCILE TEAM LEAGUE RESULT",
         "FINALIZE TEAM LEAGUE RECOVERY",
@@ -203,6 +209,7 @@ def test_team_league_and_award_admin_pages_are_complete_and_responsive() -> None
     assert "award_catalog" in awards_panel
     assert "Measurable league results" in awards_panel
     assert "Team measures" in awards_panel
+    assert "Team setup is managed in League Settings." in team_panel
     assert 'useState<"success" | "error" | null>' in registration
     assert 'messageTone === "error" ? "alert" : "status"' in registration
     assert 'boxSizing: "border-box"' in registration

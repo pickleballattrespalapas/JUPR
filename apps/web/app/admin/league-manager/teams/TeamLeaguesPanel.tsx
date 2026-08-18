@@ -109,42 +109,12 @@ type RecoveryEvidence = {
   safe_action?: string;
 };
 type WriteResponse = { ok?: boolean; committed?: boolean; operation_id?: string; message?: string };
-type SettingsDraft = {
-  registrationOpen: boolean;
-  teamSize: string;
-  teamCategory: string;
-  maxAlternates: string;
-  substitutePoolEnabled: boolean;
-  mixedRequiredMen: string;
-  mixedRequiredWomen: string;
-  allowSubstitutes: boolean;
-  playoffFormat: string;
-  playoffTeamCount: string;
-  startDate: string;
-  weekday: string;
-  startTime: string;
-  timezone: string;
-  venue: string;
-  registrationClosesAt: string;
-};
-
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const insetStyle = { border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.8rem", background: "#f8fafc" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 const gridStyle = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" };
-const TIMEZONE_OPTIONS = [
-  "America/Mazatlan",
-  "America/Phoenix",
-  "America/Los_Angeles",
-  "America/Denver",
-  "America/Chicago",
-  "America/New_York",
-  "America/Mexico_City",
-  "UTC"
-];
-
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
 }
@@ -163,27 +133,6 @@ async function refreshAfterConfirmedWrite(refresh: () => Promise<void>): Promise
   } catch {
     return confirmedWriteRefreshWarning;
   }
-}
-
-function settingsDraft(settings?: TeamSettings | null): SettingsDraft {
-  return {
-    registrationOpen: Boolean(settings?.registration_open),
-    teamSize: String(settings?.team_size || 2),
-    teamCategory: String(settings?.team_category || "open"),
-    maxAlternates: String(settings?.max_alternates || 0),
-    substitutePoolEnabled: Boolean(settings?.substitute_pool_enabled),
-    mixedRequiredMen: String(settings?.mixed_required_men || 1),
-    mixedRequiredWomen: String(settings?.mixed_required_women || 1),
-    allowSubstitutes: Boolean(settings?.allow_substitutes),
-    playoffFormat: String(settings?.playoff_format || "none"),
-    playoffTeamCount: settings?.playoff_team_count == null ? "" : String(settings.playoff_team_count),
-    startDate: String(settings?.start_date || ""),
-    weekday: String(settings?.weekday ?? 0),
-    startTime: String(settings?.start_time || "18:00").slice(0, 5),
-    timezone: String(settings?.timezone || "America/Mazatlan"),
-    venue: String(settings?.venue || ""),
-    registrationClosesAt: settings?.registration_closes_at ? String(settings.registration_closes_at).slice(0, 16) : ""
-  };
 }
 
 function teamName(detail: TeamLeagueDetail, teamId?: string | null): string {
@@ -245,48 +194,6 @@ function requestError(payload: unknown, statusCode: number): string {
     if (detail) return String(detail);
   }
   return `API error (${statusCode})`;
-}
-
-function TeamSettingsForm({
-  settings,
-  busy,
-  onDirty,
-  onSave
-}: {
-  settings?: TeamSettings | null;
-  busy: boolean;
-  onDirty: () => void;
-  onSave: (draft: SettingsDraft, confirmationText: string) => Promise<ActionCompletion>;
-}) {
-  const [draft, setDraft] = useState<SettingsDraft>(() => settingsDraft(settings));
-  function update<K extends keyof SettingsDraft>(key: K, value: SettingsDraft[K]) {
-    setDraft((current) => ({ ...current, [key]: value }));
-    onDirty();
-  }
-  return (
-    <article style={cardStyle}>
-      <h2 style={{ marginTop: 0 }}>Registration and season setup</h2>
-      <p style={{ color: "#475569" }}>Configure a 2–4 player primary season roster, assigned alternates, a shared substitute pool, weekly schedule, and optional playoffs. Every match still uses a two-player doubles lineup.</p>
-      <div style={gridStyle}>
-        <label><input type="checkbox" checked={draft.registrationOpen} onChange={(event) => update("registrationOpen", event.target.checked)} /> <strong>Registration open</strong></label>
-        <label><strong>Primary roster size</strong><br /><select value={draft.teamSize} onChange={(event) => { const size = Number(event.target.value); update("teamSize", event.target.value); update("mixedRequiredMen", String(Math.floor(size / 2))); update("mixedRequiredWomen", String(size - Math.floor(size / 2))); }} style={inputStyle}><option value="2">2 players</option><option value="3">3 players</option><option value="4">4 players</option></select></label>
-        <label><strong>Maximum alternates</strong><br /><select value={draft.maxAlternates} onChange={(event) => update("maxAlternates", event.target.value)} style={inputStyle}>{[0, 1, 2, 3, 4].map((count) => <option key={count} value={String(count)}>{count}</option>)}</select></label>
-        <label><strong>Team eligibility</strong><br /><select value={draft.teamCategory} onChange={(event) => { update("teamCategory", event.target.value); if (event.target.value === "mixed") { const size = Number(draft.teamSize); update("mixedRequiredMen", String(Math.floor(size / 2))); update("mixedRequiredWomen", String(size - Math.floor(size / 2))); } }} style={inputStyle}><option value="open">Open</option><option value="mens">Men&apos;s</option><option value="womens">Women&apos;s</option><option value="mixed">Mixed</option></select></label>
-        <label><input type="checkbox" checked={draft.allowSubstitutes} onChange={(event) => { update("allowSubstitutes", event.target.checked); if (!event.target.checked) update("substitutePoolEnabled", false); }} /> <strong>Allow substitutes</strong></label>
-        <label><input type="checkbox" checked={draft.substitutePoolEnabled} disabled={!draft.allowSubstitutes} onChange={(event) => update("substitutePoolEnabled", event.target.checked)} /> <strong>Shared substitute pool</strong></label>
-        {draft.teamCategory === "mixed" ? <><label><strong>Required men on primary roster</strong><br /><input type="number" min={1} max={3} value={draft.mixedRequiredMen} onChange={(event) => update("mixedRequiredMen", event.target.value)} style={inputStyle} /></label><label><strong>Required women on primary roster</strong><br /><input type="number" min={1} max={3} value={draft.mixedRequiredWomen} onChange={(event) => update("mixedRequiredWomen", event.target.value)} style={inputStyle} /></label></> : null}
-        <label><strong>Playoffs</strong><br /><select value={draft.playoffFormat} onChange={(event) => update("playoffFormat", event.target.value)} style={inputStyle}><option value="none">No playoffs</option><option value="top_2_final">Top 2 final</option><option value="top_4_single_elimination">Top 4 single elimination</option><option value="all_team_single_elimination">All-team single elimination</option></select></label>
-        {draft.playoffFormat === "all_team_single_elimination" ? <label><strong>Playoff team count</strong><br /><input type="number" min={2} max={128} value={draft.playoffTeamCount} onChange={(event) => update("playoffTeamCount", event.target.value)} style={inputStyle} /></label> : null}
-        <label><strong>Season start</strong><br /><input type="date" value={draft.startDate} onChange={(event) => update("startDate", event.target.value)} style={inputStyle} /></label>
-        <label><strong>League night</strong><br /><select value={draft.weekday} onChange={(event) => update("weekday", event.target.value)} style={inputStyle}><option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option></select></label>
-        <label><strong>Start time</strong><br /><input type="time" value={draft.startTime} onChange={(event) => update("startTime", event.target.value)} style={inputStyle} /></label>
-        <label><strong>Timezone</strong><br /><select value={draft.timezone} onChange={(event) => update("timezone", event.target.value)} style={inputStyle}>{!TIMEZONE_OPTIONS.includes(draft.timezone) ? <option value={draft.timezone}>{draft.timezone}</option> : null}{TIMEZONE_OPTIONS.map((zone) => <option key={zone} value={zone}>{zone}</option>)}</select></label>
-        <label><strong>Venue</strong><br /><input value={draft.venue} onChange={(event) => update("venue", event.target.value)} maxLength={240} style={inputStyle} /></label>
-        <label><strong>Registration closes</strong><br /><input type="datetime-local" value={draft.registrationClosesAt} onChange={(event) => update("registrationClosesAt", event.target.value)} style={inputStyle} /></label>
-      </div>
-      <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Save team league setup"} title="Save this team league setup?" description="This saves roster size, eligibility, alternates, substitute policy, weekly schedule, and playoff choices together." confirmLabel="Yes, save setup" confirmationText="SAVE TEAM LEAGUE" disabled={busy} busy={busy} onConfirm={(confirmationText) => onSave(draft, confirmationText)} /></p>
-    </article>
-  );
 }
 
 function ScoreFixtureCard({
@@ -411,7 +318,6 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
   const [preview, setPreview] = useState<SchedulePreview | null>(null);
   const [phase, setPhase] = useState<"regular" | "playoff">("regular");
   const [scheduleKey, setScheduleKey] = useState(() => operationKey("team-schedule"));
-  const [settingsKey, setSettingsKey] = useState(() => operationKey("team-settings"));
   const [waitlistIds, setWaitlistIds] = useState<string[]>([]);
   const [waitlistAction, setWaitlistAction] = useState<"pair" | "withdraw">("pair");
   const [waitlistTeamName, setWaitlistTeamName] = useState("");
@@ -509,7 +415,6 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     setWaitlistIds([]);
     setRecoveryEvidence(null);
     setScheduleKey(operationKey("team-schedule"));
-    setSettingsKey(operationKey("team-settings"));
     setWaitlistKey(operationKey("team-waitlist"));
     setNewTeamName("");
     setNewCaptainId("");
@@ -549,91 +454,6 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
       const without = current.filter((row) => row.league_name !== leagueName);
       return [...without, payload.settings].sort((a, b) => a.league_name.localeCompare(b.league_name));
     });
-  }
-
-  async function saveSettings(draft: SettingsDraft, confirmationText: string): Promise<ActionCompletion> {
-    if (!leagueName) {
-      const error = new Error("Select a league first.");
-      setMessage(error.message);
-      throw error;
-    }
-    const playoffCount = draft.playoffTeamCount ? Number(draft.playoffTeamCount) : null;
-    const teamSize = Number(draft.teamSize);
-    const maxAlternates = Number(draft.maxAlternates);
-    const mixedRequiredMen = Number(draft.mixedRequiredMen);
-    const mixedRequiredWomen = Number(draft.mixedRequiredWomen);
-    if (![2, 3, 4].includes(teamSize)) {
-      const error = new Error("Primary roster size must be 2, 3, or 4 players.");
-      setMessage(error.message);
-      throw error;
-    }
-    if (!Number.isInteger(maxAlternates) || maxAlternates < 0 || maxAlternates > 4) {
-      const error = new Error("Maximum alternates must be a whole number from 0 to 4.");
-      setMessage(error.message);
-      throw error;
-    }
-    if (draft.teamCategory === "mixed" && (
-      !Number.isInteger(mixedRequiredMen)
-      || !Number.isInteger(mixedRequiredWomen)
-      || mixedRequiredMen < 1
-      || mixedRequiredWomen < 1
-      || mixedRequiredMen + mixedRequiredWomen !== teamSize
-    )) {
-      const error = new Error("Mixed roster counts must each be at least one and total the primary roster size.");
-      setMessage(error.message);
-      throw error;
-    }
-    if (draft.substitutePoolEnabled && !draft.allowSubstitutes) {
-      const error = new Error("Enable substitutes before enabling the shared substitute pool.");
-      setMessage(error.message);
-      throw error;
-    }
-    if (draft.playoffFormat === "all_team_single_elimination" && (!Number.isInteger(playoffCount) || Number(playoffCount) < 2 || Number(playoffCount) > 128)) {
-      const error = new Error("Playoff team count must be a whole number from 2 to 128.");
-      setMessage(error.message);
-      throw error;
-    }
-    setBusy(true);
-    setMessage(null);
-    try {
-      await requestJson<WriteResponse>(teamLeaguePath("/settings"), {
-        method: "PUT",
-        body: JSON.stringify({
-          settings: {
-            registration_open: draft.registrationOpen,
-            team_size: teamSize,
-            team_category: draft.teamCategory,
-            max_alternates: maxAlternates,
-            substitute_pool_enabled: draft.substitutePoolEnabled,
-            mixed_required_men: mixedRequiredMen,
-            mixed_required_women: mixedRequiredWomen,
-            allow_substitutes: draft.allowSubstitutes,
-            playoff_format: draft.playoffFormat,
-            playoff_team_count: playoffCount,
-            start_date: draft.startDate || null,
-            weekday: Number(draft.weekday),
-            start_time: draft.startTime,
-            timezone: draft.timezone,
-            venue: draft.venue || null,
-            registration_closes_at: draft.registrationClosesAt ? new Date(draft.registrationClosesAt).toISOString() : null
-          },
-          expected_settings_version: Number(detail?.settings.settings_version || 0),
-          idempotency_key: settingsKey,
-          confirmation_text: confirmationText,
-          source: "next_team_league_settings_page"
-        })
-      });
-      setSettingsKey(operationKey("team-settings"));
-      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
-      const successMessage = `Team eligibility, registration, substitute, schedule, and playoff settings were saved together.${refreshWarning}`;
-      setMessage(successMessage);
-      return actionSuccess("Team league setup saved", successMessage);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save team league setup.");
-      throw error;
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function buildPreview() {
@@ -914,7 +734,6 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
 
   useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadLeagues);
 
-  const selectedSettings = detail?.settings || teamLeagueRows.find((row) => row.league_name === leagueName);
   const waiting = (detail?.waitlist || []).filter((row) => row.status === "waiting");
 
   return (
@@ -932,7 +751,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
         {message ? <p role="status" style={{ color: /unable|error|required|stale|retry|recovery/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
 
-      {leagueName ? <TeamSettingsForm key={`${leagueName}:${selectedSettings?.settings_version || 0}`} settings={selectedSettings} busy={busy} onDirty={() => setSettingsKey(operationKey("team-settings"))} onSave={saveSettings} /> : null}
+      {leagueName ? <article style={{ ...cardStyle, background: "#f8fafc" }}><strong>Team setup is managed in League Settings.</strong><p style={{ marginBottom: 0, color: "#475569" }}>Use this tab for teams, assigned rosters, substitutes, schedules, results, standings, playoffs, and recovery.</p></article> : null}
 
       {detail ? (
         <>
@@ -1029,7 +848,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
             {recoveryEvidence ? <div style={{ ...insetStyle, marginTop: "0.75rem" }}><p><strong>Safe action:</strong> {recoveryEvidence.safe_action || "review"} · Canonical commit: {recoveryEvidence.stable_direct_match_receipt?.committed ? "yes" : "no"}</p><div style={gridStyle}><label><strong>Resolution</strong><br /><select value={recoveryResolution} onChange={(event) => setRecoveryResolution(event.target.value as "finalize" | "compensate")} style={inputStyle}><option value="finalize">Finalize from committed evidence</option><option value="compensate">Compensate uncommitted operation</option></select></label><label><strong>Recovery note</strong><br /><input value={recoveryNote} onChange={(event) => setRecoveryNote(event.target.value)} minLength={5} maxLength={500} style={inputStyle} /></label></div><p><ConfirmAction triggerLabel={busy ? "Working…" : recoveryResolution === "finalize" ? "Finalize recovery" : "Compensate operation"} title="Resolve this interrupted operation?" description="The server rechecks the canonical match receipt and refuses an unsafe resolution." confirmLabel="Yes, resolve operation" confirmationText={recoveryResolution === "finalize" ? "FINALIZE TEAM LEAGUE RECOVERY" : "COMPENSATE TEAM LEAGUE RECOVERY"} tone={recoveryResolution === "compensate" ? "danger" : "default"} disabled={busy || recoveryNote.trim().length < 5} busy={busy} onConfirm={resolveRecovery} /></p></div> : null}
           </article>
         </>
-      ) : leagueName ? <p style={{ color: "#475569" }}>Save team league setup to enable registration, scheduling, results, and recovery.</p> : null}
+      ) : leagueName ? <p style={{ color: "#475569" }}>Complete this league&apos;s pre-start setup in Settings before beginning team operations.</p> : null}
     </div>
   );
 }

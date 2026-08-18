@@ -44,9 +44,9 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
   const { accessToken, loading: sessionLoading } = useAdminSession();
   const [detail, setDetail] = useState<AdminLeagueManagerDetailResponse | null>(null);
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<RosterFilter>("not_in_league");
+  const [filter, setFilter] = useState<RosterFilter>("in_league");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
-  const [action, setAction] = useState<"activate" | "deactivate">("activate");
+  const [action, setAction] = useState<"activate" | "deactivate">("deactivate");
   const [startingRating, setStartingRating] = useState("3.5");
   const [idempotencyKey, setIdempotencyKey] = useState(operationKey);
   const [busy, setBusy] = useState(false);
@@ -70,8 +70,8 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
     actionRequest.invalidate();
     setDetail(null);
     setSelectedIds([]);
-    setFilter("not_in_league");
-    setAction("activate");
+    setFilter("in_league");
+    setAction("deactivate");
     setBusy(false);
     setMessage(null);
   }
@@ -87,8 +87,8 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
       if (!detailRequest.isCurrent(generation)) return;
       setDetail(payload);
       setSelectedIds([]);
-      setFilter(payload.capabilities?.roster_mutable === false ? "in_league" : "not_in_league");
-      setAction(payload.capabilities?.roster_mutable === false ? "deactivate" : "activate");
+      setFilter("in_league");
+      setAction("deactivate");
       setIdempotencyKey(operationKey());
     } catch (error) {
       if (detailRequest.isCurrent(generation)) {

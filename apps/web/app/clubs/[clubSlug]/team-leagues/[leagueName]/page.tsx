@@ -51,6 +51,15 @@ export default async function TeamLeagueDetailPage({ params }: Props) {
         </div>
         {!data.teams.length ? <p>No confirmed teams yet.</p> : null}
       </article>
+      {data.award_progress.awards.length ? (
+        <article style={{ ...card, background: "#eff6ff", borderColor: "#bfdbfe" }} data-testid="team-league-awards">
+          <h2 style={{ marginTop: 0 }}>Awards</h2>
+          <p style={{ color: "#475569" }}>Current leaders who have met each configured minimum criterion.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 210px), 1fr))", gap: "0.75rem" }}>
+            {data.award_progress.awards.map((award) => <div key={`${award.category_key}-${award.rank}-${award.team_id || award.player_id}`} style={{ padding: "0.75rem", borderRadius: "10px", background: "white" }}><strong>{award.category_label}{award.rank && award.rank > 1 ? ` · #${award.rank}` : ""}</strong><br />{award.recipient_name || "—"}{award.is_co_winner ? " · co-leader" : ""}<br /><small>{award.metric_display || "—"} · Minimum {award.min_games ?? 0} {String(award.minimum_metric || "games").replace(/_/g, " ")}</small></div>)}
+          </div>
+        </article>
+      ) : null}
       <article style={card}>
         <h2 style={{ marginTop: 0 }}>Standings</h2>
         <div style={{ overflowX: "auto", maxWidth: "100%", minWidth: 0 }}>

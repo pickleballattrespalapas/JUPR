@@ -158,6 +158,38 @@ def test_paused_league_roster_is_review_only(monkeypatch) -> None:
     assert detail["capabilities"]["roster_mutable"] is False
 
 
+def test_active_manager_detail_hides_inactive_members_but_archive_keeps_them(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    storage = fake_storage()
+    storage["league_ratings"].append(
+        {
+            "club_id": "club",
+            "id": 12,
+            "player_id": 3,
+            "league_name": "Open",
+            "rating": 1700,
+            "starting_rating": 1400,
+            "wins": 8,
+            "losses": 1,
+            "matches_played": 9,
+            "is_active": False,
+            "inactive_at": "2026-08-01T00:00:00Z",
+        }
+    )
+    supabase = FakeSupabase(storage)
+
+    active = get_admin_league_manager_detail(
+        supabase, club_id="club", league_name="Open"
+    )
+    assert "Casey" not in {row["player_name"] for row in active["standings"]}
+
+    storage["leagues_metadata"][0].update(status="archived", is_active=False)
+    archived = get_admin_league_manager_detail(
+        supabase, club_id="club", league_name="Open"
+    )
+    assert "Casey" in {row["player_name"] for row in archived["standings"]}
+
+
 def test_legacy_inactive_status_is_always_a_draft() -> None:
     for is_active in (True, False, None):
         assert _league_row_payload({"status": " INACTIVE ", "is_active": is_active})["status"] == "draft"

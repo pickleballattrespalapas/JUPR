@@ -93,6 +93,9 @@ def test_normalized_roster_migration_extends_fixed_pair_compatibly() -> None:
 
 def test_admin_surfaces_advertise_normalized_rosters_but_public_form_stays_pair_only() -> None:
     admin = _read("apps/web/app/admin/league-manager/teams/TeamLeaguesPanel.tsx")
+    setup = _read(
+        "apps/web/app/admin/league-manager/settings/TeamLeagueSetupPanel.tsx"
+    )
     public_list = _read("apps/web/app/clubs/[clubSlug]/team-leagues/page.tsx")
     public_detail = _read(
         "apps/web/app/clubs/[clubSlug]/team-leagues/[leagueName]/page.tsx"
@@ -102,7 +105,10 @@ def test_admin_surfaces_advertise_normalized_rosters_but_public_form_stays_pair_
         "TeamLeagueRegistrationForm.tsx"
     )
     api_types = _read("apps/web/lib/teamLeagueApi.ts")
-    surfaces = "\n".join((admin, public_list, public_detail, registration, api_types))
+    admin_surfaces = "\n".join((admin, setup))
+    surfaces = "\n".join(
+        (admin, setup, public_list, public_detail, registration, api_types)
+    )
 
     for phrase in (
         "Primary roster",
@@ -118,7 +124,7 @@ def test_admin_surfaces_advertise_normalized_rosters_but_public_form_stays_pair_
         "Assigned alternate",
         "Create a forming team",
     ):
-        assert phrase in admin
+        assert phrase in admin_surfaces
     assert "substitutes are allowed" in registration
     assert "team_size}-player primary roster" in public_detail
     assert "league.team_size" in public_list

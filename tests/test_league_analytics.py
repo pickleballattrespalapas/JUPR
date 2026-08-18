@@ -130,6 +130,36 @@ def test_missing_pre_match_rating_never_becomes_fifty_fifty_expectation() -> Non
     assert alex["expected_model"] is None
 
 
+def test_singles_match_is_canonical_without_partner_slots() -> None:
+    singles_match = _match(
+        8,
+        t1_p2=None,
+        t2_p2=None,
+        t1_p1_r=1600,
+        t2_p1_r=1800,
+    )
+
+    result = compute_league_player_analytics(
+        [singles_match],
+        club_id="club",
+        league_name="Open",
+        match_format="singles",
+        players=[
+            {"id": 1, "name": "Alex", "rating": 1610},
+            {"id": 3, "name": "Casey", "rating": 1790},
+        ],
+    )
+
+    assert result["provenance"]["included_count"] == 1
+    assert result["provenance"]["exclusion_counts"] == {}
+    assert {row["player_name"] for row in result["players"]} == {"Alex", "Casey"}
+    alex = next(row for row in result["players"] if row["player_id"] == 1)
+    assert (alex["games"], alex["wins"], alex["losses"]) == (1, 1, 0)
+    assert alex["best_partner_id"] is None
+    assert alex["partner_variety"] == 0
+    assert alex["expected_model"] == "canonical_elo_pre_match_singles_v1"
+
+
 def test_team_standings_use_head_to_head_before_point_differential() -> None:
     teams = [
         {

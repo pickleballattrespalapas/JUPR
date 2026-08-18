@@ -60,7 +60,8 @@ def test_roster_filters_and_actions_open_in_the_same_mode() -> None:
         "apps/web/app/admin/league-manager/roster/LeagueRosterPanel.tsx"
     )
 
-    assert 'useState<RosterFilter>("not_in_league")' in source
+    assert 'useState<RosterFilter>("in_league")' in source
+    assert 'useState<"activate" | "deactivate">("deactivate")' in source
     assert 'nextFilter === "not_in_league"' in source
     assert 'setAction("activate")' in source
     assert 'nextFilter === "in_league"' in source

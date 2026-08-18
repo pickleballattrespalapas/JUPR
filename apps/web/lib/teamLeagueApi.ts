@@ -1,3 +1,5 @@
+import type { LeagueAwardProgress } from "./api";
+
 export type TeamLeagueSettings = {
   league_name: string;
   status: string;
@@ -54,6 +56,7 @@ export type PublicTeamLeagueDetail = {
   teams: TeamLeagueTeam[];
   fixtures: TeamLeagueFixture[];
   standings: Array<Record<string, unknown>>;
+  award_progress: LeagueAwardProgress;
   registration: {
     open: boolean;
     payment_mode: "offline";

@@ -648,12 +648,21 @@ def get_public_team_league(
     ]
     registration_supported = _online_team_registration_supported(settings)
     registration_open = _registration_is_open(settings) and registration_supported
+    from jupr_app.services.admin_league_awards_service import (
+        get_public_league_award_progress,
+    )
+
     return {
         "ok": True,
         "league": _public_settings(settings),
         "teams": public_teams,
         "fixtures": public_fixtures,
         "standings": compute_team_league_standings(fixtures, confirmed),
+        "award_progress": get_public_league_award_progress(
+            supabase,
+            club_id=str(club_id),
+            league_name=_text(league_name, 120),
+        ),
         "registration": {
             "open": registration_open,
             "payment_mode": "offline",

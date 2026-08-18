@@ -10,8 +10,6 @@ import type {
 } from "@/lib/adminLeagueManagerApi";
 
 type SettingsPatch = Record<string, unknown>;
-type AwardKey = "highest_rating" | "most_improved" | "best_win_pct" | "most_wins";
-type AwardCategoryForm = { enabled: boolean; minGames: string; depth: "1" | "3" };
 type FormState = {
   description: string;
   leagueType: string;
@@ -41,8 +39,6 @@ type FormState = {
   disputePolicy: string;
   minGames: string;
   kFactor: string;
-  awardDepth: "1" | "3";
-  awardCategories: Record<AwardKey, AwardCategoryForm>;
 };
 
 type Props = {
@@ -53,12 +49,6 @@ type Props = {
   onPreview: (scheduleConfig: Record<string, unknown>) => Promise<AdminLeagueManagerSchedulePreviewResponse | null>;
 };
 
-const awardDefinitions: Array<{ key: AwardKey; label: string }> = [
-  { key: "highest_rating", label: "Highest Rating" },
-  { key: "most_improved", label: "Most Improved" },
-  { key: "best_win_pct", label: "Best Win %" },
-  { key: "most_wins", label: "Most Wins" }
-];
 const inputStyle = { width: "100%", padding: "0.5rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
@@ -72,7 +62,6 @@ function asRecord(value: unknown): Record<string, unknown> {
 function textValue(value: unknown, fallback = ""): string { return value == null ? fallback : String(value); }
 function numberText(value: unknown, fallback: number): string { return value == null || value === "" ? String(fallback) : String(value); }
 function listText(value: unknown): string { return Array.isArray(value) ? value.map((item) => String(item)).join(", ") : ""; }
-function depthValue(value: unknown, fallback: "1" | "3" = "1"): "1" | "3" { return Number(value) === 3 ? "3" : fallback; }
 function optionValue<T extends string>(value: unknown, options: readonly T[], fallback: T): T { return options.includes(String(value) as T) ? String(value) as T : fallback; }
 function uniqueList(raw: string): string[] { return Array.from(new Set(raw.replace(/\n/g, ",").split(",").map((item) => item.trim()).filter(Boolean))); }
 function isIsoDate(value: string): boolean {
@@ -98,14 +87,6 @@ function downloadTextFile(filename: string, content: string) {
   URL.revokeObjectURL(url);
 }
 
-function categoryForm(config: Record<string, unknown>, minGames: string, defaultDepth: "1" | "3"): AwardCategoryForm {
-  return {
-    enabled: typeof config.enabled === "boolean" ? config.enabled : true,
-    minGames: numberText(config.min_games, Number(minGames) || 0),
-    depth: depthValue(config.depth, defaultDepth)
-  };
-}
-
 function formFromDetail(detail: AdminLeagueManagerDetailResponse): FormState {
   const league = detail.league;
   const schedule = asRecord(league.schedule_config);
@@ -113,10 +94,7 @@ function formFromDetail(detail: AdminLeagueManagerDetailResponse): FormState {
   const rules = asRecord(league.rules_config);
   const overview = asRecord(rules.overview);
   const competition = asRecord(rules.competition);
-  const awards = asRecord(league.awards_config);
-  const categories = asRecord(awards.categories);
   const minGames = numberText(league.min_games, 0);
-  const awardDepth = depthValue(awards.default_depth);
   return {
     description: textValue(league.description),
     leagueType: textValue(overview.league_type),
@@ -145,14 +123,7 @@ function formFromDetail(detail: AdminLeagueManagerDetailResponse): FormState {
     disputeWindow: textValue(competition.dispute_window),
     disputePolicy: textValue(competition.dispute_policy),
     minGames,
-    kFactor: numberText(league.k_factor, 32),
-    awardDepth,
-    awardCategories: {
-      highest_rating: categoryForm(asRecord(categories.highest_rating), minGames, awardDepth),
-      most_improved: categoryForm(asRecord(categories.most_improved), minGames, awardDepth),
-      best_win_pct: categoryForm(asRecord(categories.best_win_pct), minGames, awardDepth),
-      most_wins: categoryForm(asRecord(categories.most_wins), minGames, awardDepth)
-    }
+    kFactor: numberText(league.k_factor, 32)
   };
 }
 
@@ -205,18 +176,6 @@ function buildDraftPatch(form: FormState, detail: AdminLeagueManagerDetailRespon
   const rules = asRecord(detail.league.rules_config);
   const overview = asRecord(rules.overview);
   const competition = asRecord(rules.competition);
-  const awards = asRecord(detail.league.awards_config);
-  const categories = asRecord(awards.categories);
-  const awardCategories: Record<string, unknown> = { ...categories };
-  for (const { key } of awardDefinitions) {
-    const category = form.awardCategories[key];
-    awardCategories[key] = {
-      ...asRecord(categories[key]),
-      enabled: category.enabled,
-      min_games: wholeNumber(category.minGames, `${key} minimum games`, 0, 1000),
-      depth: wholeNumber(category.depth, `${key} award depth`, 1, 3)
-    };
-  }
   return {
     description: form.description,
     min_games: minGames,
@@ -248,12 +207,6 @@ function buildDraftPatch(form: FormState, detail: AdminLeagueManagerDetailRespon
         dispute_window: form.disputeWindow,
         dispute_policy: form.disputePolicy
       }
-    },
-    awards_config: {
-      ...awards,
-      default_min_games: minGames,
-      default_depth: wholeNumber(form.awardDepth, "Award depth", 1, 3),
-      categories: awardCategories
     }
   };
 }
@@ -288,16 +241,6 @@ export function GuidedLeagueSettingsEditor({ detail, saving, canWrite, onSave, o
     updateField(key, value);
     setPreview(null);
   }
-  function updateAwardCategory(key: AwardKey, patch: Partial<AwardCategoryForm>) {
-    setForm((current) => ({
-      ...current,
-      awardCategories: {
-        ...current.awardCategories,
-        [key]: { ...current.awardCategories[key], ...patch }
-      }
-    }));
-  }
-
   async function previewSchedule() {
     setLocalMessage(null);
     setLocalMessageIsError(false);
@@ -337,7 +280,7 @@ export function GuidedLeagueSettingsEditor({ detail, saving, canWrite, onSave, o
 
   return <article style={cardStyle}>
     <h2 style={{ marginTop: 0 }}>Guided settings editor</h2>
-    <p style={{ color: isClosed ? "#92400e" : "#475569" }}>{isDraft ? "Draft leagues allow the full overview, schedule, courts, competition, ratings, and awards configuration. Unknown compatible extension keys are preserved." : isClosed ? `This league is ${status}; its complete saved configuration is shown read-only.` : `This league is ${status}; its complete saved configuration is shown below, and only its description can be edited.`}</p>
+    <p style={{ color: isClosed ? "#92400e" : "#475569" }}>{isDraft ? "Draft leagues allow the full overview, schedule, courts, competition, and rating configuration. Award and team-league setup appear below. Unknown compatible extension keys are preserved." : isClosed ? `This league is ${status}; its complete saved configuration is shown read-only.` : `This league is ${status}; its complete saved configuration is shown below, and only its description can be edited.`}</p>
     <label><strong>Description</strong><br /><textarea value={form.description} onChange={(event) => updateField("description", event.target.value)} disabled={isClosed} maxLength={2000} rows={3} style={inputStyle} /></label>
 
     <fieldset disabled={!isDraft} aria-label="League configuration" style={{ border: 0, padding: 0, margin: "0.75rem 0 0", minWidth: 0, opacity: isDraft ? 1 : 0.78 }}>
@@ -353,11 +296,10 @@ export function GuidedLeagueSettingsEditor({ detail, saving, canWrite, onSave, o
 
       <details style={detailsStyle}><summary style={{ cursor: "pointer", fontWeight: 800 }}>Ratings &amp; eligibility</summary><div style={{ ...gridStyle, marginTop: "0.75rem" }}><label><strong>Minimum games</strong><br /><input type="number" min={0} max={1000} value={form.minGames} onChange={(event) => updateField("minGames", event.target.value)} style={inputStyle} /></label><label><strong>K-factor</strong><br /><input type="number" min={1} max={128} value={form.kFactor} onChange={(event) => updateField("kFactor", event.target.value)} style={inputStyle} /></label></div></details>
 
-      <details style={detailsStyle}><summary style={{ cursor: "pointer", fontWeight: 800 }}>Awards &amp; trophies</summary><div style={{ ...gridStyle, marginTop: "0.75rem" }}><label><strong>Default award depth</strong><br /><select value={form.awardDepth} onChange={(event) => updateField("awardDepth", event.target.value as "1" | "3")} style={inputStyle}><option value="1">Top 1</option><option value="3">Top 3</option></select></label></div><div style={{ display: "grid", gap: "0.75rem", marginTop: "0.75rem" }}>{awardDefinitions.map(({ key, label }) => { const category = form.awardCategories[key]; return <fieldset key={key} style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.75rem" }}><legend style={{ fontWeight: 800 }}>{label}</legend><div style={gridStyle}><label><input type="checkbox" checked={category.enabled} onChange={(event) => updateAwardCategory(key, { enabled: event.target.checked })} /> Enabled</label><label><strong>Minimum games</strong><br /><input type="number" min={0} max={1000} value={category.minGames} onChange={(event) => updateAwardCategory(key, { minGames: event.target.value })} style={inputStyle} /></label><label><strong>Award depth</strong><br /><select value={category.depth} onChange={(event) => updateAwardCategory(key, { depth: event.target.value as "1" | "3" })} style={inputStyle}><option value="1">Top 1</option><option value="3">Top 3</option></select></label></div></fieldset>; })}</div></details>
       </div>
     </fieldset>
 
-    {!isClosed ? <div style={{ ...gridStyle, marginTop: "0.9rem" }}><ConfirmAction triggerLabel={saving ? "Saving…" : isDraft ? "Save structured draft" : "Save description"} title={isDraft ? "Save this structured league draft?" : "Save this league description?"} description={isDraft ? "This saves the reviewed overview, schedule, court, competition, rating, and award settings for this draft." : "This updates the description for the selected active league."} confirmLabel={isDraft ? "Yes, save draft" : "Yes, save description"} confirmationText="SAVE LEAGUE" disabled={!canWrite || !hasChanges} busy={saving} onConfirm={saveSettings} /><p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", margin: 0 }}><button type="button" onClick={resetForm} disabled={saving || !hasChanges} style={ghostButtonStyle}>Reset loaded values</button></p></div> : null}
+    {!isClosed ? <div style={{ ...gridStyle, marginTop: "0.9rem" }}><ConfirmAction triggerLabel={saving ? "Saving…" : isDraft ? "Save structured draft" : "Save description"} title={isDraft ? "Save this structured league draft?" : "Save this league description?"} description={isDraft ? "This saves the reviewed overview, schedule, court, competition, and rating settings for this draft." : "This updates the description for the selected active league."} confirmLabel={isDraft ? "Yes, save draft" : "Yes, save description"} confirmationText="SAVE LEAGUE" disabled={!canWrite || !hasChanges} busy={saving} onConfirm={saveSettings} /><p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", margin: 0 }}><button type="button" onClick={resetForm} disabled={saving || !hasChanges} style={ghostButtonStyle}>Reset loaded values</button></p></div> : null}
     {localMessage ? <p role="status" style={{ color: localMessageIsError ? "#b91c1c" : "#166534" }}>{localMessage}</p> : null}
   </article>;
 }

@@ -4,6 +4,7 @@ import pytest
 
 from jupr_app.services.admin_league_awards_service import (
     freeze_admin_league_awards,
+    get_public_league_award_progress,
     persist_admin_league_awards_preview,
     save_admin_league_award_overrides,
     save_admin_league_awards_config,
@@ -204,6 +205,118 @@ def test_individual_league_rejects_team_only_award_configuration(
             actor_email="owner@example.com",
             actor_role="club_owner",
         )
+
+
+def test_singles_match_drives_live_and_public_award_progress(monkeypatch) -> None:
+    _enable(monkeypatch)
+    storage = _storage()
+    storage["leagues_metadata"][0].update(
+        league_type="Individual",
+        match_format="singles",
+    )
+    storage["league_ratings"] = [
+        {
+            "club_id": "club",
+            "league_name": "Open",
+            "player_id": player_id,
+            "rating": rating,
+            "starting_rating": rating,
+            "is_active": True,
+        }
+        for player_id, rating in ((1, 1600), (3, 1800))
+    ]
+    storage["matches"] = [
+        {
+            "id": 99,
+            "club_id": "club",
+            "league": "Open",
+            "match_format": "singles",
+            "date": "2026-08-15",
+            "week_tag": "Week 1",
+            "t1_p1": 1,
+            "t1_p2": None,
+            "t2_p1": 3,
+            "t2_p2": None,
+            "score_t1": 11,
+            "score_t2": 8,
+            "t1_p1_r": 1600,
+            "t2_p1_r": 1800,
+        }
+    ]
+    supabase = FakeSupabase(storage)
+
+    configured = save_admin_league_awards_config(
+        supabase,
+        club_id="club",
+        league_name="Open",
+        awards_config={
+            "categories": {
+                "most_wins": {"enabled": True, "depth": 1, "minimum": 1}
+            }
+        },
+        expected_config_version=0,
+        actor_email="owner@example.com",
+        actor_role="club_owner",
+    )
+
+    assert configured["provenance"]["included_count"] == 1
+    assert configured["provenance"]["exclusion_counts"] == {}
+    assert [row["player_name"] for row in configured["player_analytics"]] == [
+        "Alex",
+        "Casey",
+    ]
+    assert configured["award_progress"][0]["recipient_name"] == "Alex"
+    public = get_public_league_award_progress(
+        supabase, club_id="club", league_name="Open"
+    )
+    assert public["award_count"] == 1
+    assert public["awards"][0]["category_key"] == "most_wins"
+    assert public["awards"][0]["recipient_name"] == "Alex"
+
+
+def test_public_awards_wait_for_configured_minimum(monkeypatch) -> None:
+    _enable(monkeypatch)
+    storage = _storage()
+    storage["leagues_metadata"][0].update(
+        league_type="Individual",
+        match_format="singles",
+        awards_config={
+            "categories": {
+                "most_wins": {"enabled": True, "depth": 1, "minimum": 2}
+            }
+        },
+    )
+    storage["league_ratings"] = [
+        {
+            "club_id": "club",
+            "league_name": "Open",
+            "player_id": player_id,
+            "rating": 1600,
+            "starting_rating": 1600,
+            "is_active": True,
+        }
+        for player_id in (1, 3)
+    ]
+    storage["matches"] = [
+        {
+            "id": 100,
+            "club_id": "club",
+            "league": "Open",
+            "date": "2026-08-16",
+            "t1_p1": 1,
+            "t1_p2": None,
+            "t2_p1": 3,
+            "t2_p2": None,
+            "score_t1": 11,
+            "score_t2": 8,
+        }
+    ]
+
+    public = get_public_league_award_progress(
+        FakeSupabase(storage), club_id="club", league_name="Open"
+    )
+
+    assert public == {"awards": [], "award_count": 0}
 
 
 def test_player_co_winners_survive_freeze_preview_and_confirmation(

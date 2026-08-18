@@ -109,6 +109,8 @@ def test_public_league_results_contract(client):
     assert payload["selected_league"] == "Open"
     assert payload["league"] == {
         "name": "Open",
+        "league_type": "Individual",
+        "match_format": "doubles",
         "min_games": 4,
         "k_factor": 24,
         "start_week": None,

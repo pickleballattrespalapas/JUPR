@@ -186,6 +186,22 @@
   min-width: 0;
 }
 
+@media print {
+  .sidebar {
+    display: none !important;
+  }
+
+  .shell,
+  .shellCollapsed {
+    display: block !important;
+  }
+
+  .content {
+    width: 100% !important;
+    max-width: none !important;
+  }
+}
+
 .link:focus-visible,
 .sessionLink:focus-visible,
 .signOut:focus-visible,

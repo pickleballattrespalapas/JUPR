@@ -277,7 +277,14 @@ def _fetch_player_names(supabase: Any, *, club_id: str) -> dict[int, str]:
     return names
 
 
-def _league_standings(supabase: Any, *, club_id: str, league_name: str, limit: int = 50) -> list[dict[str, Any]]:
+def _league_standings(
+    supabase: Any,
+    *,
+    club_id: str,
+    league_name: str,
+    limit: int = 50,
+    include_inactive: bool = False,
+) -> list[dict[str, Any]]:
     player_names = _fetch_player_names(supabase, club_id=str(club_id))
     try:
         rows = _safe_rows(
@@ -291,6 +298,10 @@ def _league_standings(supabase: Any, *, club_id: str, league_name: str, limit: i
         rows = []
     standings: list[dict[str, Any]] = []
     for row in rows:
+        if not include_inactive and (
+            row.get("is_active") is False or bool(row.get("inactive_at"))
+        ):
+            continue
         pid = _safe_int(row.get("player_id"))
         if pid is None:
             continue
@@ -480,7 +491,16 @@ def get_admin_league_manager_detail(supabase: Any, *, club_id: str, league_name:
     league = next((row for row in leagues if row.get("league_name") == clean_league), None)
     if league is None:
         raise ValueError("league not found")
-    standings = _league_standings(supabase, club_id=str(club_id), league_name=clean_league)
+    include_inactive = str(league.get("status") or "").strip().lower() in {
+        "ended",
+        "archived",
+    }
+    standings = _league_standings(
+        supabase,
+        club_id=str(club_id),
+        league_name=clean_league,
+        include_inactive=include_inactive,
+    )
     roster = _league_roster(supabase, club_id=str(club_id), league_name=clean_league, standings=standings)
     schedule_config = league.get("schedule_config")
     schedule_preview = _schedule_preview(schedule_config)
