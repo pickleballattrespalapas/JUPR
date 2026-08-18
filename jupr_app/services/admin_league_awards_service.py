@@ -6,7 +6,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
@@ -221,58 +221,88 @@ def _award_inputs(
     *,
     club_id: str,
     league_name: str,
+    metadata: Mapping[str, Any] | None = None,
+    league_rows: Sequence[Mapping[str, Any]] | None = None,
+    match_rows: Sequence[Mapping[str, Any]] | None = None,
+    player_rows: Sequence[Mapping[str, Any]] | None = None,
+    team_rows: Sequence[Mapping[str, Any]] | None = None,
+    fixture_rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], pd.DataFrame, pd.DataFrame, dict[int, str]]:
     clean_league = _clean_text(league_name, limit=120)
     if not clean_league:
         raise ValueError("league_name is required")
-    meta_row = _fetch_league_meta_row(supabase, club_id=str(club_id), league_name=clean_league)
+    meta_row = dict(metadata) if metadata is not None else _fetch_league_meta_row(
+        supabase, club_id=str(club_id), league_name=clean_league
+    )
     if not meta_row:
         raise ValueError("league not found")
+    if _clean_text(meta_row.get("league_name"), limit=120) != clean_league:
+        raise ValueError("league metadata does not match league_name")
 
     meta_rows = [meta_row]
-    league_rows = _fetch_table_rows(
-        supabase,
-        "league_ratings",
-        club_id=str(club_id),
-        filters={"league_name": clean_league},
+    resolved_league_rows = (
+        [dict(row) for row in league_rows]
+        if league_rows is not None
+        else _fetch_table_rows(
+            supabase,
+            "league_ratings",
+            club_id=str(club_id),
+            filters={"league_name": clean_league},
+        )
     )
-    match_rows = _fetch_table_rows(
-        supabase,
-        "matches",
-        club_id=str(club_id),
-        filters={"league": clean_league},
+    resolved_match_rows = (
+        [dict(row) for row in match_rows]
+        if match_rows is not None
+        else _fetch_table_rows(
+            supabase,
+            "matches",
+            club_id=str(club_id),
+            filters={"league": clean_league},
+        )
     )
-    team_rows = _fetch_table_rows(
-        supabase,
-        "team_league_teams",
-        club_id=str(club_id),
-        filters={"league_name": clean_league},
+    resolved_team_rows = (
+        [dict(row) for row in team_rows]
+        if team_rows is not None
+        else _fetch_table_rows(
+            supabase,
+            "team_league_teams",
+            club_id=str(club_id),
+            filters={"league_name": clean_league},
+        )
     )
-    fixture_rows = _fetch_table_rows(
-        supabase,
-        "team_league_fixtures",
-        club_id=str(club_id),
-        filters={"league_name": clean_league},
+    resolved_fixture_rows = (
+        [dict(row) for row in fixture_rows]
+        if fixture_rows is not None
+        else _fetch_table_rows(
+            supabase,
+            "team_league_fixtures",
+            club_id=str(club_id),
+            filters={"league_name": clean_league},
+        )
     )
     player_ids = {
         int(value)
-        for row in league_rows
+        for row in resolved_league_rows
         for value in [row.get("player_id")]
         if value not in (None, "")
     }
-    for row in match_rows:
+    for row in resolved_match_rows:
         for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
             try:
                 player_ids.add(int(row.get(key)))
             except Exception:
                 pass
-    player_rows = _fetch_players_by_id(
-        supabase, club_id=str(club_id), player_ids=player_ids
+    resolved_player_rows = (
+        [dict(row) for row in player_rows]
+        if player_rows is not None
+        else _fetch_players_by_id(
+            supabase, club_id=str(club_id), player_ids=player_ids
+        )
     )
-    id_to_name = _id_to_name(player_rows)
+    id_to_name = _id_to_name(resolved_player_rows)
 
     df_meta = pd.DataFrame(meta_rows)
-    df_leagues = pd.DataFrame(league_rows)
+    df_leagues = pd.DataFrame(resolved_league_rows)
     awards_config = _json_value(meta_row.get("awards_config"), {}) or {}
     awards = compute_top_performer_awards_for_config(
         df_leagues,
@@ -294,24 +324,24 @@ def _award_inputs(
                 break
     regular_weeks = [
         int(row.get("week_number") or 0)
-        for row in fixture_rows
+        for row in resolved_fixture_rows
         if str(row.get("phase") or "") == "regular"
     ]
     if expected_weeks is None and regular_weeks:
         expected_weeks = max(regular_weeks)
     player_analytics = compute_league_player_analytics(
-        match_rows,
+        resolved_match_rows,
         club_id=str(club_id),
         league_name=clean_league,
-        players=player_rows,
-        league_ratings=league_rows,
+        players=resolved_player_rows,
+        league_ratings=resolved_league_rows,
         match_format=_clean_text(meta_row.get("match_format"), limit=20),
         expected_weeks=expected_weeks,
     )
     if normalize_league_status(meta_row) not in {"ended", "archived"}:
         active_member_ids = {
             int(row["player_id"])
-            for row in league_rows
+            for row in resolved_league_rows
             if row.get("player_id") not in (None, "")
             and row.get("is_active") is not False
             and not row.get("inactive_at")
@@ -321,7 +351,9 @@ def _award_inputs(
             for row in player_analytics["players"]
             if int(row.get("player_id") or 0) in active_member_ids
         ]
-    team_analytics = compute_team_league_analytics(fixture_rows, team_rows)
+    team_analytics = compute_team_league_analytics(
+        resolved_fixture_rows, resolved_team_rows
+    )
     analytics_context = {
         "catalog": _award_catalog_for_league(meta_row),
         "measurable_player_stats": list(
@@ -899,16 +931,83 @@ def _response(
     }
 
 
+def _enabled_public_award_specs(
+    meta_row: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    awards_config = _json_value(meta_row.get("awards_config"), {}) or {}
+    if not isinstance(awards_config, Mapping):
+        return []
+    categories = awards_config.get("categories")
+    if not isinstance(categories, Mapping) or not categories:
+        return []
+    catalog = {
+        str(row.get("key")): dict(row)
+        for row in _award_catalog_for_league(meta_row)
+    }
+    enabled: list[dict[str, Any]] = []
+    for category_key, raw_config in categories.items():
+        config = dict(raw_config) if isinstance(raw_config, Mapping) else {}
+        spec = catalog.get(str(category_key))
+        if spec and config.get("enabled") is not False:
+            enabled.append(spec)
+    return enabled
+
+
 def get_public_league_award_progress(
-    supabase: Any, *, club_id: str, league_name: str
+    supabase: Any,
+    *,
+    club_id: str,
+    league_name: str,
+    metadata: Mapping[str, Any] | None = None,
+    league_rows: Sequence[Mapping[str, Any]] | None = None,
+    match_rows: Sequence[Mapping[str, Any]] | None = None,
+    player_rows: Sequence[Mapping[str, Any]] | None = None,
+    team_rows: Sequence[Mapping[str, Any]] | None = None,
+    fixture_rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return configured, currently-qualified awards without workflow internals."""
 
     try:
+        meta_row = dict(metadata) if metadata is not None else _fetch_league_meta_row(
+            supabase,
+            club_id=str(club_id),
+            league_name=str(league_name),
+        )
+        if not meta_row:
+            return {"awards": [], "award_count": 0}
+        enabled_specs = _enabled_public_award_specs(meta_row)
+        if not enabled_specs:
+            return {"awards": [], "award_count": 0}
+
+        needs_player_analytics = any(
+            spec.get("recipient_type") == "player" for spec in enabled_specs
+        )
+        needs_team_analytics = any(
+            spec.get("recipient_type") == "team" for spec in enabled_specs
+        )
+        if not needs_player_analytics:
+            league_rows = ()
+            match_rows = ()
+            player_rows = ()
+        league_type = _clean_text(meta_row.get("league_type"), limit=40).casefold()
+        if not needs_team_analytics and league_type not in {
+            "team",
+            "team league",
+            "team_league",
+        }:
+            team_rows = ()
+            fixture_rows = ()
+
         meta_row, _awards, _df_meta, _df_leagues, _id_map = _award_inputs(
             supabase,
             club_id=str(club_id),
             league_name=str(league_name),
+            metadata=meta_row,
+            league_rows=league_rows,
+            match_rows=match_rows,
+            player_rows=player_rows,
+            team_rows=team_rows,
+            fixture_rows=fixture_rows,
         )
         analytics = dict(meta_row.get("_analytics") or {})
         rows = list(analytics.get("award_progress") or [])

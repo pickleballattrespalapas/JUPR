@@ -3,17 +3,18 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Mapping
 
 LEAGUE_META_SELECT = (
-    "club_id,league_name,league_type,match_format,is_active,status,min_games,k_factor,schedule_config"
+    "club_id,league_name,league_type,match_format,is_active,status,min_games,k_factor,"
+    "schedule_config,awards_config"
 )
 LEAGUE_RATINGS_SELECT = "club_id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active,inactive_at"
 PLAYER_SELECT = "id,club_id,name,rating,active,inactive_at"
 MATCH_SELECT = (
     "id,club_id,date,league,match_type,week_tag,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,"
     "t1_p1_r,t1_p1_r_end,t1_p2_r,t1_p2_r_end,t2_p1_r,t2_p1_r_end,t2_p2_r,t2_p2_r_end,"
-    "deleted_at"
+    "deleted_at,excluded_from_ratings"
 )
 DEFAULT_WEEKLY_HIGHLIGHT_MIN_GAMES = 4
 
@@ -186,8 +187,10 @@ def _public_league_meta(name: str, meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def get_public_league_results_overview(supabase: Any, *, club_id: str) -> dict[str, Any]:
-    """Return public-safe league options for League Results."""
+def _get_public_league_results_overview_data(
+    supabase: Any, *, club_id: str
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Return the public overview plus private metadata for request-local reuse."""
 
     cid = str(club_id).strip()
     names: set[str] = set()
@@ -236,7 +239,16 @@ def get_public_league_results_overview(supabase: Any, *, club_id: str) -> dict[s
     for name in sorted(names, key=_league_sort_key):
         meta = meta_by_name.get(name, {})
         leagues.append(_public_league_meta(name, meta))
-    return {"leagues": leagues}
+    return {"leagues": leagues}, meta_by_name
+
+
+def get_public_league_results_overview(supabase: Any, *, club_id: str) -> dict[str, Any]:
+    """Return public-safe league options for League Results."""
+
+    overview, _metadata_by_name = _get_public_league_results_overview_data(
+        supabase, club_id=club_id
+    )
+    return overview
 
 
 def _selected_league(overview: dict[str, Any], league_name: str | None) -> str | None:
@@ -390,6 +402,19 @@ def _summarize(rows: list[dict[str, Any]], group_keys: tuple[str, ...]) -> list[
     return output
 
 
+def _league_rating_rows(
+    supabase: Any, *, club_id: str, league_name: str
+) -> list[dict[str, Any]]:
+    return _fetch_table(
+        supabase,
+        "league_ratings",
+        LEAGUE_RATINGS_SELECT,
+        club_id=club_id,
+        filters={"league_name": str(league_name)},
+        limit=5000,
+    )
+
+
 def _standing_rows(
     supabase: Any,
     *,
@@ -397,14 +422,14 @@ def _standing_rows(
     league_name: str,
     players_by_id: dict[int, dict[str, Any]],
     include_inactive: bool = False,
+    rating_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    rows = _fetch_table(
-        supabase,
-        "league_ratings",
-        LEAGUE_RATINGS_SELECT,
-        club_id=club_id,
-        filters={"league_name": str(league_name)},
-        limit=5000,
+    rows = (
+        [dict(row) for row in rating_rows]
+        if rating_rows is not None
+        else _league_rating_rows(
+            supabase, club_id=club_id, league_name=league_name
+        )
     )
     output: list[dict[str, Any]] = []
     for row in rows:
@@ -771,6 +796,7 @@ def _build_resolved_league_results(
     weekly_min_games: int = DEFAULT_WEEKLY_HIGHLIGHT_MIN_GAMES,
     include_inactive_players: bool = False,
     include_inactive_ratings: bool = False,
+    league_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build sanitized results after the caller has resolved league visibility."""
 
@@ -803,18 +829,28 @@ def _build_resolved_league_results(
         include_inactive=include_inactive_players,
     )
     league = _league_meta(overview, selected)
+    rating_rows = _league_rating_rows(
+        supabase, club_id=cid, league_name=selected
+    )
     rating_standings = _standing_rows(
         supabase,
         club_id=cid,
         league_name=selected,
         players_by_id=players_by_id,
         include_inactive=include_inactive_ratings,
+        rating_rows=rating_rows,
     )
     league_member_ids = {
         int(row["player_id"])
         for row in rating_standings
         if _safe_int(row.get("player_id")) is not None
     }
+    award_rating_rows = [
+        dict(row)
+        for row in rating_rows
+        if (rating_player_id := _safe_int(row.get("player_id"))) is not None
+        and rating_player_id in league_member_ids
+    ]
     scoped_players = (
         players_by_id
         if include_inactive_ratings
@@ -942,20 +978,42 @@ def _build_resolved_league_results(
         # Compatibility alias for the former latest-week highlight object.
         "highlights": weekly_highlights,
         "award_progress": _public_award_progress(
-            supabase, club_id=cid, league_name=selected
+            supabase,
+            club_id=cid,
+            league_name=selected,
+            metadata=league_metadata,
+            league_rows=award_rating_rows,
+            match_rows=matches,
+            player_rows=[
+                {"club_id": cid, **dict(player)}
+                for player in players_by_id.values()
+            ],
         ),
     }
 
 
 def _public_award_progress(
-    supabase: Any, *, club_id: str, league_name: str
+    supabase: Any,
+    *,
+    club_id: str,
+    league_name: str,
+    metadata: Mapping[str, Any] | None = None,
+    league_rows: list[dict[str, Any]] | None = None,
+    match_rows: list[dict[str, Any]] | None = None,
+    player_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     from jupr_app.services.admin_league_awards_service import (
         get_public_league_award_progress,
     )
 
     return get_public_league_award_progress(
-        supabase, club_id=str(club_id), league_name=str(league_name)
+        supabase,
+        club_id=str(club_id),
+        league_name=str(league_name),
+        metadata=metadata,
+        league_rows=league_rows,
+        match_rows=match_rows,
+        player_rows=player_rows,
     )
 
 
@@ -971,7 +1029,9 @@ def build_public_league_results(
     """Build active-only public League Results for one club/league."""
 
     cid = str(club_id).strip()
-    overview = get_public_league_results_overview(supabase, club_id=cid)
+    overview, metadata_by_name = _get_public_league_results_overview_data(
+        supabase, club_id=cid
+    )
     selected = _selected_league(overview, league_name)
     return _build_resolved_league_results(
         supabase,
@@ -981,4 +1041,5 @@ def build_public_league_results(
         week_num=week_num,
         player_id=player_id,
         weekly_min_games=weekly_min_games,
+        league_metadata=metadata_by_name.get(str(selected or "")),
     )
