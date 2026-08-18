@@ -57,8 +57,10 @@ class FakeQuery:
 class FakeSupabase:
     def __init__(self, tables):
         self._tables = tables
+        self.table_calls: list[str] = []
 
     def table(self, name):
+        self.table_calls.append(str(name))
         return FakeQuery(self._tables.get(name, []))
 
 
@@ -272,7 +274,10 @@ def test_public_league_results_filters_matches_before_the_fetch_limit() -> None:
 
 
 def test_public_league_results_builds_standings_weekly_and_highlights() -> None:
-    payload = build_public_league_results(fake_supabase(), club_id="club", league_name="Open")
+    supabase = fake_supabase()
+    payload = build_public_league_results(
+        supabase, club_id="club", league_name="Open"
+    )
 
     assert payload["selected_league"] == "Open"
     assert payload["standings"][0]["player_name"] == "Alex"
@@ -319,6 +324,12 @@ def test_public_league_results_builds_standings_weekly_and_highlights() -> None:
     assert payload["recent_matches"][0]["match_id"] == 11
     assert payload["recent_matches"][0]["result"] == "L"
     assert "admin_flag" not in payload["weekly_results"][0]
+    assert supabase.table_calls.count("leagues_metadata") == 1
+    assert supabase.table_calls.count("players") == 1
+    assert supabase.table_calls.count("league_ratings") == 2
+    assert supabase.table_calls.count("matches") == 2
+    assert "team_league_teams" not in supabase.table_calls
+    assert "team_league_fixtures" not in supabase.table_calls
 
 
 def test_public_league_results_honors_week_player_and_qualification_deep_links() -> None:

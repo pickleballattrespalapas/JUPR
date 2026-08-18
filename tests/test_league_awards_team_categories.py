@@ -12,6 +12,16 @@ from jupr_app.services.admin_league_awards_service import (
 from tests.test_admin_match_log_service import FakeSupabase
 
 
+class CountingSupabase(FakeSupabase):
+    def __init__(self, tables) -> None:
+        super().__init__(tables)
+        self.table_calls: list[str] = []
+
+    def table(self, name):
+        self.table_calls.append(str(name))
+        return super().table(name)
+
+
 def _storage() -> dict[str, list[dict]]:
     return {
         "leagues_metadata": [
@@ -243,7 +253,7 @@ def test_singles_match_drives_live_and_public_award_progress(monkeypatch) -> Non
             "t2_p1_r": 1800,
         }
     ]
-    supabase = FakeSupabase(storage)
+    supabase = CountingSupabase(storage)
 
     configured = save_admin_league_awards_config(
         supabase,
@@ -272,6 +282,38 @@ def test_singles_match_drives_live_and_public_award_progress(monkeypatch) -> Non
     assert public["award_count"] == 1
     assert public["awards"][0]["category_key"] == "most_wins"
     assert public["awards"][0]["recipient_name"] == "Alex"
+    assert supabase.table_calls[-4:] == [
+        "leagues_metadata",
+        "league_ratings",
+        "matches",
+        "players",
+    ]
+
+    supabase.table_calls.clear()
+    preloaded = get_public_league_award_progress(
+        supabase,
+        club_id="club",
+        league_name="Open",
+        metadata=storage["leagues_metadata"][0],
+        league_rows=storage["league_ratings"],
+        match_rows=storage["matches"],
+        player_rows=storage["players"],
+        team_rows=(),
+        fixture_rows=(),
+    )
+    assert preloaded == public
+    assert supabase.table_calls == []
+
+
+def test_public_awards_skip_analytics_reads_without_enabled_categories() -> None:
+    supabase = CountingSupabase(_storage())
+
+    public = get_public_league_award_progress(
+        supabase, club_id="club", league_name="Open"
+    )
+
+    assert public == {"awards": [], "award_count": 0}
+    assert supabase.table_calls == ["leagues_metadata"]
 
 
 def test_public_awards_wait_for_configured_minimum(monkeypatch) -> None:

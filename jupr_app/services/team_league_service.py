@@ -662,6 +662,10 @@ def get_public_team_league(
             supabase,
             club_id=str(club_id),
             league_name=_text(league_name, 120),
+            metadata=manager,
+            player_rows=all_player_rows,
+            team_rows=teams,
+            fixture_rows=fixtures,
         ),
         "registration": {
             "open": registration_open,
