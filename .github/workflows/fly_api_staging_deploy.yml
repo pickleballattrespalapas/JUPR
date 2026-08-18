@@ -1,7 +1,7 @@
 name: Deploy FastAPI staging to Fly
 run-name: >-
   Fly staging ·
-  ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || (github.event.head_commit.message == 'Open time-bounded staging write session' && 'open' || 'none') }} ·
+  ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || (startsWith(github.event.head_commit.message, 'Open time-bounded staging write session') && 'open' || 'none') }} ·
   ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.expected_candidate_sha || github.sha }}
 
 on:
@@ -137,7 +137,7 @@ jobs:
       - name: Configure staging write posture
         shell: bash
         env:
-          SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || (github.event.head_commit.message == 'Open time-bounded staging write session' && 'open' || 'none') }}
+          SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || (startsWith(github.event.head_commit.message, 'Open time-bounded staging write session') && 'open' || 'none') }}
         run: |
           set -euo pipefail
           python scripts/staging_write_waves.py \
@@ -419,7 +419,7 @@ jobs:
     needs: deploy-staging
     if: >-
       github.event_name == 'push' &&
-      github.event.head_commit.message == 'Open time-bounded staging write session'
+      startsWith(github.event.head_commit.message, 'Open time-bounded staging write session')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: staging
