@@ -98,6 +98,8 @@ class AdminLeagueManagerCreateRequest(BaseModel):
     league_name: str = Field(min_length=1, max_length=120)
     league_type: str = Field(default="Individual", pattern=r"^(Individual|Team)$")
     match_format: str = Field(default="doubles", pattern=r"^(doubles|singles)$")
+    league_format: str = Field(default="ladder", pattern=r"^(ladder|round_robin|rotating_partner|fixed_team|flex_challenge)$")
+    session_mode: str = Field(default="scheduled_rounds", pattern=r"^(scheduled_rounds|live_court_board|self_scheduled)$")
     description: str = Field(default="", max_length=2000)
     min_games: int = Field(default=6, ge=0, le=1000)
     k_factor: int = Field(default=32, ge=1, le=128)
@@ -1053,6 +1055,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 k_factor=payload.k_factor,
                 match_format=payload.match_format,
                 league_type=payload.league_type,
+                league_format=payload.league_format,
+                session_mode=payload.session_mode,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,

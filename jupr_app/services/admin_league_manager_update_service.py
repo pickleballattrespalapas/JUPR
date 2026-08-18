@@ -20,6 +20,22 @@ ACTIVE_SAFE_FIELDS = {"description"}
 CLOSED_STATUSES = {"ended", "archived"}
 AWARD_CATEGORY_KEYS = ("highest_rating", "most_improved", "best_win_pct", "most_wins")
 MAX_CONFIG_JSON_BYTES = 50_000
+LEAGUE_FORMATS = {
+    "ladder",
+    "round_robin",
+    "rotating_partner",
+    "fixed_team",
+    "flex_challenge",
+}
+SESSION_MODES = {"scheduled_rounds", "live_court_board", "self_scheduled"}
+STANDINGS_TIEBREAKS = {
+    "wins_then_point_differential",
+    "wins_then_total_points",
+    "points_then_point_differential",
+}
+CORRECTION_WINDOWS = {"until_next_round", "same_day", "seven_days"}
+SCORE_SUBMISSION_POLICIES = {"admin_only", "captain_or_admin", "rostered_player_or_admin"}
+PLAYOFF_FORMATS = {"none", "single_elimination", "double_elimination"}
 
 
 def _truthy_env(name: str) -> bool:
@@ -261,6 +277,48 @@ def _normalize_court_defaults(value: Any) -> dict[str, Any]:
     return _bounded_config(normalized, field="court_board_defaults")
 
 
+def _choice(value: Any, *, field: str, options: set[str], default: str) -> str:
+    clean = _config_text(value, field=field, limit=80).casefold() or default
+    if clean not in options:
+        raise ValueError(f"{field} must be one of: {', '.join(sorted(options))}.")
+    return clean
+
+
+def _normalize_match_structure(value: Any) -> dict[str, Any]:
+    structure = _json_object(value, field="rules_config.competition.match_structure") or {}
+    kind = _choice(
+        structure.get("kind"),
+        field="rules_config.competition.match_structure.kind",
+        options={"fixed_games", "best_of"},
+        default="fixed_games",
+    )
+    games = _safe_int(
+        structure.get("games"),
+        field="rules_config.competition.match_structure.games",
+        minimum=1,
+        maximum=9,
+    )
+    if games is None:
+        games = 1
+    if kind == "best_of" and (games < 3 or games % 2 == 0):
+        raise ValueError("rules_config.competition.match_structure.best_of must use an odd game count of at least 3.")
+    return {
+        "kind": kind,
+        "games": int(games),
+        # Every completed pickleball game remains an official league game.
+        # Best-of controls when play stops, not whether a played game counts.
+        "result_counting": "each_game",
+        "completion": "clinch" if kind == "best_of" else "all_games",
+    }
+
+
+def _validate_format_operation(*, league_format: str, session_mode: str) -> None:
+    if league_format == "ladder" and session_mode == "self_scheduled":
+        raise ValueError("Ladder leagues need scheduled rounds or a live court board.")
+    if league_format == "flex_challenge" and session_mode != "self_scheduled":
+        raise ValueError("Flex challenge leagues use self-scheduled play.")
+
+
 def _normalize_rules_config(value: Any) -> dict[str, Any]:
     obj = _json_object(value, field="rules_config") or {}
     normalized = dict(obj)
@@ -282,6 +340,13 @@ def _normalize_rules_config(value: Any) -> dict[str, Any]:
             clean_overview["summary"] = _config_text(
                 overview.get("summary"), field="rules_config.overview.summary", limit=2000
             )
+        if "league_format" in overview:
+            clean_overview["league_format"] = _choice(
+                overview.get("league_format"),
+                field="rules_config.overview.league_format",
+                options=LEAGUE_FORMATS,
+                default="ladder",
+            )
         normalized["overview"] = clean_overview
     if "competition" in obj:
         competition = _json_object(obj.get("competition"), field="rules_config.competition") or {}
@@ -298,7 +363,72 @@ def _normalize_rules_config(value: Any) -> dict[str, Any]:
                 clean_competition[key] = _config_text(
                     competition.get(key), field=f"rules_config.competition.{key}", limit=limit
                 )
+        if "scoring_profile" in competition:
+            clean_competition["scoring_profile"] = _choice(
+                competition.get("scoring_profile"),
+                field="rules_config.competition.scoring_profile",
+                options={"standard_pickleball"},
+                default="standard_pickleball",
+            )
+        if "match_structure" in competition:
+            clean_competition["match_structure"] = _normalize_match_structure(
+                competition.get("match_structure")
+            )
+        if "standings_tiebreak" in competition:
+            clean_competition["standings_tiebreak"] = _choice(
+                competition.get("standings_tiebreak"),
+                field="rules_config.competition.standings_tiebreak",
+                options=STANDINGS_TIEBREAKS,
+                default="wins_then_point_differential",
+            )
+        if "correction_window" in competition:
+            clean_competition["correction_window"] = _choice(
+                competition.get("correction_window"),
+                field="rules_config.competition.correction_window",
+                options=CORRECTION_WINDOWS,
+                default="until_next_round",
+            )
+        if "score_submission_policy" in competition:
+            clean_competition["score_submission_policy"] = _choice(
+                competition.get("score_submission_policy"),
+                field="rules_config.competition.score_submission_policy",
+                options=SCORE_SUBMISSION_POLICIES,
+                default="admin_only",
+            )
+        if "playoff_format" in competition:
+            clean_competition["playoff_format"] = _choice(
+                competition.get("playoff_format"),
+                field="rules_config.competition.playoff_format",
+                options=PLAYOFF_FORMATS,
+                default="none",
+            )
         normalized["competition"] = clean_competition
+    if "operation" in obj:
+        operation = _json_object(obj.get("operation"), field="rules_config.operation") or {}
+        clean_operation = dict(operation)
+        if "session_mode" in operation:
+            clean_operation["session_mode"] = _choice(
+                operation.get("session_mode"),
+                field="rules_config.operation.session_mode",
+                options=SESSION_MODES,
+                default="scheduled_rounds",
+            )
+        for key in ("move_up_count", "move_down_count"):
+            if key in operation:
+                clean_operation[key] = _safe_int(
+                    operation.get(key),
+                    field=f"rules_config.operation.{key}",
+                    minimum=0,
+                    maximum=20,
+                ) or 0
+        normalized["operation"] = clean_operation
+    overview = normalized.get("overview") if isinstance(normalized.get("overview"), dict) else {}
+    operation = normalized.get("operation") if isinstance(normalized.get("operation"), dict) else {}
+    if "league_format" in overview and "session_mode" in operation:
+        _validate_format_operation(
+            league_format=str(overview["league_format"]),
+            session_mode=str(operation["session_mode"]),
+        )
     return _bounded_config(normalized, field="rules_config")
 
 

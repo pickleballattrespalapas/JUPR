@@ -14,8 +14,12 @@ def test_next_uses_one_fastapi_complete_round_publish_path() -> None:
     routes = ROUTES.read_text(encoding="utf-8")
     assert "/match-uploader/batch" not in panel
     assert "/rounds/${encodeURIComponent(String(currentRound))}/submit" in panel
-    assert "expected_match_count: allPreviewMatches.length" in panel
-    assert "validScoreCount !== allPreviewMatches.length" in panel
+    assert "expected_match_count: matches.length" in panel
+    assert "!allSeriesComplete" in panel
+    assert "series_key: match.row_id" in panel
+    assert "every played game still counts as an official league game" in Path(
+        "apps/web/app/admin/league-manager/GuidedLeagueSettingsEditor.tsx"
+    ).read_text(encoding="utf-8")
     assert "submit_admin_league_live_round_publish" in routes
     assert "rounds/{round_number}/submit" in routes
 

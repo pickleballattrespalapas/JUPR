@@ -92,11 +92,11 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
       `}</style>
 
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        League Standings
+        League Awards Race
       </p>
-      <h1 style={{ marginTop: 0 }}>{leagueName} standings</h1>
+      <h1 style={{ marginTop: 0 }}>{leagueName} awards race</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Current rank, league rating, season record, and rating movement for {leagueName}.
+        Awards-race leaders and qualification come first. Rating standings remain available below as a separate performance reference.
       </p>
 
       <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="overall" />
@@ -112,26 +112,28 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
         <PrintButton />
       </div>
 
-      {data.award_progress.awards.length ? (
-        <section style={{ marginBottom: "1.25rem" }} data-testid="league-awards">
-          <h2>Awards</h2>
-          <p style={{ color: "#64748b" }}>Current leaders who have met each configured minimum criterion.</p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
-            {data.award_progress.awards.map((award) => (
-              <article key={`${award.category_key}-${award.rank}-${award.team_id || award.player_id}`} style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
-                <strong>{award.category_label}{award.rank && award.rank > 1 ? ` · #${award.rank}` : ""}</strong>
-                <h3 style={{ margin: "0.45rem 0 0.2rem" }}>{award.recipient_name || "—"}{award.is_co_winner ? " · co-leader" : ""}</h3>
-                <p style={{ margin: 0, color: "#475569" }}>{award.metric_display || "—"} · Minimum {award.min_games ?? 0} {String(award.minimum_metric || "games").replace(/_/g, " ")}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
+      <section style={{ marginBottom: "1.25rem" }} data-testid="league-awards">
+        <h2>Awards race</h2>
+        {data.award_progress.awards.length ? (
+          <>
+            <p style={{ color: "#64748b" }}>Current leaders who have met each award&apos;s minimum criterion.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
+              {data.award_progress.awards.map((award) => (
+                <article key={`${award.category_key}-${award.rank}-${award.team_id || award.player_id}`} style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
+                  <strong>{award.category_label}{award.rank && award.rank > 1 ? ` · #${award.rank}` : ""}</strong>
+                  <h3 style={{ margin: "0.45rem 0 0.2rem" }}>{award.recipient_name || "—"}{award.is_co_winner ? " · co-leader" : ""}</h3>
+                  <p style={{ margin: 0, color: "#475569" }}>{award.metric_display || "—"} · Minimum {award.min_games ?? 0} {String(award.minimum_metric || "games").replace(/_/g, " ")}</p>
+                </article>
+              ))}
+            </div>
+          </>
+        ) : <article style={{ ...cardStyle, background: "#f8fafc" }}>No player has met the current award qualification criteria yet.</article>}
+      </section>
 
       <section>
-        <h2>Current standings</h2>
+        <h2>Rating standings</h2>
         <p style={{ color: "#64748b" }}>
-          Players who have not yet earned a league rating remain unranked.
+          This table is ordered by rating. It is not the league&apos;s awards race; players who have not yet earned a league rating remain unranked.
         </p>
         {data.standings.length ? (
           <div style={{ display: "grid", gap: "0.65rem" }}>

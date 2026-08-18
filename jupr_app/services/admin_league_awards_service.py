@@ -953,6 +953,19 @@ def _enabled_public_award_specs(
     return enabled
 
 
+def _has_explicit_award_categories(meta_row: Mapping[str, Any]) -> bool:
+    """Whether a league intentionally saved award category choices.
+
+    Older leagues predate the draft-only award editor.  They still have valid
+    default top-performer calculations, so an entirely absent ``categories``
+    key must not hide their public awards.  An explicitly saved categories
+    object, including an empty one, remains authoritative.
+    """
+
+    awards_config = _json_value(meta_row.get("awards_config"), {}) or {}
+    return isinstance(awards_config, Mapping) and "categories" in awards_config
+
+
 def get_public_league_award_progress(
     supabase: Any,
     *,
@@ -965,7 +978,12 @@ def get_public_league_award_progress(
     team_rows: Sequence[Mapping[str, Any]] | None = None,
     fixture_rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Return configured, currently-qualified awards without workflow internals."""
+    """Return current eligible awards without exposing workflow internals.
+
+    Explicit award choices always win.  Leagues created before that editor (or
+    with no saved category choices) use the established top-performer defaults
+    so public standings do not silently lose valid award leaders.
+    """
 
     try:
         meta_row = dict(metadata) if metadata is not None else _fetch_league_meta_row(
@@ -976,10 +994,13 @@ def get_public_league_award_progress(
         if not meta_row:
             return {"awards": [], "award_count": 0}
         enabled_specs = _enabled_public_award_specs(meta_row)
-        if not enabled_specs:
+        explicit_categories = _has_explicit_award_categories(meta_row)
+        if explicit_categories and not enabled_specs:
             return {"awards": [], "award_count": 0}
 
-        needs_player_analytics = any(
+        # A legacy/default league uses the existing individual top-performer
+        # calculation, which needs the same player inputs as configured awards.
+        needs_player_analytics = (not explicit_categories) or any(
             spec.get("recipient_type") == "player" for spec in enabled_specs
         )
         needs_team_analytics = any(
@@ -998,7 +1019,7 @@ def get_public_league_award_progress(
             team_rows = ()
             fixture_rows = ()
 
-        meta_row, _awards, _df_meta, _df_leagues, _id_map = _award_inputs(
+        meta_row, computed_awards, _df_meta, _df_leagues, _id_map = _award_inputs(
             supabase,
             club_id=str(club_id),
             league_name=str(league_name),
@@ -1011,25 +1032,30 @@ def get_public_league_award_progress(
         )
         analytics = dict(meta_row.get("_analytics") or {})
         rows = list(analytics.get("award_progress") or [])
+        if not explicit_categories:
+            rows = list(computed_awards or [])
     except Exception:
         rows = []
     safe_rows = [
         {
-            key: row.get(key)
-            for key in (
-                "category_key",
-                "category_label",
-                "recipient_type",
-                "player_id",
-                "team_id",
-                "recipient_name",
-                "metric_value",
-                "metric_display",
-                "rank",
-                "is_co_winner",
-                "min_games",
-                "minimum_metric",
-            )
+            "category_key": row.get("category_key"),
+            "category_label": row.get("category_label"),
+            "recipient_type": row.get("recipient_type"),
+            "player_id": row.get("player_id"),
+            "team_id": row.get("team_id"),
+            # Legacy top-performer rows use ``player_name`` while configured
+            # category rows use ``recipient_name``.  The public projection is
+            # deliberately one shape, so preserve either without exposing any
+            # private player fields.
+            "recipient_name": row.get("recipient_name")
+            or row.get("player_name")
+            or row.get("team_name"),
+            "metric_value": row.get("metric_value"),
+            "metric_display": row.get("metric_display"),
+            "rank": row.get("rank"),
+            "is_co_winner": row.get("is_co_winner"),
+            "min_games": row.get("min_games"),
+            "minimum_metric": row.get("minimum_metric"),
         }
         for row in rows
     ]

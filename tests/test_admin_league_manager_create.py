@@ -69,6 +69,13 @@ def test_create_league_draft_service(monkeypatch) -> None:
     assert result["league"]["status"] == "draft"
     assert tables["leagues_metadata"][-1]["is_active"] is False
     assert tables["leagues_metadata"][-1]["event_tags"] == {"skill_levels": [], "date_tags": []}
+    assert tables["leagues_metadata"][-1]["rules_config"]["overview"]["league_format"] == "ladder"
+    assert tables["leagues_metadata"][-1]["rules_config"]["competition"]["match_structure"] == {
+        "kind": "fixed_games",
+        "games": 1,
+        "result_counting": "each_game",
+        "completion": "all_games",
+    }
     assert tables["admin_activity_log"][0]["action_type"] == "create_league_manager_draft_admin"
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
 
@@ -115,6 +122,35 @@ def test_create_league_draft_rejects_team_singles(monkeypatch) -> None:
 
     assert [row["league_name"] for row in tables["leagues_metadata"]] == ["Existing League"]
     assert tables["admin_activity_log"] == []
+
+
+@pytest.mark.parametrize(
+    ("league_format", "session_mode", "message"),
+    [
+        ("ladder", "self_scheduled", "Ladder leagues need scheduled rounds"),
+        ("flex_challenge", "scheduled_rounds", "Flex challenge leagues use self-scheduled play"),
+    ],
+)
+def test_create_league_draft_rejects_incompatible_format_and_operation(monkeypatch, league_format, session_mode, message) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = league_create_tables()
+
+    with pytest.raises(ValueError, match=message):
+        create_admin_league_manager_draft(
+            FakeSupabase(tables),
+            club_id="club",
+            league_name="Invalid Format",
+            description="",
+            min_games=6,
+            k_factor=32,
+            league_format=league_format,
+            session_mode=session_mode,
+            actor_email="owner@example.com",
+            actor_role="club_owner",
+            confirmation_text="CREATE LEAGUE",
+        )
+
+    assert len(tables["leagues_metadata"]) == 1
 
 
 def test_duplicate_league_draft_copies_configuration_without_history(monkeypatch) -> None:

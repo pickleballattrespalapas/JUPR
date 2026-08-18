@@ -77,9 +77,9 @@ export default async function PublicLeagueHomePage({ params }: Props) {
 
   const modules = [
     {
-      title: "Standings",
+      title: "Awards race & rating standings",
       description:
-        "Current league rating, rank, season record, and rating movement.",
+        "Award leaders and qualification first, with rating standings kept separate below.",
       href: publicLeagueResultsHref(
         params.clubSlug,
         leagueName,
@@ -124,7 +124,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
       </p>
       <h1 style={{ marginTop: 0 }}>{leagueName}</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Standings, weekly history, player summaries, and public league results
+        Awards-race leaders, rating standings, weekly history, player summaries, and public league results
         for this league.
       </p>
 
@@ -244,9 +244,9 @@ export default async function PublicLeagueHomePage({ params }: Props) {
           }}
         >
           <div>
-            <h2 style={{ marginBottom: "0.25rem" }}>Standings preview</h2>
+            <h2 style={{ marginBottom: "0.25rem" }}>Awards race</h2>
             <p style={{ marginTop: 0, color: "#64748b" }}>
-              The top five currently ranked players.
+              Current award leaders who have qualified.
             </p>
           </div>
           <Link
@@ -257,8 +257,15 @@ export default async function PublicLeagueHomePage({ params }: Props) {
             )}
             style={{ fontWeight: 800 }}
           >
-            View full standings
+            View awards race and rating standings
           </Link>
+        </div>
+
+        {data.award_progress.awards.length ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.55rem", marginBottom: "1rem" }}>{data.award_progress.awards.map((award) => <article key={`${award.category_key}-${award.rank}-${award.team_id || award.player_id}`} style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}><strong>{award.category_label}{award.rank && award.rank > 1 ? ` · #${award.rank}` : ""}</strong><br />{award.recipient_name || "—"}<br /><small>{award.metric_display || "—"} · Minimum {award.min_games ?? 0} {String(award.minimum_metric || "games").replace(/_/g, " ")}</small></article>)}</div> : <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "1rem" }}>No player has met the current award qualification criteria yet.</article>}
+
+        <div style={{ marginTop: "1.25rem" }}>
+          <h2 style={{ marginBottom: "0.25rem" }}>Rating standings preview</h2>
+          <p style={{ marginTop: 0, color: "#64748b" }}>The top five by rating. Rating position is separate from awards leadership.</p>
         </div>
 
         {standings.length ? (

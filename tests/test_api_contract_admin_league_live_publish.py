@@ -153,6 +153,63 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
     assert "league_live_session" in exported.json()["csv_text"]
 
 
+def test_fixed_series_publishes_each_played_game_as_an_official_match(monkeypatch) -> None:
+    tables = _tables()
+    tables["leagues_metadata"] = [
+        {
+            "club_id": "club",
+            "league_name": "Tuesday Ladder",
+            "rules_config": {
+                "competition": {
+                    "match_structure": {
+                        "kind": "fixed_games",
+                        "games": 2,
+                        "result_counting": "each_game",
+                        "completion": "all_games",
+                    }
+                }
+            },
+        }
+    ]
+    supabase = FakeSupabase(tables)
+    _install_submit_env(monkeypatch, supabase)
+    calls: list[int] = []
+    monkeypatch.setattr(
+        "jupr_app.services.admin_league_live_submit_service.submit_admin_match_uploader_batch",
+        _publisher(tables, calls=calls),
+    )
+    client = TestClient(app)
+    session = _create(client).json()["session"]
+    games = [
+        {
+            **MATCHES[0],
+            "series_key": "court-1-match-1",
+            "series_kind": "fixed_games",
+            "series_games": 2,
+            "game_number": game_number,
+        }
+        for game_number in (1, 2)
+    ]
+    plan = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/plan",
+        headers={"Authorization": "Bearer local"},
+        json={"expected_updated_at": session["updated_at"], "matches": games, "courts": COURTS},
+    )
+    assert plan.status_code == 200, plan.text
+
+    response = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/submit",
+        headers={"Authorization": "Bearer local"},
+        json=_request(session, plan.json()["operation_key"], matches=games),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["published_match_ids"] == [9000, 9001]
+    assert calls == [2]
+    assert [row["game_number"] for row in tables["matches"]] == [1, 2]
+    assert all(row["series_key"] == "court-1-match-1" for row in tables["matches"])
+
+
 def test_stale_and_incomplete_requests_fail_before_audit_or_publish(monkeypatch) -> None:
     tables = _tables()
     supabase = FakeSupabase(tables)

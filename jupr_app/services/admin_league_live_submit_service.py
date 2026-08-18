@@ -22,6 +22,7 @@ from jupr_app.services.admin_league_live_service import (
     _clean_text,
     _fetch_session_row,
     _first_row,
+    _league_match_structure,
     _safe_int,
     _safe_rows,
     build_admin_league_live_round_plan,
@@ -509,6 +510,11 @@ def submit_admin_league_live_round_publish(
         )
         if not existing_for_round or str(existing_for_round.get("status")) != "completed":
             raise LeagueLiveConflictError("This round is no longer current. Reload before publishing.")
+    match_structure = _league_match_structure(
+        supabase,
+        club_id=str(club_id),
+        league_name=str(session.get("league_name") or ""),
+    )
     request = build_league_live_publish_request(
         session_id=str(session_id),
         round_number=safe_round,
@@ -527,6 +533,7 @@ def submit_admin_league_live_round_publish(
         roster_change=roster_change,
         bench_player_ids=bench_player_ids,
         bench_override_reason=bench_override_reason,
+        match_structure=match_structure,
     )
     operation = _fetch_publish_operation(
         supabase,

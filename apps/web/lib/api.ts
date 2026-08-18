@@ -235,7 +235,7 @@ export type PlayerProfileResponse = {
   rating_breakdowns: PublicRatingBreakdown[];
   rating_history: PublicRatingHistoryPoint[];
   league_ratings: PublicLeagueRating[];
-  awards: { badge_count: number; badge_award_count: number; prestige_total: number; badges: PublicBadgeAward[]; trophies: PublicTrophy[] };
+  awards: { badge_count: number; badge_award_count: number; trophy_count?: number; prestige_total: number; badges: PublicBadgeAward[]; trophies: PublicTrophy[] };
   relationships: { best_partner?: PublicRelationship | null; rival?: PublicRelationship | null; partners: PublicRelationship[]; rivals: PublicRelationship[] };
   social: PublicSocialProjection;
   recent_matches: PublicMatch[];
