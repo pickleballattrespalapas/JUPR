@@ -172,9 +172,13 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
 
     assert "  push:\n    branches:\n      - staging\n" in workflow
     assert (
-        "SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'none' }}"
+        "SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || (github.event.head_commit.message == 'Open time-bounded staging write session' && 'open' || 'none') }}"
         in workflow
     )
+    assert "close-temporary-open-wave:" in workflow
+    assert "run: sleep 2700" in workflow
+    assert "--input write_wave=none" in workflow
+    assert "verify-final-none" in workflow
     assert "${{ inputs." not in workflow
     assert "STAGING_SUPABASE_URL" in workflow
     assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" in workflow
