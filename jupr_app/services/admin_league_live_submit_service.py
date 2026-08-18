@@ -22,6 +22,7 @@ from jupr_app.services.admin_league_live_service import (
     _clean_text,
     _fetch_session_row,
     _first_row,
+    _league_match_format,
     _league_match_structure,
     _safe_int,
     _safe_rows,
@@ -501,16 +502,22 @@ def submit_admin_league_live_round_publish(
     if session is None:
         raise ValueError("league live session not found")
     safe_round = max(1, _safe_int(round_number, 1) or 1)
+    operation = _fetch_publish_operation(
+        supabase,
+        club_id=str(club_id),
+        session_id=str(session_id),
+        round_number=safe_round,
+    )
     if safe_round != (_safe_int(session.get("current_round"), 1) or 1):
-        existing_for_round = _fetch_publish_operation(
-            supabase,
-            club_id=str(club_id),
-            session_id=str(session_id),
-            round_number=safe_round,
-        )
-        if not existing_for_round or str(existing_for_round.get("status")) != "completed":
+        recoverable_states = {"completed", "published", "reconciling", "recovery_required"}
+        if not operation or str(operation.get("status")) not in recoverable_states:
             raise LeagueLiveConflictError("This round is no longer current. Reload before publishing.")
     match_structure = _league_match_structure(
+        supabase,
+        club_id=str(club_id),
+        league_name=str(session.get("league_name") or ""),
+    )
+    match_format = _league_match_format(
         supabase,
         club_id=str(club_id),
         league_name=str(session.get("league_name") or ""),
@@ -534,12 +541,6 @@ def submit_admin_league_live_round_publish(
         bench_player_ids=bench_player_ids,
         bench_override_reason=bench_override_reason,
         match_structure=match_structure,
-    )
-    operation = _fetch_publish_operation(
-        supabase,
-        club_id=str(club_id),
-        session_id=str(session_id),
-        round_number=safe_round,
     )
     if operation:
         if str(operation.get("idempotency_key")) != key:
@@ -776,6 +777,8 @@ def submit_admin_league_live_round_publish(
             matches=request["matches"],
             actor_email=actor_email,
             actor_role=actor_role,
+            idempotency_key=f"league-live:{key}",
+            match_format=match_format,
             source="next_league_live_all_match_publish",
         )
     except Exception as exc:

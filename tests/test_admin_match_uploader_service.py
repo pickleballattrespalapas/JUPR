@@ -437,6 +437,7 @@ def test_submit_match_uploader_batch(monkeypatch) -> None:
         actor_email="admin@example.com",
         actor_role="scorekeeper",
         idempotency_key="test:batch-1",
+        match_format="singles",
         matches=[
             {
                 "date": "2026-03-01",
@@ -459,6 +460,7 @@ def test_submit_match_uploader_batch(monkeypatch) -> None:
     assert result["result"]["inserted"] == 1
     assert calls[0]["matches"][0]["league"] == "Open"
     assert calls[0]["idempotency_key"] == "test:batch-1"
+    assert calls[0]["match_format"] == "singles"
 
 
 def test_submit_match_uploader_popup_context_name_creates_event(monkeypatch) -> None:

@@ -36,6 +36,7 @@ STANDINGS_TIEBREAKS = {
 CORRECTION_WINDOWS = {"until_next_round", "same_day", "seven_days"}
 SCORE_SUBMISSION_POLICIES = {"admin_only", "captain_or_admin", "rostered_player_or_admin"}
 PLAYOFF_FORMATS = {"none", "single_elimination", "double_elimination"}
+LADDER_POD_SIZES = {str(size) for size in range(2, 9)}
 
 
 def _truthy_env(name: str) -> bool:
@@ -244,8 +245,8 @@ def _normalize_court_defaults(value: Any) -> dict[str, Any]:
             field="court_board_defaults.players_per_court",
             limit=8,
         ) or "4"
-        if players_per_court not in {"4", "5", "6+"}:
-            raise ValueError("court_board_defaults.players_per_court must be 4, 5, or 6+.")
+        if players_per_court not in LADDER_POD_SIZES:
+            raise ValueError("court_board_defaults.players_per_court must be a whole number from 2 through 8.")
         normalized["players_per_court"] = players_per_court
     if "rotation_mode" in obj:
         rotation_mode = _config_text(

@@ -57,10 +57,18 @@ def _request(session: dict[str, Any], operation_key: str, *, matches=None, expec
     }
 
 
-def _publisher(tables: dict[str, Any], *, fail_after: int | None = None, calls: list[int] | None = None):
+def _publisher(
+    tables: dict[str, Any],
+    *,
+    fail_after: int | None = None,
+    calls: list[int] | None = None,
+    batch_calls: list[dict[str, Any]] | None = None,
+):
     def publish(_supabase, *, club_id: str, matches: list[dict[str, Any]], **_kwargs):
         if calls is not None:
             calls.append(len(matches))
+        if batch_calls is not None:
+            batch_calls.append(dict(_kwargs))
         for index, row in enumerate(matches, start=1):
             tables["matches"].append(
                 {
@@ -100,9 +108,10 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
     supabase = FakeSupabase(tables)
     _install_submit_env(monkeypatch, supabase)
     calls: list[int] = []
+    batch_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
         "jupr_app.services.admin_league_live_submit_service.submit_admin_match_uploader_batch",
-        _publisher(tables, calls=calls),
+        _publisher(tables, calls=calls, batch_calls=batch_calls),
     )
     client = TestClient(app)
     session = _create(client).json()["session"]
@@ -122,6 +131,13 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
     assert len(payload["published_match_ids"]) == 1
     assert len(tables["matches"]) == 1
     assert calls == [1]
+    assert batch_calls == [{
+        "actor_email": "admin@example.com",
+        "actor_role": "club_owner",
+        "idempotency_key": f"league-live:{plan['operation_key']}",
+        "match_format": "doubles",
+        "source": "next_league_live_all_match_publish",
+    }]
     actions = [row["action_type"] for row in tables["admin_activity_log"]]
     assert "submit_league_live_round_intent_admin" in actions
     assert "complete_league_live_round_publish_admin" in actions
