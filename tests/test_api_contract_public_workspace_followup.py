@@ -22,7 +22,7 @@ def test_public_leagues_open_dedicated_league_home() -> None:
     assert 'active="home"' in home
     assert "League pages" in home
     assert "Awards race" in home
-    assert "Rating standings preview" in home
+    assert "Awards race & player roster" in home
     assert "All leagues" in nav
     assert "League Home" in nav
     assert "Standings" in nav

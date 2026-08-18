@@ -78,7 +78,9 @@ def test_public_awards_precede_standings_and_wait_for_api_progress() -> None:
     )
 
     assert "data.award_progress.awards.length" in standings
-    assert standings.index("<h2>Awards race</h2>") < standings.index("<h2>Rating standings</h2>")
+    assert standings.index("<h2>Awards race</h2>") < standings.index("<h2>Player roster</h2>")
+    assert "LeagueAwardRaceGrid" in standings
+    assert "LeaguePlayerRoster" in standings
     assert "data.award_progress.awards.length" in team
     assert team.index(">Awards race<") < team.index(">Team standings<")
 
@@ -96,6 +98,23 @@ def test_player_summary_selection_is_immediate_and_singles_hides_partner() -> No
     assert "onChange" in selector
     assert 'data.league?.match_format === "singles"' in page
     assert "Partner:" in page
+
+
+def test_league_creation_and_player_positions_follow_award_race_rules() -> None:
+    create = _read("apps/web/app/admin/league-manager/create/LeagueCreatePanel.tsx")
+    profile = _read("apps/web/app/clubs/[clubSlug]/players/[playerId]/page.tsx")
+    roster = _read("apps/web/components/LeaguePlayerRoster.tsx")
+    race = _read("apps/web/components/LeagueAwardRace.tsx")
+
+    assert "function changeMatchFormat" in create
+    assert 'nextMatchFormat === "singles" && leagueFormat === "rotating_partner"' in create
+    assert 'createMatchFormat === "doubles" ? <option value="rotating_partner"' in create
+    assert "function isLeagueName" in profile
+    assert "leaguePositionNames" in profile
+    assert "Rating position" not in profile
+    assert "eligible_count" in profile
+    assert "Sort roster by" in roster
+    assert "View all eligible players" in race
 
 
 def test_print_css_hides_admin_sidebar_and_uses_full_width() -> None:

@@ -68,9 +68,20 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
   }
 
   function changeSeasonFormat(nextFormat: typeof leagueFormat) {
+    if (matchFormat === "singles" && nextFormat === "rotating_partner") {
+      setLeagueFormat("ladder");
+      return;
+    }
     setLeagueFormat(nextFormat);
     if (nextFormat === "flex_challenge") setSessionMode("self_scheduled");
     else if (sessionMode === "self_scheduled") setSessionMode("scheduled_rounds");
+  }
+
+  function changeMatchFormat(nextMatchFormat: "doubles" | "singles") {
+    setMatchFormat(nextMatchFormat);
+    if (nextMatchFormat === "singles" && leagueFormat === "rotating_partner") {
+      setLeagueFormat("ladder");
+    }
   }
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -182,7 +193,7 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
           <strong>Match modality</strong><br />
           <select
             value={createMatchFormat}
-            onChange={(event) => setMatchFormat(event.target.value as "doubles" | "singles")}
+            onChange={(event) => changeMatchFormat(event.target.value as "doubles" | "singles")}
             disabled={leagueType === "Team"}
             aria-describedby={leagueType === "Team" ? "team-league-format-note" : undefined}
             style={inputStyle}
@@ -197,7 +208,7 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
           <select value={leagueType === "Team" ? "fixed_team" : leagueFormat} onChange={(event) => changeSeasonFormat(event.target.value as typeof leagueFormat)} disabled={leagueType === "Team"} style={inputStyle}>
             <option value="ladder">Ladder league</option>
             <option value="round_robin">Season round robin</option>
-            <option value="rotating_partner">Rotating-partner individual league</option>
+            {createMatchFormat === "doubles" ? <option value="rotating_partner">Rotating-partner individual league</option> : null}
             <option value="flex_challenge">Flex challenge league</option>
             {leagueType === "Team" ? <option value="fixed_team">Fixed-team league</option> : null}
           </select>

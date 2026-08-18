@@ -18,6 +18,7 @@ from jupr_app.domain.leagues import (
     mint_top_performer_badges,
     normalize_league_status,
 )
+from jupr_app.domain.awards import TOP_PERFORMER_SPECS
 from jupr_app.domain.league_analytics import (
     award_category_catalog,
     compute_league_player_analytics,
@@ -471,6 +472,170 @@ def _computed_configured_awards(
                 }
             )
     return result
+
+
+_LEGACY_PUBLIC_AWARD_KEYS = tuple(
+    spec.category_key for spec in TOP_PERFORMER_SPECS
+)
+
+
+def _award_minimum(
+    config: Mapping[str, Any], meta_row: Mapping[str, Any]
+) -> int:
+    """Return the configured award threshold with a safe legacy fallback."""
+
+    for value in (
+        config.get("minimum"),
+        config.get("min_games"),
+        config.get("default_min_games"),
+        meta_row.get("min_games"),
+    ):
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _award_race_entries(
+    spec: Mapping[str, Any],
+    recipients: Sequence[Mapping[str, Any]],
+    *,
+    minimum: int,
+) -> list[dict[str, Any]]:
+    """Build every currently qualified public placement for one award race.
+
+    These are live race positions, not the final award recipients.  Keeping the
+    full qualified field here lets the public view show a short preview while
+    a player profile can still explain a player's exact current context.
+    """
+
+    metric = str(spec.get("metric") or "")
+    minimum_metric = str(spec.get("minimum_metric") or "games")
+    qualified = [
+        dict(row)
+        for row in recipients
+        if row.get(metric) is not None
+        and float(row.get(minimum_metric) or 0) >= minimum
+    ]
+    qualified.sort(
+        key=lambda row: (
+            -float(row.get(metric) or 0),
+            str(row.get("player_name") or row.get("team_name") or "").lower(),
+            str(row.get("player_id") or row.get("team_id") or ""),
+        )
+    )
+    if not qualified:
+        return []
+
+    result: list[dict[str, Any]] = []
+    previous_metric: float | None = None
+    previous_rank = 0
+    for index, row in enumerate(qualified, start=1):
+        metric_value = row.get(metric)
+        numeric_metric = float(metric_value or 0)
+        rank = previous_rank if previous_metric is not None and numeric_metric == previous_metric else index
+        previous_metric = numeric_metric
+        previous_rank = rank
+        recipient_type = str(spec.get("recipient_type") or "player")
+        recipient_id = row.get("team_id") if recipient_type == "team" else row.get("player_id")
+        if recipient_id in (None, ""):
+            continue
+        result.append(
+            {
+                "category_key": str(spec.get("key") or ""),
+                "category_label": str(spec.get("label") or "Award"),
+                "recipient_type": recipient_type,
+                "player_id": row.get("player_id"),
+                "team_id": row.get("team_id"),
+                "recipient_name": row.get("player_name") or row.get("team_name"),
+                "metric_value": metric_value,
+                "metric_display": _metric_display(spec, row, metric_value),
+                "rank": rank,
+                "is_co_winner": sum(
+                    float(other.get(metric) or 0) == numeric_metric
+                    for other in qualified
+                ) > 1,
+                "min_games": minimum,
+                "minimum_metric": minimum_metric,
+            }
+        )
+    return result
+
+
+def _public_award_races(
+    meta_row: Mapping[str, Any],
+    analytics: Mapping[str, Any],
+    awards_config: Mapping[str, Any],
+    *,
+    explicit_categories: bool,
+) -> list[dict[str, Any]]:
+    """Return all qualified placements, grouped by the enabled public award."""
+
+    catalog = {
+        str(row.get("key")): dict(row)
+        for row in analytics.get("catalog", [])
+        if isinstance(row, Mapping) and row.get("key")
+    }
+    raw_categories = awards_config.get("categories")
+    categories = raw_categories if isinstance(raw_categories, Mapping) else {}
+    if explicit_categories:
+        category_configs = [
+            (str(key), dict(value) if isinstance(value, Mapping) else {})
+            for key, value in categories.items()
+        ]
+    else:
+        category_configs = [(key, {}) for key in _LEGACY_PUBLIC_AWARD_KEYS]
+
+    races: list[dict[str, Any]] = []
+    for category_key, config in category_configs:
+        if config.get("enabled") is False:
+            continue
+        spec = catalog.get(category_key)
+        if not spec:
+            continue
+        recipients = (
+            analytics.get("team_analytics", [])
+            if spec.get("recipient_type") == "team"
+            else analytics.get("player_analytics", [])
+        )
+        minimum = _award_minimum(config, meta_row)
+        entries = _award_race_entries(spec, recipients, minimum=minimum)
+        if not entries:
+            continue
+        races.append(
+            {
+                "category_key": category_key,
+                "category_label": spec.get("label"),
+                "recipient_type": spec.get("recipient_type"),
+                "min_games": minimum,
+                "minimum_metric": spec.get("minimum_metric") or "games",
+                "eligible_count": len(entries),
+                "entries": entries,
+            }
+        )
+    return races
+
+
+def _public_award_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep the public race projection deliberately limited to display data."""
+
+    return {
+        "category_key": row.get("category_key"),
+        "category_label": row.get("category_label"),
+        "recipient_type": row.get("recipient_type"),
+        "player_id": row.get("player_id"),
+        "team_id": row.get("team_id"),
+        "recipient_name": row.get("recipient_name")
+        or row.get("player_name")
+        or row.get("team_name"),
+        "metric_value": row.get("metric_value"),
+        "metric_display": row.get("metric_display"),
+        "rank": row.get("rank"),
+        "is_co_winner": row.get("is_co_winner"),
+        "min_games": row.get("min_games"),
+        "minimum_metric": row.get("minimum_metric"),
+    }
 
 
 def _metric_display(
@@ -993,6 +1158,7 @@ def get_public_league_award_progress(
         )
         if not meta_row:
             return {"awards": [], "award_count": 0}
+        awards_config = _json_value(meta_row.get("awards_config"), {}) or {}
         enabled_specs = _enabled_public_award_specs(meta_row)
         explicit_categories = _has_explicit_award_categories(meta_row)
         if explicit_categories and not enabled_specs:
@@ -1034,32 +1200,41 @@ def get_public_league_award_progress(
         rows = list(analytics.get("award_progress") or [])
         if not explicit_categories:
             rows = list(computed_awards or [])
+        races = _public_award_races(
+            meta_row,
+            analytics,
+            awards_config if isinstance(awards_config, Mapping) else {},
+            explicit_categories=explicit_categories,
+        )
     except Exception:
         rows = []
-    safe_rows = [
+        races = []
+    safe_rows = [_public_award_row(row) for row in rows]
+    safe_races = [
         {
-            "category_key": row.get("category_key"),
-            "category_label": row.get("category_label"),
-            "recipient_type": row.get("recipient_type"),
-            "player_id": row.get("player_id"),
-            "team_id": row.get("team_id"),
-            # Legacy top-performer rows use ``player_name`` while configured
-            # category rows use ``recipient_name``.  The public projection is
-            # deliberately one shape, so preserve either without exposing any
-            # private player fields.
-            "recipient_name": row.get("recipient_name")
-            or row.get("player_name")
-            or row.get("team_name"),
-            "metric_value": row.get("metric_value"),
-            "metric_display": row.get("metric_display"),
-            "rank": row.get("rank"),
-            "is_co_winner": row.get("is_co_winner"),
-            "min_games": row.get("min_games"),
-            "minimum_metric": row.get("minimum_metric"),
+            "category_key": race.get("category_key"),
+            "category_label": race.get("category_label"),
+            "recipient_type": race.get("recipient_type"),
+            "min_games": race.get("min_games"),
+            "minimum_metric": race.get("minimum_metric"),
+            "eligible_count": race.get("eligible_count"),
+            "entries": [
+                _public_award_row(entry)
+                for entry in race.get("entries", [])
+                if isinstance(entry, Mapping)
+            ],
         }
-        for row in rows
+        for race in races
+        if isinstance(race, Mapping)
     ]
-    return {"awards": safe_rows, "award_count": len(safe_rows)}
+    response = {
+        "awards": safe_rows,
+        "award_count": len(safe_rows),
+    }
+    if safe_races:
+        response["races"] = safe_races
+        response["race_count"] = len(safe_races)
+    return response
 
 
 def get_admin_league_awards_wizard(supabase: Any, *, club_id: str, league_name: str) -> dict[str, Any]:
