@@ -2,6 +2,7 @@ import Link from "next/link";
 import PublicLeagueNav, {
   publicLeagueResultsHref
 } from "@/components/PublicLeagueNav";
+import { LeagueAwardRaceGrid } from "@/components/LeagueAwardRace";
 import { getClubLeagueResults } from "@/lib/api";
 
 type Props = {
@@ -22,11 +23,6 @@ function decodeLeagueName(value: string): string {
   } catch {
     return value;
   }
-}
-
-function ratingLabel(value?: number | null): string {
-  if (value == null || Number.isNaN(Number(value))) return "—";
-  return Number(value).toFixed(3);
 }
 
 export default async function PublicLeagueHomePage({ params }: Props) {
@@ -77,9 +73,9 @@ export default async function PublicLeagueHomePage({ params }: Props) {
 
   const modules = [
     {
-      title: "Awards race & rating standings",
+      title: "Awards race & player roster",
       description:
-        "Award leaders and qualification first, with rating standings kept separate below.",
+        "Award placement and qualification first, with an unranked player roster below.",
       href: publicLeagueResultsHref(
         params.clubSlug,
         leagueName,
@@ -124,7 +120,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
       </p>
       <h1 style={{ marginTop: 0 }}>{leagueName}</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Awards-race leaders, rating standings, weekly history, player summaries, and public league results
+        Awards-race placement, an unranked player roster, weekly history, player summaries, and public league results
         for this league.
       </p>
 
@@ -179,9 +175,9 @@ export default async function PublicLeagueHomePage({ params }: Props) {
           }}
         >
           <div>
-            <strong>Ranked players</strong>
+            <strong>Players with a league rating</strong>
             <br />
-            {standings.filter((row) => row.rank != null).length}
+            {standings.filter((row) => row.rating_jupr != null).length}
           </div>
           <div>
             <strong>Players shown</strong>
@@ -246,7 +242,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
           <div>
             <h2 style={{ marginBottom: "0.25rem" }}>Awards race</h2>
             <p style={{ marginTop: 0, color: "#64748b" }}>
-              Current award leaders who have qualified.
+              Top five qualified players for every award, with the full eligible field available on the standings page.
             </p>
           </div>
           <Link
@@ -257,48 +253,11 @@ export default async function PublicLeagueHomePage({ params }: Props) {
             )}
             style={{ fontWeight: 800 }}
           >
-            View awards race and rating standings
+            View awards race and player roster
           </Link>
         </div>
 
-        {data.award_progress.awards.length ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.55rem", marginBottom: "1rem" }}>{data.award_progress.awards.map((award) => <article key={`${award.category_key}-${award.rank}-${award.team_id || award.player_id}`} style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}><strong>{award.category_label}{award.rank && award.rank > 1 ? ` · #${award.rank}` : ""}</strong><br />{award.recipient_name || "—"}<br /><small>{award.metric_display || "—"} · Minimum {award.min_games ?? 0} {String(award.minimum_metric || "games").replace(/_/g, " ")}</small></article>)}</div> : <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "1rem" }}>No player has met the current award qualification criteria yet.</article>}
-
-        <div style={{ marginTop: "1.25rem" }}>
-          <h2 style={{ marginBottom: "0.25rem" }}>Rating standings preview</h2>
-          <p style={{ marginTop: 0, color: "#64748b" }}>The top five by rating. Rating position is separate from awards leadership.</p>
-        </div>
-
-        {standings.length ? (
-          <div style={{ display: "grid", gap: "0.55rem" }}>
-            {standings.slice(0, 5).map((row) => (
-              <article
-                key={String(row.player_id)}
-                style={{
-                  ...cardStyle,
-                  display: "grid",
-                  gridTemplateColumns: "52px minmax(0, 1fr) auto",
-                  gap: "0.75rem",
-                  alignItems: "center"
-                }}
-              >
-                <strong>#{row.rank ?? "—"}</strong>
-                <div>
-                  <strong>{row.player_name}</strong>
-                  <div style={{ color: "#64748b", fontSize: "0.88rem" }}>
-                    {row.wins ?? 0}-{row.losses ?? 0} · {row.matches_played ?? 0} games
-                  </div>
-                </div>
-                <strong>{ratingLabel(row.rating_jupr)}</strong>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <article style={cardStyle}>
-            <p style={{ margin: 0, color: "#64748b" }}>
-              This league does not have public standings yet.
-            </p>
-          </article>
-        )}
+        {data.award_progress.awards.length ? <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} /> : <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "1rem" }}>No player has met the current award qualification criteria yet.</article>}
       </section>
     </section>
   );

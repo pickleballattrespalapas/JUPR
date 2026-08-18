@@ -1,5 +1,7 @@
 import Link from "next/link";
 import PublicLeagueNav from "@/components/PublicLeagueNav";
+import { LeagueAwardRaceGrid } from "@/components/LeagueAwardRace";
+import LeaguePlayerRoster from "@/components/LeaguePlayerRoster";
 import { getClubLeagueResults, type LeagueResultsStatRow } from "@/lib/api";
 import PrintButton from "../../../league-results/PrintButton";
 
@@ -21,22 +23,6 @@ function decodeLeagueName(value: string): string {
   } catch {
     return value;
   }
-}
-
-function ratingLabel(value?: number | null): string {
-  if (value == null || Number.isNaN(Number(value))) return "—";
-  return Number(value).toFixed(3);
-}
-
-function percentLabel(value?: number | null): string {
-  if (value == null || Number.isNaN(Number(value))) return "—";
-  return `${Number(value).toFixed(1)}%`;
-}
-
-function deltaLabel(value?: number | null): string {
-  if (value == null || Number.isNaN(Number(value))) return "—";
-  const amount = Number(value);
-  return `${amount >= 0 ? "+" : ""}${amount.toFixed(3)}`;
 }
 
 function highlightNames(rows: LeagueResultsStatRow[]): string {
@@ -73,7 +59,7 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
     );
   }
 
-  const rankedPlayers = data.standings.filter((row) => row.rank != null).length;
+  const ratedPlayers = data.standings.filter((row) => row.rating_jupr != null).length;
   const resultWeeks = data.weeks.filter((week) => week.has_results !== false).length;
 
   return (
@@ -96,13 +82,13 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
       </p>
       <h1 style={{ marginTop: 0 }}>{leagueName} awards race</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Awards-race leaders and qualification come first. Rating standings remain available below as a separate performance reference.
+        Awards-race placement and qualification come first. An unranked player roster remains available below as a reference.
       </p>
 
       <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="overall" />
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
-        <article style={cardStyle}><strong>Ranked players</strong><br />{rankedPlayers}</article>
+        <article style={cardStyle}><strong>Players with a league rating</strong><br />{ratedPlayers}</article>
         <article style={cardStyle}><strong>Players shown</strong><br />{data.standings.length}</article>
         <article style={cardStyle}><strong>Minimum games</strong><br />{data.league?.min_games ?? 0}</article>
         <article style={cardStyle}><strong>Weeks with results</strong><br />{resultWeeks}</article>
@@ -116,57 +102,18 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
         <h2>Awards race</h2>
         {data.award_progress.awards.length ? (
           <>
-            <p style={{ color: "#64748b" }}>Current leaders who have met each award&apos;s minimum criterion.</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
-              {data.award_progress.awards.map((award) => (
-                <article key={`${award.category_key}-${award.rank}-${award.team_id || award.player_id}`} style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
-                  <strong>{award.category_label}{award.rank && award.rank > 1 ? ` · #${award.rank}` : ""}</strong>
-                  <h3 style={{ margin: "0.45rem 0 0.2rem" }}>{award.recipient_name || "—"}{award.is_co_winner ? " · co-leader" : ""}</h3>
-                  <p style={{ margin: 0, color: "#475569" }}>{award.metric_display || "—"} · Minimum {award.min_games ?? 0} {String(award.minimum_metric || "games").replace(/_/g, " ")}</p>
-                </article>
-              ))}
-            </div>
+            <p style={{ color: "#64748b" }}>Top five qualified players are shown for each award. Expand a race to see every eligible player.</p>
+            <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} />
           </>
         ) : <article style={{ ...cardStyle, background: "#f8fafc" }}>No player has met the current award qualification criteria yet.</article>}
       </section>
 
       <section>
-        <h2>Rating standings</h2>
+        <h2>Player roster</h2>
         <p style={{ color: "#64748b" }}>
-          This table is ordered by rating. It is not the league&apos;s awards race; players who have not yet earned a league rating remain unranked.
+          This is an unranked reference roster. Sort it by the measure you need; award placement is shown above.
         </p>
-        {data.standings.length ? (
-          <div style={{ display: "grid", gap: "0.65rem" }}>
-            {data.standings.map((row) => (
-              <article
-                key={String(row.player_id)}
-                style={{
-                  ...cardStyle,
-                  display: "grid",
-                  gridTemplateColumns: "48px minmax(0, 1fr) auto",
-                  gap: "0.75rem",
-                  alignItems: "center"
-                }}
-              >
-                <strong style={{ fontSize: "1.05rem" }}>#{row.rank ?? "—"}</strong>
-                <div>
-                  <Link href={`/clubs/${params.clubSlug}/players/${row.player_id}`} style={{ fontWeight: 800 }}>
-                    {row.player_name}
-                  </Link>
-                  <div style={{ color: "#64748b", fontSize: "0.88rem", marginTop: "0.2rem" }}>
-                    {row.wins ?? 0}-{row.losses ?? 0} · {row.matches_played ?? 0} games · {percentLabel(row.win_pct)} wins
-                  </div>
-                </div>
-                <div style={{ textAlign: "right" }}>
-                  <strong>{ratingLabel(row.rating_jupr)}</strong>
-                  <div style={{ color: "#64748b", fontSize: "0.82rem" }}>{deltaLabel(row.rating_delta_jupr)}</div>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <article style={cardStyle}>No public standings are available for this league yet.</article>
-        )}
+        <LeaguePlayerRoster standings={data.standings} clubSlug={params.clubSlug} />
       </section>
 
       <section style={{ marginTop: "1.25rem" }}>

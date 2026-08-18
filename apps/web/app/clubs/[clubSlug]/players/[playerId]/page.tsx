@@ -8,11 +8,12 @@ type PlayerProfilePageProps = {
 
 type SectionKey = "overview" | "ratings" | "positions" | "trophies" | "social" | "matches" | "badges";
 type HistoryKey = "recent" | "all";
+type PlayerAwardPlacement = LeagueAwardProgressRow & { eligible_count?: number | null };
 type LeaguePosition = {
   leagueName: string;
   result: LeagueResultsResponse | null;
   error: string | null;
-  awards: LeagueAwardProgressRow[];
+  awards: PlayerAwardPlacement[];
 };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -83,6 +84,22 @@ function gameLabel(value: number): string {
   return `${value} ${value === 1 ? "game" : "games"}`;
 }
 
+function isLeagueName(value?: string | null): value is string {
+  const normalized = String(value || "").trim().toLowerCase();
+  return Boolean(normalized) && normalized !== "popup" && normalized !== "pop up";
+}
+
+function playerAwardPlacements(result: LeagueResultsResponse | null, playerId: string | number): PlayerAwardPlacement[] {
+  const races = result?.award_progress.races || [];
+  if (races.length) {
+    return races.flatMap((race) => (race.entries || [])
+      .filter((entry) => String(entry.player_id ?? "") === String(playerId))
+      .map((entry) => ({ ...entry, eligible_count: race.eligible_count ?? race.entries.length })));
+  }
+  return (result?.award_progress.awards || [])
+    .filter((award) => String(award.player_id ?? "") === String(playerId));
+}
+
 function relationshipCard(clubSlug: string, title: string, testId: string, relationship?: PublicRelationship | null) {
   return (
     <article style={cardStyle} data-testid={testId}>
@@ -150,19 +167,20 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
   const leagueRatings = data.league_ratings ?? [];
   const sourceMatches = historyView === "all" ? data.match_history : data.recent_matches;
   const leagues = Array.from(new Set([...leagueRatings.map((row) => row.league_name).filter(Boolean), ...data.match_history.map((match) => match.league).filter(Boolean)] as string[])).sort((a, b) => a.localeCompare(b));
+  const leaguePositionNames = leagues.filter(isLeagueName);
   const matches = selectedLeague ? sourceMatches.filter((match) => match.league === selectedLeague) : sourceMatches;
   const awards = data.awards;
   const social = data.social;
   const verifiedLabel = data.verified_updates.status === "enabled" ? "Verified updates enabled" : data.verified_updates.status === "pending" ? "Verified updates pending review" : "Verified updates available";
   const leaguePositions: LeaguePosition[] = section === "positions"
-    ? await Promise.all(leagues.map(async (leagueName) => {
+    ? await Promise.all(leaguePositionNames.map(async (leagueName) => {
       const response = await getClubLeagueResults(clubSlug, leagueName, null, player.id);
       const result = response.data;
       return {
         leagueName,
         result,
         error: response.error,
-        awards: (result?.award_progress.awards || []).filter((award) => String(award.player_id ?? "") === String(player.id))
+        awards: playerAwardPlacements(result, player.id)
       };
     }))
     : [];
@@ -208,7 +226,7 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
             </p>
           </article>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: "0.75rem" }}>
-            <article style={cardStyle}><strong>League positions</strong><p style={{ color: "#475569" }}>Current rating position, awards-race leadership, and qualification status by league.</p><Link href={pageHref({ clubSlug, playerId, section: "positions" })}>Open league positions</Link></article>
+            <article style={cardStyle}><strong>League positions</strong><p style={{ color: "#475569" }}>Awards-race placement, league rating, record, and qualification status by league.</p><Link href={pageHref({ clubSlug, playerId, section: "positions" })}>Open league positions</Link></article>
             <article style={cardStyle}><strong>Trophy case</strong><p style={{ color: "#475569" }}>End-of-league awards and tournament podium honors only.</p><Link href={pageHref({ clubSlug, playerId, section: "trophies" })}>Open trophy case</Link></article>
             <article style={cardStyle}><strong>Badge cabinet</strong><p style={{ color: "#475569" }}>Repeatable progression and participation achievements.</p><Link href={pageHref({ clubSlug, playerId, section: "badges" })}>Open badge cabinet</Link></article>
           </div>
@@ -219,7 +237,7 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
         <section id="positions" data-testid="player-league-positions" style={{ display: "grid", gap: "1rem", marginBottom: "1rem" }}>
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>My league positions</h2>
-            <p style={{ color: "#475569", marginBottom: 0 }}>This is a player-only view. Rating position is kept separate from current awards-race leadership and eligibility.</p>
+            <p style={{ color: "#475569", marginBottom: 0 }}>This is a player-only view of current awards-race placement, league rating, record, and eligibility.</p>
           </article>
           {leaguePositions.length === 0 ? <article style={cardStyle}>No public league positions yet.</article> : leaguePositions.map((position) => {
             const summary = position.result?.player_summary;
@@ -232,14 +250,13 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
                 <h3 style={{ marginTop: 0 }}>{position.leagueName}</h3>
                 {position.error || !summary ? <p style={{ color: "#92400e" }}>League-position data is not available right now.</p> : <>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))", gap: "0.65rem", marginBottom: "0.85rem" }}>
-                    <div><strong>Rating position</strong><br />#{summary.rank ?? "—"}</div>
                     <div><strong>League rating</strong><br />{ratingLabel(summary.rating_jupr)}</div>
                     <div><strong>Record</strong><br />{summary.wins ?? 0}-{summary.losses ?? 0}</div>
                     <div><strong>Qualification</strong><br />{eligible ? `Eligible (${gameLabel(games)})` : `${gameLabel(needed)} needed`}</div>
                   </div>
                   <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: "0.75rem" }}>
                     <strong>Awards race</strong>
-                    {position.awards.length ? <ul style={{ marginBottom: 0 }}>{position.awards.map((award) => <li key={`${award.category_key}-${award.rank}`}>{award.category_label}{award.rank && award.rank > 1 ? ` · #${award.rank}` : ""} — {award.metric_display || "current leader"}{award.is_co_winner ? " · co-leader" : ""}</li>)}</ul> : <p style={{ color: "#475569", marginBottom: 0 }}>{eligible ? "Not currently leading a public awards race." : `Awards become eligible after ${gameLabel(minimumGames)}.`}</p>}
+                    {position.awards.length ? <ul style={{ marginBottom: 0 }}>{position.awards.map((award) => <li key={`${award.category_key}-${award.rank}`}>{award.category_label} — #{award.rank ?? "—"}{award.eligible_count ? ` of ${award.eligible_count} eligible` : ""} · {award.metric_display || "—"}{award.is_co_winner ? " · tied" : ""}</li>)}</ul> : <p style={{ color: "#475569", marginBottom: 0 }}>{eligible ? "No current awards-race placement is available yet." : `Awards become eligible after ${gameLabel(minimumGames)}.`}</p>}
                   </div>
                 </>}
               </article>

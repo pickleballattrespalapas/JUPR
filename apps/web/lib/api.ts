@@ -427,9 +427,21 @@ export type LeagueAwardProgressRow = {
   minimum_metric?: string | null;
 };
 
+export type LeagueAwardRace = {
+  category_key: string;
+  category_label: string;
+  recipient_type?: "player" | "team" | string | null;
+  min_games?: number | null;
+  minimum_metric?: string | null;
+  eligible_count?: number | null;
+  entries: LeagueAwardProgressRow[];
+};
+
 export type LeagueAwardProgress = {
   awards: LeagueAwardProgressRow[];
   award_count: number;
+  races?: LeagueAwardRace[];
+  race_count?: number;
 };
 
 export type LeagueResultsStanding = {

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { LeagueAwardRaceGrid } from "@/components/LeagueAwardRace";
 import { getPublicTeamLeague, teamLeagueApiBaseUrl } from "@/lib/teamLeagueApi";
 import TeamLeagueRegistrationForm from "./TeamLeagueRegistrationForm";
 
@@ -54,10 +55,8 @@ export default async function TeamLeagueDetailPage({ params }: Props) {
       <article style={{ ...card, background: "#eff6ff", borderColor: "#bfdbfe" }} data-testid="team-league-awards">
         <h2 style={{ marginTop: 0 }}>Awards race</h2>
         {data.award_progress.awards.length ? <>
-          <p style={{ color: "#475569" }}>Current leaders who have met each configured minimum criterion.</p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 210px), 1fr))", gap: "0.75rem" }}>
-            {data.award_progress.awards.map((award) => <div key={`${award.category_key}-${award.rank}-${award.team_id || award.player_id}`} style={{ padding: "0.75rem", borderRadius: "10px", background: "white" }}><strong>{award.category_label}{award.rank && award.rank > 1 ? ` · #${award.rank}` : ""}</strong><br />{award.recipient_name || "—"}{award.is_co_winner ? " · co-leader" : ""}<br /><small>{award.metric_display || "—"} · Minimum {award.min_games ?? 0} {String(award.minimum_metric || "games").replace(/_/g, " ")}</small></div>)}
-          </div>
+          <p style={{ color: "#475569" }}>Top five qualified teams are shown for each award. Expand a race to see every eligible team.</p>
+          <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} />
         </> : <p style={{ color: "#475569", marginBottom: 0 }}>No team has met the current award qualification criteria yet.</p>}
       </article>
       <article style={card}>

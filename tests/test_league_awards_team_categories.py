@@ -370,6 +370,61 @@ def test_public_awards_default_to_qualified_top_performers_when_categories_are_u
     ]
 
 
+def test_public_award_races_include_every_eligible_player_and_competition_ranks() -> None:
+    storage = _storage()
+    storage["leagues_metadata"][0].update(
+        league_type="Individual",
+        match_format="singles",
+        min_games=0,
+        awards_config={
+            "categories": {
+                "highest_rating": {"enabled": True, "depth": 1, "minimum": 0}
+            }
+        },
+    )
+    storage["league_ratings"] = [
+        {
+            "club_id": "club",
+            "league_name": "Open",
+            "player_id": player_id,
+            "rating": rating,
+            "starting_rating": rating,
+            "is_active": True,
+        }
+        for player_id, rating in ((1, 1600), (2, 1700), (3, 1700), (4, 1500))
+    ]
+    storage["matches"] = [
+        {
+            "id": match_id,
+            "club_id": "club",
+            "league": "Open",
+            "match_format": "singles",
+            "date": "2026-08-16",
+            "t1_p1": first,
+            "t2_p1": second,
+            "score_t1": 11,
+            "score_t2": 8,
+        }
+        for match_id, first, second in ((101, 1, 2), (102, 3, 4))
+    ]
+
+    public = get_public_league_award_progress(
+        FakeSupabase(storage), club_id="club", league_name="Open"
+    )
+
+    assert public["award_count"] == 2
+    race = public["races"][0]
+    assert race["category_key"] == "highest_rating"
+    assert race["eligible_count"] == 4
+    assert [entry["recipient_name"] for entry in race["entries"]] == [
+        "Blair",
+        "Casey",
+        "Alex",
+        "Devon",
+    ]
+    assert [entry["rank"] for entry in race["entries"]] == [1, 1, 3, 4]
+
+
 def test_public_awards_respect_an_explicit_empty_categories_choice() -> None:
     storage = _storage()
     storage["leagues_metadata"][0]["awards_config"] = {"categories": {}}
