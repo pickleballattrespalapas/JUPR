@@ -107,3 +107,62 @@ def test_admin_results_require_one_exact_metadata_row() -> None:
             club_id="club",
             league_name="Winter 2024",
         )
+
+
+def test_active_admin_results_only_include_current_league_members() -> None:
+    tables = {
+        "leagues_metadata": [
+            {
+                "id": "active-1",
+                "club_id": "club",
+                "league_name": "Summer",
+                "league_type": "Individual",
+                "match_format": "doubles",
+                "is_active": True,
+                "status": "active",
+                "min_games": 1,
+                "k_factor": 24,
+                "schedule_config": {"weeks": 1},
+            }
+        ],
+        "players": [
+            {"id": player_id, "club_id": "club", "name": name, "rating": 1500, "active": True}
+            for player_id, name in ((1, "Current A"), (2, "Current B"), (3, "Former A"), (4, "Former B"))
+        ],
+        "league_ratings": [
+            {"club_id": "club", "player_id": 1, "league_name": "Summer", "rating": 1510, "starting_rating": 1500, "wins": 1, "losses": 0, "matches_played": 1, "is_active": True},
+            {"club_id": "club", "player_id": 2, "league_name": "Summer", "rating": 1490, "starting_rating": 1500, "wins": 0, "losses": 1, "matches_played": 1, "is_active": True},
+            {"club_id": "club", "player_id": 3, "league_name": "Summer", "rating": 1600, "starting_rating": 1500, "wins": 4, "losses": 0, "matches_played": 4, "is_active": False, "inactive_at": "2026-08-01T00:00:00Z"},
+            {"club_id": "club", "player_id": 4, "league_name": "Summer", "rating": 1400, "starting_rating": 1500, "wins": 0, "losses": 4, "matches_played": 4, "is_active": False, "inactive_at": "2026-08-01T00:00:00Z"},
+        ],
+        "matches": [
+            {
+                "id": 20,
+                "club_id": "club",
+                "date": "2026-08-01T00:00:00Z",
+                "league": "Summer",
+                "match_type": "Live Match",
+                "week_tag": "Week 1",
+                "t1_p1": 1,
+                "t1_p2": 2,
+                "t2_p1": 3,
+                "t2_p2": 4,
+                "score_t1": 11,
+                "score_t2": 7,
+                "deleted_at": None,
+            }
+        ],
+    }
+
+    payload = build_admin_league_results(
+        FakeSupabase(tables), club_id="club", league_name="Summer"
+    )
+
+    assert {row["player_name"] for row in payload["standings"]} == {
+        "Current A",
+        "Current B",
+    }
+    assert {row["player_name"] for row in payload["weekly_results"]} == {
+        "Current A",
+        "Current B",
+    }

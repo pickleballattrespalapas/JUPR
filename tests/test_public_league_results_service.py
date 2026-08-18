@@ -180,11 +180,13 @@ def test_public_league_results_overview_excludes_inactive_leagues() -> None:
     overview = get_public_league_results_overview(fake_supabase(), club_id="club")
 
     assert overview["leagues"] == [
-        {
-            "name": "Open",
-            "min_games": 4,
-            "k_factor": 24,
-            "start_week": None,
+            {
+                "name": "Open",
+                "min_games": 4,
+                "k_factor": 24,
+                "league_type": "Individual",
+                "match_format": "doubles",
+                "start_week": None,
             "end_week": None,
             "num_weeks": None,
         }
@@ -212,11 +214,13 @@ def test_public_league_results_maps_configured_schedule_weeks() -> None:
     )
 
     assert overview["leagues"] == [
-        {
-            "name": "Scheduled",
-            "min_games": 2,
-            "k_factor": 24,
-            "start_week": None,
+            {
+                "name": "Scheduled",
+                "min_games": 2,
+                "k_factor": 24,
+                "league_type": "Individual",
+                "match_format": "doubles",
+                "start_week": None,
             "end_week": None,
             "num_weeks": 6,
         }
@@ -276,15 +280,7 @@ def test_public_league_results_builds_standings_weekly_and_highlights() -> None:
     assert payload["standings"][0]["rating_jupr"] == 4.1
     assert payload["standings"][0]["rating_delta_jupr"] == 0.1
     assert "admin_notes" not in payload["standings"][0]
-    devon_standing = next(
-        row for row in payload["standings"] if row["player_name"] == "Devon"
-    )
-    assert devon_standing["rank"] is None
-    assert (
-        devon_standing["matches_played"],
-        devon_standing["wins"],
-        devon_standing["losses"],
-    ) == (2, 1, 1)
+    assert "Devon" not in {row["player_name"] for row in payload["standings"]}
     alex_season = next(
         row for row in payload["cumulative"] if row["player_name"] == "Alex"
     )
@@ -300,7 +296,7 @@ def test_public_league_results_builds_standings_weekly_and_highlights() -> None:
     ]
     assert payload["selected_week"] == 2
     week_two = [row for row in payload["weekly_results"] if row["week_num"] == 2]
-    assert {row["player_name"] for row in week_two} == {"Alex", "Blair", "Casey", "Devon"}
+    assert {row["player_name"] for row in week_two} == {"Alex", "Blair", "Casey"}
     blair_week_two = next(row for row in week_two if row["player_name"] == "Blair")
     assert blair_week_two["rank"] == 2
     assert blair_week_two["rank_delta"] == 0
@@ -312,7 +308,7 @@ def test_public_league_results_builds_standings_weekly_and_highlights() -> None:
     assert payload["season_highlights"]["scope"] == "season"
     assert payload["season_highlights"]["min_games"] == 4
     assert payload["season_highlights"]["best_win_pct"][0]["player_name"] == "Alex"
-    assert len(payload["players"]) == 4
+    assert len(payload["players"]) == 3
     assert payload["selected_player_id"] == 1
     assert payload["player_summary"]["player_name"] == "Alex"
     assert (

@@ -9,7 +9,7 @@ from jupr_app.services.public_league_results_service import (
 )
 
 ADMIN_LEAGUE_RESULTS_META_SELECT = (
-    "id,club_id,league_name,league_type,is_active,status,min_games,k_factor,"
+    "id,club_id,league_name,league_type,match_format,is_active,status,min_games,k_factor,"
     "schedule_config"
 )
 PUBLIC_LEAGUE_STATUSES = {"active", "published", "live"}
@@ -77,6 +77,10 @@ def build_admin_league_results(
     if exact_name != requested:
         raise ValueError("League results were not found.")
 
+    historical = str(metadata.get("status") or "").strip().lower() in {
+        "ended",
+        "archived",
+    }
     results = _build_resolved_league_results(
         supabase,
         club_id=cid,
@@ -85,8 +89,8 @@ def build_admin_league_results(
         week_num=week_num,
         player_id=player_id,
         weekly_min_games=weekly_min_games,
-        include_inactive_players=True,
-        include_inactive_ratings=True,
+        include_inactive_players=historical,
+        include_inactive_ratings=historical,
     )
     league_id = metadata.get("id") or metadata.get("league_id") or exact_name
     return {

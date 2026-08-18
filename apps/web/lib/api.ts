@@ -403,11 +403,33 @@ export type MatchExplorerPreviewResponse = {
 
 export type LeagueResultsLeague = {
   name: string;
+  league_type?: string | null;
+  match_format?: "doubles" | "singles" | string | null;
   min_games?: number | null;
   k_factor?: number | null;
   start_week?: number | null;
   end_week?: number | null;
   num_weeks?: number | null;
+};
+
+export type LeagueAwardProgressRow = {
+  category_key: string;
+  category_label: string;
+  recipient_type?: "player" | "team" | string;
+  player_id?: string | number | null;
+  team_id?: string | null;
+  recipient_name?: string | null;
+  metric_value?: number | null;
+  metric_display?: string | null;
+  rank?: number | null;
+  is_co_winner?: boolean | null;
+  min_games?: number | null;
+  minimum_metric?: string | null;
+};
+
+export type LeagueAwardProgress = {
+  awards: LeagueAwardProgressRow[];
+  award_count: number;
 };
 
 export type LeagueResultsStanding = {
@@ -488,6 +510,7 @@ export type LeagueResultsResponse = {
   weekly_highlights: LeagueResultsHighlights;
   season_highlights: LeagueResultsHighlights;
   highlights: LeagueResultsHighlights;
+  award_progress: LeagueAwardProgress;
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };

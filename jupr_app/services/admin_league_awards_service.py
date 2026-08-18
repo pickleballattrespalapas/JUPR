@@ -305,8 +305,22 @@ def _award_inputs(
         league_name=clean_league,
         players=player_rows,
         league_ratings=league_rows,
+        match_format=_clean_text(meta_row.get("match_format"), limit=20),
         expected_weeks=expected_weeks,
     )
+    if normalize_league_status(meta_row) not in {"ended", "archived"}:
+        active_member_ids = {
+            int(row["player_id"])
+            for row in league_rows
+            if row.get("player_id") not in (None, "")
+            and row.get("is_active") is not False
+            and not row.get("inactive_at")
+        }
+        player_analytics["players"] = [
+            row
+            for row in player_analytics["players"]
+            if int(row.get("player_id") or 0) in active_member_ids
+        ]
     team_analytics = compute_team_league_analytics(fixture_rows, team_rows)
     analytics_context = {
         "catalog": _award_catalog_for_league(meta_row),
@@ -324,6 +338,7 @@ def _award_inputs(
         analytics_context,
         awards_config if isinstance(awards_config, dict) else {},
     )
+    analytics_context["award_progress"] = list(configured or [])
     if configured is not None:
         awards = configured
     meta_row = {**meta_row, "_analytics": analytics_context}
@@ -416,7 +431,7 @@ def _computed_configured_awards(
                     "recipient_name": row.get("player_name")
                     or row.get("team_name"),
                     "metric_value": metric_value,
-                    "metric_display": str(metric_value),
+                    "metric_display": _metric_display(spec, row, metric_value),
                     "rank": rank,
                     "is_co_winner": is_co_winner,
                     "min_games": minimum,
@@ -424,6 +439,30 @@ def _computed_configured_awards(
                 }
             )
     return result
+
+
+def _metric_display(
+    spec: Mapping[str, Any], row: Mapping[str, Any], metric_value: Any
+) -> str:
+    format_name = str(spec.get("format") or "")
+    try:
+        number = float(metric_value)
+    except Exception:
+        return str(metric_value)
+    if format_name == "percent":
+        return f"{number * 100:.1f}%"
+    if format_name in {"rating", "signed_rating"}:
+        prefix = "+" if format_name == "signed_rating" and number > 0 else ""
+        return f"{prefix}{number:.3f}"
+    if format_name in {"integer", "signed_integer"}:
+        prefix = "+" if format_name == "signed_integer" and number > 0 else ""
+        return f"{prefix}{int(number)}"
+    if format_name in {"decimal", "signed_decimal"}:
+        prefix = "+" if format_name == "signed_decimal" and number > 0 else ""
+        return f"{prefix}{number:.2f}"
+    if format_name == "team_record":
+        return f"{int(row.get('wins') or 0)}-{int(row.get('losses') or 0)}"
+    return str(metric_value)
 
 
 def _award_identity(award: Mapping[str, Any]) -> str:
@@ -845,6 +884,8 @@ def _response(
         ),
         "player_analytics": analytics.get("player_analytics", []),
         "team_analytics": analytics.get("team_analytics", []),
+        "award_progress": analytics.get("award_progress", []),
+        "award_progress_count": len(analytics.get("award_progress", [])),
         "provenance": (
             (workflow.get("frozen_snapshot") or {}).get("provenance")
             if workflow.get("frozen_snapshot")
@@ -856,6 +897,44 @@ def _response(
         ),
         **_badge_definition_readiness(supabase),
     }
+
+
+def get_public_league_award_progress(
+    supabase: Any, *, club_id: str, league_name: str
+) -> dict[str, Any]:
+    """Return configured, currently-qualified awards without workflow internals."""
+
+    try:
+        meta_row, _awards, _df_meta, _df_leagues, _id_map = _award_inputs(
+            supabase,
+            club_id=str(club_id),
+            league_name=str(league_name),
+        )
+        analytics = dict(meta_row.get("_analytics") or {})
+        rows = list(analytics.get("award_progress") or [])
+    except Exception:
+        rows = []
+    safe_rows = [
+        {
+            key: row.get(key)
+            for key in (
+                "category_key",
+                "category_label",
+                "recipient_type",
+                "player_id",
+                "team_id",
+                "recipient_name",
+                "metric_value",
+                "metric_display",
+                "rank",
+                "is_co_winner",
+                "min_games",
+                "minimum_metric",
+            )
+        }
+        for row in rows
+    ]
+    return {"awards": safe_rows, "award_count": len(safe_rows)}
 
 
 def get_admin_league_awards_wizard(supabase: Any, *, club_id: str, league_name: str) -> dict[str, Any]:

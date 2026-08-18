@@ -6,9 +6,9 @@ from datetime import date, datetime
 from typing import Any
 
 LEAGUE_META_SELECT = (
-    "club_id,league_name,is_active,status,min_games,k_factor,schedule_config"
+    "club_id,league_name,league_type,match_format,is_active,status,min_games,k_factor,schedule_config"
 )
-LEAGUE_RATINGS_SELECT = "club_id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active"
+LEAGUE_RATINGS_SELECT = "club_id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active,inactive_at"
 PLAYER_SELECT = "id,club_id,name,rating,active,inactive_at"
 MATCH_SELECT = (
     "id,club_id,date,league,match_type,week_tag,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,"
@@ -164,6 +164,13 @@ def _public_league_meta(name: str, meta: dict[str, Any]) -> dict[str, Any]:
         "name": str(name),
         "min_games": _safe_int(meta.get("min_games"), 0) or 0,
         "k_factor": _safe_int(meta.get("k_factor"), None),
+        "league_type": str(meta.get("league_type") or "Individual"),
+        "match_format": (
+            "singles"
+            if str(meta.get("match_format") or "").strip().casefold()
+            == "singles"
+            else "doubles"
+        ),
         "start_week": _safe_int(meta.get("start_week"), None),
         "end_week": _safe_int(meta.get("end_week"), None),
         "num_weeks": _safe_int(
@@ -403,7 +410,9 @@ def _standing_rows(
     for row in rows:
         if str(row.get("league_name") or "").strip() != str(league_name).strip():
             continue
-        if row.get("is_active") is False and not include_inactive:
+        if (
+            row.get("is_active") is False or bool(row.get("inactive_at"))
+        ) and not include_inactive:
             continue
         pid = _safe_int(row.get("player_id"))
         if pid is None or int(pid) not in players_by_id:
@@ -785,6 +794,7 @@ def _build_resolved_league_results(
             "weekly_highlights": empty_highlights,
             "season_highlights": _highlights([], scope="season", min_games=1),
             "highlights": empty_highlights,
+            "award_progress": {"awards": [], "award_count": 0},
         }
 
     players_by_id = _fetch_players(
@@ -792,8 +802,30 @@ def _build_resolved_league_results(
         cid,
         include_inactive=include_inactive_players,
     )
+    league = _league_meta(overview, selected)
+    rating_standings = _standing_rows(
+        supabase,
+        club_id=cid,
+        league_name=selected,
+        players_by_id=players_by_id,
+        include_inactive=include_inactive_ratings,
+    )
+    league_member_ids = {
+        int(row["player_id"])
+        for row in rating_standings
+        if _safe_int(row.get("player_id")) is not None
+    }
+    scoped_players = (
+        players_by_id
+        if include_inactive_ratings
+        else {
+            player_id: player
+            for player_id, player in players_by_id.items()
+            if player_id in league_member_ids
+        }
+    )
     matches = _league_matches(supabase, club_id=cid, league_name=selected)
-    expanded = _expand_matches(matches, players_by_id)
+    expanded = _expand_matches(matches, scoped_players)
     weekly = _summarize(expanded, ("week_num", "player_id", "player_name"))
     weekly_ratings = _weekly_rating_rankings(expanded)
     for row in weekly:
@@ -817,14 +849,6 @@ def _build_resolved_league_results(
             -(row.get("games") or 0),
             str(row.get("player_name") or "").lower(),
         )
-    )
-    league = _league_meta(overview, selected)
-    rating_standings = _standing_rows(
-        supabase,
-        club_id=cid,
-        league_name=selected,
-        players_by_id=players_by_id,
-        include_inactive=include_inactive_ratings,
     )
     cumulative = _canonical_season_rows(rating_standings, match_cumulative)
     standings = _standings_with_fallback_players(rating_standings, cumulative)
@@ -917,7 +941,22 @@ def _build_resolved_league_results(
         "season_highlights": season_highlights,
         # Compatibility alias for the former latest-week highlight object.
         "highlights": weekly_highlights,
+        "award_progress": _public_award_progress(
+            supabase, club_id=cid, league_name=selected
+        ),
     }
+
+
+def _public_award_progress(
+    supabase: Any, *, club_id: str, league_name: str
+) -> dict[str, Any]:
+    from jupr_app.services.admin_league_awards_service import (
+        get_public_league_award_progress,
+    )
+
+    return get_public_league_award_progress(
+        supabase, club_id=str(club_id), league_name=str(league_name)
+    )
 
 
 def build_public_league_results(

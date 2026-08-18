@@ -40,10 +40,14 @@ assert.match(matchUploader, /const explicitlyFailed = detailRecord\.kind === "fa
 assert.match(matchUploader, /!explicitlyFailed && \(status >= 500/, "Match Uploader must retain only non-conclusive transport failures");
 
 const teamLeagues = fs.readFileSync(path.join(webRoot, "app", "admin", "league-manager", "teams", "TeamLeaguesPanel.tsx"), "utf8");
+const teamLeagueSetup = fs.readFileSync(path.join(webRoot, "app", "admin", "league-manager", "settings", "TeamLeagueSetupPanel.tsx"), "utf8");
 assert.match(teamLeagues, /async function refreshAfterConfirmedWrite[\s\S]*?try \{[\s\S]*?await refresh\(\);[\s\S]*?\} catch \{[\s\S]*?return confirmedWriteRefreshWarning;/, "Team League follow-up refresh failures must not turn confirmed writes into failures");
+assert.match(teamLeagueSetup, /async function refreshAfterConfirmedWrite[\s\S]*?try \{[\s\S]*?await refresh\(\);[\s\S]*?\} catch \{[\s\S]*?return confirmedWriteRefreshWarning;/, "Team League setup refresh failures must not turn confirmed writes into failures");
 assert.match(teamLeagues, /do not repeat the completed action/, "Team League refresh guidance must prevent a blind mutation retry");
-assert.equal((teamLeagues.match(/await refreshAfterConfirmedWrite\(/g) || []).length, 10, "Every Team League mutation with a follow-up refresh must preserve its confirmed success");
+assert.match(teamLeagueSetup, /do not repeat the completed action/, "Team League setup refresh guidance must prevent a blind mutation retry");
+assert.equal((teamLeagues.match(/await refreshAfterConfirmedWrite\(/g) || []).length + (teamLeagueSetup.match(/await refreshAfterConfirmedWrite\(/g) || []).length, 10, "Every Team League mutation with a follow-up refresh must preserve its confirmed success");
 assert.doesNotMatch(teamLeagues, /await (?:onSaved|refreshDetail)\(\);/, "Team League mutations must not let a follow-up refresh reject after a confirmed write");
+assert.doesNotMatch(teamLeagueSetup, /await (?:load|refreshSettings)\(\);/, "Team League setup must not let a follow-up refresh reject after a confirmed write");
 
 const tournamentCommerce = fs.readFileSync(path.join(webRoot, "app", "admin", "tournaments", "commerce", "TournamentCommercePanel.tsx"), "utf8");
 assert.match(tournamentCommerce, /const key = crypto\.randomUUID\(\);/, "Tournament Commerce must send a canonical UUID operation key accepted by the API");

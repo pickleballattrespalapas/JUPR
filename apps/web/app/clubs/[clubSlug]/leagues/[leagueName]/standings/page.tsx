@@ -112,6 +112,22 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
         <PrintButton />
       </div>
 
+      {data.award_progress.awards.length ? (
+        <section style={{ marginBottom: "1.25rem" }} data-testid="league-awards">
+          <h2>Awards</h2>
+          <p style={{ color: "#64748b" }}>Current leaders who have met each configured minimum criterion.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
+            {data.award_progress.awards.map((award) => (
+              <article key={`${award.category_key}-${award.rank}-${award.team_id || award.player_id}`} style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
+                <strong>{award.category_label}{award.rank && award.rank > 1 ? ` · #${award.rank}` : ""}</strong>
+                <h3 style={{ margin: "0.45rem 0 0.2rem" }}>{award.recipient_name || "—"}{award.is_co_winner ? " · co-leader" : ""}</h3>
+                <p style={{ margin: 0, color: "#475569" }}>{award.metric_display || "—"} · Minimum {award.min_games ?? 0} {String(award.minimum_metric || "games").replace(/_/g, " ")}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section>
         <h2>Current standings</h2>
         <p style={{ color: "#64748b" }}>

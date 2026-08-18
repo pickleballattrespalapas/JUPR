@@ -1,6 +1,7 @@
 import Link from "next/link";
 import PublicLeagueNav from "@/components/PublicLeagueNav";
 import { getClubLeagueResults, type LeagueResultsRecentMatch } from "@/lib/api";
+import LeaguePlayerSelect from "./LeaguePlayerSelect";
 
 type Props = {
   params: { clubSlug: string; leagueName: string };
@@ -13,16 +14,6 @@ const cardStyle = {
   padding: "1rem",
   background: "white",
   minWidth: 0
-};
-
-const inputStyle = {
-  width: "100%",
-  boxSizing: "border-box" as const,
-  padding: "0.65rem",
-  border: "1px solid #cbd5e1",
-  borderRadius: "10px",
-  background: "white",
-  font: "inherit"
 };
 
 function decodeLeagueName(value: string): string {
@@ -111,22 +102,13 @@ export default async function PublicLeaguePlayerSummariesPage({ params, searchPa
 
       <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="player" />
 
-      <form method="get" style={{ ...cardStyle, display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "0.65rem", alignItems: "end", marginBottom: "1rem" }}>
-        <label>
-          <strong>Player</strong><br />
-          <select name="player" defaultValue={selectedPlayerId == null ? "" : String(selectedPlayerId)} style={inputStyle}>
-            <option value="">Choose a player</option>
-            {data.players.map((player) => (
-              <option key={String(player.player_id)} value={String(player.player_id)}>
-                {player.player_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="submit" style={{ border: "1px solid #0f172a", borderRadius: "999px", padding: "0.65rem 0.95rem", background: "#0f172a", color: "white", fontWeight: 800 }}>
-          Open summary
-        </button>
-      </form>
+      <div style={{ ...cardStyle, marginBottom: "1rem" }}>
+        <LeaguePlayerSelect
+          baseHref={`/clubs/${params.clubSlug}/leagues/${encodeURIComponent(leagueName)}/players`}
+          players={data.players}
+          selectedPlayerId={selectedPlayerId}
+        />
+      </div>
 
       {summary && selectedPlayerId != null ? (
         <>
@@ -195,7 +177,7 @@ export default async function PublicLeaguePlayerSummariesPage({ params, searchPa
                           {dateLabel(match.date)} · {match.week_label || (match.week_num ? `Week ${match.week_num}` : "League match")}
                         </Link>
                         <div style={{ color: "#64748b", marginTop: "0.25rem" }}>
-                          Partner: {match.partner?.player_name || "—"} · Opponents: {opponentsLabel(match)}
+                          {data.league?.match_format === "singles" ? <>Opponents: {opponentsLabel(match)}</> : <>Partner: {match.partner?.player_name || "—"} · Opponents: {opponentsLabel(match)}</>}
                         </div>
                       </div>
                       <div style={{ textAlign: "right" }}>
