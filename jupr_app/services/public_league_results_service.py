@@ -14,7 +14,7 @@ PLAYER_SELECT = "id,club_id,name,rating,active,inactive_at"
 MATCH_SELECT = (
     "id,club_id,date,league,match_type,week_tag,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,"
     "t1_p1_r,t1_p1_r_end,t1_p2_r,t1_p2_r_end,t2_p1_r,t2_p1_r_end,t2_p2_r,t2_p2_r_end,"
-    "deleted_at,excluded_from_ratings"
+    "deleted_at"
 )
 DEFAULT_WEEKLY_HIGHLIGHT_MIN_GAMES = 4
 
