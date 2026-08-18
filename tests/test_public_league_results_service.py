@@ -10,8 +10,9 @@ from jupr_app.services.public_league_results_service import (
 
 
 class FakeQuery:
-    def __init__(self, rows):
+    def __init__(self, rows, *, strict_select: bool = False):
         self._rows = list(rows)
+        self._strict_select = bool(strict_select)
         self._filters: dict[str, object] = {}
         self._limit: int | None = None
         self._selected_columns: list[str] | None = None
@@ -38,6 +39,15 @@ class FakeQuery:
 
     def execute(self):
         rows = list(self._rows)
+        if self._strict_select and self._selected_columns is not None:
+            schema_columns = {column for row in rows for column in row}
+            unknown = [
+                column
+                for column in self._selected_columns
+                if column not in schema_columns
+            ]
+            if unknown:
+                raise RuntimeError(f"Unknown selected columns: {', '.join(unknown)}")
         for key, expected in self._filters.items():
             rows = [row for row in rows if row.get(key) == expected]
         if self._limit is not None:
@@ -55,13 +65,17 @@ class FakeQuery:
 
 
 class FakeSupabase:
-    def __init__(self, tables):
+    def __init__(self, tables, *, strict_select_tables=()):
         self._tables = tables
+        self._strict_select_tables = set(strict_select_tables)
         self.table_calls: list[str] = []
 
     def table(self, name):
         self.table_calls.append(str(name))
-        return FakeQuery(self._tables.get(name, []))
+        return FakeQuery(
+            self._tables.get(name, []),
+            strict_select=name in self._strict_select_tables,
+        )
 
 
 def fake_supabase() -> FakeSupabase:
@@ -271,6 +285,19 @@ def test_public_league_results_filters_matches_before_the_fetch_limit() -> None:
     )
 
     assert [row["id"] for row in rows] == [9001]
+
+
+def test_public_match_select_matches_the_deployed_staging_schema() -> None:
+    supabase = fake_supabase()
+    supabase._strict_select_tables.add("matches")
+
+    rows = _league_matches(
+        supabase,
+        club_id="club",
+        league_name="Open",
+    )
+
+    assert [row["id"] for row in rows] == [10, 11]
 
 
 def test_public_league_results_builds_standings_weekly_and_highlights() -> None:
