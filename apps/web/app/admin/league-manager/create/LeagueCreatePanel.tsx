@@ -49,6 +49,8 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
   const [description, setDescription] = useState("");
   const [leagueType, setLeagueType] = useState<"Individual" | "Team">("Individual");
   const [matchFormat, setMatchFormat] = useState<"doubles" | "singles">("doubles");
+  const [leagueFormat, setLeagueFormat] = useState<"ladder" | "round_robin" | "rotating_partner" | "fixed_team" | "flex_challenge">("ladder");
+  const [sessionMode, setSessionMode] = useState<"scheduled_rounds" | "live_court_board" | "self_scheduled">("scheduled_rounds");
   const [minGames, setMinGames] = useState("6");
   const [kFactor, setKFactor] = useState("32");
   const [busy, setBusy] = useState(false);
@@ -57,7 +59,18 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
 
   function changeLeagueType(nextLeagueType: "Individual" | "Team") {
     setLeagueType(nextLeagueType);
-    if (nextLeagueType === "Team") setMatchFormat("doubles");
+    if (nextLeagueType === "Team") {
+      setMatchFormat("doubles");
+      setLeagueFormat("fixed_team");
+    } else if (leagueFormat === "fixed_team") {
+      setLeagueFormat("ladder");
+    }
+  }
+
+  function changeSeasonFormat(nextFormat: typeof leagueFormat) {
+    setLeagueFormat(nextFormat);
+    if (nextFormat === "flex_challenge") setSessionMode("self_scheduled");
+    else if (sessionMode === "self_scheduled") setSessionMode("scheduled_rounds");
   }
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -96,6 +109,16 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
       setMessage(error.message);
       throw error;
     }
+    if (leagueType === "Individual" && leagueFormat === "ladder" && sessionMode === "self_scheduled") {
+      const error = new Error("Ladder leagues need scheduled rounds or a live court board.");
+      setMessage(error.message);
+      throw error;
+    }
+    if (leagueType === "Individual" && leagueFormat === "flex_challenge" && sessionMode !== "self_scheduled") {
+      const error = new Error("Flex challenge leagues use self-scheduled play.");
+      setMessage(error.message);
+      throw error;
+    }
 
     const generation = actionRequest.begin();
     setBusy(true);
@@ -109,6 +132,8 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
             league_name: cleanName,
             league_type: leagueType,
             match_format: createMatchFormat,
+            league_format: leagueType === "Team" ? "fixed_team" : leagueFormat,
+            session_mode: sessionMode,
             description,
             min_games: minimum,
             k_factor: factor,
@@ -154,7 +179,7 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
         <label><strong>League name</strong><br /><input value={name} onChange={(event) => setName(event.target.value)} maxLength={120} style={inputStyle} /></label>
         <label><strong>League mode</strong><br /><select value={leagueType} onChange={(event) => changeLeagueType(event.target.value as "Individual" | "Team")} style={inputStyle}><option value="Individual">Individual</option><option value="Team">Team</option></select></label>
         <label>
-          <strong>League format</strong><br />
+          <strong>Match modality</strong><br />
           <select
             value={createMatchFormat}
             onChange={(event) => setMatchFormat(event.target.value as "doubles" | "singles")}
@@ -167,10 +192,30 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
           </select>
           {leagueType === "Team" ? <small id="team-league-format-note" style={{ color: "#64748b" }}>Team leagues use Doubles.</small> : null}
         </label>
+        <label>
+          <strong>Season format</strong><br />
+          <select value={leagueType === "Team" ? "fixed_team" : leagueFormat} onChange={(event) => changeSeasonFormat(event.target.value as typeof leagueFormat)} disabled={leagueType === "Team"} style={inputStyle}>
+            <option value="ladder">Ladder league</option>
+            <option value="round_robin">Season round robin</option>
+            <option value="rotating_partner">Rotating-partner individual league</option>
+            <option value="flex_challenge">Flex challenge league</option>
+            {leagueType === "Team" ? <option value="fixed_team">Fixed-team league</option> : null}
+          </select>
+          {leagueType === "Team" ? <small style={{ color: "#64748b" }}>Team leagues use the fixed-team format.</small> : null}
+        </label>
+        <label>
+          <strong>Session operation</strong><br />
+          <select value={sessionMode} onChange={(event) => setSessionMode(event.target.value as typeof sessionMode)} disabled={leagueType === "Individual" && leagueFormat === "flex_challenge"} style={inputStyle}>
+            <option value="scheduled_rounds">Scheduled rounds</option>
+            <option value="live_court_board">Live court board</option>
+            <option value="self_scheduled">Self-scheduled flex play</option>
+          </select>
+        </label>
         <label><strong>Minimum games</strong><br /><input type="number" value={minGames} onChange={(event) => setMinGames(event.target.value)} min={0} max={1000} style={inputStyle} /></label>
         <label><strong>K-factor</strong><br /><input type="number" value={kFactor} onChange={(event) => setKFactor(event.target.value)} min={1} max={128} style={inputStyle} /></label>
       </div>
       <label><strong>Description</strong><br /><textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={2000} rows={4} style={inputStyle} /></label>
+      <p style={{ color: "#475569" }}>Season format determines competition flow; match modality determines singles, doubles, or team scoring. Detailed match-series and court rules are set in the draft settings editor.</p>
       <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
         <ConfirmAction
           triggerLabel={busy ? "Creating…" : "Create league"}

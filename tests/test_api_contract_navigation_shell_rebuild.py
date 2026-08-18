@@ -130,7 +130,8 @@ def test_selected_league_modules_are_dedicated_pages_without_legacy_switchers() 
 
     assert "PublicLeagueNav" in standings
     assert 'active="overall"' in standings
-    assert "Current standings" in standings
+    assert "Awards race" in standings
+    assert "Rating standings" in standings
     assert "data.leagues.map" not in standings
     assert "sectionLabels" not in standings
 

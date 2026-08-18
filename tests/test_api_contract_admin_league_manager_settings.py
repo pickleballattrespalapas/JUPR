@@ -179,6 +179,53 @@ def test_admin_league_manager_structured_draft_settings_are_normalized_and_prese
     assert tables["admin_activity_log"][0]["after_json"]["patch"]["schedule_config"]["timezone"] == "America/Chicago"
 
 
+def test_admin_league_manager_structured_match_and_operation_rules_drive_saved_draft(monkeypatch):
+    tables = league_manager_tables()
+    tables["leagues_metadata"][0].update({"status": "draft", "is_active": False})
+    _install_env(monkeypatch, FakeSupabase(tables))
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/league-manager/leagues/Tuesday%20Ladder",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "rules_config": {
+                "overview": {"league_format": "ladder"},
+                "competition": {
+                    "scoring_profile": "standard_pickleball",
+                    "match_structure": {"kind": "fixed_games", "games": 2},
+                    "standings_tiebreak": "wins_then_point_differential",
+                    "correction_window": "until_next_round",
+                    "score_submission_policy": "rostered_player_or_admin",
+                    "playoff_format": "single_elimination",
+                },
+                "operation": {
+                    "session_mode": "live_court_board",
+                    "move_up_count": 1,
+                    "move_down_count": 2,
+                },
+            },
+            "confirmation_text": "SAVE LEAGUE",
+        },
+    )
+
+    assert response.status_code == 200
+    rules = tables["leagues_metadata"][0]["rules_config"]
+    assert rules["overview"]["league_format"] == "ladder"
+    assert rules["competition"]["scoring_profile"] == "standard_pickleball"
+    assert rules["competition"]["match_structure"] == {
+        "kind": "fixed_games",
+        "games": 2,
+        "result_counting": "each_game",
+        "completion": "all_games",
+    }
+    assert rules["competition"]["score_submission_policy"] == "rostered_player_or_admin"
+    assert rules["operation"] == {
+        "session_mode": "live_court_board",
+        "move_up_count": 1,
+        "move_down_count": 2,
+    }
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -189,6 +236,8 @@ def test_admin_league_manager_structured_draft_settings_are_normalized_and_prese
         ("court_board_defaults", {"total_courts": 3, "max_used_courts": 4}, "cannot exceed total_courts"),
         ("court_board_defaults", {"players_per_court": "8"}, "must be 4, 5, or 6+"),
         ("rules_config", {"overview": {"divisions": "Open"}}, "divisions must be a list"),
+        ("rules_config", {"competition": {"match_structure": {"kind": "best_of", "games": 4}}}, "odd game count"),
+        ("rules_config", {"overview": {"league_format": "ladder"}, "operation": {"session_mode": "self_scheduled"}}, "Ladder leagues need scheduled rounds"),
         ("awards_config", {"default_depth": 2}, "must be 1 or 3"),
         ("awards_config", {"categories": {"most_wins": {"enabled": "yes"}}}, "must be true or false"),
         ("rules_config", {"extension": "x" * 5001}, "longer than 5000"),

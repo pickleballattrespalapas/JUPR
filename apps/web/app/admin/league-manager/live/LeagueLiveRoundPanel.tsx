@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
 import type { AdminLeagueLiveStatusResponse, AdminLeagueManagerDetailResponse, AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
-import type { AdminMatchUploaderRoundRobinCourt, AdminMatchUploaderRoundRobinPreview, AdminMatchUploaderStatusResponse } from "@/lib/adminMatchUploaderApi";
+import type { AdminMatchUploaderRoundRobinCourt, AdminMatchUploaderRoundRobinMatch, AdminMatchUploaderRoundRobinPreview, AdminMatchUploaderStatusResponse } from "@/lib/adminMatchUploaderApi";
 import type { PublicPlayer } from "@/lib/api";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
@@ -20,6 +20,19 @@ type Props = {
 
 type CourtDraft = { court: string; formatType: string; playerNames: string };
 type ScoreDraft = { scoreT1: string; scoreT2: string };
+type MatchStructure = {
+  kind: "fixed_games" | "best_of";
+  games: number;
+  result_counting: "each_game";
+  completion: "all_games" | "clinch";
+};
+type SeriesScoreState = {
+  complete: boolean;
+  playedGames: number;
+  clinchedAt: number | null;
+  hasGap: boolean;
+  hasScoreAfterClinch: boolean;
+};
 type LeagueLiveSession = {
   id: string;
   league_name: string;
@@ -44,7 +57,7 @@ type LeagueLiveListResponse = { ok: boolean; sessions: LeagueLiveSession[]; coun
 type LeagueLiveDetailResponse = { ok: boolean; session: LeagueLiveSession; rounds: LeagueLiveRound[]; courts: LeagueLiveCourt[]; publish_operations?: LeagueLivePublishOperation[] };
 type LeagueLiveWriteResponse = { ok: boolean; idempotent_replay?: boolean; operation_key?: string; session: LeagueLiveSession; round?: LeagueLiveRound; rounds?: LeagueLiveRound[]; courts?: LeagueLiveCourt[]; movement?: LeagueMovementPayload; bench?: LeagueLiveRosterRow[]; publish_operation?: LeagueLivePublishOperation; rating_review?: LeagueLiveRatingReview; published_match_ids?: unknown[]; warnings?: string[] };
 type LeagueLiveRosterSuggestion = { ok: boolean; roster: LeagueLiveRosterRow[]; active_roster: LeagueLiveRosterRow[]; bench: LeagueLiveRosterRow[]; bench_player_ids: number[]; default_bench_player_ids: number[]; bench_override_applied: boolean; court_sizes: number[]; courts: LeagueLiveCourt[]; suggestion_note?: string | null; fingerprint: string };
-type LeagueLiveRoundPlan = { ok: boolean; operation_key: string; session_updated_at: string; round_number: number; next_round: number; ready_to_save: boolean; scored_match_count: number; warnings: string[]; movement: LeagueMovementPayload; next_roster: LeagueLiveRosterRow[]; next_courts: LeagueLiveCourt[]; bench: LeagueLiveRosterRow[]; bench_player_ids: number[] };
+type LeagueLiveRoundPlan = { ok: boolean; operation_key: string; session_updated_at: string; round_number: number; next_round: number; ready_to_save: boolean; scored_match_count: number; warnings: string[]; movement: LeagueMovementPayload; next_roster: LeagueLiveRosterRow[]; next_courts: LeagueLiveCourt[]; bench: LeagueLiveRosterRow[]; bench_player_ids: number[]; match_structure?: MatchStructure };
 type LeagueLiveGuestResponse = { ok: boolean; idempotent_replay: boolean; player: { id: number; name: string; rating?: number | null; rating_jupr?: number | null }; guest_operation_id: string };
 type LeagueLiveExportResponse = { ok: boolean; kind: string; filename: string; content_type: string; row_count: number; csv_text: string };
 type LeagueLiveCreateRecovery = { operationKey: string; status: string; message: string };
@@ -56,6 +69,7 @@ const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: 
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
+const DEFAULT_MATCH_STRUCTURE: MatchStructure = { kind: "fixed_games", games: 1, result_counting: "each_game", completion: "all_games" };
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -73,6 +87,79 @@ function scoreIsValid(score: ScoreDraft): boolean {
   const a = Number(score.scoreT1);
   const b = Number(score.scoreT2);
   return Number.isInteger(a) && Number.isInteger(b) && a >= 0 && b >= 0 && a !== b && a + b > 0;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function matchStructureFromDetail(detail: AdminLeagueManagerDetailResponse | null): MatchStructure {
+  const rules = asRecord(detail?.league.rules_config);
+  const competition = asRecord(rules.competition);
+  const raw = asRecord(competition.match_structure);
+  const kind = raw.kind === "best_of" ? "best_of" : "fixed_games";
+  const games = Math.max(1, Math.min(9, Math.trunc(Number(raw.games) || 1)));
+  if (kind === "best_of" && (games < 3 || games % 2 === 0)) return DEFAULT_MATCH_STRUCTURE;
+  return {
+    kind,
+    games,
+    result_counting: "each_game",
+    completion: kind === "best_of" ? "clinch" : "all_games"
+  };
+}
+
+function matchStructureLabel(structure: MatchStructure): string {
+  if (structure.kind === "best_of") return `Best ${Math.floor(structure.games / 2) + 1} out of ${structure.games}`;
+  return structure.games === 1 ? "1 game" : `${structure.games} games`;
+}
+
+function scoreKey(rowId: string, gameNumber: number): string {
+  return `${rowId}:game:${gameNumber}`;
+}
+
+function scoreHasValue(score: ScoreDraft | undefined): boolean {
+  return Boolean(score && (score.scoreT1.trim() || score.scoreT2.trim()));
+}
+
+function seriesScoreState(rowId: string, scores: Record<string, ScoreDraft>, structure: MatchStructure): SeriesScoreState {
+  let teamOneWins = 0;
+  let teamTwoWins = 0;
+  let playedGames = 0;
+  let clinchedAt: number | null = null;
+  let hasGap = false;
+  let hasScoreAfterClinch = false;
+  const winsNeeded = Math.floor(structure.games / 2) + 1;
+
+  for (let gameNumber = 1; gameNumber <= structure.games; gameNumber += 1) {
+    const score = scores[scoreKey(rowId, gameNumber)];
+    if (clinchedAt != null) {
+      if (scoreHasValue(score)) hasScoreAfterClinch = true;
+      continue;
+    }
+    if (!scoreIsValid(score || { scoreT1: "", scoreT2: "" })) {
+      if (scoreHasValue(score)) hasGap = true;
+      for (let later = gameNumber + 1; later <= structure.games; later += 1) {
+        if (scoreHasValue(scores[scoreKey(rowId, later)])) hasGap = true;
+      }
+      break;
+    }
+    playedGames += 1;
+    if (Number(score?.scoreT1) > Number(score?.scoreT2)) teamOneWins += 1;
+    else teamTwoWins += 1;
+    if (structure.kind === "best_of" && Math.max(teamOneWins, teamTwoWins) === winsNeeded) {
+      clinchedAt = gameNumber;
+    }
+  }
+
+  return {
+    playedGames,
+    clinchedAt,
+    hasGap,
+    hasScoreAfterClinch,
+    complete: structure.kind === "fixed_games"
+      ? playedGames === structure.games && !hasGap
+      : clinchedAt != null && !hasGap && !hasScoreAfterClinch
+  };
 }
 
 function leagueLiveOperatorMessage(value: unknown, fallback: string): string {
@@ -156,6 +243,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [roundLabel, setRoundLabel] = useState("Round 1");
   const [matchDate, setMatchDate] = useState(todayIso());
   const [detail, setDetail] = useState<AdminLeagueManagerDetailResponse | null>(null);
+  const [matchStructure, setMatchStructure] = useState<MatchStructure>(DEFAULT_MATCH_STRUCTURE);
   const [sessionRoster, setSessionRoster] = useState<LeagueLiveRosterRow[]>([]);
   const [liveSessions, setLiveSessions] = useState<LeagueLiveSession[]>([]);
   const [sessionId, setSessionId] = useState("");
@@ -248,7 +336,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   );
   const activeSessionRoster = useMemo(() => sessionRoster.filter((row) => row.status === "active"), [sessionRoster]);
   const allPreviewMatches = (preview?.courts || []).flatMap((court) => court.matches || []);
-  const validScoreCount = allPreviewMatches.filter((match) => scoreIsValid(scores[match.row_id] || { scoreT1: "", scoreT2: "" })).length;
+  const seriesStates = allPreviewMatches.map((match) => seriesScoreState(match.row_id, scores, matchStructure));
+  const completeSeriesCount = seriesStates.filter((state) => state.complete).length;
+  const validScoreCount = seriesStates.reduce((total, state) => total + state.playedGames, 0);
+  const allSeriesComplete = allPreviewMatches.length > 0 && completeSeriesCount === allPreviewMatches.length;
   const sessionIsCurrentLeague = Boolean(
     loadedSessionId
     && loadedSessionId === sessionId
@@ -289,7 +380,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     sessionRow: LeagueLiveSession,
     courtsRows: LeagueLiveCourt[] = [],
     rounds: LeagueLiveRound[] = [],
-    operations: LeagueLivePublishOperation[] = []
+    operations: LeagueLivePublishOperation[] = [],
+    leagueDetail: AdminLeagueManagerDetailResponse | null = null
   ) {
     setSessionId(sessionRow.id);
     setLoadedSessionId(sessionRow.id);
@@ -297,7 +389,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setSessionUpdatedAt(sessionRow.updated_at || "");
     setLeagueName(sessionRow.league_name);
     setLoadedLeagueName(sessionRow.league_name);
-    setDetail(null);
+    setDetail(leagueDetail);
+    setMatchStructure(matchStructureFromDetail(leagueDetail));
     setRosterSuggestion(null);
     setWeekTag(sessionRow.week_tag || "Week 1");
     setSessionStatus(sessionRow.status || "active");
@@ -320,6 +413,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
 
   function clearRoundDerivedState() {
     setDetail(null);
+    setMatchStructure(DEFAULT_MATCH_STRUCTURE);
     setLoadedLeagueName("");
     setSessionRoster([]);
     setRosterSuggestion(null);
@@ -495,6 +589,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       const suggestion = await fetchRosterSuggestion(payload);
       if (!leagueDetailRequest.isCurrent(generation)) return;
       setDetail(payload);
+      setMatchStructure(matchStructureFromDetail(payload));
       setLoadedLeagueName(selectedLeague);
       applyRosterSuggestion(suggestion);
       setMessage(`Roster plan suggested ${suggestion.courts.length} court(s) and ${suggestion.bench.length} bench player(s). Review before creating the session.`);
@@ -549,7 +644,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
 
   async function applyRecoveredLiveSession(recovered: LeagueLiveCreateReconcileResponse) {
     if (!recovered.session) throw new Error("The completed operation did not include its League Live session.");
-    applySession(recovered.session, recovered.courts || [], recovered.rounds || []);
+    const leagueDetail = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(recovered.session.league_name)}`);
+    applySession(recovered.session, recovered.courts || [], recovered.rounds || [], [], leagueDetail);
     setLiveSessions((current) => [
       ...current.filter((row) => row.id !== recovered.session?.id),
       recovered.session as LeagueLiveSession,
@@ -661,7 +757,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       });
       createSessionOperationRef.current = null;
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the League Live creation response was applied.");
-      applySession(payload.session, payload.courts || [], []);
+      applySession(payload.session, payload.courts || [], [], [], detail);
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before League Live sessions could be refreshed.");
       await loadSessions();
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the created session was confirmed.");
@@ -705,7 +801,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     try {
       const payload = await requestJson<LeagueLiveDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(selectedSessionId)}`);
       if (!sessionDetailRequest.isCurrent(generation)) return;
-      applySession(payload.session, payload.courts || [], payload.rounds || [], payload.publish_operations || []);
+      const leagueDetail = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(payload.session.league_name)}`);
+      if (!sessionDetailRequest.isCurrent(generation)) return;
+      applySession(payload.session, payload.courts || [], payload.rounds || [], payload.publish_operations || [], leagueDetail);
       setMessage("Persisted League Live session loaded.");
     } catch (error) {
       if (sessionDetailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load persisted session.");
@@ -747,7 +845,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         })
       });
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the saved snapshot response was applied.");
-      applySession(payload.session, payload.courts || [], roundHistory);
+      applySession(payload.session, payload.courts || [], roundHistory, publishOperations, detail);
       setMessage("League Live session snapshot saved.");
       return actionSuccess("Session snapshot saved", "The League Live session snapshot was saved.");
     } catch (error) {
@@ -792,13 +890,17 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       if (!actionRequest.isCurrent(generation)) return;
       setPreview(payload);
       const nextScores: Record<string, ScoreDraft> = {};
-      for (const match of (payload.courts || []).flatMap((court) => court.matches || [])) nextScores[match.row_id] = { scoreT1: "", scoreT2: "" };
+      for (const match of (payload.courts || []).flatMap((court) => court.matches || [])) {
+        for (let gameNumber = 1; gameNumber <= matchStructure.games; gameNumber += 1) {
+          nextScores[scoreKey(match.row_id, gameNumber)] = { scoreT1: "", scoreT2: "" };
+        }
+      }
       setScores(nextScores);
       setMovementPlan(null);
       setMovementPlanStale(false);
       setMovementOverrides({});
       if (payload.missing_players?.length) setMessage(`Missing players: ${payload.missing_players.join(", ")}`);
-      else setMessage(`Generated ${payload.match_count || 0} match slot(s). Save the session snapshot before leaving this page.`);
+      else setMessage(`Generated ${payload.match_count || 0} matchup slot(s) using ${matchStructureLabel(matchStructure)}. Save the session snapshot before leaving this page.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to generate round preview.");
     } finally {
@@ -807,21 +909,31 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   function buildScoredMatches(): Array<Record<string, unknown>> {
-    return allPreviewMatches
-      .filter((match) => scoreIsValid(scores[match.row_id] || { scoreT1: "", scoreT2: "" }))
-      .map((match) => ({
-        date: matchDate,
-        league: leagueName,
-        week_tag: weekTag,
-        match_type: "League Manager Live",
-        court: match.court,
-        t1_p1: match.t1_p1,
-        t1_p2: match.t1_p2,
-        t2_p1: match.t2_p1,
-        t2_p2: match.t2_p2,
-        score_t1: Number(scores[match.row_id]?.scoreT1 || 0),
-        score_t2: Number(scores[match.row_id]?.scoreT2 || 0)
-      }));
+    return allPreviewMatches.flatMap((match) => {
+      const state = seriesScoreState(match.row_id, scores, matchStructure);
+      if (!state.complete) return [];
+      return Array.from({ length: state.playedGames }, (_, index) => {
+        const gameNumber = index + 1;
+        const score = scores[scoreKey(match.row_id, gameNumber)] || { scoreT1: "", scoreT2: "" };
+        return {
+          date: matchDate,
+          league: leagueName,
+          week_tag: weekTag,
+          match_type: "League Manager Live",
+          court: match.court,
+          t1_p1: match.t1_p1,
+          t1_p2: match.t1_p2,
+          t2_p1: match.t2_p1,
+          t2_p2: match.t2_p2,
+          score_t1: Number(score.scoreT1),
+          score_t2: Number(score.scoreT2),
+          series_key: match.row_id,
+          series_kind: matchStructure.kind,
+          series_games: matchStructure.games,
+          game_number: gameNumber
+        };
+      });
+    });
   }
 
   function movementOverridePayload(): Array<{ player_id: number; to_court: number }> {
@@ -845,8 +957,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   async function previewPythonMovement() {
     if (!requireCurrentSession("previewing next-round movement")) return;
     const matches = buildScoredMatches();
-    if (!matches.length) {
-      setMessage("Enter at least one valid non-tied score before previewing next-round movement.");
+    if (!allSeriesComplete || !matches.length) {
+      setMessage(`Complete every ${matchStructureLabel(matchStructure)} matchup before previewing next-round movement (${completeSeriesCount} of ${allPreviewMatches.length} complete).`);
       return;
     }
     const generation = actionRequest.begin();
@@ -884,8 +996,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   async function submitRound(confirmationText: string): Promise<ActionCompletion> {
     if (!requireCurrentSession("submitting official scores")) throw new Error("Resume the current persisted session before submitting official scores.");
     const matches = buildScoredMatches();
-    if (!matches.length || matches.length !== allPreviewMatches.length) {
-      const error = new Error(`Score every generated match before publishing (${matches.length} of ${allPreviewMatches.length} complete).`);
+    if (!allSeriesComplete || !matches.length) {
+      const error = new Error(`Complete every generated matchup before publishing (${completeSeriesCount} of ${allPreviewMatches.length} complete; ${matches.length} game result(s) ready).`);
       setMessage(error.message);
       throw error;
     }
@@ -908,7 +1020,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           match_date: matchDate,
           preview: preview || {},
           matches,
-          expected_match_count: allPreviewMatches.length,
+          expected_match_count: matches.length,
           movement_overrides: movementOverridePayload(),
           override_reason: overrideReason || null,
           roster_change: rosterChangePayload(),
@@ -924,7 +1036,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       });
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the submitted round response was applied.");
       if (payload.session) {
-        applySession(payload.session, payload.courts || [], payload.rounds || [...roundHistory, ...(payload.round ? [payload.round] : [])]);
+        applySession(payload.session, payload.courts || [], payload.rounds || [...roundHistory, ...(payload.round ? [payload.round] : [])], publishOperations, detail);
         setRoundNumber(String(payload.session.current_round || currentRound));
         setRoundLabel(`Round ${payload.session.current_round || currentRound}`);
       }
@@ -1294,22 +1406,41 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       {preview?.courts?.length ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>3. Enter scores</h2>
-          <p style={{ color: "#475569" }}>Every generated match must have a valid non-tied score. League Live publishes the whole round, recalculates statistics and movement, and safely resumes the same publish if interrupted.</p>
+          <p style={{ color: "#475569" }}><strong>Configured format: {matchStructureLabel(matchStructure)}.</strong> Every played game becomes an official league game. {matchStructure.kind === "best_of" ? "A matchup closes as soon as one team clinches the series." : "Every configured game is required."} League Live publishes the whole round, recalculates statistics and movement, and safely resumes the same publish if interrupted.</p>
           <div style={{ display: "grid", gap: "0.75rem" }}>
             {(preview.courts as AdminMatchUploaderRoundRobinCourt[]).map((court) => (
               <section key={court.court} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem" }}>
                 <h3 style={{ marginTop: 0 }}>Court {court.court} · {court.format_type}</h3>
-                {(court.matches || []).map((match) => (
-                  <div key={match.row_id} style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px", gap: "0.75rem", alignItems: "center", borderTop: "1px solid #f1f5f9", padding: "0.5rem 0" }}>
-                    <div><strong>{match.label}</strong><br />{match.t1.map((p) => p.name).join(" / ")} vs {match.t2.map((p) => p.name).join(" / ")}</div>
-                    <input value={scores[match.row_id]?.scoreT1 || ""} onChange={(event) => { setScores((current) => ({ ...current, [match.row_id]: { ...(current[match.row_id] || { scoreT1: "", scoreT2: "" }), scoreT1: event.target.value } })); markPlanStale(); }} disabled={busy} placeholder="Team 1" style={inputStyle} />
-                    <input value={scores[match.row_id]?.scoreT2 || ""} onChange={(event) => { setScores((current) => ({ ...current, [match.row_id]: { ...(current[match.row_id] || { scoreT1: "", scoreT2: "" }), scoreT2: event.target.value } })); markPlanStale(); }} disabled={busy} placeholder="Team 2" style={inputStyle} />
-                  </div>
-                ))}
+                {(court.matches || []).map((match: AdminMatchUploaderRoundRobinMatch) => {
+                  const state = seriesScoreState(match.row_id, scores, matchStructure);
+                  return (
+                    <section key={match.row_id} style={{ borderTop: "1px solid #f1f5f9", padding: "0.75rem 0" }}>
+                      <div><strong>{match.label}</strong><br />{match.t1.map((p) => p.name).join(" / ")} vs {match.t2.map((p) => p.name).join(" / ")}</div>
+                      <div style={{ display: "grid", gap: "0.45rem", marginTop: "0.5rem" }}>
+                        {Array.from({ length: matchStructure.games }, (_, gameIndex) => {
+                          const gameNumber = gameIndex + 1;
+                          const key = scoreKey(match.row_id, gameNumber);
+                          const score = scores[key] || { scoreT1: "", scoreT2: "" };
+                          const afterClinch = state.clinchedAt != null && gameNumber > state.clinchedAt;
+                          const canClearUnexpectedScore = afterClinch && scoreHasValue(score);
+                          return (
+                            <div key={key} style={{ display: "grid", gridTemplateColumns: "minmax(78px, 0.45fr) minmax(72px, 90px) minmax(72px, 90px) minmax(150px, 1fr)", gap: "0.6rem", alignItems: "center" }}>
+                              <strong>Game {gameNumber}</strong>
+                              <input aria-label={`${match.label} Game ${gameNumber} Team 1 score`} value={score.scoreT1} onChange={(event) => { setScores((current) => ({ ...current, [key]: { ...(current[key] || { scoreT1: "", scoreT2: "" }), scoreT1: event.target.value } })); markPlanStale(); }} disabled={busy || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 1" style={inputStyle} />
+                              <input aria-label={`${match.label} Game ${gameNumber} Team 2 score`} value={score.scoreT2} onChange={(event) => { setScores((current) => ({ ...current, [key]: { ...(current[key] || { scoreT1: "", scoreT2: "" }), scoreT2: event.target.value } })); markPlanStale(); }} disabled={busy || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 2" style={inputStyle} />
+                              <small style={{ color: afterClinch ? "#64748b" : scoreIsValid(score) ? "#166534" : "#64748b" }}>{afterClinch && !canClearUnexpectedScore ? "Not played — series already clinched" : scoreIsValid(score) ? "Complete" : "Enter a non-tied final score"}</small>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p style={{ marginBottom: 0, color: state.complete ? "#166534" : "#92400e" }}>{state.complete ? `Matchup complete · ${state.playedGames} official game${state.playedGames === 1 ? "" : "s"}` : state.hasScoreAfterClinch ? "Clear any score entered after the series was clinched." : state.hasGap ? "Complete games in order without leaving a gap." : `Matchup incomplete · ${state.playedGames} game${state.playedGames === 1 ? "" : "s"} entered`}</p>
+                    </section>
+                  );
+                })}
               </section>
             ))}
           </div>
-          <p style={{ color: "#475569" }}>Valid scored matches: {validScoreCount} / {allPreviewMatches.length}</p>
+          <p style={{ color: "#475569" }}>Completed matchups: {completeSeriesCount} / {allPreviewMatches.length} · Official game results ready: {validScoreCount}</p>
           <section style={{ padding: "0.75rem", border: "1px solid #e2e8f0", borderRadius: "12px", marginBottom: "0.75rem" }}>
             <h3 style={{ marginTop: 0 }}>Next-round roster change</h3>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>
@@ -1361,7 +1492,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
               <label style={{ display: "block", marginTop: "0.75rem" }}>Manual movement override reason<br /><input value={overrideReason} onChange={(event) => { setOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="At least 10 characters when changing a planned target" style={inputStyle} /></label>
             </article>
           ) : null}
-          <p><button type="button" onClick={previewPythonMovement} disabled={busy || validScoreCount !== allPreviewMatches.length || !sessionIsCurrentLeague} style={ghostButtonStyle}>{busy ? "Planning…" : "Preview movement"}</button></p>
+          <p><button type="button" onClick={previewPythonMovement} disabled={busy || !allSeriesComplete || !sessionIsCurrentLeague} style={ghostButtonStyle}>{busy ? "Planning…" : "Preview movement"}</button></p>
           <ConfirmAction
             triggerLabel="Publish complete league round"
             title="Publish this complete league round?"
@@ -1369,7 +1500,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
             confirmLabel="Yes, publish round"
             confirmationText="SUBMIT LEAGUE ROUND"
             tone="danger"
-            disabled={busy || !liveDomainStatus.submit_enabled || validScoreCount !== allPreviewMatches.length || !sessionIsCurrentLeague || !movementPlan || movementPlanStale}
+            disabled={busy || !liveDomainStatus.submit_enabled || !allSeriesComplete || !sessionIsCurrentLeague || !movementPlan || movementPlanStale}
             busy={busy}
             onConfirm={submitRound}
           />

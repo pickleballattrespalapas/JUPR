@@ -250,7 +250,10 @@ def test_public_profile_closes_rating_award_relationship_social_and_privacy_pari
     assert profile["rating_summary"]["starting_rating_jupr"] == 3.8
     assert profile["rating_summary"]["highest_rating_jupr"] == 4.0
     assert profile["rating_summary"]["lowest_rating_jupr"] == 3.8
-    assert profile["awards"]["badge_count"] == 2
+    assert profile["awards"]["badge_count"] == 1
+    assert profile["awards"]["badge_award_count"] == 1
+    assert profile["awards"]["trophy_count"] == 1
+    assert [row["name"] for row in profile["awards"]["badges"]] == ["First Win"]
     assert profile["awards"]["trophies"][0]["context_label"] == "Summer Cup"
     assert profile["relationships"]["best_partner"]["player_name"] == "Blair"
     assert profile["relationships"]["rival"]["player_name"] in {"Casey", "Devon"}

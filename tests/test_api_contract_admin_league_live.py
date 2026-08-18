@@ -103,6 +103,57 @@ def _plan(client: TestClient, session: dict):
     )
 
 
+def test_round_plan_enforces_saved_fixed_series_and_counts_each_game(monkeypatch):
+    tables = league_live_tables()
+    tables["leagues_metadata"] = [
+        {
+            "club_id": "club",
+            "league_name": "Tuesday Ladder",
+            "rules_config": {
+                "competition": {
+                    "match_structure": {
+                        "kind": "fixed_games",
+                        "games": 2,
+                        "result_counting": "each_game",
+                        "completion": "all_games",
+                    }
+                }
+            },
+        }
+    ]
+    supabase = FakeSupabase(tables)
+    _install_env(monkeypatch, supabase)
+    client = TestClient(app)
+    session = _create(client).json()["session"]
+    games = [
+        {**MATCHES[0], "series_key": "court-1-match-1", "series_kind": "fixed_games", "series_games": 2, "game_number": 1},
+        {**MATCHES[0], "series_key": "court-1-match-1", "series_kind": "fixed_games", "series_games": 2, "game_number": 2},
+    ]
+
+    response = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/plan",
+        headers={"Authorization": "Bearer local"},
+        json={"expected_updated_at": session["updated_at"], "matches": games, "courts": COURTS},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["scored_match_count"] == 2
+    assert response.json()["match_structure"] == {
+        "kind": "fixed_games",
+        "games": 2,
+        "result_counting": "each_game",
+        "completion": "all_games",
+    }
+
+    incomplete = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/plan",
+        headers={"Authorization": "Bearer local"},
+        json={"expected_updated_at": session["updated_at"], "matches": games[:1], "courts": COURTS},
+    )
+    assert incomplete.status_code == 400
+    assert "requires all 2" in incomplete.json()["detail"]
+
+
 def test_admin_league_live_requires_server_only_supabase_key(monkeypatch):
     supabase = FakeSupabase(league_live_tables())
     _install_env(monkeypatch, supabase, service_role=False)

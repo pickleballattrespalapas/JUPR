@@ -14,6 +14,8 @@ from jupr_app.services.admin_league_manager_service import (
 CONFIRM_CREATE_LEAGUE = "CREATE LEAGUE"
 CONFIRM_DUPLICATE_LEAGUE = "DUPLICATE LEAGUE"
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
+LEAGUE_FORMATS = {"ladder", "round_robin", "rotating_partner", "fixed_team", "flex_challenge"}
+SESSION_MODES = {"scheduled_rounds", "live_court_board", "self_scheduled"}
 
 
 def _truthy_env(name: str) -> bool:
@@ -43,6 +45,31 @@ def _normalize_match_format(value: Any) -> str:
     if clean not in {"doubles", "singles"}:
         raise ValueError("match_format must be doubles or singles.")
     return clean
+
+
+def _normalize_league_format(value: Any, *, league_type: str) -> str:
+    clean = str(value or "ladder").strip().casefold()
+    if clean not in LEAGUE_FORMATS:
+        raise ValueError("league_format must be Ladder, Round Robin, Rotating Partner, Fixed Team, or Flex Challenge.")
+    if league_type == "Team":
+        return "fixed_team"
+    if clean == "fixed_team":
+        raise ValueError("Fixed Team format requires a Team league.")
+    return clean
+
+
+def _normalize_session_mode(value: Any) -> str:
+    clean = str(value or "scheduled_rounds").strip().casefold()
+    if clean not in SESSION_MODES:
+        raise ValueError("session_mode must be scheduled_rounds, live_court_board, or self_scheduled.")
+    return clean
+
+
+def _validate_format_operation(*, league_format: str, session_mode: str) -> None:
+    if league_format == "ladder" and session_mode == "self_scheduled":
+        raise ValueError("Ladder leagues need scheduled rounds or a live court board.")
+    if league_format == "flex_challenge" and session_mode != "self_scheduled":
+        raise ValueError("Flex challenge leagues use self-scheduled play.")
 
 
 def _bounded_int(value: Any, *, field: str, minimum: int, maximum: int) -> int:
@@ -133,6 +160,8 @@ def create_admin_league_manager_draft(
     confirmation_text: str,
     match_format: str = "doubles",
     league_type: str = "Individual",
+    league_format: str = "ladder",
+    session_mode: str = "scheduled_rounds",
     source: str = "next_league_manager_create",
 ) -> dict[str, Any]:
     if not is_admin_league_manager_enabled():
@@ -152,6 +181,14 @@ def create_admin_league_manager_draft(
     clean_league_type = _normalize_league_type(league_type)
     if clean_league_type == "Team" and clean_match_format == "singles":
         raise ValueError("Team leagues must use doubles; Team + Singles is not supported.")
+    clean_league_format = _normalize_league_format(
+        league_format, league_type=clean_league_type
+    )
+    clean_session_mode = _normalize_session_mode(session_mode)
+    _validate_format_operation(
+        league_format=clean_league_format,
+        session_mode=clean_session_mode,
+    )
     clean_min_games = _bounded_int(min_games, field="min_games", minimum=0, maximum=1000)
     clean_k_factor = _bounded_int(k_factor, field="k_factor", minimum=1, maximum=128)
     if clean_name.casefold() in _existing_league_names(supabase, club_id=clean_club_id):
@@ -167,6 +204,27 @@ def create_admin_league_manager_draft(
         "k_factor": clean_k_factor,
         "is_active": False,
         "status": "draft",
+        "rules_config": {
+            "overview": {"league_format": clean_league_format},
+            "competition": {
+                "scoring_profile": "standard_pickleball",
+                "match_structure": {
+                    "kind": "fixed_games",
+                    "games": 1,
+                    "result_counting": "each_game",
+                    "completion": "all_games",
+                },
+                "standings_tiebreak": "wins_then_point_differential",
+                "correction_window": "until_next_round",
+                "score_submission_policy": "admin_only",
+                "playoff_format": "none",
+            },
+            "operation": {
+                "session_mode": clean_session_mode,
+                "move_up_count": 1 if clean_league_format == "ladder" else 0,
+                "move_down_count": 1 if clean_league_format == "ladder" else 0,
+            },
+        },
         "event_tags": normalize_event_tags({"skill_levels": [], "date_tags": []}),
     }
     try:

@@ -430,7 +430,7 @@ export default async function LeagueResultsPage({ params, searchParams }: League
       </p>
       <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} league results</h1>
       <p style={{ color: "#334155", maxWidth: "760px" }}>
-        Public league standings, weekly results, and season performance. This page is read-only and uses public-safe FastAPI summaries.
+        Awards-race leaders, rating standings, weekly results, and season performance. This page is read-only and uses public-safe FastAPI summaries.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>League Results are temporarily unavailable. {error}</p> : null}
@@ -472,10 +472,22 @@ export default async function LeagueResultsPage({ params, searchParams }: League
           </div>
 
           {showOverall ? (
+            <section style={sectionStyle} data-testid="league-results-awards-race">
+              <h2>Awards race</h2>
+              {data.award_progress.awards.length ? <>
+                <p style={{ color: "#64748b" }}>Players shown here have met the current qualification requirement for their award category.</p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+                  {data.award_progress.awards.map((award) => <article key={`${award.category_key}-${award.rank}-${award.team_id || award.player_id}`} style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}><strong>{award.category_label}{award.rank && award.rank > 1 ? ` · #${award.rank}` : ""}</strong><h3 style={{ margin: "0.4rem 0 0.2rem" }}>{award.recipient_name || "—"}{award.is_co_winner ? " · co-leader" : ""}</h3><small>{award.metric_display || "—"} · Minimum {award.min_games ?? 0} {String(award.minimum_metric || "games").replace(/_/g, " ")}</small></article>)}
+                </div>
+              </> : <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "1rem" }}>No player has met the current award qualification criteria yet.</article>}
+            </section>
+          ) : null}
+
+          {showOverall ? (
             <section style={sectionStyle}>
-              <h2>Current standings</h2>
+              <h2>Rating standings</h2>
               <p style={{ color: "#64748b" }}>
-                Current rating and rank with the league&apos;s official season record.
+                Current rating and rank with the league&apos;s official season record. This is a rating table, not the primary awards race.
                 Players awaiting a league rating appear unranked.
               </p>
               <StandingsTable standings={data.standings} clubSlug={clubSlug} />

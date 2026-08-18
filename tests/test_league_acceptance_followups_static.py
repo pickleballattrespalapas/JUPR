@@ -78,9 +78,9 @@ def test_public_awards_precede_standings_and_wait_for_api_progress() -> None:
     )
 
     assert "data.award_progress.awards.length" in standings
-    assert standings.index("<h2>Awards</h2>") < standings.index("<h2>Current standings</h2>")
+    assert standings.index("<h2>Awards race</h2>") < standings.index("<h2>Rating standings</h2>")
     assert "data.award_progress.awards.length" in team
-    assert team.index(">Awards<") < team.index(">Standings<")
+    assert team.index(">Awards race<") < team.index(">Team standings<")
 
 
 def test_player_summary_selection_is_immediate_and_singles_hides_partner() -> None:

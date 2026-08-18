@@ -29,7 +29,10 @@ def test_profile_renders_every_parity_projection_and_format_label():
         "player-public-identity",
         "player-rating-trend",
         "player-format-row",
-        "player-awards",
+        "player-overview",
+        "player-league-positions",
+        "player-trophies",
+        "player-badges",
         "player-trophy",
         "player-badge",
         "player-best-partner",
@@ -48,6 +51,9 @@ def test_profile_renders_every_parity_projection_and_format_label():
     assert 'data-rating-point={item.format}' in source
     assert "Each format has its own line" in source
     assert "coordinates.filter(({ point }) => point.match_format === definition.format)" in source
+    assert "Leaderboard snapshot" not in source
+    assert "Badge codex" not in source
+    assert "Major honors only" in source
     assert "{error}" not in source
 
 

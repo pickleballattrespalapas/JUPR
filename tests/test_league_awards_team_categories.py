@@ -305,8 +305,75 @@ def test_singles_match_drives_live_and_public_award_progress(monkeypatch) -> Non
     assert supabase.table_calls == []
 
 
-def test_public_awards_skip_analytics_reads_without_enabled_categories() -> None:
-    supabase = CountingSupabase(_storage())
+def test_public_awards_default_to_qualified_top_performers_when_categories_are_unsaved() -> None:
+    storage = _storage()
+    storage["leagues_metadata"][0].update(
+        league_type="Individual",
+        match_format="singles",
+        awards_config={},
+    )
+    storage["league_ratings"] = [
+        {
+            "club_id": "club",
+            "league_name": "Open",
+            "player_id": 1,
+            "rating": 1640,
+            "starting_rating": 1600,
+            "wins": 2,
+            "losses": 0,
+            "matches_played": 2,
+            "is_active": True,
+        },
+        {
+            "club_id": "club",
+            "league_name": "Open",
+            "player_id": 3,
+            "rating": 1600,
+            "starting_rating": 1600,
+            "wins": 0,
+            "losses": 2,
+            "matches_played": 2,
+            "is_active": True,
+        },
+    ]
+    storage["matches"] = [
+        {
+            "id": 101,
+            "club_id": "club",
+            "league": "Open",
+            "match_format": "singles",
+            "t1_p1": 1,
+            "t2_p1": 3,
+            "score_t1": 11,
+            "score_t2": 8,
+        }
+    ]
+    supabase = CountingSupabase(storage)
+
+    public = get_public_league_award_progress(
+        supabase, club_id="club", league_name="Open"
+    )
+
+    assert public["award_count"] == 4
+    assert {row["category_key"] for row in public["awards"]} == {
+        "highest_rating",
+        "most_improved",
+        "best_win_pct",
+        "most_wins",
+    }
+    assert {row["recipient_name"] for row in public["awards"]} == {"Alex"}
+    assert supabase.table_calls == [
+        "leagues_metadata",
+        "league_ratings",
+        "matches",
+        "players",
+    ]
+
+
+def test_public_awards_respect_an_explicit_empty_categories_choice() -> None:
+    storage = _storage()
+    storage["leagues_metadata"][0]["awards_config"] = {"categories": {}}
+    supabase = CountingSupabase(storage)
 
     public = get_public_league_award_progress(
         supabase, club_id="club", league_name="Open"

@@ -12,6 +12,10 @@ from jupr_app.domain.league_live_orchestration import (
     build_league_live_round_plan,
     normalize_league_live_roster,
 )
+from jupr_app.domain.league_match_structure import (
+    normalize_league_match_structure,
+    validate_league_series_matches,
+)
 from jupr_app.services.admin_guarded_write_service import (
     GuardedWriteRecoveryRequired,
     canonical_fingerprint,
@@ -102,6 +106,24 @@ def _as_list(value: Any) -> list[Any]:
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _league_match_structure(supabase: Any, *, club_id: str, league_name: str) -> dict[str, Any]:
+    """Resolve the immutable league-series rule used by League Live."""
+    try:
+        row = _first_row(
+            supabase.table("leagues_metadata")
+            .select("rules_config")
+            .eq("club_id", str(club_id))
+            .eq("league_name", str(league_name))
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise LeagueLivePersistenceError("Unable to load the league match structure before scoring.") from exc
+    rules = _as_dict((row or {}).get("rules_config"))
+    competition = _as_dict(rules.get("competition"))
+    return normalize_league_match_structure(competition.get("match_structure"))
 
 
 def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -695,20 +717,31 @@ def build_admin_league_live_round_plan(
         }
 
     effective_courts = list(courts or _as_list(session_row.get("current_court_state_json")))
-    return build_league_live_round_plan(
+    match_structure = _league_match_structure(
+        supabase,
+        club_id=str(club_id),
+        league_name=str(session_row.get("league_name") or ""),
+    )
+    series_matches = validate_league_series_matches(
+        matches,
+        match_structure=match_structure,
+    )
+    result = build_league_live_round_plan(
         session_id=str(session_id),
         round_number=safe_round,
         total_rounds=_safe_int(session_row.get("total_rounds"), safe_round) or safe_round,
         session_updated_at=str(session_row.get("updated_at") or ""),
         roster=_as_list(session_row.get("roster_json")),
         courts=effective_courts,
-        matches=matches,
+        matches=series_matches,
         movement_overrides=movement_overrides,
         override_reason=override_reason,
         roster_change=resolved_roster_change,
         bench_player_ids=bench_player_ids,
         bench_override_reason=bench_override_reason,
     )
+    result["match_structure"] = match_structure
+    return result
 
 
 def prepare_admin_league_live_session_create(

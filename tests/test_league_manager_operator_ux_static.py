@@ -27,7 +27,7 @@ def test_awards_and_live_panels_do_not_expose_deployment_instructions() -> None:
     assert "server-only service-role key" not in awards
     assert "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN" not in live
     assert "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT" not in live
-    assert "Award changes are unavailable in this build." in awards
+    assert "Awards editing is closed for this staging test." in awards
     assert "League Live is not available yet" in live
 
 
