@@ -172,13 +172,12 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
 
     assert "  push:\n    branches:\n      - staging\n" in workflow
     assert (
-        "SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || (startsWith(github.event.head_commit.message, 'Open time-bounded staging write session') && 'open' || 'none') }}"
+        "SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'open' }}"
         in workflow
     )
-    assert "close-temporary-open-wave:" in workflow
-    assert "run: sleep 2700" in workflow
-    assert "--input write_wave=none" in workflow
-    assert "verify-final-none" in workflow
+    assert "close-temporary-open-wave:" not in workflow
+    assert "run: sleep 2700" not in workflow
+    assert "verify-final-none" not in workflow
     assert "${{ inputs." not in workflow
     assert "STAGING_SUPABASE_URL" in workflow
     assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" in workflow
@@ -246,7 +245,7 @@ def test_staging_deploy_wave_choices_exactly_match_the_code_ledger():
         if line.strip().startswith("- ")
     )
 
-    assert 'default: "none"' in write_wave
+    assert 'default: "open"' in write_wave
     assert choices[0] == "none"
     assert set(choices) == {OPEN_WRITE_WAVE, *STAGING_WRITE_WAVES}
     assert len(choices) == len(STAGING_WRITE_WAVES) + 1
@@ -358,15 +357,15 @@ def test_staging_smoke_scopes_bypass_secret_to_request_steps():
     ) == 5
 
 
-def test_staging_smoke_attests_exact_sha_and_disabled_write_projection():
+def test_staging_smoke_attests_exact_sha_and_open_write_projection():
     workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
-    identity = workflow.split("      - name: Attest exact read-only deployment identity\n", 1)[
+    identity = workflow.split("      - name: Attest exact open-write staging deployment identity\n", 1)[
         1
     ].split("\n      - name:", 1)[0]
 
     assert "deployment_identity_errors(" in identity
     assert 'candidate_sha=os.environ["GITHUB_SHA"]' in identity
-    assert 'expected_write_wave="none"' in identity
+    assert 'expected_write_wave="open"' in identity
     assert "expected_web_origin=web_origin" in identity
     assert "_immutable_vercel_origin" in identity
     assert "juprleagues-api-staging:deployment-" in identity
@@ -377,7 +376,7 @@ def test_staging_smoke_repo_import_steps_set_workspace_pythonpath():
     workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
 
     for step_name in (
-        "Attest exact read-only deployment identity",
+        "Attest exact open-write staging deployment identity",
         "Reject incomplete browser public-read evidence",
     ):
         step = workflow.split(f"      - name: {step_name}\n", 1)[1].split(

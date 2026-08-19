@@ -130,7 +130,7 @@ jobs:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: make public-web-smoke
 
-      - name: Attest exact read-only deployment identity
+      - name: Attest exact open-write staging deployment identity
         shell: python
         env:
           PYTHONPATH: ${{ github.workspace }}
@@ -170,7 +170,7 @@ jobs:
                   candidate_sha=os.environ["GITHUB_SHA"],
                   vercel_deployment_id=vercel_id,
                   fly_image_ref=fly_image,
-                  expected_write_wave="none",
+                  expected_write_wave="open",
                   expected_web_origin=web_origin,
               )
           )
@@ -178,7 +178,7 @@ jobs:
               for error in errors:
                   print(f"::error title=Staging identity rejected::{error}")
               raise SystemExit(1)
-          print("Vercel and Fly attest the exact staging SHA with every controlled write flag disabled.")
+          print("Vercel and Fly attest the exact staging SHA with the persistent staging write posture enabled.")
 
       - name: Set up Node
         uses: actions/setup-node@v4

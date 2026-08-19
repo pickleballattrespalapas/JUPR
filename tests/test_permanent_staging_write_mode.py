@@ -44,7 +44,7 @@ def test_open_wave_allows_every_reviewed_staging_route() -> None:
     assert not wave_allows_request(NO_WRITE_WAVE, "POST", "/clubs/tres-palapas/support/intake")
 
 
-def test_fly_staging_defaults_to_fail_closed_none_mode() -> None:
+def test_source_fly_config_remains_safe_until_the_staging_deploy_projects_its_posture() -> None:
     text = Path("fly.staging.toml").read_text(encoding="utf-8")
     assert 'JUPR_STAGING_WRITE_WAVE = "none"' in text
     assert 'JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL = "0"' in text
@@ -53,11 +53,11 @@ def test_fly_staging_defaults_to_fail_closed_none_mode() -> None:
         assert f'{flag} = "0"' in text
 
 
-def test_staging_deploy_defaults_to_none_and_retains_explicit_open() -> None:
+def test_staging_deploy_defaults_to_persistent_open_and_retains_explicit_close() -> None:
     text = Path(".github/workflows/fly_api_staging_deploy.yml").read_text(encoding="utf-8")
-    assert "|| 'none'" in text
-    assert "|| 'open'" not in text
-    assert 'default: "none"' in text
+    assert "|| 'open'" in text
+    assert "|| 'none'" not in text
+    assert 'default: "open"' in text
     assert "- open" in text
     assert "- none" in text
     assert 'JUPR_EMAIL_MODE: dry_run' in text

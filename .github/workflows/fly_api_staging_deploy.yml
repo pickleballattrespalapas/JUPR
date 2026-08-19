@@ -1,7 +1,7 @@
 name: Deploy FastAPI staging to Fly
 run-name: >-
   Fly staging ·
-  ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || (startsWith(github.event.head_commit.message, 'Open time-bounded staging write session') && 'open' || 'none') }} ·
+  ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'open' }} ·
   ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.expected_candidate_sha || github.sha }}
 
 on:
@@ -31,10 +31,10 @@ on:
         required: true
         default: "tres_palapas"
       write_wave:
-        description: "Staging write posture; select a write wave only for an explicitly approved test"
+        description: "Staging write posture. Normal staging deployments remain open; select none only to close writes temporarily."
         required: true
         type: choice
-        default: "none"
+        default: "open"
         options:
           - none
           - open
@@ -137,7 +137,7 @@ jobs:
       - name: Configure staging write posture
         shell: bash
         env:
-          SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || (startsWith(github.event.head_commit.message, 'Open time-bounded staging write session') && 'open' || 'none') }}
+          SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'open' }}
         run: |
           set -euo pipefail
           python scripts/staging_write_waves.py \
@@ -413,58 +413,3 @@ jobs:
             --club-slug "$CLUB_SLUG" \
             --club-id "$CLUB_ID" \
             --json
-
-  close-temporary-open-wave:
-    name: Restore temporary staging writes to read-only
-    needs: deploy-staging
-    if: >-
-      github.event_name == 'push' &&
-      startsWith(github.event.head_commit.message, 'Open time-bounded staging write session')
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    environment: staging
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Check out canonical staging
-        uses: actions/checkout@v4
-        with:
-          ref: staging
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Keep the acceptance window bounded
-        shell: bash
-        run: sleep 2700
-
-      - name: Restore staging writes to none
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python scripts/staging_evidence_automation.py candidate-sha \
-            > "$RUNNER_TEMP/current-staging.json"
-          RESTORE_SHA="$(jq -r '.candidate_sha' "$RUNNER_TEMP/current-staging.json")"
-          python scripts/staging_evidence_automation.py dispatch \
-            --workflow fly_api_staging_deploy.yml \
-            --input write_wave=none \
-            --input "expected_candidate_sha=$RESTORE_SHA" \
-            --input "orchestration_run_id=$GITHUB_RUN_ID" \
-            > "$RUNNER_TEMP/restore-none-dispatch.json"
-          RESTORE_RUN_ID="$(jq -r '.workflow_run_id' "$RUNNER_TEMP/restore-none-dispatch.json")"
-          python scripts/staging_evidence_automation.py wait-run \
-            --workflow fly_api_staging_deploy.yml \
-            --run-id "$RESTORE_RUN_ID" \
-            --candidate-sha "$RESTORE_SHA" \
-            --timeout-seconds 900
-          python scripts/staging_evidence_automation.py fly-health \
-            > "$RUNNER_TEMP/restored-health.json"
-          python scripts/staging_evidence_automation.py verify-final-none \
-            --fly-json "$RUNNER_TEMP/restored-health.json"

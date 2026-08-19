@@ -10,7 +10,7 @@ def _read(path: str) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
-def test_temporary_write_session_controller_is_retired() -> None:
+def test_temporary_write_session_controller_is_retired_in_favor_of_persistent_staging_writes() -> None:
     workflow = _read(WORKFLOW_PATH)
 
     assert workflow.startswith("name: Retired Staging Write Session\n")
@@ -19,8 +19,8 @@ def test_temporary_write_session_controller_is_retired() -> None:
     assert "schedule:" not in workflow
     assert "workflow_run:" not in workflow
     assert "Temporary staging write leases are retired." in workflow
-    assert "Staging is read-only at rest; automatic deployments use write_wave=none." in workflow
-    assert "one explicitly approved named wave" in workflow
+    assert "Staging writes remain open for ongoing acceptance testing." in workflow
+    assert "emergency disable workflow" in workflow
     assert "flyctl" not in workflow
     assert "SUPABASE" not in workflow
 
@@ -45,13 +45,13 @@ def test_emergency_disable_is_manual_owner_only_and_staging_only() -> None:
     assert "environment: production" not in recovery
 
 
-def test_normal_staging_deploy_is_fail_closed_and_email_stays_dry_run() -> None:
+def test_normal_staging_deploy_is_open_and_email_stays_dry_run() -> None:
     fly = _read(FLY_PATH)
 
     assert "  push:\n    branches:\n      - staging\n" in fly
-    assert "|| 'none'" in fly
-    assert "|| 'open'" not in fly
-    assert 'default: "none"' in fly
+    assert "|| 'open'" in fly
+    assert "|| 'none'" not in fly
+    assert 'default: "open"' in fly
     assert "SELECTED_WRITE_WAVE:" in fly
     assert "JUPR_EMAIL_MODE: dry_run" in fly
     assert '"JUPR_EMAIL_MODE=dry_run"' in fly

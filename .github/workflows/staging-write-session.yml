@@ -10,8 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Explain fail-closed staging test mode
+      - name: Explain persistent staging write mode
         run: |
           echo "Temporary staging write leases are retired."
-          echo "Staging is read-only at rest; automatic deployments use write_wave=none."
-          echo "Use one explicitly approved named wave for a bounded test, then restore none."
+          echo "Staging writes remain open for ongoing acceptance testing."
+          echo "Use the emergency disable workflow only when staging writes must be deliberately closed."
