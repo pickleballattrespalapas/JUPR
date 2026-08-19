@@ -44,7 +44,7 @@ def test_guided_settings_keep_saved_configuration_visible_after_draft() -> None:
         "apps/web/app/admin/league-manager/GuidedLeagueSettingsEditor.tsx"
     )
 
-    assert 'fieldset disabled={!isDraft} aria-label="League configuration"' in source
+    assert 'fieldset ref={configurationRef} disabled={!isDraft} aria-label="League configuration"' in source
     assert "its complete saved configuration is shown below" in source
     assert "Saved configuration · read-only" in source
     assert "structured Streamlit overview" not in source
@@ -53,6 +53,12 @@ def test_guided_settings_keep_saved_configuration_visible_after_draft() -> None:
     assert "Choose a week count or an end date" in source
     assert "Weeks (or use an end date)" in source
     assert 'color: localMessageIsError ? "#b91c1c" : "#166534"' in source
+    assert "League setup wizard" in source
+    assert "League setup summary" in source
+    assert "League setup progress" in source
+    assert "League setup review" in source
+    assert "Created play format" in source
+    assert "setupStep === 5" in source
 
 
 def test_roster_filters_and_actions_open_in_the_same_mode() -> None:

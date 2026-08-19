@@ -226,7 +226,7 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
         <label><strong>K-factor</strong><br /><input type="number" value={kFactor} onChange={(event) => setKFactor(event.target.value)} min={1} max={128} style={inputStyle} /></label>
       </div>
       <label><strong>Description</strong><br /><textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={2000} rows={4} style={inputStyle} /></label>
-      <p style={{ color: "#475569" }}>Season format determines competition flow; match modality determines singles, doubles, or team scoring. Detailed match-series and court rules are set in the draft settings editor.</p>
+      <p style={{ color: "#475569" }}>Season format determines competition flow; match modality determines singles, doubles, or team scoring. Detailed match-series and court rules are completed in the league setup wizard after this draft is created.</p>
       <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
         <ConfirmAction
           triggerLabel={busy ? "Creating…" : "Create league"}
