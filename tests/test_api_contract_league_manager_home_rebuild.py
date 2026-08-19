@@ -31,7 +31,8 @@ def test_create_and_selected_league_homes_are_separate() -> None:
     league_panel = read("app/admin/league-manager/league/LeagueHomePanel.tsx")
     nav = read("app/admin/league-manager/LeagueManagerNav.tsx")
 
-    assert "Create league draft" in create_page
+    assert "Start league setup" in create_page
+    assert "league setup wizard before activation" in create_page
     assert "redirect(\"/admin/league-manager\")" in league_page
     assert "League tools" in league_panel
     assert "League night printout" in league_panel
