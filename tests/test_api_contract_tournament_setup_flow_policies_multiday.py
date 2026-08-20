@@ -133,13 +133,15 @@ def test_multi_day_projection_preserves_existing_single_day_contracts() -> None:
     assert 'scheduled_day_ids: ["day-saturday"]' in payload_tests
 
 
-def test_public_registration_displays_required_weather_policy() -> None:
+def test_public_tournament_home_displays_required_weather_policy() -> None:
     public_api = read("lib/tournamentRegistrationApi.ts")
-    public_page = read("app/clubs/[clubSlug]/tournament-registration/page.tsx")
+    registration_page = read("app/clubs/[clubSlug]/tournament-registration/page.tsx")
+    tournament_home = read("app/clubs/[clubSlug]/tournaments/page.tsx")
     assert "weather_policy_markdown?: string | null" in public_api
     assert "scheduled_day_ids?: string[] | null" in public_api
-    assert "settings?.weather_policy_markdown" in public_page
-    assert ">Weather policy<" in public_page
+    assert "settings?.weather_policy_markdown" not in registration_page
+    assert "settings?.weather_policy_markdown" in tournament_home
+    assert ">Weather policy<" in tournament_home
 
 
 def test_public_services_project_weather_and_multi_day_fields() -> None:

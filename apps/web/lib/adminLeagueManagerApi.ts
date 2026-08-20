@@ -89,6 +89,8 @@ export type AdminLeagueManagerRosterRow = {
   league_name: string;
   rating?: number | null;
   rating_jupr?: number | null;
+  overall_rating?: number | null;
+  overall_rating_jupr?: number | null;
   wins?: number | null;
   losses?: number | null;
   matches_played?: number | null;

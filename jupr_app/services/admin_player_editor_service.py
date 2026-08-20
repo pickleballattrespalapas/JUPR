@@ -15,7 +15,6 @@ from jupr_app.services.admin_guarded_write_service import (
 )
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
-DEFAULT_NEW_PLAYER_JUPR = 3.5
 
 
 class PlayerEditorConflictError(RuntimeError):
@@ -548,7 +547,7 @@ def create_admin_player_editor_player(
     *,
     club_id: str,
     name: str,
-    starting_jupr: Any = DEFAULT_NEW_PLAYER_JUPR,
+    starting_jupr: Any = None,
     actor_email: str,
     actor_role: str,
     idempotency_key: str,
@@ -561,7 +560,7 @@ def create_admin_player_editor_player(
         raise ValueError("Player name is required.")
     rating = _safe_float(starting_jupr)
     if rating is None:
-        rating = DEFAULT_NEW_PLAYER_JUPR
+        raise ValueError("Starting JUPR is required for a new player.")
     if rating < 1.0 or rating > 7.0:
         raise ValueError("Starting JUPR must be between 1.0 and 7.0.")
     request_payload = {"name": clean_name, "starting_jupr": float(rating)}

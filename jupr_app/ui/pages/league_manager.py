@@ -497,7 +497,7 @@ def render(ctx):
                 st.caption("Set a starting JUPR for each new player, then click Save & Continue. (This creates the accounts.)")
 
                 df_new = pd.DataFrame(
-                    {"Name": [str(x) for x in new_names], "Starting JUPR": [3.5] * len(new_names)}
+                    {"Name": [str(x) for x in new_names], "Starting JUPR": [None] * len(new_names)}
                 )
 
                 edited_new = st.data_editor(
@@ -510,6 +510,7 @@ def render(ctx):
                             min_value=1.0,
                             max_value=7.0,
                             step=0.1,
+                            required=True,
                         )
                     },
                     key="lm_new_players_editor",
@@ -520,6 +521,10 @@ def render(ctx):
                     errs = 0
                     for _, r in edited_new.iterrows():
                         nm = str(r["Name"]).strip()
+                        if pd.isna(r["Starting JUPR"]):
+                            errs += 1
+                            st.error(f"Set a Starting JUPR for {nm or 'every new player'}.")
+                            continue
                         jupr = float(r["Starting JUPR"])
                         ok, err = safe_add_player(
                             supabase=ctx.supabase,
@@ -1218,9 +1223,18 @@ def render(ctx):
                         if use_guest_sub:
                             guest_name = st.text_input("Guest name", key="ladder_sub_guest_name")
                             guest_rating = st.number_input(
-                                "Guest starting JUPR", min_value=1.0, max_value=7.0, step=0.1, value=3.5, key="ladder_sub_guest_rating"
+                                "Guest starting JUPR",
+                                min_value=1.0,
+                                max_value=7.0,
+                                step=0.1,
+                                value=None,
+                                placeholder="Required",
+                                key="ladder_sub_guest_rating",
                             )
-                            sub_player = {"name": guest_name.strip(), "rating": float(guest_rating)}
+                            sub_player = {
+                                "name": guest_name.strip(),
+                                "rating": None if guest_rating is None else float(guest_rating),
+                            }
                         else:
                             sub_label = st.selectbox("Select substitute", options, key="ladder_sub_in")
                             sub_player = option_map.get(sub_label, {})
@@ -1243,12 +1257,14 @@ def render(ctx):
                                 if use_guest_sub:
                                     if not sub_player.get("name"):
                                         raise RosterChangeError("Guest name is required.")
+                                    if sub_player.get("rating") is None:
+                                        raise RosterChangeError("Guest starting JUPR is required.")
                         
                                     ok, err = safe_add_player(
                                         supabase=ctx.supabase,
                                         club_id=str(ctx.club_id),
                                         name=sub_player["name"],
-                                        rating_jupr=float(sub_player.get("rating", 3.5)),
+                                        rating_jupr=float(sub_player["rating"]),
                                     )
                         
                                     if not ok:
@@ -1329,10 +1345,14 @@ def render(ctx):
                                 min_value=1.0,
                                 max_value=7.0,
                                 step=0.1,
-                                value=3.5,
+                                value=None,
+                                placeholder="Required",
                                 key="ladder_add_guest_rating",
                             )
-                            add_player = {"name": guest_name.strip(), "rating": float(guest_rating)}
+                            add_player = {
+                                "name": guest_name.strip(),
+                                "rating": None if guest_rating is None else float(guest_rating),
+                            }
                         else:
                             add_label = st.selectbox("Select player", options, key="ladder_add_player")
                             add_player = option_map.get(add_label, {})
@@ -1351,11 +1371,13 @@ def render(ctx):
                                 if use_guest_add:
                                     if not add_player.get("name"):
                                         raise RosterChangeError("Guest name is required.")
+                                    if add_player.get("rating") is None:
+                                        raise RosterChangeError("Guest starting JUPR is required.")
                                     ok, err = safe_add_player(
                                         supabase=ctx.supabase,
                                         club_id=str(ctx.club_id),
                                         name=add_player["name"],
-                                        rating_jupr=float(add_player.get("rating", 3.5)),
+                                        rating_jupr=float(add_player["rating"]),
                                     )
                                     if not ok:
                                         raise RosterChangeError(f"Could not add guest: {err}")

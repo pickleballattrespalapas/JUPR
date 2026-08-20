@@ -10,11 +10,13 @@ def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_roster_rating_input_is_an_add_player_value_not_a_filter() -> None:
+def test_roster_activation_uses_current_overall_rating_without_an_override() -> None:
     source = _read("apps/web/app/admin/league-manager/roster/LeagueRosterPanel.tsx")
 
-    assert "Starting JUPR or Elo for newly added players" in source
-    assert "this is not a roster filter" in source
+    assert "Starting JUPR or Elo for newly added players" not in source
+    assert "each selected player starts this league from their current Overall JUPR" in source
+    assert "starting_rating: null" in source
+    assert "set Overall JUPR first" in source
     assert 'rosterMutable && action === "activate"' in source
     assert "This roster is available for review only while the league is" in source
 
@@ -58,6 +60,9 @@ def test_guided_settings_keep_saved_configuration_visible_after_draft() -> None:
     assert "League setup progress" in source
     assert "League setup review" in source
     assert "Created play format" in source
+    assert "Participation model" in source
+    assert "Flex — select attendees each session" in source
+    assert "Set — persistent season roster" in source
     assert "setupStep === 5" in source
 
 
@@ -74,7 +79,7 @@ def test_roster_filters_and_actions_open_in_the_same_mode() -> None:
     assert 'setAction("deactivate")' in source
     assert "Eligible to add" in source
     assert "Current members" in source
-    assert 'action === "activate" ? !row.in_league : row.in_league' in source
+    assert 'action === "activate" ? !row.in_league && hasUsableOverallRating(row) : row.in_league' in source
     assert "disabled={!rowSelectable(row)}" in source
     service = _read("jupr_app/services/admin_league_manager_service.py")
     roster_service = _read(
@@ -86,12 +91,37 @@ def test_roster_filters_and_actions_open_in_the_same_mode() -> None:
     assert '"roster_mutable": status in {"draft", "active"}' in service
     assert "update_admin_league_manager_roster_batch(" in roster_service
     assert "_rollback_roster_membership" not in roster_service
-    assert '"admin_apply_league_roster_batch_atomic_v2"' in batch_service
+    assert '"admin_apply_league_roster_batch_atomic_v3"' in batch_service
     roster_guard = _read(
         "supabase/migrations/20261104000000_historic_singles_league_rating_backfill.sql"
     )
     assert "v_league_status not in ('draft', 'active')" in roster_guard
     assert "if v_has_operation then" in roster_guard
+
+
+def test_flex_and_set_leagues_have_distinct_live_session_behavior() -> None:
+    create = _read(
+        "apps/web/app/admin/league-manager/create/LeagueCreatePanel.tsx"
+    )
+    live = _read(
+        "apps/web/app/admin/league-manager/live/LeagueLiveRoundPanel.tsx"
+    )
+
+    assert 'useState<"flex" | "set">("flex")' in create
+    assert "Flex — session attendance" in create
+    assert "Set — persistent roster" in create
+    assert "function participationModeFromDetail" in live
+    assert "Flex attendance for this session" in live
+    assert "select today's attendees" in live
+    assert "Build courts from" in live
+    assert "function replaceFlexAttendance" in live
+    assert "invalidateFlexRosterPlan(message)" in live
+    assert "Set participation:" in live
+    assert "retain its saved pods and positions" in live
+    update_service = _read(
+        "jupr_app/services/admin_league_manager_update_service.py"
+    )
+    assert "Team leagues use Set participation" in update_service
 
 
 def test_selected_awards_scope_keeps_one_clear_recovery_control() -> None:

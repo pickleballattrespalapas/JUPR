@@ -47,6 +47,7 @@ def _registered_supabase(monkeypatch):
         email="alex@example.com",
         secret="test-registration-edit-secret-32bytes",
     )
+    supabase.rpc_calls.clear()
     return supabase, storage, result["registration_id"], token
 
 

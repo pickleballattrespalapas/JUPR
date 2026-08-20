@@ -320,7 +320,7 @@ function SearchablePlayerInput({
   const selected = playerUniverse.find((player) => String(player.id) === value);
   const selectedName = selected ? String(selected.name) : "";
   const [query, setQuery] = useState(selectedName);
-  const [startingJupr, setStartingJupr] = useState("3.5");
+  const [startingJupr, setStartingJupr] = useState("");
   const [creating, setCreating] = useState(false);
   const cleanedQuery = query.replace(/\s+/g, " ").trim();
   const exactPlayer = players.find(
@@ -440,8 +440,9 @@ function SearchablePlayerInput({
         {cleanedQuery && !existingClubPlayer && matchingPlayers.length === 0 ? (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(100px, 1fr) auto", gap: "0.35rem", marginTop: "0.35rem", alignItems: "end" }}>
           <label htmlFor={`${inputId}-starting-jupr`}>
-            <span style={{ display: "block", color: "#475569", fontSize: "0.8rem" }}>Starting JUPR</span>
+            <span style={{ display: "block", color: "#475569", fontSize: "0.8rem" }}>Starting JUPR *</span>
             <input
+              required
               id={`${inputId}-starting-jupr`}
               type="number"
               min={1}
@@ -479,7 +480,7 @@ function SearchablePlayerMultiInput({
   onCreate,
 }: SearchablePlayerMultiInputProps) {
   const [query, setQuery] = useState("");
-  const [startingJupr, setStartingJupr] = useState("3.5");
+  const [startingJupr, setStartingJupr] = useState("");
   const [creating, setCreating] = useState(false);
   const cleanedQuery = query.replace(/\s+/g, " ").trim();
   const selectedNames = new Set(
@@ -585,8 +586,9 @@ function SearchablePlayerMultiInput({
       {cleanedQuery && !exactPlayer ? (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(100px, 1fr) auto", gap: "0.4rem", marginTop: "0.4rem", alignItems: "end" }}>
           <label htmlFor={`${inputId}-starting-jupr`}>
-            <span style={{ display: "block", color: "#475569", fontSize: "0.8rem" }}>Starting JUPR</span>
+            <span style={{ display: "block", color: "#475569", fontSize: "0.8rem" }}>Starting JUPR *</span>
             <input
+              required
               id={`${inputId}-starting-jupr`}
               type="number"
               min={1}
@@ -1367,7 +1369,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
       if (preview.missing_players?.length) {
         setRrSchedule([]);
         setRrPendingPayload(payload);
-        setNewPlayerDrafts(preview.missing_players.map((name) => ({ name, startingJupr: "3.5" })));
+        setNewPlayerDrafts(preview.missing_players.map((name) => ({ name, startingJupr: "" })));
         setMessage(`Found ${preview.missing_players.length} new player(s). Create profiles to continue.`);
         return;
       }

@@ -47,7 +47,6 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
   const [filter, setFilter] = useState<RosterFilter>("in_league");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [action, setAction] = useState<"activate" | "deactivate">("deactivate");
-  const [startingRating, setStartingRating] = useState("3.5");
   const [idempotencyKey, setIdempotencyKey] = useState(operationKey);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -122,13 +121,6 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
       setMessage(error.message);
       throw error;
     }
-    const rating = action === "activate" ? Number(startingRating) : null;
-    if (action === "activate" && (rating === null || !Number.isFinite(rating) || !((rating >= 1 && rating <= 7) || (rating >= 400 && rating <= 2800)))) {
-      const error = new Error("Starting rating must be JUPR 1.0–7.0 or Elo 400–2800.");
-      setMessage(error.message);
-      throw error;
-    }
-
     const generation = actionRequest.begin();
     setBusy(true);
     setMessage(null);
@@ -140,7 +132,7 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
           body: JSON.stringify({
             action,
             player_ids: selectedIds,
-            starting_rating: rating,
+            starting_rating: null,
             idempotency_key: idempotencyKey,
             confirmation_text: confirmationText,
             source: "next_selected_league_roster_page"
@@ -178,8 +170,12 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
       return true;
     });
   }, [filter, query, roster]);
+  const hasUsableOverallRating = (row: AdminLeagueManagerRosterRow) => {
+    const rating = Number(row.overall_rating);
+    return Number.isFinite(rating) && rating >= 400 && rating <= 2800;
+  };
   const rowSelectable = (row: AdminLeagueManagerRosterRow) => row.player_active !== false
-    && (action === "activate" ? !row.in_league : row.in_league);
+    && (action === "activate" ? !row.in_league && hasUsableOverallRating(row) : row.in_league);
   const visibleSelectable = visibleRows.filter(rowSelectable).map((row) => row.player_id);
   const allVisibleSelected = Boolean(visibleSelectable.length && visibleSelectable.every((id) => selectedIds.includes(id)));
   const rosterMutable = detail?.capabilities?.roster_mutable !== false;
@@ -209,8 +205,9 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
             <label><strong>Search players</strong><br /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name or player ID" style={inputStyle} /></label>
             <label><strong>Show</strong><br /><select value={filter} onChange={(event) => changeFilter(event.target.value as RosterFilter)} style={inputStyle}><option value="not_in_league">Eligible to add</option><option value="in_league">Current members</option><option value="all">All club players</option><option value="inactive">Inactive club players</option></select></label>
             {rosterMutable ? <label><strong>Action</strong><br /><select value={action} onChange={(event) => resetOperation(event.target.value as "activate" | "deactivate")} style={inputStyle}><option value="activate">Add players</option><option value="deactivate">Remove players</option></select></label> : null}
-            {rosterMutable && action === "activate" ? <label><strong>Starting JUPR or Elo for newly added players</strong><br /><input value={startingRating} onChange={(event) => { setStartingRating(event.target.value); setIdempotencyKey(operationKey()); }} style={inputStyle} /><br /><small style={{ color: "#64748b" }}>Applied only when adding the selected players; this is not a roster filter.</small></label> : null}
           </div>
+
+          {rosterMutable && action === "activate" ? <p style={{ color: "#475569" }}><strong>League starting rating:</strong> each selected player starts this league from their current Overall JUPR. Players without an overall rating cannot be selected; enter their reviewed rating in Player Editor first.</p> : null}
 
           {rosterMutable ? <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
             <button type="button" onClick={() => setSelectedIds(allVisibleSelected ? selectedIds.filter((id) => !visibleSelectable.includes(id)) : Array.from(new Set([...selectedIds, ...visibleSelectable])))} disabled={!visibleSelectable.length || !rosterMutable} style={ghostButtonStyle}>{allVisibleSelected ? "Clear visible" : "Select visible"}</button>
@@ -219,10 +216,10 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
 
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "650px" }}>
-              <thead><tr>{rosterMutable ? <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Select</th> : null}<th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Membership</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Rating</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Record</th></tr></thead>
+              <thead><tr>{rosterMutable ? <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Select</th> : null}<th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Membership</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Overall / league JUPR</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Record</th></tr></thead>
               <tbody>{visibleRows.map((row: AdminLeagueManagerRosterRow) => {
                 const selected = selectedIds.includes(row.player_id);
-                return <tr key={row.player_id}>{rosterMutable ? <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input aria-label={`Select ${row.player_name}`} type="checkbox" checked={selected} disabled={!rowSelectable(row)} onChange={(event) => { setSelectedIds((current) => event.target.checked ? [...current, row.player_id] : current.filter((id) => id !== row.player_id)); setIdempotencyKey(operationKey()); }} /></td> : null}<td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.player_name}<br /><small>#{row.player_id}{row.player_active === false ? " · inactive" : ""}</small></td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.in_league ? "In league" : "Not in league"}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.rating_jupr == null ? "—" : Number(row.rating_jupr).toFixed(2)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}-{row.losses ?? 0}</td></tr>;
+                return <tr key={row.player_id}>{rosterMutable ? <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input aria-label={`Select ${row.player_name}`} type="checkbox" checked={selected} disabled={!rowSelectable(row)} onChange={(event) => { setSelectedIds((current) => event.target.checked ? [...current, row.player_id] : current.filter((id) => id !== row.player_id)); setIdempotencyKey(operationKey()); }} /></td> : null}<td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.player_name}<br /><small>#{row.player_id}{row.player_active === false ? " · inactive" : !hasUsableOverallRating(row) ? " · set Overall JUPR first" : ""}</small></td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.in_league ? "In league" : "Not in league"}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.overall_rating_jupr == null ? "—" : Number(row.overall_rating_jupr).toFixed(2)} / {row.rating_jupr == null ? "—" : Number(row.rating_jupr).toFixed(2)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}-{row.losses ?? 0}</td></tr>;
               })}</tbody>
             </table>
           </div>
@@ -231,7 +228,7 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
             <ConfirmAction
               triggerLabel={busy ? "Saving…" : action === "activate" ? (selectedIds.length === 1 ? "Add Player" : "Add Players") : (selectedIds.length === 1 ? "Remove Player" : "Remove Players")}
               title={`${action === "activate" ? "Add" : "Remove"} ${selectedIds.length === 1 ? "this player" : "these players"}?`}
-              description={`Apply this single atomic roster change to ${selectedIds.length} selected player${selectedIds.length === 1 ? "" : "s"}.`}
+              description={action === "activate" ? `Add ${selectedIds.length} selected player${selectedIds.length === 1 ? "" : "s"} and start each league rating from that player's current Overall JUPR.` : `Apply this single atomic roster change to ${selectedIds.length} selected player${selectedIds.length === 1 ? "" : "s"}.`}
               confirmLabel={action === "activate" ? "Yes, add players" : "Yes, remove players"}
               confirmationText="SAVE LEAGUE ROSTER BATCH"
               tone={action === "deactivate" ? "danger" : "default"}

@@ -108,6 +108,12 @@ function matchStructureFromDetail(detail: AdminLeagueManagerDetailResponse | nul
   };
 }
 
+function participationModeFromDetail(detail: AdminLeagueManagerDetailResponse | null): "flex" | "set" {
+  const rules = asRecord(detail?.league.rules_config);
+  const operation = asRecord(rules.operation);
+  return operation.participation_mode === "flex" ? "flex" : "set";
+}
+
 function matchStructureLabel(structure: MatchStructure): string {
   if (structure.kind === "best_of") return `Best ${Math.floor(structure.games / 2) + 1} out of ${structure.games}`;
   return structure.games === 1 ? "1 game" : `${structure.games} games`;
@@ -213,8 +219,8 @@ function courtsFromPersisted(courts: LeagueLiveCourt[], currentRound: number, fa
     .map((row) => ({ court: String(row.court_number), formatType: String(row.format_type || "4-player"), playerNames: (row.player_names || []).join("\n") }));
 }
 
-function activeRosterPayload(detail: AdminLeagueManagerDetailResponse | null) {
-  return (detail?.roster || []).filter((row) => row.in_league).map((row) => ({
+function activeRosterPayload(detail: AdminLeagueManagerDetailResponse | null, attendeeIds?: Set<number>) {
+  return (detail?.roster || []).filter((row) => row.in_league && (!attendeeIds || attendeeIds.has(Number(row.player_id)))).map((row) => ({
     player_id: row.player_id,
     player_name: row.player_name,
     rating: row.rating,
@@ -245,6 +251,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [detail, setDetail] = useState<AdminLeagueManagerDetailResponse | null>(null);
   const [matchStructure, setMatchStructure] = useState<MatchStructure>(DEFAULT_MATCH_STRUCTURE);
   const [sessionRoster, setSessionRoster] = useState<LeagueLiveRosterRow[]>([]);
+  const [attendeePlayerIds, setAttendeePlayerIds] = useState<number[]>([]);
   const [liveSessions, setLiveSessions] = useState<LeagueLiveSession[]>([]);
   const [sessionId, setSessionId] = useState("");
   const [loadedSessionId, setLoadedSessionId] = useState("");
@@ -268,7 +275,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [replacedPlayerId, setReplacedPlayerId] = useState("");
   const [guestPlayers, setGuestPlayers] = useState<Array<{ id: number; name: string; rating?: number | null }>>([]);
   const [guestName, setGuestName] = useState("");
-  const [guestJupr, setGuestJupr] = useState("3.5");
+  const [guestJupr, setGuestJupr] = useState("");
   const [guestReason, setGuestReason] = useState("");
   const [compensationReference, setCompensationReference] = useState("");
   const [compensationReason, setCompensationReason] = useState("");
@@ -325,6 +332,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
 
   const currentRound = Math.max(1, Number(roundNumber) || 1);
   const safeTotalRounds = Math.max(currentRound, Number(totalRounds) || currentRound);
+  const participationMode = participationModeFromDetail(detail);
+  const activeLeagueMembers = useMemo(
+    () => (detail?.roster || []).filter((row) => row.in_league),
+    [detail?.roster]
+  );
   const playerOptions = useMemo(() => players.map((player) => player.name).filter(Boolean).sort((a, b) => a.localeCompare(b)), [players]);
   const rosterPlayerIds = useMemo(() => new Set(sessionRoster.map((row) => Number(row.player_id))), [sessionRoster]);
   const incomingPlayerOptions = useMemo(
@@ -399,6 +411,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setRoundLabel(`Round ${sessionRow.current_round || 1}`);
     setSessionNotes(sessionRow.notes || "");
     setSessionRoster((sessionRow.roster_json || []) as LeagueLiveRosterRow[]);
+    setAttendeePlayerIds(((sessionRow.roster_json || []) as LeagueLiveRosterRow[]).map((row) => Number(row.player_id)));
     setRoundHistory(rounds || []);
     setPublishOperations(operations || []);
     setCourts(courtsFromPersisted(courtsRows, sessionRow.current_round || 1, sessionRow.current_court_state_json || []));
@@ -416,6 +429,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setMatchStructure(DEFAULT_MATCH_STRUCTURE);
     setLoadedLeagueName("");
     setSessionRoster([]);
+    setAttendeePlayerIds([]);
     setRosterSuggestion(null);
     setCourts([{ court: "1", formatType: "4-player", playerNames: "" }]);
     setPreview(null);
@@ -432,7 +446,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setReplacedPlayerId("");
     setGuestPlayers([]);
     setGuestName("");
-    setGuestJupr("3.5");
+    setGuestJupr("");
     setGuestReason("");
   }
 
@@ -482,15 +496,47 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     if (movementPlan) setMovementPlanStale(true);
   }
 
+  function invalidateFlexRosterPlan(message: string) {
+    setRosterSuggestion(null);
+    setSessionRoster([]);
+    setBenchOverrideIds([]);
+    setBenchOverrideReason("");
+    setCourts([{ court: "1", formatType: "4-player", playerNames: "" }]);
+    setPreview(null);
+    setScores({});
+    setMovementPlan(null);
+    setMovementPlanStale(false);
+    setMovementOverrides({});
+    setOverrideReason("");
+    createSessionOperationRef.current = null;
+    setMessage(message);
+  }
+
+  function replaceFlexAttendance(playerIds: number[], message: string) {
+    setAttendeePlayerIds([...new Set(playerIds)]);
+    invalidateFlexRosterPlan(message);
+  }
+
+  function changeFlexAttendance(playerId: number, attending: boolean) {
+    setAttendeePlayerIds((current) => attending
+      ? [...new Set([...current, playerId])]
+      : current.filter((id) => id !== playerId));
+    invalidateFlexRosterPlan("Attendance changed. Build fresh Flex courts before creating the session.");
+  }
+
   async function fetchRosterSuggestion(
     leagueDetail: AdminLeagueManagerDetailResponse,
     requestedBenchIds: number[] = [],
-    requestedBenchReason = ""
+    requestedBenchReason = "",
+    requestedAttendeeIds: number[] = attendeePlayerIds
   ): Promise<LeagueLiveRosterSuggestion> {
+    const attendeeFilter = participationModeFromDetail(leagueDetail) === "flex"
+      ? new Set(requestedAttendeeIds.map(Number))
+      : undefined;
     return requestJson<LeagueLiveRosterSuggestion>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live/roster-suggestion`, {
       method: "POST",
       body: JSON.stringify({
-        roster: activeRosterPayload(leagueDetail),
+        roster: activeRosterPayload(leagueDetail, attendeeFilter),
         bench_player_ids: requestedBenchIds,
         bench_override_reason: requestedBenchReason || null,
         round_number: currentRound
@@ -586,13 +632,20 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     try {
       const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}`);
       if (!leagueDetailRequest.isCurrent(generation)) return;
-      const suggestion = await fetchRosterSuggestion(payload);
-      if (!leagueDetailRequest.isCurrent(generation)) return;
       setDetail(payload);
       setMatchStructure(matchStructureFromDetail(payload));
       setLoadedLeagueName(selectedLeague);
+      if (participationModeFromDetail(payload) === "flex") {
+        setAttendeePlayerIds([]);
+        setRosterSuggestion(null);
+        setSessionRoster([]);
+        setMessage("Flex participation: select today's attendees, then build fresh rating-seeded courts for this session.");
+        return;
+      }
+      const suggestion = await fetchRosterSuggestion(payload, [], "", []);
+      if (!leagueDetailRequest.isCurrent(generation)) return;
       applyRosterSuggestion(suggestion);
-      setMessage(`Roster plan suggested ${suggestion.courts.length} court(s) and ${suggestion.bench.length} bench player(s). Review before creating the session.`);
+      setMessage(`Set participation: loaded the persistent league roster and suggested ${suggestion.courts.length} court(s). Resume an existing session to keep its saved pod positions.`);
     } catch (error) {
       if (leagueDetailRequest.isCurrent(generation)) {
         clearPersistedSessionBinding();
@@ -627,14 +680,18 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       setMessage("Load a league roster before requesting another roster suggestion.");
       return;
     }
+    if (participationModeFromDetail(detail) === "flex" && !attendeePlayerIds.length) {
+      setMessage("Select at least one attendee before building Flex courts.");
+      return;
+    }
     const generation = leagueDetailRequest.begin();
     setBusy(true);
     setMessage(null);
     try {
-      const suggestion = await fetchRosterSuggestion(detail, benchOverrideIds, benchOverrideReason);
+      const suggestion = await fetchRosterSuggestion(detail, benchOverrideIds, benchOverrideReason, attendeePlayerIds);
       if (!leagueDetailRequest.isCurrent(generation)) return;
       applyRosterSuggestion(suggestion);
-      setMessage(`Roster plan refreshed ${suggestion.courts.length} court(s); ${suggestion.bench.length} player(s) are benched.`);
+      setMessage(`${participationModeFromDetail(detail) === "flex" ? "Fresh attendee" : "Persistent roster"} plan built ${suggestion.courts.length} court(s); ${suggestion.bench.length} player(s) are benched.`);
     } catch (error) {
       if (leagueDetailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to refresh the roster suggestion.");
     } finally {
@@ -1265,6 +1322,21 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
             onConfirm={createSession}
           />
         </div>
+        {detail && loadedLeagueName === leagueName && !sessionIsCurrentLeague && participationMode === "flex" ? (
+          <section style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #bfdbfe", borderRadius: "12px", background: "#eff6ff" }}>
+            <h3 style={{ marginTop: 0 }}>Flex attendance for this session</h3>
+            <p style={{ color: "#475569" }}>Select only the players who showed up today. Every new Flex session resets attendance and rebuilds rating-seeded pods/courts from this list.</p>
+            <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <button type="button" onClick={() => replaceFlexAttendance(activeLeagueMembers.map((row) => Number(row.player_id)), "All active league members selected. Build fresh Flex courts when attendance is final.")} disabled={busy || !activeLeagueMembers.length} style={ghostButtonStyle}>Select all rostered players</button>
+              <button type="button" onClick={() => replaceFlexAttendance([], "Flex attendance cleared.")} disabled={busy || !attendeePlayerIds.length} style={ghostButtonStyle}>Clear attendance</button>
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.35rem" }}>
+              {activeLeagueMembers.map((row) => <label key={row.player_id} style={{ display: "flex", gap: "0.45rem", alignItems: "center" }}><input type="checkbox" checked={attendeePlayerIds.includes(Number(row.player_id))} onChange={(event) => changeFlexAttendance(Number(row.player_id), event.target.checked)} disabled={busy} /> {row.player_name}{row.overall_rating_jupr == null ? "" : ` · ${Number(row.overall_rating_jupr).toFixed(2)}`}</label>)}
+            </div>
+            <p style={{ marginBottom: 0 }}><button type="button" onClick={refreshRosterSuggestion} disabled={busy || !attendeePlayerIds.length} style={buttonStyle}>Build courts from {attendeePlayerIds.length} attendee{attendeePlayerIds.length === 1 ? "" : "s"}</button></p>
+          </section>
+        ) : null}
+        {detail && loadedLeagueName === leagueName && !sessionIsCurrentLeague && participationMode === "set" ? <p style={{ color: "#475569" }}><strong>Set participation:</strong> the active league roster is the season roster. Resume an existing persisted session to retain its saved pods and positions; creating a new session seeds the initial positions once.</p> : null}
         {rosterSuggestion ? (
           <section style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #dbeafe", borderRadius: "12px", background: "#eff6ff" }}>
             <h3 style={{ marginTop: 0 }}>Roster and bench suggestion</h3>
@@ -1454,7 +1526,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
                 <p style={{ color: "#475569" }}>Guest creation makes a real club player record so ratings and Match Log recovery stay linked. Use Player Editor to retire an abandoned guest.</p>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
                   <label>Guest name<br /><input value={guestName} onChange={(event) => setGuestName(event.target.value)} disabled={busy} style={inputStyle} /></label>
-                  <label>Starting JUPR<br /><input value={guestJupr} onChange={(event) => setGuestJupr(event.target.value)} disabled={busy} type="number" min="1" max="7" step="0.1" style={inputStyle} /></label>
+                  <label>Starting JUPR *<br /><input required value={guestJupr} onChange={(event) => setGuestJupr(event.target.value)} disabled={busy} type="number" min="1" max="7" step="0.1" placeholder="Required" style={inputStyle} /></label>
                   <label>Operator reason<br /><input value={guestReason} onChange={(event) => setGuestReason(event.target.value)} disabled={busy} placeholder="At least 10 characters" style={inputStyle} /></label>
                   <ConfirmAction
                     triggerLabel="Create guest"
@@ -1462,7 +1534,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
                     description="This creates a real club player record linked to ratings and Match Log recovery."
                     confirmLabel="Yes, create guest"
                     confirmationText="CREATE LIVE GUEST"
-                    disabled={busy || !sessionIsCurrentLeague || !guestName.trim() || guestReason.trim().length < 10}
+                    disabled={busy || !sessionIsCurrentLeague || !guestName.trim() || !Number.isFinite(Number(guestJupr)) || Number(guestJupr) < 1 || Number(guestJupr) > 7 || guestReason.trim().length < 10}
                     busy={busy}
                     onConfirm={createGuest}
                   />

@@ -5,7 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from jupr_app.domain.tournament_registration_repo import PUBLIC_REGISTRATION_EDIT_RPC
+from jupr_app.domain.tournament_registration_repo import (
+    PUBLIC_REGISTRATION_CANONICAL_CREATE_RPC,
+    PUBLIC_REGISTRATION_EDIT_RPC,
+)
 from jupr_app.services.public_tournament_registration_service import (
     DuplicateTournamentRegistrationError,
     build_registration_confirmation_delivery,
@@ -135,6 +138,28 @@ class FakeRegistrationEditRpc:
         self.params = params
 
     def execute(self):
+        if self.name == PUBLIC_REGISTRATION_CANONICAL_CREATE_RPC:
+            registration = deepcopy(self.params.get("p_registration") or {})
+            selections = deepcopy(self.params.get("p_selections") or [])
+            tournament_id = str(registration.get("tournament_id") or "")
+            email = str(registration.get("email") or "").strip().lower()
+            if any(
+                str(row.get("tournament_id") or "") == tournament_id
+                and str(row.get("email") or "").strip().lower() == email
+                for row in self.storage.get("tournament_registrations", [])
+            ):
+                raise RuntimeError("JUPR_TOURNAMENT_REGISTRATION_DUPLICATE")
+            self.storage.setdefault("tournament_registrations", []).append(registration)
+            self.storage.setdefault("tournament_registration_selections", []).extend(selections)
+            return SimpleNamespace(
+                data={
+                    "ok": True,
+                    "registration_id": registration.get("id"),
+                    "submitted_at": registration.get("submitted_at"),
+                    "updated_at": registration.get("updated_at"),
+                    "selection_count": len(selections),
+                }
+            )
         if self.name != PUBLIC_REGISTRATION_EDIT_RPC:
             raise AssertionError(f"Unexpected fake RPC: {self.name}")
         tournament_id = str(self.params.get("p_tournament_id") or "")

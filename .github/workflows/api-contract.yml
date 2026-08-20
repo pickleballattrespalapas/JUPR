@@ -68,6 +68,22 @@ jobs:
             tests/test_tournament_setup_request_safety_static.py \
             tests/test_tournament_setup_selection_ux.py
 
+      - name: Run tournament and league testing-fix contracts
+        run: |
+          python -m pytest -q \
+            tests/test_admin_league_manager_create.py \
+            tests/test_admin_league_manager_roster_batch_service.py \
+            tests/test_admin_league_manager_service.py \
+            tests/test_admin_match_uploader_service.py \
+            tests/test_admin_player_editor_service.py \
+            tests/test_jupr_live_admin_roster_builder.py \
+            tests/test_league_manager_operator_ux_static.py \
+            tests/test_league_roster_rating_integrity_migration.py \
+            tests/test_public_tournament_registration_edit_service.py \
+            tests/test_public_tournament_registration_service.py \
+            tests/test_tournament_testing_fixes_static.py \
+            tests/test_staging_candidate_handoff.py
+
       - name: Validate parity final-evidence scaffold and manifest
         run: |
           make check-parity-final-evidence

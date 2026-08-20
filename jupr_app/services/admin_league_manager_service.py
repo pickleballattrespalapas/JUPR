@@ -256,7 +256,7 @@ def _fetch_player_rows(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
     try:
         rows = _safe_rows(
             supabase.table("players")
-            .select("id,name,active,last_game_at")
+            .select("id,name,rating,starting_rating,active,last_game_at")
             .eq("club_id", str(club_id))
             .order("name", desc=False)
             .execute()
@@ -335,6 +335,7 @@ def _league_roster(supabase: Any, *, club_id: str, league_name: str, standings: 
             continue
         league_row = standing_by_player.get(int(pid))
         rating = _safe_float((league_row or {}).get("rating"))
+        overall_rating = _safe_float(player.get("rating"))
         league_active = bool((league_row or {}).get("is_active", False)) and not bool((league_row or {}).get("inactive_at")) if league_row else False
         roster.append(
             {
@@ -344,6 +345,8 @@ def _league_roster(supabase: Any, *, club_id: str, league_name: str, standings: 
                 "league_name": str(league_name),
                 "rating": rating,
                 "rating_jupr": None if rating is None else rating / 400.0,
+                "overall_rating": overall_rating,
+                "overall_rating_jupr": None if overall_rating is None else overall_rating / 400.0,
                 "wins": _safe_int((league_row or {}).get("wins")) or 0,
                 "losses": _safe_int((league_row or {}).get("losses")) or 0,
                 "matches_played": _safe_int((league_row or {}).get("matches_played")) or 0,

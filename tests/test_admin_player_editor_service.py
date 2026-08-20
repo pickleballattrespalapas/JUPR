@@ -175,6 +175,25 @@ def test_create_player_editor_player_writes_audit(monkeypatch) -> None:
     assert any(row["action_type"] == "create_player_editor_player" for row in storage["admin_activity_log"])
 
 
+def test_create_player_editor_player_requires_explicit_starting_rating(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    storage = fake_storage()
+
+    with pytest.raises(ValueError, match="Starting JUPR is required"):
+        create_admin_player_editor_player(
+            FakeSupabase(storage),
+            club_id="club",
+            name="No Default",
+            starting_jupr=None,
+            actor_email="owner@example.com",
+            actor_role="club_owner",
+            idempotency_key="player-create-no-default",
+            source="test",
+        )
+
+    assert "No Default" not in {row["name"] for row in storage["players"]}
+
+
 def test_update_player_editor_player_writes_audit(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
     storage = fake_storage()

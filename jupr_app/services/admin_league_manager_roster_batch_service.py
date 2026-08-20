@@ -71,7 +71,7 @@ def update_admin_league_manager_roster_batch(
     }
     try:
         response = supabase.rpc(
-            "admin_apply_league_roster_batch_atomic_v2",
+            "admin_apply_league_roster_batch_atomic_v3",
             {
                 "p_operation_id": str(uuid4()),
                 "p_club_id": str(club_id),
@@ -127,6 +127,10 @@ def update_admin_league_manager_roster_batch(
         if "RATING_INVALID" in detail:
             raise ValueError(
                 "Every new league member needs a valid starting rating."
+            ) from exc
+        if "OVERALL_RATING_REQUIRED" in detail:
+            raise ValueError(
+                "Set a reviewed Overall JUPR in Player Editor before adding this player to a league."
             ) from exc
         if "FORMAT_INVALID" in detail:
             raise ValueError("League match format must be singles or doubles.") from exc

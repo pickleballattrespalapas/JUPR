@@ -16,6 +16,7 @@ CONFIRM_DUPLICATE_LEAGUE = "DUPLICATE LEAGUE"
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 LEAGUE_FORMATS = {"ladder", "round_robin", "rotating_partner", "fixed_team", "flex_challenge"}
 SESSION_MODES = {"scheduled_rounds", "live_court_board", "self_scheduled"}
+PARTICIPATION_MODES = {"flex", "set"}
 
 
 def _truthy_env(name: str) -> bool:
@@ -62,6 +63,15 @@ def _normalize_session_mode(value: Any) -> str:
     clean = str(value or "scheduled_rounds").strip().casefold()
     if clean not in SESSION_MODES:
         raise ValueError("session_mode must be scheduled_rounds, live_court_board, or self_scheduled.")
+    return clean
+
+
+def _normalize_participation_mode(value: Any, *, league_type: str) -> str:
+    clean = str(value or "set").strip().casefold()
+    if clean not in PARTICIPATION_MODES:
+        raise ValueError("participation_mode must be flex or set.")
+    if league_type == "Team" and clean != "set":
+        raise ValueError("Team leagues use Set participation so registration establishes the roster.")
     return clean
 
 
@@ -162,6 +172,7 @@ def create_admin_league_manager_draft(
     league_type: str = "Individual",
     league_format: str = "ladder",
     session_mode: str = "scheduled_rounds",
+    participation_mode: str = "set",
     source: str = "next_league_manager_create",
 ) -> dict[str, Any]:
     if not is_admin_league_manager_enabled():
@@ -185,6 +196,9 @@ def create_admin_league_manager_draft(
         league_format, league_type=clean_league_type
     )
     clean_session_mode = _normalize_session_mode(session_mode)
+    clean_participation_mode = _normalize_participation_mode(
+        participation_mode, league_type=clean_league_type
+    )
     _validate_format_operation(
         league_format=clean_league_format,
         session_mode=clean_session_mode,
@@ -221,6 +235,7 @@ def create_admin_league_manager_draft(
             },
             "operation": {
                 "session_mode": clean_session_mode,
+                "participation_mode": clean_participation_mode,
                 "move_up_count": 1 if clean_league_format == "ladder" else 0,
                 "move_down_count": 1 if clean_league_format == "ladder" else 0,
             },
