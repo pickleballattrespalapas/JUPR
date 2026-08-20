@@ -201,8 +201,8 @@ def test_registration_editor_supports_partner_and_extra_reconciliation() -> None
     partner_service = read_root("jupr_app/services/admin_tournament_service.py")
 
     assert "Assigned partner" in panel
-    assert "Save assigned partner" in panel
-    assert 'confirmationText="SAVE PARTNER"' in panel
+    assert 'submitLabel="Save partner"' in panel
+    assert 'onSubmit={() => savePartner("SAVE PARTNER")}' in panel
     assert "Review updated extras" in panel
     assert "Save reviewed extras" in panel
     assert "expected_quote_fingerprint" in panel
