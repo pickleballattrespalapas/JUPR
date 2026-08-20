@@ -41,7 +41,7 @@ from services.api.auth import authenticate_bearer, auth_header
 
 class AdminPlayerEditorCreateRequest(BaseModel):
     name: str
-    starting_jupr: float = Field(default=3.5, ge=1.0, le=7.0)
+    starting_jupr: float = Field(ge=1.0, le=7.0)
     idempotency_key: str = Field(
         min_length=8,
         max_length=160,

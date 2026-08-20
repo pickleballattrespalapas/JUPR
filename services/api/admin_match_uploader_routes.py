@@ -77,7 +77,7 @@ class AdminMatchUploaderRoundRobinPreviewRequest(BaseModel):
 
 class AdminMatchUploaderNewPlayerRequest(BaseModel):
     name: str
-    starting_jupr: float = Field(default=3.5, ge=1.0, le=7.0)
+    starting_jupr: float = Field(ge=1.0, le=7.0)
 
 
 class AdminMatchUploaderCreatePlayersRequest(BaseModel):

@@ -58,6 +58,18 @@ function eventLabel(event: PublicRegistrationEvent): string {
     .join(" · ");
 }
 
+function markdownish(text?: string | null) {
+  if (!text) return null;
+  return text
+    .split("\n")
+    .filter(Boolean)
+    .map((line, index) => (
+      <p key={`${index}:${line}`} style={{ margin: "0 0 0.5rem", color: "#475569" }}>
+        {line.replace(/^#+\s*/, "")}
+      </p>
+    ));
+}
+
 export default async function PublicTournamentsPage({
   params,
   searchParams
@@ -349,7 +361,7 @@ export default async function PublicTournamentsPage({
         </div>
       </section>
 
-      <section>
+      <section style={{ marginBottom: "1.25rem" }}>
         <h2>Events and days</h2>
         <div style={{ display: "grid", gap: "0.75rem" }}>
           {eventsByDay.map(({ day, events }) => (
@@ -377,6 +389,84 @@ export default async function PublicTournamentsPage({
           ))}
         </div>
       </section>
+
+      {(settings?.location_name ||
+        settings?.venue_address ||
+        settings?.venue_directions ||
+        settings?.sponsor_markdown ||
+        settings?.rules_markdown ||
+        settings?.refund_policy_markdown ||
+        settings?.weather_policy_markdown) ? (
+        <section style={{ marginBottom: "1.25rem" }}>
+          <h2>Tournament information</h2>
+          <div style={{ display: "grid", gap: "0.75rem" }}>
+            {settings?.location_name || settings?.venue_address || settings?.venue_directions ? (
+              <article style={cardStyle}>
+                <h3 style={{ marginTop: 0 }}>Venue</h3>
+                {settings?.location_name ? (
+                  <p style={{ marginBottom: "0.35rem", fontWeight: 800 }}>
+                    {settings.location_name}
+                  </p>
+                ) : null}
+                {settings?.venue_address ? (
+                  <address style={{ fontStyle: "normal", color: "#334155" }}>
+                    {settings.venue_address}
+                  </address>
+                ) : null}
+                {settings?.venue_address ? (
+                  <p style={{ marginBottom: settings?.venue_directions ? "0.75rem" : 0 }}>
+                    <a
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(settings.venue_address)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open map
+                    </a>
+                  </p>
+                ) : null}
+                {settings?.venue_directions ? (
+                  <div>
+                    <strong>Arrival directions</strong>
+                    {markdownish(settings.venue_directions)}
+                  </div>
+                ) : null}
+              </article>
+            ) : null}
+            {settings?.sponsor_markdown ? (
+              <article style={{ ...cardStyle, background: "#fffbeb", borderColor: "#fde68a" }}>
+                <h3 style={{ marginTop: 0 }}>Tournament sponsors</h3>
+                {markdownish(settings.sponsor_markdown)}
+              </article>
+            ) : null}
+            {settings?.rules_markdown ? (
+              <article style={cardStyle}>
+                <h3 style={{ marginTop: 0 }}>Rules and registration notes</h3>
+                {markdownish(settings.rules_markdown)}
+              </article>
+            ) : null}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+                gap: "0.75rem"
+              }}
+            >
+              {settings?.refund_policy_markdown ? (
+                <article style={cardStyle}>
+                  <h3 style={{ marginTop: 0 }}>Refund policy</h3>
+                  {markdownish(settings.refund_policy_markdown)}
+                </article>
+              ) : null}
+              {settings?.weather_policy_markdown ? (
+                <article style={cardStyle}>
+                  <h3 style={{ marginTop: 0 }}>Weather policy</h3>
+                  {markdownish(settings.weather_policy_markdown)}
+                </article>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <p style={{ marginTop: "1rem" }}>
         <Link href={`/clubs/${params.clubSlug}/tournament-team-results`}>

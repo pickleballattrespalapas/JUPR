@@ -70,6 +70,7 @@ def test_create_league_draft_service(monkeypatch) -> None:
     assert tables["leagues_metadata"][-1]["is_active"] is False
     assert tables["leagues_metadata"][-1]["event_tags"] == {"skill_levels": [], "date_tags": []}
     assert tables["leagues_metadata"][-1]["rules_config"]["overview"]["league_format"] == "ladder"
+    assert tables["leagues_metadata"][-1]["rules_config"]["operation"]["participation_mode"] == "set"
     assert tables["leagues_metadata"][-1]["rules_config"]["competition"]["match_structure"] == {
         "kind": "fixed_games",
         "games": 1,
@@ -122,6 +123,50 @@ def test_create_league_draft_rejects_team_singles(monkeypatch) -> None:
 
     assert [row["league_name"] for row in tables["leagues_metadata"]] == ["Existing League"]
     assert tables["admin_activity_log"] == []
+
+
+def test_create_league_draft_stores_flex_participation(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = league_create_tables()
+
+    create_admin_league_manager_draft(
+        FakeSupabase(tables),
+        club_id="club",
+        league_name="Drop In Ladder",
+        description="Attendance changes every session",
+        min_games=6,
+        k_factor=32,
+        participation_mode="flex",
+        actor_email="owner@example.com",
+        actor_role="club_owner",
+        confirmation_text="CREATE LEAGUE",
+    )
+
+    operation = tables["leagues_metadata"][-1]["rules_config"]["operation"]
+    assert operation["participation_mode"] == "flex"
+
+
+def test_create_team_league_rejects_flex_participation(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = league_create_tables()
+
+    with pytest.raises(ValueError, match="Team leagues use Set participation"):
+        create_admin_league_manager_draft(
+            FakeSupabase(tables),
+            club_id="club",
+            league_name="Invalid Flex Team",
+            description="",
+            min_games=6,
+            k_factor=32,
+            league_type="Team",
+            league_format="fixed_team",
+            participation_mode="flex",
+            actor_email="owner@example.com",
+            actor_role="club_owner",
+            confirmation_text="CREATE LEAGUE",
+        )
+
+    assert len(tables["leagues_metadata"]) == 1
 
 
 @pytest.mark.parametrize(

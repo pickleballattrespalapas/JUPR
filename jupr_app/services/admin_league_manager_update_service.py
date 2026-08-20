@@ -28,6 +28,7 @@ LEAGUE_FORMATS = {
     "flex_challenge",
 }
 SESSION_MODES = {"scheduled_rounds", "live_court_board", "self_scheduled"}
+PARTICIPATION_MODES = {"flex", "set"}
 STANDINGS_TIEBREAKS = {
     "wins_then_point_differential",
     "wins_then_total_points",
@@ -414,6 +415,13 @@ def _normalize_rules_config(value: Any) -> dict[str, Any]:
                 options=SESSION_MODES,
                 default="scheduled_rounds",
             )
+        if "participation_mode" in operation:
+            clean_operation["participation_mode"] = _choice(
+                operation.get("participation_mode"),
+                field="rules_config.operation.participation_mode",
+                options=PARTICIPATION_MODES,
+                default="set",
+            )
         for key in ("move_up_count", "move_down_count"):
             if key in operation:
                 clean_operation[key] = _safe_int(
@@ -592,6 +600,20 @@ def update_admin_league_manager_settings(
     if before is None:
         raise ValueError("league not found")
     normalized = _normalize_patch(dict(patch or {}))
+    normalized_rules = normalized.get("rules_config")
+    normalized_operation = (
+        normalized_rules.get("operation")
+        if isinstance(normalized_rules, dict)
+        and isinstance(normalized_rules.get("operation"), dict)
+        else {}
+    )
+    if (
+        str(before.get("league_type") or "").strip().casefold() == "team"
+        and normalized_operation.get("participation_mode") not in (None, "set")
+    ):
+        raise ValueError(
+            "Team leagues use Set participation so registration establishes the roster."
+        )
     if "schedule_config" in normalized and "event_tags" not in normalized:
         schedule_config = normalized.get("schedule_config") or {}
         event_tags = normalize_event_tags(before.get("event_tags"))

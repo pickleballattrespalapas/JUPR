@@ -36,7 +36,7 @@ class _Supabase:
         self.error = error
 
     def table(self, _name):
-        raise AssertionError("roster lifecycle must be checked atomically by v2")
+        raise AssertionError("roster lifecycle must be checked atomically by the guarded RPC")
 
     def rpc(self, name, params):
         self.rpc_calls.append((name, dict(params)))
@@ -58,7 +58,7 @@ def _update(supabase: _Supabase) -> dict:
     )
 
 
-def test_paused_new_roster_batch_is_rejected_by_the_authoritative_v2(
+def test_paused_new_roster_batch_is_rejected_by_the_authoritative_v3(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("JUPR_ENV", "test")
@@ -72,10 +72,10 @@ def test_paused_new_roster_batch_is_rejected_by_the_authoritative_v2(
     with pytest.raises(ValueError, match="read-only unless the league is draft"):
         _update(supabase)
 
-    assert supabase.rpc_calls[0][0] == "admin_apply_league_roster_batch_atomic_v2"
+    assert supabase.rpc_calls[0][0] == "admin_apply_league_roster_batch_atomic_v3"
 
 
-def test_paused_idempotent_receipt_can_return_through_v2(monkeypatch) -> None:
+def test_paused_idempotent_receipt_can_return_through_v3(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENV", "test")
     supabase = _Supabase(
         payload={
@@ -89,7 +89,7 @@ def test_paused_idempotent_receipt_can_return_through_v2(monkeypatch) -> None:
     result = _update(supabase)
 
     assert result["idempotent"] is True
-    assert supabase.rpc_calls[0][0] == "admin_apply_league_roster_batch_atomic_v2"
+    assert supabase.rpc_calls[0][0] == "admin_apply_league_roster_batch_atomic_v3"
 
 
 def test_active_roster_batch_still_returns_its_atomic_receipt(monkeypatch) -> None:
@@ -99,4 +99,4 @@ def test_active_roster_batch_still_returns_its_atomic_receipt(monkeypatch) -> No
     result = _update(supabase)
 
     assert result["committed"] is True
-    assert supabase.rpc_calls[0][0] == "admin_apply_league_roster_batch_atomic_v2"
+    assert supabase.rpc_calls[0][0] == "admin_apply_league_roster_batch_atomic_v3"

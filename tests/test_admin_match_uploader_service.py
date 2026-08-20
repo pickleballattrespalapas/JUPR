@@ -221,6 +221,27 @@ def test_create_players_then_continue_round_robin_preview(monkeypatch) -> None:
     assert preview["courts"][0]["matches"][0]["t1_p1"] in {1, 2, 3, 5}
 
 
+def test_match_uploader_new_player_requires_explicit_starting_rating(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
+    storage = fake_storage()
+    reviewed_players = [{"name": "No Default", "starting_jupr": None}]
+
+    with pytest.raises(ValueError, match="Starting JUPR is required"):
+        create_admin_match_uploader_players(
+            FakeSupabase(storage),
+            club_id="club",
+            actor_email="admin@example.com",
+            actor_role="scorekeeper",
+            players=reviewed_players,
+            reviewed_fingerprint=match_uploader_player_batch_fingerprint(reviewed_players),
+            idempotency_key="create-player-no-default",
+            confirmation_text="CREATE PLAYERS",
+            source="test",
+        )
+
+    assert "No Default" not in {row["name"] for row in storage["players"]}
+
+
 def test_create_players_exact_retry_replays_without_duplicate(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
     storage = fake_storage()

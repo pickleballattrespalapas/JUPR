@@ -1312,7 +1312,20 @@ def create_admin_tournament_selection(
         registration_id=clean_registration_id,
         payload=validated,
     )
-    selection = _selection_payload(created, event_options=event_options)
+    created_id = _clean_text(created.get("id"), limit=120)
+    refreshed_detail = get_admin_tournament_detail(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=clean_tournament_id,
+    )
+    selection = next(
+        (
+            row
+            for row in refreshed_detail.get("selections") or []
+            if _clean_text(row.get("id"), limit=120) == created_id
+        ),
+        _selection_payload(created, event_options=event_options),
+    )
     audit_payload = build_activity_payload(
         club_id=str(club_id),
         actor_email=str(actor_email or ""),
@@ -1496,7 +1509,19 @@ def update_admin_tournament_selection(
         payload=update_payload,
         expected_updated_at=clean_expected_updated_at,
     )
-    selection = _selection_payload(updated, event_options=event_options)
+    refreshed_detail = get_admin_tournament_detail(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=clean_tournament_id,
+    )
+    selection = next(
+        (
+            row
+            for row in refreshed_detail.get("selections") or []
+            if _clean_text(row.get("id"), limit=120) == clean_selection_id
+        ),
+        _selection_payload(updated, event_options=event_options),
+    )
     audit_payload = build_activity_payload(
         club_id=str(club_id),
         actor_email=str(actor_email or ""),

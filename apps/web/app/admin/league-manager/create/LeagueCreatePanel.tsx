@@ -51,6 +51,7 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
   const [matchFormat, setMatchFormat] = useState<"doubles" | "singles">("doubles");
   const [leagueFormat, setLeagueFormat] = useState<"ladder" | "round_robin" | "rotating_partner" | "fixed_team" | "flex_challenge">("ladder");
   const [sessionMode, setSessionMode] = useState<"scheduled_rounds" | "live_court_board" | "self_scheduled">("scheduled_rounds");
+  const [participationMode, setParticipationMode] = useState<"flex" | "set">("flex");
   const [minGames, setMinGames] = useState("6");
   const [kFactor, setKFactor] = useState("32");
   const [busy, setBusy] = useState(false);
@@ -62,6 +63,7 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
     if (nextLeagueType === "Team") {
       setMatchFormat("doubles");
       setLeagueFormat("fixed_team");
+      setParticipationMode("set");
     } else if (leagueFormat === "fixed_team") {
       setLeagueFormat("ladder");
     }
@@ -145,6 +147,7 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
             match_format: createMatchFormat,
             league_format: leagueType === "Team" ? "fixed_team" : leagueFormat,
             session_mode: sessionMode,
+            participation_mode: leagueType === "Team" ? "set" : participationMode,
             description,
             min_games: minimum,
             k_factor: factor,
@@ -213,6 +216,14 @@ export default function LeagueCreatePanel({ apiBase, clubId, status }: Props) {
             {leagueType === "Team" ? <option value="fixed_team">Fixed-team league</option> : null}
           </select>
           {leagueType === "Team" ? <small style={{ color: "#64748b" }}>Team leagues use the fixed-team format.</small> : null}
+        </label>
+        <label>
+          <strong>Participation model</strong><br />
+          <select value={leagueType === "Team" ? "set" : participationMode} onChange={(event) => setParticipationMode(event.target.value as typeof participationMode)} disabled={leagueType === "Team"} style={inputStyle}>
+            <option value="flex">Flex — session attendance</option>
+            <option value="set">Set — persistent roster</option>
+          </select>
+          <br /><small style={{ color: "#64748b" }}>{leagueType === "Team" || participationMode === "set" ? "Registration establishes the season roster; saved pods and positions persist." : "Choose attendees each session; courts are rebuilt from those players."}</small>
         </label>
         <label>
           <strong>Session operation</strong><br />

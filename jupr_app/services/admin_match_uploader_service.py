@@ -27,7 +27,6 @@ from jupr_app.services.admin_guarded_write_service import (
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 MAX_MATCH_UPLOADER_BATCH_ROWS = 200
 MAX_MATCH_UPLOADER_RR_COURTS = 10
-DEFAULT_NEW_PLAYER_JUPR = 3.5
 
 
 def _truthy_env(name: str) -> bool:
@@ -831,7 +830,7 @@ def build_admin_match_uploader_round_robin_preview(
 
 def _coerce_starting_jupr(value: Any) -> float:
     if value in (None, ""):
-        return DEFAULT_NEW_PLAYER_JUPR
+        raise ValueError("Starting JUPR is required for every new player.")
     try:
         rating = float(value)
     except Exception as exc:

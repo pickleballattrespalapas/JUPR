@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import { actionSuccess } from "@/components/interaction";
+import { FormDialog, actionSuccess } from "@/components/interaction";
 import type {
   AdminTournamentDetailResponse,
   AdminTournamentRegistration,
@@ -108,6 +108,11 @@ const buttonStyle = {
   fontWeight: 800,
   cursor: "pointer"
 };
+const ghostButtonStyle = {
+  ...buttonStyle,
+  background: "white",
+  color: "#0f172a"
+};
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -201,6 +206,25 @@ function numberValue(
   return Number.isFinite(value) ? value : null;
 }
 
+function partnerStateLabel(row: AdminTournamentSelection): string {
+  if (row.partner_selection_id) {
+    return row.partner_display_name
+      ? `Confirmed with ${row.partner_display_name}`
+      : "Confirmed team";
+  }
+  if (row.partner_mode === "HAS_PARTNER") {
+    return row.partner_name
+      ? `Manual partner: ${row.partner_name}`
+      : "Manual partner details needed";
+  }
+  if (row.partner_mode === "NEEDS_PARTNER") {
+    return row.show_on_partner_board
+      ? "Needs partner · on Partner Board"
+      : "Needs partner";
+  }
+  return "No partner request";
+}
+
 export default function TournamentRegistrantEditPanel({
   apiBase,
   clubId,
@@ -219,6 +243,8 @@ export default function TournamentRegistrantEditPanel({
   const [registrationDraft, setRegistrationDraft] =
     useState<RegistrationEdit>(() => registrationEdit(null));
   const [selectedSelectionId, setSelectedSelectionId] = useState("");
+  const [eventDialogOpen, setEventDialogOpen] = useState(false);
+  const [partnerDialogOpen, setPartnerDialogOpen] = useState(false);
   const [newEventOptionId, setNewEventOptionId] = useState("");
   const [selectionDraft, setSelectionDraft] = useState<SelectionEdit>(() =>
     selectionEdit(null)
@@ -255,6 +281,8 @@ export default function TournamentRegistrantEditPanel({
     setCommerceWarning(null);
     setRegistrationDraft(registrationEdit(null));
     setSelectedSelectionId("");
+    setEventDialogOpen(false);
+    setPartnerDialogOpen(false);
     setNewEventOptionId("");
     setSelectionDraft(selectionEdit(null));
     setExtraQuantities({});
@@ -368,11 +396,16 @@ export default function TournamentRegistrantEditPanel({
     }
   }
 
-  function chooseSelection(selectionId: string) {
+  function chooseSelection(
+    selectionId: string,
+    dialog: "event" | "partner"
+  ) {
     const row =
       selections.find((selection) => selection.id === selectionId) || null;
     setSelectedSelectionId(row?.id || "");
     setSelectionDraft(selectionEdit(row));
+    setEventDialogOpen(Boolean(row) && dialog === "event");
+    setPartnerDialogOpen(Boolean(row) && dialog === "partner");
     setMessage(null);
   }
 
@@ -473,8 +506,11 @@ export default function TournamentRegistrantEditPanel({
     }
   }
 
-  async function removeSelection(confirmationText: string) {
-    if (!selectedSelection?.updated_at) {
+  async function removeSelection(
+    row: AdminTournamentSelection,
+    confirmationText: string
+  ) {
+    if (!row.updated_at) {
       setMessage("Reload this event entry before removing it.");
       throw new Error("Reload this event entry before removing it.");
     }
@@ -483,11 +519,11 @@ export default function TournamentRegistrantEditPanel({
     setMessage(null);
     try {
       await requestJson<AdminTournamentWriteResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/selections/${encodeURIComponent(selectedSelection.id)}`,
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/selections/${encodeURIComponent(row.id)}`,
         {
           method: "DELETE",
           body: JSON.stringify({
-            expected_updated_at: selectedSelection.updated_at,
+            expected_updated_at: row.updated_at,
             confirmation_text: confirmationText,
             source: "next_tournament_registration_detail"
           })
@@ -591,7 +627,10 @@ export default function TournamentRegistrantEditPanel({
           body: JSON.stringify({
             partner_selection_id:
               selectionDraft.partnerSelectionId || null,
-            unpaired_mode: selectionDraft.partnerMode,
+            unpaired_mode:
+              selectionDraft.partnerMode === "NEEDS_PARTNER"
+                ? "NEEDS_PARTNER"
+                : "NONE",
             expected_updated_at: selectedSelection.updated_at,
             confirmation_text: confirmationText,
             source: "next_tournament_registration_detail"
@@ -767,6 +806,27 @@ export default function TournamentRegistrantEditPanel({
     const selectedIds = new Set(selections.map((row) => row.event_option_id));
     return (detail?.event_options || []).filter((row) => !selectedIds.has(String(row.id)));
   }, [detail, selections]);
+
+  const loadedSelectionDraft = selectionEdit(selectedSelection);
+  const eventDialogDirty = Boolean(
+    selectedSelection &&
+      JSON.stringify(selectionDraft) !== JSON.stringify(loadedSelectionDraft)
+  );
+  const manualPartnerFieldsValid =
+    selectionDraft.partnerMode !== "HAS_PARTNER" ||
+    Boolean(
+      selectionDraft.partnerName.trim() &&
+        selectionDraft.partnerEmail.trim() &&
+        selectionDraft.partnerSkill.trim() &&
+        Number(selectionDraft.partnerSkill) >= 1 &&
+        Number(selectionDraft.partnerSkill) <= 7
+    );
+  const partnerDialogDirty = Boolean(
+    selectedSelection &&
+      (selectionDraft.partnerSelectionId !==
+        loadedSelectionDraft.partnerSelectionId ||
+        selectionDraft.partnerMode !== loadedSelectionDraft.partnerMode)
+  );
 
   const activeVariants = useMemo(() => {
     if (!commerce) return [];
@@ -986,9 +1046,92 @@ export default function TournamentRegistrantEditPanel({
 
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Event entries and partners</h2>
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "0.75rem", alignItems: "end", marginBottom: "1rem" }}>
+            {selections.length ? (
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                {selections.map((row) => (
+                  <section
+                    key={row.id}
+                    style={{
+                      border: "1px solid #cbd5e1",
+                      borderRadius: "12px",
+                      padding: "0.85rem",
+                      background: "#f8fafc"
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "flex-start",
+                        gap: "0.75rem",
+                        flexWrap: "wrap"
+                      }}
+                    >
+                      <div>
+                        <h3 style={{ margin: 0 }}>
+                          {row.event_label || row.event_option_id || "Event entry"}
+                        </h3>
+                        <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
+                          <strong>Status:</strong> {registration.registration_status} ·{" "}
+                          <strong>Partner:</strong> {partnerStateLabel(row)}
+                        </p>
+                        <small style={{ color: "#64748b" }}>
+                          Entry {row.id}
+                        </small>
+                      </div>
+                      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          onClick={() => chooseSelection(row.id, "event")}
+                          disabled={busy}
+                          style={buttonStyle}
+                        >
+                          Edit entry
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => chooseSelection(row.id, "partner")}
+                          disabled={busy}
+                          style={ghostButtonStyle}
+                        >
+                          Change partner
+                        </button>
+                        <ConfirmAction
+                          triggerLabel={busy ? "Removing…" : "Remove"}
+                          title={`Remove ${row.event_label || "this event entry"}?`}
+                          description="Remove this division from the registration. Confirmed teams and imported draws remain protected."
+                          confirmLabel="Yes, remove event entry"
+                          confirmationText="REMOVE SELECTION"
+                          tone="danger"
+                          busy={busy}
+                          onConfirm={(confirmationText) =>
+                            removeSelection(row, confirmationText)
+                          }
+                        />
+                      </div>
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <p style={{ color: "#64748b" }}>
+                No event entries are attached to this registration.
+              </p>
+            )}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1fr) auto",
+                gap: "0.75rem",
+                alignItems: "end",
+                marginTop: "1rem",
+                paddingTop: "1rem",
+                borderTop: "1px solid #e2e8f0"
+              }}
+            >
               <label>
-                <strong>Add another event entry</strong><br />
+                <strong>Add another event entry</strong>
+                <br />
                 <select value={newEventOptionId} onChange={(event) => setNewEventOptionId(event.target.value)} style={inputStyle}>
                   <option value="">{availableNewEvents.length ? "Choose Division" : "All available Divisions are already selected"}</option>
                   {availableNewEvents.map((row) => <option key={String(row.id)} value={String(row.id)}>{eventLabel(row)}</option>)}
@@ -1005,220 +1148,109 @@ export default function TournamentRegistrantEditPanel({
                 onConfirm={addSelection}
               />
             </div>
-            {selections.length ? (
-              <>
+          </article>
+
+          <FormDialog
+            open={eventDialogOpen && Boolean(selectedSelection)}
+            mode="edit"
+            size="xwide"
+            title={`Edit ${selectedSelection?.event_label || "event entry"}`}
+            description="Edit one event entry without changing the registrant's other divisions."
+            dirty={eventDialogDirty}
+            submitLabel="Save event entry"
+            workingLabel="Saving event entry…"
+            submitDisabled={!eventDialogDirty || !selectionDraft.eventOptionId || !manualPartnerFieldsValid}
+            onSubmit={() => saveSelection("SAVE SELECTION")}
+            onCancel={() => {
+              setEventDialogOpen(false);
+              setSelectionDraft(selectionEdit(selectedSelection));
+            }}
+          >
+            {selectedSelection ? (
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem" }}>
+                  <label>
+                    <strong>Division</strong><br />
+                    <select value={selectionDraft.eventOptionId} onChange={(event) => setSelectionDraft((current) => ({ ...current, eventOptionId: event.target.value }))} disabled={Boolean(selectedSelection.partner_selection_id)} style={inputStyle}>
+                      <option value="">Choose division</option>
+                      {detail?.event_options.map((row) => <option key={String(row.id)} value={String(row.id)}>{eventLabel(row)}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <strong>Partner state</strong><br />
+                    <select value={selectionDraft.partnerMode} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerMode: event.target.value }))} disabled={Boolean(selectionDraft.partnerSelectionId)} style={inputStyle}>
+                      {PARTNER_MODE_OPTIONS.map((value) => <option key={value} value={value}>{value === "NONE" ? "No partner request" : value === "HAS_PARTNER" ? "Manual / unregistered partner" : "Needs partner"}</option>)}
+                    </select>
+                  </label>
+                </div>
+                {selectionDraft.partnerMode === "HAS_PARTNER" && !selectionDraft.partnerSelectionId ? (
+                  <section style={{ padding: "0.85rem", border: "1px solid #bfdbfe", borderRadius: "12px", background: "#eff6ff" }}>
+                    <h3 style={{ marginTop: 0 }}>Manual partner details</h3>
+                    <p style={{ color: "#475569" }}>Saving resolves an existing club player when possible, or creates a linked player and tournament entry, so the public roster shows one canonical team.</p>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem" }}>
+                      <label><strong>Partner name *</strong><br /><input required value={selectionDraft.partnerName} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerName: event.target.value }))} style={inputStyle} /></label>
+                      <label><strong>Partner email *</strong><br /><input required type="email" value={selectionDraft.partnerEmail} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerEmail: event.target.value }))} style={inputStyle} /></label>
+                      <label><strong>Partner phone</strong><br /><input type="tel" value={selectionDraft.partnerPhone} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerPhone: event.target.value }))} style={inputStyle} /></label>
+                      <label><strong>Partner DUPR ID</strong><br /><input value={selectionDraft.partnerDuprId} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerDuprId: event.target.value }))} style={inputStyle} /></label>
+                      <label><strong>Partner starting skill *</strong><br /><input required type="number" min="1" max="7" step="0.01" value={selectionDraft.partnerSkill} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerSkill: event.target.value }))} style={inputStyle} /></label>
+                      <label><strong>Partner age</strong><br /><input type="number" min="5" max="120" value={selectionDraft.partnerAge} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerAge: event.target.value }))} style={inputStyle} /></label>
+                      <label><strong>Partner gender</strong><br /><select value={selectionDraft.partnerGender} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerGender: event.target.value }))} style={inputStyle}><option value="">Not specified</option><option value="Women">Women</option><option value="Men">Men</option><option value="Non-binary">Non-binary</option><option value="Other">Other</option><option value="Prefer not to say">Prefer not to say</option></select></label>
+                    </div>
+                  </section>
+                ) : null}
+                {selectionDraft.partnerMode === "NEEDS_PARTNER" && !selectionDraft.partnerSelectionId ? (
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <input type="checkbox" checked={selectionDraft.showOnPartnerBoard} disabled={!Boolean(registration.wants_partner_board_contact)} onChange={(event) => setSelectionDraft((current) => ({ ...current, showOnPartnerBoard: event.target.checked }))} />
+                    Show this request on the Partner Board
+                    {!registration.wants_partner_board_contact ? <small>Save Partner Board contact consent above first.</small> : null}
+                  </label>
+                ) : null}
                 <label>
-                  <strong>Select entry</strong>
-                  <br />
-                  <select
-                    value={selectedSelectionId}
-                    onChange={(event) => chooseSelection(event.target.value)}
-                    style={inputStyle}
-                  >
-                    {selections.map((row) => (
-                      <option key={row.id} value={row.id}>
-                        {row.event_label || row.event_option_id || row.id}
-                      </option>
-                    ))}
+                  <strong>Partner note</strong><br />
+                  <textarea value={selectionDraft.partnerNote} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerNote: event.target.value }))} rows={3} style={inputStyle} />
+                </label>
+              </div>
+            ) : null}
+          </FormDialog>
+
+          <FormDialog
+            open={partnerDialogOpen && Boolean(selectedSelection)}
+            mode="edit"
+            title={`Change partner · ${selectedSelection?.event_label || "event entry"}`}
+            description="Assign another registered player in this division, or remove the confirmed team link."
+            dirty={partnerDialogDirty}
+            submitLabel="Save partner"
+            workingLabel="Saving partner…"
+            submitDisabled={!partnerDialogDirty}
+            onSubmit={() => savePartner("SAVE PARTNER")}
+            onCancel={() => {
+              setPartnerDialogOpen(false);
+              setSelectionDraft(selectionEdit(selectedSelection));
+            }}
+          >
+            {selectedSelection ? (
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                <label>
+                  <strong>Assigned partner</strong><br />
+                  <select value={selectionDraft.partnerSelectionId} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerSelectionId: event.target.value }))} style={inputStyle}>
+                    <option value="">No assigned partner</option>
+                    {selectedSelection.partner_selection_id && !partnerCandidates.some((candidate) => candidate.selection.id === selectedSelection.partner_selection_id) ? <option value={selectedSelection.partner_selection_id}>{selectedSelection.partner_display_name || "Current partner"}</option> : null}
+                    {partnerCandidates.map(({ selection, registration: candidateRegistration }) => <option key={selection.id} value={selection.id}>{candidateRegistration?.display_name || selection.id}</option>)}
                   </select>
                 </label>
-                {selectedSelection ? (
-                  <div style={{ marginTop: "0.75rem" }}>
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns:
-                          "repeat(auto-fit, minmax(190px, 1fr))",
-                        gap: "0.75rem"
-                      }}
-                    >
-                      <label style={{ minWidth: 0 }}>
-                        <strong>Division</strong>
-                        <br />
-                        <select
-                          value={selectionDraft.eventOptionId}
-                          onChange={(event) =>
-                            setSelectionDraft((current) => ({
-                              ...current,
-                              eventOptionId: event.target.value
-                            }))
-                          }
-                          disabled={Boolean(
-                            selectedSelection.partner_selection_id
-                          )}
-                          style={inputStyle}
-                        >
-                          <option value="">Choose division</option>
-                          {detail?.event_options.map((row) => (
-                            <option key={String(row.id)} value={String(row.id)}>
-                              {eventLabel(row)}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label style={{ minWidth: 0 }}>
-                        <strong>Unpaired mode</strong>
-                        <br />
-                        <select
-                          value={selectionDraft.partnerMode}
-                          onChange={(event) =>
-                            setSelectionDraft((current) => ({
-                              ...current,
-                              partnerMode: event.target.value
-                            }))
-                          }
-                          disabled={Boolean(
-                            selectionDraft.partnerSelectionId
-                          )}
-                          style={inputStyle}
-                        >
-                          {PARTNER_MODE_OPTIONS.map((value) => (
-                            <option key={value} value={value}>
-                              {value === "NONE"
-                                ? "No partner request"
-                                : value === "HAS_PARTNER"
-                                  ? "Has manual / unregistered partner"
-                                  : "Needs partner"}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                    {selectionDraft.partnerMode === "HAS_PARTNER" && !selectionDraft.partnerSelectionId ? (
-                      <div style={{ marginTop: "0.75rem", padding: "0.85rem", border: "1px solid #bfdbfe", borderRadius: "12px", background: "#eff6ff" }}>
-                        <h3 style={{ marginTop: 0 }}>Manual partner details</h3>
-                        <p style={{ color: "#475569" }}>Use this when the partner does not have a separate tournament registration. These fields are used for skill, age, and gender eligibility.</p>
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem" }}>
-                          <label><strong>Partner name</strong><br /><input value={selectionDraft.partnerName} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerName: event.target.value }))} style={inputStyle} /></label>
-                          <label><strong>Partner email</strong><br /><input type="email" value={selectionDraft.partnerEmail} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerEmail: event.target.value }))} style={inputStyle} /></label>
-                          <label><strong>Partner phone</strong><br /><input type="tel" value={selectionDraft.partnerPhone} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerPhone: event.target.value }))} style={inputStyle} /></label>
-                          <label><strong>Partner DUPR ID</strong><br /><input value={selectionDraft.partnerDuprId} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerDuprId: event.target.value }))} style={inputStyle} /></label>
-                          <label><strong>Partner doubles skill</strong><br /><input type="number" min="1" max="7" step="0.01" value={selectionDraft.partnerSkill} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerSkill: event.target.value }))} style={inputStyle} /></label>
-                          <label><strong>Partner age</strong><br /><input type="number" min="5" max="120" value={selectionDraft.partnerAge} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerAge: event.target.value }))} style={inputStyle} /></label>
-                          <label><strong>Partner gender</strong><br /><select value={selectionDraft.partnerGender} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerGender: event.target.value }))} style={inputStyle}><option value="">Not specified</option><option value="Women">Women</option><option value="Men">Men</option><option value="Non-binary">Non-binary</option><option value="Other">Other</option><option value="Prefer not to say">Prefer not to say</option></select></label>
-                        </div>
-                      </div>
-                    ) : null}
-                    {selectionDraft.partnerMode === "NEEDS_PARTNER" && !selectionDraft.partnerSelectionId ? (
-                      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.75rem" }}>
-                        <input
-                          type="checkbox"
-                          checked={selectionDraft.showOnPartnerBoard}
-                          disabled={!Boolean(registration.wants_partner_board_contact)}
-                          onChange={(event) => setSelectionDraft((current) => ({ ...current, showOnPartnerBoard: event.target.checked }))}
-                        />
-                        Show this partner request on the Partner Board
-                        {!registration.wants_partner_board_contact ? <small>Enable and save the registrant&apos;s Partner Board contact consent above first.</small> : null}
-                      </label>
-                    ) : null}
-                    <label
-                      style={{ display: "block", marginTop: "0.75rem" }}
-                    >
-                      <strong>Assigned partner</strong>
-                      <br />
-                      <select
-                        value={selectionDraft.partnerSelectionId}
-                        onChange={(event) =>
-                          setSelectionDraft((current) => ({
-                            ...current,
-                            partnerSelectionId: event.target.value
-                          }))
-                        }
-                        style={inputStyle}
-                      >
-                        <option value="">No assigned partner</option>
-                        {selectedSelection.partner_selection_id &&
-                        !partnerCandidates.some(
-                          (candidate) =>
-                            candidate.selection.id ===
-                            selectedSelection.partner_selection_id
-                        ) ? (
-                          <option value={selectedSelection.partner_selection_id}>
-                            {selectedSelection.partner_display_name ||
-                              "Current partner"}
-                          </option>
-                        ) : null}
-                        {partnerCandidates.map(({ selection, registration }) => (
-                          <option key={selection.id} value={selection.id}>
-                            {registration?.display_name || selection.id}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <p style={{ color: "#475569" }}>
-                      Only compatible, non-cancelled registrations in this
-                      division are shown. Existing teams and imported draws are
-                      protected from conflicting assignments.
-                    </p>
-                    <label
-                      style={{ display: "block", marginTop: "0.75rem" }}
-                    >
-                      <strong>Partner note</strong>
-                      <br />
-                      <textarea
-                        value={selectionDraft.partnerNote}
-                        onChange={(event) =>
-                          setSelectionDraft((current) => ({
-                            ...current,
-                            partnerNote: event.target.value
-                          }))
-                        }
-                        rows={3}
-                        style={inputStyle}
-                      />
-                    </label>
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: "0.75rem",
-                        flexWrap: "wrap",
-                        marginTop: "0.75rem"
-                      }}
-                    >
-                      <ConfirmAction
-                        triggerLabel={busy ? "Saving…" : "Save event entry"}
-                        title="Save this event-entry update?"
-                        description="Update the Division, unpaired mode, complete manual-partner details, eligibility data, Partner Board visibility, and partner note."
-                        confirmLabel="Yes, save event entry"
-                        confirmationText="SAVE SELECTION"
-                        busy={busy}
-                        onConfirm={saveSelection}
-                      />
-                      <ConfirmAction
-                        triggerLabel={
-                          busy ? "Saving…" : "Save assigned partner"
-                        }
-                        title="Save this partner assignment?"
-                        description={
-                          selectionDraft.partnerSelectionId
-                            ? "Assign or replace the confirmed partner for this event."
-                            : "Remove the confirmed partner and return the entry to its selected unpaired mode."
-                        }
-                        confirmLabel="Yes, save partner"
-                        confirmationText="SAVE PARTNER"
-                        busy={busy}
-                        onConfirm={savePartner}
-                      />
-                      <ConfirmAction
-                        triggerLabel={busy ? "Removing…" : "Remove event entry"}
-                        title="Remove this event entry?"
-                        description="Remove the Division from this registration. Confirmed teams and imported draws remain protected and must be changed in their canonical workflow first."
-                        confirmLabel="Yes, remove event entry"
-                        confirmationText="REMOVE SELECTION"
-                        tone="danger"
-                        busy={busy}
-                        onConfirm={removeSelection}
-                      />
-                    </div>
-                  </div>
+                {!selectionDraft.partnerSelectionId ? (
+                  <label>
+                    <strong>After removal</strong><br />
+                    <select value={selectionDraft.partnerMode === "NEEDS_PARTNER" ? "NEEDS_PARTNER" : "NONE"} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerMode: event.target.value }))} style={inputStyle}>
+                      <option value="NONE">No partner request</option>
+                      <option value="NEEDS_PARTNER">Needs partner</option>
+                    </select>
+                  </label>
                 ) : null}
-              </>
-            ) : (
-              <p style={{ color: "#64748b" }}>
-                No event entries are attached to this registration.
-              </p>
-            )}
-          </article>
+                <p style={{ color: "#475569", marginBottom: 0 }}>Only compatible, non-cancelled registrations in this division are shown. Existing teams and imported draws remain protected.</p>
+              </div>
+            ) : null}
+          </FormDialog>
 
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Extras and quantities</h2>

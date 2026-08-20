@@ -57,6 +57,9 @@ class TournamentRegistrationRelationshipLockedError(ValueError):
 ADMIN_SELECTION_UPDATE_RPC = "admin_update_tournament_registration_selection"
 ADMIN_SELECTION_DELETE_RPC = "admin_delete_tournament_registration_selection"
 PUBLIC_REGISTRATION_EDIT_RPC = "server_update_public_tournament_registration_edit"
+PUBLIC_REGISTRATION_CANONICAL_CREATE_RPC = (
+    "create_tournament_registration_canonical_v1"
+)
 PUBLIC_REGISTRATION_COMMERCE_CREATE_RPC = (
     "server_create_public_tournament_registration_with_commerce"
 )
@@ -267,6 +270,27 @@ def _database_error_contains(exc: Exception, marker: str) -> bool:
         elif arg is not None:
             values.append(str(arg))
     return str(marker).upper() in "\n".join(values).upper()
+
+
+def _manual_partner_error_message(exc: Exception) -> str | None:
+    messages = {
+        "JUPR_MANUAL_PARTNER_NAME_REQUIRED": "Enter the partner name.",
+        "JUPR_MANUAL_PARTNER_EMAIL_REQUIRED": "Enter the partner email so their tournament entry can be linked.",
+        "JUPR_MANUAL_PARTNER_RATING_REQUIRED": "Enter a starting JUPR from 1.0 through 7.0 for a new partner.",
+        "JUPR_MANUAL_PARTNER_AMBIGUOUS": "More than one club player has this exact name. Link the correct player before saving the partner.",
+        "JUPR_MANUAL_PARTNER_SELF": "A registrant cannot be their own partner.",
+        "JUPR_MANUAL_PARTNER_CANCELLED": "The matching partner registration is cancelled.",
+        "JUPR_MANUAL_PARTNER_ALREADY_LINKED": "One of these event entries already belongs to another confirmed team.",
+        "JUPR_MANUAL_PARTNER_CLUB_MISMATCH": "The matching partner registration links to a player in another club.",
+    }
+    return next(
+        (
+            message
+            for marker, message in messages.items()
+            if _database_error_contains(exc, marker)
+        ),
+        None,
+    )
 
 
 def _normalize_email(value: Any) -> str:
@@ -2699,7 +2723,13 @@ def create_admin_registration_selection(
         "created_at": now,
         "updated_at": now,
     }
-    response = supabase.table("tournament_registration_selections").insert(row).execute()
+    try:
+        response = supabase.table("tournament_registration_selections").insert(row).execute()
+    except Exception as exc:
+        manual_partner_message = _manual_partner_error_message(exc)
+        if manual_partner_message:
+            raise ValueError(manual_partner_message) from exc
+        raise
     created = _safe_first(response)
     if not created:
         raise RuntimeError("Tournament event entry was not created.")
@@ -2824,6 +2854,9 @@ def update_admin_registration_selection(
     try:
         resp = supabase.rpc(ADMIN_SELECTION_UPDATE_RPC, params).execute()
     except Exception as exc:
+        manual_partner_message = _manual_partner_error_message(exc)
+        if manual_partner_message:
+            raise ValueError(manual_partner_message) from exc
         if _database_error_contains(exc, SELECTION_WRITE_CONFLICT_MARKER) or _database_error_contains(
             exc, SELECTION_WRITE_CONFLICT_CODE
         ):
@@ -3265,6 +3298,9 @@ def save_registration(
         try:
             resp = supabase.rpc(rpc_name, params).execute()
         except Exception as exc:
+            manual_partner_message = _manual_partner_error_message(exc)
+            if manual_partner_message:
+                raise ValueError(manual_partner_message) from exc
             if _database_error_contains(exc, REGISTRATION_EDIT_CONFLICT_MARKER):
                 raise TournamentRegistrationEditConflictError(
                     "Registration changed after it was loaded. Refresh the edit link and try again."
@@ -3348,6 +3384,9 @@ def save_registration(
                 PUBLIC_REGISTRATION_COMMERCE_CREATE_RPC, params
             ).execute()
         except Exception as exc:
+            manual_partner_message = _manual_partner_error_message(exc)
+            if manual_partner_message:
+                raise ValueError(manual_partner_message) from exc
             if _database_error_contains(
                 exc, "JUPR_TOURNAMENT_COMMERCE_REGISTRATION_DUPLICATE"
             ):
@@ -3390,30 +3429,59 @@ def save_registration(
             "idempotent_replay": bool(result.get("idempotent_replay")),
         }
 
-    (
-        supabase.table("tournament_registrations")
-        .upsert(reg_row, on_conflict="id")
-        .execute()
-    )
-
-    (
-        supabase.table("tournament_registration_selections")
-        .delete()
-        .eq("registration_id", registration_id)
-        .execute()
-    )
-
-    if rows:
+    rpc = getattr(supabase, "rpc", None)
+    if not callable(rpc):
+        # Local fakes and the legacy Streamlit compatibility harness do not
+        # expose RPC. Real Supabase clients always take the transactional path
+        # below, where registration, selections, and canonical partner teams
+        # commit or roll back together.
         (
-            supabase.table("tournament_registration_selections")
-            .insert(rows)
+            supabase.table("tournament_registrations")
+            .upsert(reg_row, on_conflict="id")
             .execute()
         )
+        (
+            supabase.table("tournament_registration_selections")
+            .delete()
+            .eq("registration_id", registration_id)
+            .execute()
+        )
+        if rows:
+            supabase.table("tournament_registration_selections").insert(rows).execute()
+        return {
+            "registration_id": registration_id,
+            "submitted_at": submitted_at,
+            "selection_count": len(rows),
+        }
 
+    try:
+        response = rpc(
+            PUBLIC_REGISTRATION_CANONICAL_CREATE_RPC,
+            {"p_registration": reg_row, "p_selections": rows},
+        ).execute()
+    except Exception as exc:
+        manual_partner_message = _manual_partner_error_message(exc)
+        if manual_partner_message:
+            raise ValueError(manual_partner_message) from exc
+        if _database_error_contains(
+            exc, "JUPR_TOURNAMENT_REGISTRATION_DUPLICATE"
+        ):
+            raise ValueError(
+                "A registration already exists for this email. Please use the secure edit-link flow."
+            ) from exc
+        raise RuntimeError(
+            "Tournament registration was not saved."
+        ) from exc
+    result = _rpc_object(response)
+    if not result or result.get("ok") is not True:
+        raise RuntimeError(
+            "Tournament registration returned no recovery evidence."
+        )
     return {
-        "registration_id": registration_id,
-        "submitted_at": submitted_at,
-        "selection_count": len(rows),
+        "registration_id": str(result.get("registration_id") or registration_id),
+        "submitted_at": result.get("submitted_at") or submitted_at,
+        "updated_at": result.get("updated_at"),
+        "selection_count": int(result.get("selection_count") or 0),
     }
 
 

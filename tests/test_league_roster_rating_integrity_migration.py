@@ -11,6 +11,12 @@ MIGRATION = (
     / "migrations"
     / "20261101000000_league_roster_rating_integrity.sql"
 )
+OVERALL_BASELINE_MIGRATION = (
+    ROOT
+    / "supabase"
+    / "migrations"
+    / "20261106000000_league_ratings_start_from_overall.sql"
+)
 
 
 def _sql() -> str:
@@ -155,3 +161,20 @@ def test_roster_reactivation_preserves_an_existing_rating() -> None:
     assert "inactive_at = null" in reactivation
     assert "set rating" not in reactivation
     assert "starting_rating" not in reactivation
+
+
+def test_latest_league_baseline_uses_current_overall_without_a_default() -> None:
+    sql = OVERALL_BASELINE_MIGRATION.read_text(encoding="utf-8").lower()
+
+    assert "before insert" in sql
+    assert "select player.rating::numeric" in sql
+    assert "new.rating := pg_catalog.round(v_overall_rating, 4)" in sql
+    assert "new.starting_rating := pg_catalog.round(v_overall_rating, 4)" in sql
+    assert "jupr_league_overall_rating_required" in sql
+    assert "coalesce(player.rating, 1200)" not in sql
+    assert "singles_rating" not in sql
+    assert "admin_apply_league_roster_batch_atomic_v3" in sql
+    assert "jupr.league_roster_overall_baseline" in sql
+    assert "admin_apply_league_roster_batch_atomic_v2" in sql
+    assert "security invoker" in sql
+    assert "set search_path = ''" in sql

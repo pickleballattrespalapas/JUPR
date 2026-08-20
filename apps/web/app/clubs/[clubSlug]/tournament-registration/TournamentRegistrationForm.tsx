@@ -411,8 +411,12 @@ export default function TournamentRegistrationForm({
         return `${event.division_name} does not accept partner information.`;
       }
       if (partner.mode === "HAS_PARTNER") {
-        if (!partner.name.trim() || !partner.email.trim() || !partner.age.trim() || !partner.gender) {
-          return `${event.division_name}: partner name, email, age, and gender are required.`;
+        if (!partner.name.trim() || !partner.email.trim() || !partner.age.trim() || !partner.gender || !partner.skill.trim()) {
+          return `${event.division_name}: partner name, email, age, gender, and starting skill are required.`;
+        }
+        const partnerSkill = numericValue(partner.skill);
+        if (partnerSkill == null || partnerSkill < 1 || partnerSkill > 7) {
+          return `${event.division_name}: partner starting skill must be between 1 and 7.`;
         }
         if (partner.email.trim().toLowerCase() === contact.email.trim().toLowerCase()) {
           return "A player cannot register themselves as their own partner.";
@@ -788,13 +792,13 @@ export default function TournamentRegistrationForm({
                           </label>
                           {partner.mode === "HAS_PARTNER" ? (
                             <>
-                              <p style={{ color: "#475569", margin: 0 }}>Partner details are sent for staff review; they do not create or confirm a team. Both players should register individually.</p>
+                              <p style={{ color: "#475569", margin: 0 }}>We will match this person to an existing club player or create their tournament entry, then list both players as one confirmed team. Your partner does not need to register again.</p>
                               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.5rem" }}>
-                                <label>Partner name *<br /><input aria-label={`${eventOption.division_name} partner name`} value={partner.name} onChange={(event) => updatePartner(eventOption.id, { name: event.target.value })} style={inputStyle} /></label>
-                                <label>Partner email *<br /><input aria-label={`${eventOption.division_name} partner email`} type="email" value={partner.email} onChange={(event) => updatePartner(eventOption.id, { email: event.target.value })} style={inputStyle} /></label>
-                                <label>Partner age *<br /><input aria-label={`${eventOption.division_name} partner age`} type="number" min="1" max="120" value={partner.age} onChange={(event) => updatePartner(eventOption.id, { age: event.target.value })} style={inputStyle} /></label>
-                                <label>Partner gender *<br /><select aria-label={`${eventOption.division_name} partner gender`} value={partner.gender} onChange={(event) => updatePartner(eventOption.id, { gender: event.target.value })} style={inputStyle}><option value="">Select</option><option>Women</option><option>Men</option><option>Non-binary</option><option>Other</option><option>Prefer not to say</option></select></label>
-                                <label>Partner skill<br /><input aria-label={`${eventOption.division_name} partner skill`} type="number" min="1" max="7" step="0.01" value={partner.skill} onChange={(event) => updatePartner(eventOption.id, { skill: event.target.value })} style={inputStyle} /></label>
+                                <label>Partner name *<br /><input required aria-label={`${eventOption.division_name} partner name`} value={partner.name} onChange={(event) => updatePartner(eventOption.id, { name: event.target.value })} style={inputStyle} /></label>
+                                <label>Partner email *<br /><input required aria-label={`${eventOption.division_name} partner email`} type="email" value={partner.email} onChange={(event) => updatePartner(eventOption.id, { email: event.target.value })} style={inputStyle} /></label>
+                                <label>Partner age *<br /><input required aria-label={`${eventOption.division_name} partner age`} type="number" min="1" max="120" value={partner.age} onChange={(event) => updatePartner(eventOption.id, { age: event.target.value })} style={inputStyle} /></label>
+                                <label>Partner gender *<br /><select required aria-label={`${eventOption.division_name} partner gender`} value={partner.gender} onChange={(event) => updatePartner(eventOption.id, { gender: event.target.value })} style={inputStyle}><option value="">Select</option><option>Women</option><option>Men</option><option>Non-binary</option><option>Other</option><option>Prefer not to say</option></select></label>
+                                <label>Partner starting skill *<br /><input required aria-label={`${eventOption.division_name} partner skill`} type="number" min="1" max="7" step="0.01" value={partner.skill} onChange={(event) => updatePartner(eventOption.id, { skill: event.target.value })} style={inputStyle} /></label>
                                 <label>Partner phone<br /><input aria-label={`${eventOption.division_name} partner phone`} value={partner.phone} onChange={(event) => updatePartner(eventOption.id, { phone: event.target.value })} style={inputStyle} /></label>
                                 <label>Partner DUPR ID<br /><input aria-label={`${eventOption.division_name} partner DUPR ID`} value={partner.duprId} onChange={(event) => updatePartner(eventOption.id, { duprId: event.target.value })} style={inputStyle} /></label>
                               </div>
