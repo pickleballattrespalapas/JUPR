@@ -18,7 +18,7 @@ def test_browser_does_not_own_league_live_movement_math() -> None:
     assert "League Live calculates the plan; this page only displays it." in panel
 
 
-def test_league_selection_auto_loads_roster_without_showing_stale_detail() -> None:
+def test_league_selection_loads_set_rosters_and_resets_flex_attendance() -> None:
     panel = PANEL.read_text(encoding="utf-8")
     assert "selectLeague(event.target.value)" in panel
     assert "void loadLeagueDetail(selectedLeague)" in panel
@@ -27,7 +27,10 @@ def test_league_selection_auto_loads_roster_without_showing_stale_detail() -> No
     assert ">Load leagues<" not in panel
     assert "Reload roster" in panel
     assert ">Load roster<" not in panel
-    assert "const suggestion = await fetchRosterSuggestion(payload);" in panel
+    assert 'if (participationModeFromDetail(payload) === "flex") {' in panel
+    assert "setAttendeePlayerIds([]);" in panel
+    assert 'const suggestion = await fetchRosterSuggestion(payload, [], "", []);' in panel
+    assert "applyRosterSuggestion(suggestion);" in panel
     assert "clearPersistedSessionBinding();" in panel
     assert "Session writes remain unavailable until the replacement roster is ready." in panel
 
