@@ -135,6 +135,7 @@ jobs:
           version: "0.4.49"
 
       - name: Configure staging write posture
+        id: staging-posture
         shell: bash
         env:
           SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'open' }}
@@ -144,6 +145,7 @@ jobs:
             --wave "$SELECTED_WRITE_WAVE" \
             --fly-config fly.staging.toml \
             --github-env "$GITHUB_ENV"
+          printf 'write_wave=%s\n' "$SELECTED_WRITE_WAVE" >> "$GITHUB_OUTPUT"
 
       - name: Resolve stable staging-only public live secrets
         shell: bash
@@ -413,3 +415,31 @@ jobs:
             --club-slug "$CLUB_SLUG" \
             --club-id "$CLUB_ID" \
             --json
+
+      - name: Build exact-candidate staging handoff
+        if: steps.staging-posture.outputs.write_wave == 'open'
+        shell: bash
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          python scripts/staging_candidate_handoff.py \
+            --candidate-sha "$GITHUB_SHA" \
+            --workflow-run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --output-dir "$RUNNER_TEMP/staging-handoff"
+
+      - name: Upload successful staging handoff
+        if: steps.staging-posture.outputs.write_wave == 'open'
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-handoff-${{ github.sha }}
+          path: ${{ runner.temp }}/staging-handoff
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish staging handoff summary
+        if: steps.staging-posture.outputs.write_wave == 'open'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat "$RUNNER_TEMP/staging-handoff/staging-handoff.md" >> "$GITHUB_STEP_SUMMARY"
