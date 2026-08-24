@@ -724,6 +724,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     && sessionLeagueName === leagueName
     && sessionLeagueName === loadedLeagueName
   );
+  const blockingCurrentRoundPublishOperation = publishOperations.find(
+    (operation) => Number(operation.round_number) === currentRound && operation.status !== "completed"
+  ) || null;
   const hasEnteredRoundScores = Object.values(scores).some(scoreHasValue);
   const hasUnsubmittedRoundWork = Boolean(sessionIsCurrentLeague && preview && (hasEnteredRoundScores || scoresReviewed || movementPlan));
 
@@ -2079,6 +2082,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     const setupError = setupContextError();
     if (setupError) throw new Error(setupError);
     if (!requireCurrentSession("submitting official scores")) throw new Error("Resume the current persisted session before submitting official scores.");
+    if (blockingCurrentRoundPublishOperation) {
+      const error = new Error(
+        `Round ${currentRound} already has a durable ${blockingCurrentRoundPublishOperation.status.replace(/_/g, " ")} publish. Use its Retry or Reconcile action below instead of starting a new publish.`
+      );
+      setMessage(error.message);
+      throw error;
+    }
     if (!scoresReviewed) {
       const error = new Error("Review and confirm every entered score before publishing the round.");
       setMessage(error.message);
@@ -2779,7 +2789,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
               <p style={{ color: "#92400e" }}>Publishing writes every reviewed score as official, recalculates ratings, saves movement and the next roster/courts, and advances the persisted session in one durable operation.</p>
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between" }}>
                 <button type="button" onClick={() => setWorkflowStep(5)} disabled={busy} style={ghostButtonStyle}>Back to Movement</button>
-                <ConfirmAction triggerLabel="Publish reviewed round" title={`Publish Round ${currentRound}?`} description="This makes every reviewed result official and applies the approved next-round movement." confirmLabel="Yes, publish the round" confirmationText="SUBMIT LEAGUE ROUND" tone="danger" disabled={busy || !scoresReviewed || !liveDomainStatus.submit_enabled || !allSeriesComplete || !sessionIsCurrentLeague || !movementPlan || movementPlanStale || !roundContextValid || !matchDateValid || sessionStatus !== "active"} busy={busy} onConfirm={publishRoundAndStay} />
+                {blockingCurrentRoundPublishOperation ? (
+                  <p role="alert" style={{ margin: 0, maxWidth: "44rem", color: "#9a3412", fontWeight: 700 }}>
+                    Round {currentRound} already has a durable {blockingCurrentRoundPublishOperation.status.replace(/_/g, " ")} publish. Use its Retry or Reconcile action in Publish recovery below; a new publish is intentionally blocked.
+                  </p>
+                ) : (
+                  <ConfirmAction triggerLabel="Publish reviewed round" title={`Publish Round ${currentRound}?`} description="This makes every reviewed result official and applies the approved next-round movement." confirmLabel="Yes, publish the round" confirmationText="SUBMIT LEAGUE ROUND" tone="danger" disabled={busy || !scoresReviewed || !liveDomainStatus.submit_enabled || !allSeriesComplete || !sessionIsCurrentLeague || !movementPlan || movementPlanStale || !roundContextValid || !matchDateValid || sessionStatus !== "active"} busy={busy} onConfirm={publishRoundAndStay} />
+                )}
               </div>
             </>
           ) : (

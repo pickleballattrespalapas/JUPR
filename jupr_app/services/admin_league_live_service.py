@@ -698,6 +698,7 @@ def build_admin_league_live_round_plan(
     roster_change: dict[str, Any] | None = None,
     bench_player_ids: list[Any] | None = None,
     bench_override_reason: str | None = None,
+    comparison_session_updated_at: str | None = None,
 ) -> dict[str, Any]:
     _ensure_live_domain_enabled()
     session_row = _fetch_session_row(supabase, club_id=str(club_id), session_id=str(session_id))
@@ -762,6 +763,7 @@ def build_admin_league_live_round_plan(
         roster_change=resolved_roster_change,
         bench_player_ids=bench_player_ids,
         bench_override_reason=bench_override_reason,
+        comparison_session_updated_at=comparison_session_updated_at,
     )
     result["match_structure"] = match_structure
     return result

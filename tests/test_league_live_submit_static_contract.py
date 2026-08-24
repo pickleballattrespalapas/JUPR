@@ -42,6 +42,9 @@ def test_zero_write_recovery_retries_retained_request_instead_of_reconciling() -
     assert 'operation.get("request_json")' in service
     assert 'operation.get("idempotency_key")' in service
     assert 'status not in {"intent", "publishing", "retryable"}' in service
+    assert "blockingCurrentRoundPublishOperation" in panel
+    assert "a new publish is intentionally blocked" in panel
+    assert "comparison_operation_key_matches_retained_plan" in service
 
 
 def test_publish_is_staging_only_python_authority_with_recovery() -> None:

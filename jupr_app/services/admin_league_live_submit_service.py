@@ -233,6 +233,30 @@ def _operation_public_payload(operation: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _effective_publish_request(operation: dict[str, Any]) -> dict[str, Any]:
+    """Overlay a server-proven retry baseline without rewriting the retained request identity."""
+    request = _as_dict(operation.get("request_json"))
+    rebase = _as_dict(_as_dict(operation.get("result_json")).get("retained_retry_rebase"))
+    if rebase.get("proof") != "comparison_operation_key_matches_retained_plan":
+        return request
+    if (
+        str(rebase.get("request_fingerprint") or "") != str(operation.get("request_fingerprint") or "")
+        or str(rebase.get("original_expected_updated_at") or "") != str(request.get("expected_updated_at") or "")
+        or str(rebase.get("original_operation_key") or "") != str(request.get("expected_operation_key") or "")
+        or str(rebase.get("original_operation_key") or "") != str(operation.get("plan_operation_key") or "")
+    ):
+        return request
+    effective_updated_at = str(rebase.get("effective_expected_updated_at") or "")
+    effective_operation_key = str(rebase.get("effective_operation_key") or "")
+    if not effective_updated_at or len(effective_operation_key) != 64:
+        return request
+    return {
+        **request,
+        "expected_updated_at": effective_updated_at,
+        "expected_operation_key": effective_operation_key,
+    }
+
+
 def list_admin_league_live_publish_operations(
     supabase: Any,
     *,
@@ -266,7 +290,7 @@ def _completed_response(
     idempotent_replay: bool,
 ) -> dict[str, Any]:
     detail = get_admin_league_live_session(supabase, club_id=str(club_id), session_id=str(session_id))
-    request = _as_dict(operation.get("request_json"))
+    request = _effective_publish_request(operation)
     round_number = int(operation.get("round_number") or 1)
     saved_round = next(
         (row for row in detail.get("rounds", []) if int(row.get("round_number") or 0) == round_number),
@@ -277,7 +301,7 @@ def _completed_response(
         "ok": True,
         "mode": "league_live_round_publish",
         "idempotent_replay": bool(idempotent_replay),
-        "operation_key": str(operation.get("plan_operation_key") or request.get("expected_operation_key") or ""),
+        "operation_key": str(request.get("expected_operation_key") or operation.get("plan_operation_key") or ""),
         "publish_operation": _operation_public_payload(operation),
         "session": detail["session"],
         "round": saved_round,
@@ -353,7 +377,7 @@ def _finish_round_state(
     source: str,
     reconciliation: bool,
 ) -> dict[str, Any]:
-    request = _as_dict(operation.get("request_json"))
+    request = _effective_publish_request(operation)
     context_ids = [str(value) for value in _as_list(operation.get("match_context_ids")) if str(value)]
     published = _published_matches(supabase, club_id=str(club_id), context_ids=context_ids)
     if len(published) != len(context_ids):
@@ -434,6 +458,7 @@ def _finish_round_state(
         published_match_count=len(published),
     )
     result_json = {
+        **_as_dict(operation.get("result_json")),
         "round_id": _as_dict(saved.get("round")).get("id"),
         "session_updated_at": _as_dict(saved.get("session")).get("updated_at"),
         "rating_review": rating_review,
@@ -593,23 +618,24 @@ def submit_admin_league_live_round_publish(
                 source=source,
                 reconciliation=True,
             )
-    if str(session.get("updated_at") or "") != str(request["expected_updated_at"]):
+    effective_request = _effective_publish_request(operation) if operation else request
+    if str(session.get("updated_at") or "") != str(effective_request["expected_updated_at"]):
         raise LeagueLiveConflictError("League Live session changed. Reload and preview Python movement before publishing.")
     verified_plan = build_admin_league_live_round_plan(
         supabase,
         club_id=str(club_id),
         session_id=str(session_id),
         round_number=safe_round,
-        expected_updated_at=str(request["expected_updated_at"]),
-        matches=_as_list(request.get("matches")),
-        courts=_as_list(request.get("courts")),
-        movement_overrides=_as_list(request.get("movement_overrides")),
-        override_reason=request.get("override_reason"),
-        roster_change=_as_dict(request.get("roster_change")) or None,
-        bench_player_ids=_as_list(request.get("bench_player_ids")),
-        bench_override_reason=request.get("bench_override_reason"),
+        expected_updated_at=str(effective_request["expected_updated_at"]),
+        matches=_as_list(effective_request.get("matches")),
+        courts=_as_list(effective_request.get("courts")),
+        movement_overrides=_as_list(effective_request.get("movement_overrides")),
+        override_reason=effective_request.get("override_reason"),
+        roster_change=_as_dict(effective_request.get("roster_change")) or None,
+        bench_player_ids=_as_list(effective_request.get("bench_player_ids")),
+        bench_override_reason=effective_request.get("bench_override_reason"),
     )
-    if str(verified_plan.get("operation_key") or "") != str(request["expected_operation_key"]):
+    if str(verified_plan.get("operation_key") or "") != str(effective_request["expected_operation_key"]):
         raise LeagueLiveConflictError("League Live plan changed. Preview Python movement again before publishing.")
 
     if operation is None:
@@ -944,6 +970,102 @@ def retry_admin_league_live_round_publish(
         raise LeagueLivePersistenceError(
             "The retained League Live publish request is incomplete. Do not create a new key; inspect the durable operation."
         )
+    retained_fingerprint = str(request.get("request_fingerprint") or "")
+    calculated_fingerprint = stable_payload_fingerprint(
+        {key: value for key, value in request.items() if key != "request_fingerprint"}
+    )
+    if (
+        not retained_fingerprint
+        or retained_fingerprint != str(operation.get("request_fingerprint") or "")
+        or retained_fingerprint != calculated_fingerprint
+    ):
+        raise LeagueLivePersistenceError(
+            "The retained League Live publish request no longer matches its durable fingerprint. Stop and inspect the operation."
+        )
+    retained_updated_at = str(request.get("expected_updated_at") or "")
+    retained_operation_key = str(
+        request.get("expected_operation_key") or operation.get("plan_operation_key") or ""
+    )
+    if (
+        not retained_updated_at
+        or len(retained_operation_key) != 64
+        or retained_operation_key != str(operation.get("plan_operation_key") or "")
+    ):
+        raise LeagueLivePersistenceError(
+            "The retained League Live publish plan identity is incomplete. Stop and inspect the durable operation."
+        )
+    session = _fetch_session_row(supabase, club_id=str(club_id), session_id=str(session_id))
+    if session is None:
+        raise ValueError("league live session not found")
+    current_updated_at = str(session.get("updated_at") or "")
+    if current_updated_at != retained_updated_at:
+        plan = build_admin_league_live_round_plan(
+            supabase,
+            club_id=str(club_id),
+            session_id=str(session_id),
+            round_number=int(operation.get("round_number") or round_number),
+            expected_updated_at=current_updated_at,
+            matches=matches,
+            courts=_as_list(request.get("courts")),
+            movement_overrides=_as_list(request.get("movement_overrides")),
+            override_reason=request.get("override_reason"),
+            roster_change=_as_dict(request.get("roster_change")) or None,
+            bench_player_ids=_as_list(request.get("bench_player_ids")),
+            bench_override_reason=request.get("bench_override_reason"),
+            comparison_session_updated_at=retained_updated_at,
+        )
+        if str(plan.get("comparison_operation_key") or "") != retained_operation_key:
+            raise LeagueLiveConflictError(
+                "The retained publish no longer matches the current League Live roster, courts, scores, or movement plan. Nothing was published; restore the reviewed state or use audited recovery."
+            )
+        effective_operation_key = str(plan.get("operation_key") or "")
+        if len(effective_operation_key) != 64:
+            raise LeagueLivePersistenceError("Unable to derive a safe current League Live retry baseline.")
+        existing_result = _as_dict(operation.get("result_json"))
+        _required_audit(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="rebase_league_live_round_publish_retry_admin",
+            entity_type="league_live_publish_operation",
+            entity_id=str(operation.get("id")),
+            before_json={
+                "expected_session_updated_at": retained_updated_at,
+                "plan_operation_key": retained_operation_key,
+            },
+            after_json={
+                "effective_expected_updated_at": current_updated_at,
+                "effective_operation_key": effective_operation_key,
+                "request_fingerprint": retained_fingerprint,
+                "proof": "comparison_operation_key_matches_retained_plan",
+                "audit_marker": (
+                    f"league-live-publish-rebase:{operation.get('id')}:"
+                    f"{retained_fingerprint}:{effective_operation_key}"
+                ),
+            },
+            source=source,
+        )
+        operation = _update_publish_operation(
+            supabase,
+            club_id=str(club_id),
+            operation_id=str(operation.get("id")),
+            patch={
+                "result_json": {
+                    **existing_result,
+                    "retained_retry_rebase": {
+                        "proof": "comparison_operation_key_matches_retained_plan",
+                        "original_expected_updated_at": retained_updated_at,
+                        "original_operation_key": retained_operation_key,
+                        "request_fingerprint": retained_fingerprint,
+                        "effective_expected_updated_at": current_updated_at,
+                        "effective_operation_key": effective_operation_key,
+                        "rebased_at": _now_iso(),
+                    },
+                },
+                "updated_by": str(actor_email or ""),
+            },
+        )
     return submit_admin_league_live_round_publish(
         supabase,
         club_id=str(club_id),
@@ -951,10 +1073,8 @@ def retry_admin_league_live_round_publish(
         round_number=int(operation.get("round_number") or round_number),
         matches=matches,
         expected_match_count=_safe_int(request.get("expected_match_count"), len(matches)) or len(matches),
-        expected_updated_at=str(request.get("expected_updated_at") or ""),
-        expected_operation_key=str(
-            request.get("expected_operation_key") or operation.get("plan_operation_key") or ""
-        ),
+        expected_updated_at=retained_updated_at,
+        expected_operation_key=retained_operation_key,
         idempotency_key=str(operation.get("idempotency_key") or ""),
         actor_email=actor_email,
         actor_role=actor_role,

@@ -379,6 +379,7 @@ def build_league_live_round_plan(
     roster_change: dict[str, Any] | None = None,
     bench_player_ids: Iterable[Any] | None = None,
     bench_override_reason: str | None = None,
+    comparison_session_updated_at: str | None = None,
 ) -> dict[str, Any]:
     safe_round = max(1, _safe_int(round_number, 1) or 1)
     safe_total_rounds = max(safe_round, _safe_int(total_rounds, safe_round) or safe_round)
@@ -583,7 +584,7 @@ def build_league_live_round_plan(
         "bench_override_reason": _clean_text(bench_override_reason, limit=500) or None,
     }
     operation_key = canonical_fingerprint(operation_payload)
-    return {
+    result = {
         "ok": True,
         "mode": "league_live_round_plan",
         "operation_key": operation_key,
@@ -617,3 +618,11 @@ def build_league_live_round_plan(
             "replay_history": "/admin/replay-history",
         },
     }
+    if comparison_session_updated_at:
+        result["comparison_operation_key"] = canonical_fingerprint(
+            {
+                **operation_payload,
+                "session_updated_at": str(comparison_session_updated_at),
+            }
+        )
+    return result
