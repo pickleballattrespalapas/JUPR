@@ -428,6 +428,93 @@ jobs:
             --workflow-run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --output-dir "$RUNNER_TEMP/staging-handoff"
 
+      - name: Detect explicit League Live browser acceptance
+        id: league-live-e2e
+        if: github.event_name == 'push' && steps.staging-posture.outputs.write_wave == 'open'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --name-only "$GITHUB_SHA^1" "$GITHUB_SHA" | grep -Fxq 'apps/web/e2e/league-live-session.staging.spec.ts'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "The exact staging candidate includes an explicitly reviewed League Live browser acceptance change."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No explicit League Live browser acceptance change is present."
+          fi
+
+      - name: Set up Node for League Live browser acceptance
+        if: steps.league-live-e2e.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install League Live browser acceptance dependencies
+        if: steps.league-live-e2e.outputs.run == 'true'
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium for League Live browser acceptance
+        if: steps.league-live-e2e.outputs.run == 'true'
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+
+      - name: Prepare League Live browser acceptance auth session
+        if: steps.league-live-e2e.outputs.run == 'true'
+        shell: bash
+        env:
+          STAGING_API_BASE_URL: "https://juprleagues-api-staging.fly.dev"
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          STAGING_SUPABASE_URL: "https://sijpxjxvdtrehmqvirfi.supabase.co"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/league-live-e2e"
+          test -n "$GITHUB_ENV"
+          python scripts/prepare_parity_staging_session.py \
+            public-intake-auth \
+            --report-dir "$RUNNER_TEMP/league-live-e2e"
+
+      - name: Run authorized League Live browser acceptance
+        if: steps.league-live-e2e.outputs.run == 'true'
+        shell: bash
+        working-directory: apps/web
+        env:
+          JUPR_EXPECT_PREVIEW_AUTH_ISOLATION: "1"
+          JUPR_EXPECTED_STAGING_API_ORIGIN: "https://juprleagues-api-staging.fly.dev"
+          JUPR_EXPECTED_STAGING_AUTH_ORIGIN: "https://sijpxjxvdtrehmqvirfi.supabase.co"
+          JUPR_SMOKE_CLUB_SLUG: "tres-palapas"
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          handoff="$RUNNER_TEMP/staging-handoff/staging-handoff.json"
+          test -f "$handoff"
+          test "$(jq -r '.candidate_sha' "$handoff")" = "$GITHUB_SHA"
+          deployment_origin="$(jq -r '.deployment.vercel_deployment_origin' "$handoff")"
+          [[ "$deployment_origin" =~ ^https://[a-z0-9]([a-z0-9-]{0,180}[a-z0-9])?-[a-z0-9]{8,64}-pickleballattrespalapas1\.vercel\.app$ ]]
+          export STAGING_WEB_BASE_URL="$deployment_origin"
+          export JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN="$deployment_origin"
+          export JUPR_LEAGUE_LIVE_ALLOW_MUTATION_E2E=1
+          export JUPR_PARITY_MUTATION_CONFIRMATION="RUN DISPOSABLE STAGING WRITES"
+          export JUPR_LEAGUE_LIVE_E2E_SESSION_ID=d7221db1-db24-52d2-90fc-b667c16e0193
+          export JUPR_LEAGUE_LIVE_E2E_OPERATION_ID=87a15480-a0d4-4a1d-922f-f200d6e4f259
+          export JUPR_LEAGUE_LIVE_E2E_LEAGUE_NAME="Acceptance Flex 0822A"
+          export JUPR_LEAGUE_LIVE_E2E_MATCH_DATE=2026-08-24
+          export JUPR_LEAGUE_LIVE_E2E_REPORT_PATH="$RUNNER_TEMP/staging-handoff/league-live-e2e.json"
+          npx playwright test e2e/league-live-session.staging.spec.ts
+
+      - name: End League Live browser acceptance auth session
+        if: always() && steps.league-live-e2e.outputs.run == 'true'
+        shell: bash
+        env:
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_URL: "https://sijpxjxvdtrehmqvirfi.supabase.co"
+        run: |
+          python scripts/prepare_parity_staging_session.py \
+            cleanup \
+            --report-dir "$RUNNER_TEMP/league-live-e2e"
+
       - name: Upload successful staging handoff
         if: steps.staging-posture.outputs.write_wave == 'open'
         uses: actions/upload-artifact@v4
