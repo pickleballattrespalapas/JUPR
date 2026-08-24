@@ -422,6 +422,107 @@ def test_attempt_two_prewrite_rejection_recovers_once_with_the_same_operation(
     assert publish_calls == [1]
 
 
+def test_retained_retry_rebases_metadata_only_session_timestamp_drift(monkeypatch) -> None:
+    tables = _tables()
+    supabase = FakeSupabase(tables)
+    _install_submit_env(monkeypatch, supabase)
+
+    def reject_before_write(*_args, **_kwargs) -> None:
+        raise ValueError("The match plan was rejected before any data was written.")
+
+    monkeypatch.setattr(
+        "jupr_app.services.admin_league_live_submit_service.submit_admin_match_uploader_batch",
+        reject_before_write,
+    )
+    client = TestClient(app)
+    session = _create(client).json()["session"]
+    plan = _plan(client, session).json()
+    request = _request(session, plan["operation_key"])
+    endpoint = f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/submit"
+
+    rejected = client.post(endpoint, headers={"Authorization": "Bearer local"}, json=request)
+    assert rejected.status_code == 400, rejected.text
+    operation = tables["league_live_publish_operations"][0]
+    original_fingerprint = operation["request_fingerprint"]
+    original_operation_key = operation["plan_operation_key"]
+
+    # Saving an otherwise identical session snapshot advances only the CAS version.
+    tables["league_live_sessions"][0]["updated_at"] = "2026-07-19T12:05:00+00:00"
+    publish_calls: list[int] = []
+    monkeypatch.setattr(
+        "jupr_app.services.admin_league_live_submit_service.submit_admin_match_uploader_batch",
+        _publisher(tables, calls=publish_calls),
+    )
+
+    recovered = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/retry",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "RETRY LEAGUE ROUND"},
+    )
+
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["publish_operation"]["status"] == "completed"
+    assert recovered.json()["operation_key"] != original_operation_key
+    assert publish_calls == [1]
+    assert len(tables["matches"]) == 1
+    operation = tables["league_live_publish_operations"][0]
+    assert operation["request_fingerprint"] == original_fingerprint
+    assert operation["plan_operation_key"] == original_operation_key
+    rebase = operation["result_json"]["retained_retry_rebase"]
+    assert rebase["proof"] == "comparison_operation_key_matches_retained_plan"
+    assert rebase["original_operation_key"] == original_operation_key
+    assert rebase["request_fingerprint"] == original_fingerprint
+    assert rebase["effective_operation_key"] == recovered.json()["operation_key"]
+    assert tables["league_live_rounds"][0]["operation_key"] == rebase["effective_operation_key"]
+    assert any(
+        row["action_type"] == "rebase_league_live_round_publish_retry_admin"
+        for row in tables["admin_activity_log"]
+    )
+
+
+def test_retained_retry_refuses_semantic_session_drift(monkeypatch) -> None:
+    tables = _tables()
+    supabase = FakeSupabase(tables)
+    _install_submit_env(monkeypatch, supabase)
+
+    def reject_before_write(*_args, **_kwargs) -> None:
+        raise ValueError("The match plan was rejected before any data was written.")
+
+    monkeypatch.setattr(
+        "jupr_app.services.admin_league_live_submit_service.submit_admin_match_uploader_batch",
+        reject_before_write,
+    )
+    client = TestClient(app)
+    session = _create(client).json()["session"]
+    plan = _plan(client, session).json()
+    rejected = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/submit",
+        headers={"Authorization": "Bearer local"},
+        json=_request(session, plan["operation_key"]),
+    )
+    assert rejected.status_code == 400, rejected.text
+
+    tables["league_live_sessions"][0]["roster_json"][0]["rating"] = 1500
+    tables["league_live_sessions"][0]["updated_at"] = "2026-07-19T12:05:00+00:00"
+    publish_calls: list[int] = []
+    monkeypatch.setattr(
+        "jupr_app.services.admin_league_live_submit_service.submit_admin_match_uploader_batch",
+        _publisher(tables, calls=publish_calls),
+    )
+
+    blocked = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/retry",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "RETRY LEAGUE ROUND"},
+    )
+
+    assert blocked.status_code == 409, blocked.text
+    assert "no longer matches the current league live roster" in blocked.json()["detail"].lower()
+    assert publish_calls == []
+    assert tables["matches"] == []
+    assert "retained_retry_rebase" not in tables["league_live_publish_operations"][0]["result_json"]
+
+
 def test_response_loss_after_all_match_inserts_reconciles_before_any_republish(monkeypatch) -> None:
     class SimulatedWorkerLoss(BaseException):
         pass
