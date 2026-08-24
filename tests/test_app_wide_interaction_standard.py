@@ -138,26 +138,27 @@ def test_app_wide_standard_and_complete_inventories_are_checked_in() -> None:
     backend_rows = re.findall(r"^\| BE-\d{3}\s+\|.*$", backend, flags=re.MULTILINE)
     backend_ids = [re.match(r"^\| (BE-\d{3})", row).group(1) for row in backend_rows]
     assert frontend_count == 232
-    assert backend_ids == [f"BE-{index:03d}" for index in range(1, 198)]
-    assert frontend_count + len(backend_ids) == 429
+    assert backend_ids == [f"BE-{index:03d}" for index in range(1, 199)]
+    assert frontend_count + len(backend_ids) == 430
 
     method_counts = Counter(re.search(r"`(POST|PATCH|PUT|DELETE) ", row).group(1) for row in backend_rows)
-    assert method_counts == {"POST": 158, "PATCH": 30, "PUT": 8, "DELETE": 1}
-    assert sum("/admin/" in row for row in backend_rows) == 166
+    assert method_counts == {"POST": 159, "PATCH": 30, "PUT": 8, "DELETE": 1}
+    assert sum("/admin/" in row for row in backend_rows) == 167
     assert sum("/admin/" not in row for row in backend_rows) == 31
     wave_assignment_count = sum(
         len(row.rstrip(" |").rsplit("|", 1)[-1].strip().split(",")) for row in backend_rows
     )
     assert wave_assignment_count - len(backend_rows) == 12
-    assert "| Total audited frontend + backend contracts | **429** |" in report
-    assert "| Staging write-wave coverage | **197 / 197** |" in report
+    assert "| Total audited frontend + backend contracts | **430** |" in report
+    assert "| Staging write-wave coverage | **198 / 198** |" in report
 
-    appended_reconciliation_rows = (
+    appended_recovery_rows = (
         "| BE-193 | Match Uploader — `POST /admin/clubs/{club_id}/match-uploader/player-operations/{operation_key}/reconcile` — `post_admin_match_uploader_player_batch_reconcile` | `RECONCILE PLAYER BATCH` | — | — | match-player |",
         "| BE-194 | Player Editor — `POST /admin/clubs/{club_id}/players/editor/operations/{operation_key}/reconcile` — `post_admin_player_editor_operation_reconcile` | `RECONCILE PLAYER OPERATION` | — | — | match-player |",
         "| BE-195 | Club Social — `POST /admin/clubs/{club_id}/match-log/social/operations/{operation_key}/reconcile` — `post_admin_match_log_social_operation_reconcile` | `RECONCILE SOCIAL MATCH` | — | — | match-player |",
         "| BE-196 | League Live — `POST /admin/clubs/{club_id}/league-manager/live-operations/{operation_key}/reconcile` — `post_admin_league_live_create_reconcile` | `RECONCILE LIVE SESSION` | — | — | league-live-domain,league-live-submit |",
         "| BE-197 | Tournament Ops — `POST /admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams/import-registrations/operations/{operation_reference}/reconcile` — `post_admin_tournament_registration_team_import_reconcile` | `RECONCILE REGISTRATION IMPORT` | retained_request.expected_state_fingerprint,retained_request.expected_draw_updated_at | retained_request.idempotency_key | tournament-operations |",
+        "| BE-198 | League Live — `POST /admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/retry` — `post_admin_league_live_round_retry` | `RETRY LEAGUE ROUND` | server-retained expected_updated_at,expected_operation_key | server-retained idempotency_key | league-live-submit |",
     )
-    for row in appended_reconciliation_rows:
+    for row in appended_recovery_rows:
         assert row in backend

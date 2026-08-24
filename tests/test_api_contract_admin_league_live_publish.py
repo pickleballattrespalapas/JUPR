@@ -101,6 +101,7 @@ def test_submit_gate_cannot_enable_in_production(monkeypatch) -> None:
     assert response.json()["enabled"] is True
     assert response.json()["submit_enabled"] is False
     assert response.json()["round_submit_endpoint"] is None
+    assert response.json()["round_retry_endpoint"] is None
 
 
 def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> None:
@@ -114,6 +115,11 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
         _publisher(tables, calls=calls, batch_calls=batch_calls),
     )
     client = TestClient(app)
+    status = client.get("/admin/clubs/club/league-manager/live/status")
+    assert status.status_code == 200
+    assert status.json()["round_retry_endpoint"] == (
+        "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/retry"
+    )
     session = _create(client).json()["session"]
     plan = _plan(client, session).json()
     request = _request(session, plan["operation_key"])
@@ -384,10 +390,18 @@ def test_attempt_two_prewrite_rejection_recovers_once_with_the_same_operation(
         "jupr_app.services.admin_league_live_submit_service.submit_admin_match_uploader_batch",
         _publisher(tables, calls=publish_calls),
     )
-    recovered = client.post(
-        endpoint,
+    blocked_reconcile = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/reconcile",
         headers={"Authorization": "Bearer local"},
-        json=request,
+        json={"confirmation_text": "RECONCILE LEAGUE ROUND"},
+    )
+    assert blocked_reconcile.status_code == 409
+    assert "retry the original publish" in blocked_reconcile.json()["detail"].lower()
+
+    recovered = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/retry",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "RETRY LEAGUE ROUND"},
     )
 
     assert recovered.status_code == 200, recovered.text

@@ -42,6 +42,7 @@ from jupr_app.services.admin_league_live_submit_service import (
     create_admin_league_live_guest,
     list_admin_league_live_publish_operations,
     reconcile_admin_league_live_round_publish,
+    retry_admin_league_live_round_publish,
     submit_admin_league_live_round_publish,
 )
 from jupr_app.services.admin_league_results_service import build_admin_league_results
@@ -280,6 +281,11 @@ class AdminLeagueLiveRoundReconcileRequest(BaseModel):
     source: str = Field(default="next_league_live_round_reconcile", max_length=120)
 
 
+class AdminLeagueLiveRoundRetryRequest(BaseModel):
+    confirmation_text: str = Field(default="", max_length=80)
+    source: str = Field(default="next_league_live_round_retry", max_length=120)
+
+
 class AdminLeagueLiveRoundCompensateRequest(BaseModel):
     recovery_reference: str = Field(min_length=8, max_length=240)
     reason: str = Field(min_length=10, max_length=500)
@@ -400,6 +406,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                     "round_plan_endpoint": None,
                     "submit_enabled": False,
                     "round_submit_endpoint": None,
+                    "round_retry_endpoint": None,
                     "round_reconcile_endpoint": None,
                     "round_compensate_endpoint": None,
                     "guest_endpoint": None,
@@ -850,6 +857,36 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         )
         try:
             return reconcile_admin_league_live_round_publish(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                round_number=int(round_number),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/retry")
+    def post_admin_league_live_round_retry(
+        club_id: str,
+        session_id: str,
+        round_number: int,
+        payload: AdminLeagueLiveRoundRetryRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_service_role_or_503()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return retry_admin_league_live_round_publish(
                 supabase,
                 club_id=str(club_id),
                 session_id=str(session_id),

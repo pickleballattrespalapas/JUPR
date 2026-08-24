@@ -115,6 +115,8 @@ const inputStyle = { width: "100%", minWidth: 0, boxSizing: "border-box" as cons
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 const DEFAULT_MATCH_STRUCTURE: MatchStructure = { kind: "fixed_games", games: 1, result_counting: "each_game", completion: "all_games" };
+const RETRYABLE_PUBLISH_STATUSES = new Set(["intent", "publishing", "retryable"]);
+const RECONCILABLE_PUBLISH_STATUSES = new Set(["published", "reconciling", "recovery_required"]);
 const WORKFLOW_STEPS: Array<{ id: WorkflowStep; label: string }> = [
   { id: 1, label: "Setup" },
   { id: 2, label: "Players" },
@@ -2248,6 +2250,48 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
+  async function retryRetainedRound(round: number, confirmationText: string): Promise<ActionCompletion> {
+    if (!requireCurrentSession("retrying a retained round publish")) throw new Error("Resume the current persisted session before retrying the retained publish.");
+    const generation = actionRequest.begin();
+    const requestedSessionId = loadedSessionId;
+    const operationReference = publishOperations.find((operation) => operation.round_number === round)?.id || requestedSessionId;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/rounds/${encodeURIComponent(String(round))}/retry`, {
+        method: "POST",
+        body: JSON.stringify({ confirmation_text: confirmationText, source: "next_league_live_round_retry" })
+      });
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the retained round retry response was applied.");
+      await loadSessionDetail(requestedSessionId);
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the recovered round could be refreshed.");
+      setRatingReview(payload.rating_review || null);
+      clearStoredRoundDraft(requestedSessionId, round);
+      setLastPublishedRound(round);
+      setRoundPublished(true);
+      setWorkflowStep(6);
+      const matchCount = payload.published_match_ids?.length || 0;
+      const successMessage = `Retried the retained Round ${round} publish with its original key and verified ${matchCount} official match${matchCount === 1 ? "" : "es"}.`;
+      setMessage(successMessage);
+      return actionSuccess("League round publish recovered", successMessage);
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to retry the retained League Live round.");
+      if (leagueLiveWriteIsUncertain(error)) {
+        const failureDetail = error instanceof Error ? error.message : "The retained publish retry did not finish cleanly.";
+        return actionUncertain(
+          "League round retry needs verification",
+          `${failureDetail} Retry the retained operation again; the server reuses its original request and verifies existing matches first.`,
+          operationReference,
+          "Retry retained league-round publish",
+          () => retryRetainedRound(round, confirmationText)
+        );
+      }
+      throw error;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
   async function verifyCompensation(round: number, confirmationText: string): Promise<ActionCompletion> {
     if (!requireCurrentSession("verifying compensation")) throw new Error("Resume the current persisted session before verifying compensation.");
     const generation = actionRequest.begin();
@@ -2773,7 +2817,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       {sessionIsCurrentLeague && liveDomainStatus.submit_enabled ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Publish recovery and exports</h2>
-          <p style={{ color: "#475569" }}>A publish operation records intent before scores, verifies every deterministic match context, then reconciles the League Live snapshot. Retry or reconcile never republishes verified matches.</p>
+          <p style={{ color: "#475569" }}>A publish operation records intent before scores, verifies every deterministic match context, then reconciles the League Live snapshot. A retained retry reuses the original request and key; reconciliation is reserved for operations with official match evidence.</p>
           {publishOperations.length ? (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -2781,15 +2825,35 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
                 <tbody>{publishOperations.map((operation) => (
                   <tr key={operation.id}>
                     <td>{operation.round_number}</td><td>{operation.status}</td><td align="right">{operation.attempt_count}</td><td align="right">{operation.published_match_ids?.length || 0}</td>
-                    <td>{operation.status === "completed" ? "Verified" : leagueLiveOperatorMessage(operation.error_text, "Retry the original publish with the same plan key.")}</td>
+                    <td>{operation.status === "completed"
+                      ? "Verified"
+                      : RETRYABLE_PUBLISH_STATUSES.has(operation.status)
+                        ? leagueLiveOperatorMessage(operation.error_text, "Retry the retained original publish; its request and key are stored on the server.")
+                        : leagueLiveOperatorMessage(operation.error_text, "Reconcile the verified official matches with the League Live snapshot.")}</td>
                   </tr>
                 ))}</tbody>
               </table>
             </div>
           ) : <p>No publish operations recorded for this session.</p>}
-          {publishOperations.some((operation) => operation.status !== "completed") ? (
+          {publishOperations.some((operation) => RETRYABLE_PUBLISH_STATUSES.has(operation.status)) ? (
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
-              {publishOperations.filter((operation) => operation.status !== "completed").map((operation) => <ConfirmAction
+              {publishOperations.filter((operation) => RETRYABLE_PUBLISH_STATUSES.has(operation.status)).map((operation) => <ConfirmAction
+                key={operation.id}
+                triggerLabel={`Retry R${operation.round_number}`}
+                title={`Retry the retained League Live round ${operation.round_number} publish?`}
+                description="This reuses the original server-retained request and idempotency key. It verifies deterministic match contexts before writing, so an interrupted response cannot duplicate the round."
+                confirmLabel="Yes, retry original publish"
+                confirmationText="RETRY LEAGUE ROUND"
+                tone="danger"
+                disabled={busy}
+                busy={busy}
+                onConfirm={(confirmationText) => retryRetainedRound(operation.round_number, confirmationText)}
+              />)}
+            </div>
+          ) : null}
+          {publishOperations.some((operation) => RECONCILABLE_PUBLISH_STATUSES.has(operation.status)) ? (
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
+              {publishOperations.filter((operation) => RECONCILABLE_PUBLISH_STATUSES.has(operation.status)).map((operation) => <ConfirmAction
                 key={operation.id}
                 triggerLabel={`Reconcile R${operation.round_number}`}
                 title={`Reconcile League Live round ${operation.round_number}?`}
@@ -2802,14 +2866,14 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
               />)}
             </div>
           ) : null}
-          {publishOperations.some((operation) => ["published", "reconciling", "recovery_required"].includes(operation.status)) ? (
+          {publishOperations.some((operation) => RECONCILABLE_PUBLISH_STATUSES.has(operation.status)) ? (
             <details style={{ marginTop: "0.75rem" }}>
               <summary>Record completed Match Log / Replay History compensation</summary>
               <p style={{ color: "#92400e" }}>Use this only after recovery removed or excluded every related match and the ratings rebuild is complete. The recovery check confirms that no active match remains.</p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
                 <label>Recovery reference<br /><input value={compensationReference} onChange={(event) => setCompensationReference(event.target.value)} disabled={busy} placeholder="Match Log / replay operation ID" style={inputStyle} /></label>
                 <label>Reason<br /><input value={compensationReason} onChange={(event) => setCompensationReason(event.target.value)} disabled={busy} placeholder="At least 10 characters" style={inputStyle} /></label>
-                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>{publishOperations.filter((operation) => ["published", "reconciling", "recovery_required"].includes(operation.status)).map((operation) => <ConfirmAction
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>{publishOperations.filter((operation) => RECONCILABLE_PUBLISH_STATUSES.has(operation.status)).map((operation) => <ConfirmAction
                   key={operation.id}
                   triggerLabel={`Verify R${operation.round_number}`}
                   title={`Verify compensation for round ${operation.round_number}?`}

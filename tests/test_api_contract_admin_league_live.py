@@ -186,6 +186,7 @@ def test_admin_league_live_status_fails_closed_without_server_only_key(monkeypat
         "roster_suggestion_endpoint",
         "round_plan_endpoint",
         "round_submit_endpoint",
+        "round_retry_endpoint",
         "round_reconcile_endpoint",
         "round_compensate_endpoint",
         "guest_endpoint",
@@ -230,6 +231,7 @@ def test_admin_league_live_disabled_status_attests_submit_gate_closed(monkeypatc
         assert payload["submit_enabled"] is False
         for endpoint_key in (
             "round_submit_endpoint",
+            "round_retry_endpoint",
             "round_reconcile_endpoint",
             "round_compensate_endpoint",
             "guest_endpoint",

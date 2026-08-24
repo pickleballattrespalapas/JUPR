@@ -26,6 +26,22 @@ def test_next_uses_one_fastapi_complete_round_publish_path() -> None:
     ).read_text(encoding="utf-8")
     assert "submit_admin_league_live_round_publish" in routes
     assert "rounds/{round_number}/submit" in routes
+    assert "retry_admin_league_live_round_publish" in routes
+    assert "rounds/{round_number}/retry" in routes
+
+
+def test_zero_write_recovery_retries_retained_request_instead_of_reconciling() -> None:
+    panel = PANEL.read_text(encoding="utf-8")
+    service = SERVICE.read_text(encoding="utf-8")
+    assert 'RETRYABLE_PUBLISH_STATUSES = new Set(["intent", "publishing", "retryable"])' in panel
+    assert "Retry retained league-round publish" in panel
+    assert 'confirmationText="RETRY LEAGUE ROUND"' in panel
+    assert "/rounds/${encodeURIComponent(String(round))}/retry" in panel
+    assert "RECONCILABLE_PUBLISH_STATUSES.has(operation.status)" in panel
+    assert "def retry_admin_league_live_round_publish" in service
+    assert 'operation.get("request_json")' in service
+    assert 'operation.get("idempotency_key")' in service
+    assert 'status not in {"intent", "publishing", "retryable"}' in service
 
 
 def test_publish_is_staging_only_python_authority_with_recovery() -> None:
