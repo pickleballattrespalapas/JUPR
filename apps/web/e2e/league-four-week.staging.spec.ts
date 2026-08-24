@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 
-import { expect, test, type Page, type Response } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Response } from "@playwright/test";
 
 import {
   bootstrapStagingContext,
@@ -200,6 +200,21 @@ async function gotoLeaguePage(page: Page, pathname: string, leagueId: string): P
   await expect(page).toHaveURL(target);
 }
 
+async function chooseOption(select: Locator, value: string): Promise<void> {
+  await expect(select).toBeVisible();
+  await expect(select).toBeEnabled();
+  await select.evaluate((element, nextValue) => {
+    if (!(element instanceof HTMLSelectElement)) throw new Error("Expected a select element.");
+    if (![...element.options].some((option) => option.value === nextValue)) {
+      throw new Error(`Option ${nextValue} is unavailable.`);
+    }
+    element.value = nextValue;
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+  await expect(select).toHaveValue(value);
+}
+
 async function addExistingPlayers(page: Page, playerIds: readonly number[]): Promise<string[]> {
   const selected: string[] = [];
   const select = page.getByLabel(/Add an existing club player, including a non-roster player/i);
@@ -210,7 +225,7 @@ async function addExistingPlayers(page: Page, playerIds: readonly number[]): Pro
     const label = String(await option.textContent()).trim();
     expect(value).toBe(String(playerId));
     expect(label).not.toBe("");
-    await select.selectOption(String(value));
+    await chooseOption(select, String(value));
     selected.push(label);
   }
   return selected;
@@ -514,7 +529,7 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
 
   await gotoLeaguePage(page, "/admin/league-manager/roster", leagueId);
   await expect(page.getByLabel("Search players", { exact: true })).toBeVisible();
-  await page.getByLabel("Show", { exact: true }).selectOption("not_in_league");
+  await chooseOption(page.getByLabel("Show", { exact: true }), "not_in_league");
   await expect(page.getByRole("combobox", { name: "Action", exact: true })).toHaveValue("activate");
   for (const playerId of rosterPlayerIds) {
     await page.getByLabel("Search players", { exact: true }).fill(String(playerId));

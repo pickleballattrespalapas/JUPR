@@ -94,6 +94,9 @@ def test_four_week_acceptance_is_guarded_and_verifies_the_full_story() -> None:
     assert 'name: "Ladder pod size", exact: true })).toHaveValue("4")' in text
     assert 'name: "Match structure", exact: true })).toHaveValue("one_game")' in text
     assert 'name: "Action", exact: true })).toHaveValue("activate")' in text
+    assert "async function chooseOption(select: Locator, value: string)" in text
+    assert "element.dispatchEvent(new Event(\"change\", { bubbles: true }))" in text
+    assert ".selectOption(" not in text
     assert "991001" in text
     assert "991023" in text
     assert 'trigger: "Freeze and save"' in text
