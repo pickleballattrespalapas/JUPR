@@ -231,7 +231,11 @@ test("recovers retained Round 1 and completes the five-round League Live session
     exact: true
   })).toBeVisible();
 
-  const sessionSelect = page.getByLabel("Existing sessions", { exact: true });
+  const setupPanel = page.locator('article[aria-labelledby="league-live-setup-heading"]');
+  await expect(setupPanel).toBeVisible();
+  const sessionSelect = setupPanel
+    .locator("label", { hasText: /^Existing sessions/ })
+    .locator("select");
   await expect(sessionSelect).toBeEnabled({ timeout: 30_000 });
   await expect(sessionSelect.locator(`option[value="${sessionId}"]`)).toHaveCount(1);
   await sessionSelect.selectOption(sessionId);
