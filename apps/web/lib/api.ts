@@ -596,7 +596,7 @@ export async function getClubLeaderboard(
 
 export async function getClubPlayers(
   clubSlug: string,
-  filters: { q?: string | null; status?: "active" | "inactive" | "all" | null; sort?: string | null; limit?: number | null; offset?: number | null } = {}
+  filters: { q?: string | null; status?: "active" | "inactive" | "all" | null; sort?: string | null; limit?: number | null; offset?: number | null; noStore?: boolean } = {}
 ): Promise<ApiResult<PlayersResponse>> {
   const params = new URLSearchParams();
   if (filters.q) params.set("q", filters.q);
@@ -605,7 +605,10 @@ export async function getClubPlayers(
   if (filters.limit != null) params.set("limit", String(filters.limit));
   if (filters.offset != null) params.set("offset", String(filters.offset));
   const query = params.toString();
-  return fetchJson<PlayersResponse>(`/clubs/${clubSlug}/players${query ? `?${query}` : ""}`);
+  return fetchJson<PlayersResponse>(
+    `/clubs/${clubSlug}/players${query ? `?${query}` : ""}`,
+    { noStore: Boolean(filters.noStore) }
+  );
 }
 
 export async function getClubPlayerProfile(
