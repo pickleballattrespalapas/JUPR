@@ -32,6 +32,7 @@ from jupr_app.services.admin_league_live_service import (
     save_admin_league_live_round,
 )
 from jupr_app.services.admin_match_uploader_service import submit_admin_match_uploader_batch
+from jupr_app.services.direct_match_entry_service import DirectMatchConflictError
 
 
 CONFIRM_SUBMIT_ROUND = "SUBMIT LEAGUE ROUND"
@@ -780,6 +781,7 @@ def submit_admin_league_live_round_publish(
             idempotency_key=f"league-live:{key}",
             match_format=match_format,
             source="next_league_live_all_match_publish",
+            allow_league_live_context=True,
         )
     except Exception as exc:
         published = _published_matches(
@@ -800,6 +802,16 @@ def submit_admin_league_live_round_publish(
                     "updated_by": str(actor_email or ""),
                 },
             )
+            # The atomic direct-match RPC uses these exception types as commit
+            # evidence. Validation, permission, and compare-and-swap conflicts
+            # are conclusive pre-write failures, so presenting them as an
+            # uncertain 503 creates an endless exact-retry loop. Unknown
+            # transport failures remain uncertain even when readback is empty.
+            if not published:
+                if isinstance(exc, (ValueError, PermissionError)):
+                    raise
+                if isinstance(exc, DirectMatchConflictError):
+                    raise LeagueLiveConflictError(str(exc)) from exc
             recovery = "Inspect Match Log/Replay History before retrying." if published else "Retry with the same idempotency key."
             raise LeagueLivePersistenceError(f"League Live match publish did not complete. {recovery}") from exc
 

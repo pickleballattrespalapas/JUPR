@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from uuid import UUID
 
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
@@ -555,6 +556,37 @@ def _apply_event_contexts(supabase: Any, *, club_id: str, matches: list[dict[str
     return hydrated
 
 
+def _validate_private_match_contexts(
+    matches: list[dict[str, Any]],
+    *,
+    allow_league_live_context: bool,
+) -> None:
+    for row in matches:
+        context_type = str(row.get("context_type") or "").strip()
+        if context_type != "league_live_session":
+            continue
+        if not allow_league_live_context:
+            raise PermissionError(
+                "league_live_session match contexts are reserved for the "
+                "persisted League Live publisher."
+            )
+        raw_context_id = str(row.get("context_id") or "")
+        if not raw_context_id or raw_context_id != raw_context_id.strip():
+            raise ValueError(
+                "League Live match context_id must be a canonical UUIDv5."
+            )
+        try:
+            context_id = UUID(raw_context_id)
+        except (ValueError, AttributeError) as exc:
+            raise ValueError(
+                "League Live match context_id must be a canonical UUIDv5."
+            ) from exc
+        if context_id.version != 5 or str(context_id) != raw_context_id:
+            raise ValueError(
+                "League Live match context_id must be a canonical UUIDv5."
+            )
+
+
 def _round_robin_format_options() -> list[str]:
     return list(SUPPORTED_DOUBLES_FORMAT_TYPES)
 
@@ -1104,13 +1136,22 @@ def submit_admin_match_uploader_batch(
     idempotency_key: str,
     match_format: str = "doubles",
     source: str = "next_match_uploader",
+    allow_league_live_context: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_match_uploader_enabled():
         raise PermissionError("Next Match Uploader is disabled.")
     clean_match_format = str(match_format or "").strip().casefold()
     if clean_match_format not in {"singles", "doubles"}:
         raise ValueError("match_format must be singles or doubles.")
-    clean_matches = _apply_event_contexts(supabase, club_id=str(club_id), matches=_normalize_batch(matches))
+    clean_matches = _apply_event_contexts(
+        supabase,
+        club_id=str(club_id),
+        matches=_normalize_batch(matches),
+    )
+    _validate_private_match_contexts(
+        clean_matches,
+        allow_league_live_context=bool(allow_league_live_context),
+    )
     (
         df_players_all,
         _df_players_active,

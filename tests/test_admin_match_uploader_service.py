@@ -540,6 +540,45 @@ def test_submit_match_uploader_popup_context_name_creates_event(monkeypatch) -> 
     assert "context_name" not in calls[0]["matches"][0]
 
 
+def test_submit_match_uploader_rejects_reserved_league_live_context(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
+    monkeypatch.setattr(
+        "jupr_app.services.admin_match_uploader_service.load_data",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("reserved contexts must fail before data loading")
+        ),
+    )
+
+    with pytest.raises(
+        PermissionError,
+        match="reserved for the persisted League Live publisher",
+    ):
+        submit_admin_match_uploader_batch(
+            FakeSupabase(fake_storage()),
+            club_id="club",
+            actor_email="admin@example.com",
+            actor_role="scorekeeper",
+            idempotency_key="test:reserved-context-1",
+            matches=[
+                {
+                    "date": "2026-08-24",
+                    "league": "Tuesday Ladder",
+                    "match_type": "League Manager Live",
+                    "context_type": "league_live_session",
+                    "context_id": "09b05cd0-3b60-5f58-9834-808b4a7dc6a7",
+                    "t1_p1": 1,
+                    "t1_p2": 2,
+                    "t2_p1": 3,
+                    "t2_p2": 4,
+                    "score_t1": 11,
+                    "score_t2": 7,
+                }
+            ],
+        )
+
+
 def test_submit_match_uploader_rejects_empty(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
     monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.load_data", fake_load_data)

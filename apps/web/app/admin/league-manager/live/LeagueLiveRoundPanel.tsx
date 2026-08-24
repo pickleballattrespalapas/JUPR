@@ -2146,10 +2146,16 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to submit league round.");
       if (leagueLiveWriteIsUncertain(error)) {
+        const operationReference = error instanceof LeagueLiveRequestError && error.operationKey
+          ? error.operationKey
+          : roundOperationKey;
+        const failureDetail = error instanceof Error
+          ? error.message
+          : "The first request did not finish cleanly.";
         return actionUncertain(
           "League round publish needs verification",
-          "The first request did not finish cleanly. Retry these exact scores; League Live verifies any existing matches before it writes anything, so this cannot duplicate the round.",
-          roundOperationKey,
+          `${failureDetail} Retry these exact scores; League Live verifies any existing matches before it writes anything, so this cannot duplicate the round.`,
+          operationReference,
           "Retry exact league-round publish",
           () => submitRound(confirmationText)
         );
