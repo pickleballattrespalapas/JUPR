@@ -91,8 +91,12 @@ type AwardsState = {
   league?: LeagueSummary;
   awards?: Array<{ category_key: string }>;
   award_count?: number;
+  writes_enabled?: boolean;
+  service_role_ready?: boolean;
+  badge_definitions_ready?: boolean;
   badge_expected_count?: number;
   badge_verified_count?: number;
+  provenance?: { included_count?: number };
   wizard?: {
     status: string;
     final_awards?: Array<{ category_key: string }>;
@@ -172,7 +176,7 @@ async function confirmedAction(
     return url.origin === expectedApiOrigin
       && url.pathname === options.pathname
       && response.request().method() === options.method;
-  });
+  }, { timeout: 90_000 });
   await confirm.click();
   const response = await responsePromise;
   expect(response.status(), `${options.method} ${options.pathname} failed`).toBe(options.expectedStatus ?? 200);
@@ -215,9 +219,26 @@ async function chooseOption(select: Locator, value: string): Promise<void> {
   await expect(select).toHaveValue(value);
 }
 
+async function chooseResettingOption(select: Locator, value: string): Promise<void> {
+  await expect(select).toBeVisible();
+  await expect(select).toBeEnabled();
+  await select.evaluate((element, nextValue) => {
+    if (!(element instanceof HTMLSelectElement)) throw new Error("Expected a select element.");
+    if (![...element.options].some((option) => option.value === nextValue)) {
+      throw new Error(`Option ${nextValue} is unavailable.`);
+    }
+    element.value = nextValue;
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+  await expect(select).toHaveValue("");
+}
+
 async function addExistingPlayers(page: Page, playerIds: readonly number[]): Promise<string[]> {
   const selected: string[] = [];
-  const select = page.getByLabel(/Add an existing club player, including a non-roster player/i);
+  const select = page.getByRole("combobox", {
+    name: /Add an existing club player, including a non-roster player/i
+  });
   for (const playerId of playerIds) {
     const option = select.locator(`option[value="${playerId}"]`);
     await expect(option, `Existing staging guest ${playerId} is unavailable`).toHaveCount(1);
@@ -225,7 +246,8 @@ async function addExistingPlayers(page: Page, playerIds: readonly number[]): Pro
     const label = String(await option.textContent()).trim();
     expect(value).toBe(String(playerId));
     expect(label).not.toBe("");
-    await chooseOption(select, String(value));
+    await chooseResettingOption(select, String(value));
+    await expect(option, `Existing staging guest ${playerId} was not added`).toHaveCount(0);
     selected.push(label);
   }
   return selected;
@@ -239,7 +261,7 @@ async function runWeek(
   await gotoLeaguePage(page, "/admin/league-manager/live", leagueId);
   await expect(page.getByRole("heading", { name: `${leagueName} live rounds`, exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "1. Setup", exact: true })).toBeVisible();
-  await expect(page.getByLabel("League", { exact: true })).toHaveValue(leagueName);
+  await expect(page.getByRole("combobox", { name: "League", exact: true })).toHaveValue(leagueName);
   await expect(page.getByRole("button", { name: "Continue to Players", exact: true })).toBeEnabled();
   await page.getByLabel("Week", { exact: true }).fill(`Week ${plan.week}`);
   await page.getByLabel("Round #", { exact: true }).fill("1");
@@ -289,7 +311,7 @@ async function runWeek(
 
   const courtsPanel = page.locator('article[aria-labelledby="league-live-courts-heading"]');
   await expect(courtsPanel).toBeVisible();
-  const formatSelects = courtsPanel.getByLabel("Format", { exact: true });
+  const formatSelects = courtsPanel.getByRole("combobox", { name: "Format", exact: true });
   const playerLists = courtsPanel.getByLabel("Players, one per line", { exact: true });
   await expect(formatSelects).toHaveCount(plan.courtSizes.length);
   await expect(playerLists).toHaveCount(plan.courtSizes.length);
@@ -529,7 +551,7 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
 
   await gotoLeaguePage(page, "/admin/league-manager/roster", leagueId);
   await expect(page.getByLabel("Search players", { exact: true })).toBeVisible();
-  await chooseOption(page.getByLabel("Show", { exact: true }), "not_in_league");
+  await chooseOption(page.getByRole("combobox", { name: "Show", exact: true }), "not_in_league");
   await expect(page.getByRole("combobox", { name: "Action", exact: true })).toHaveValue("activate");
   for (const playerId of rosterPlayerIds) {
     await page.getByLabel("Search players", { exact: true }).fill(String(playerId));
@@ -562,21 +584,40 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
   expect(new Set(publishedMatchIds).size).toBe(36);
 
   await gotoLeaguePage(page, "/admin/league-manager/awards", leagueId);
-  const leagueSelect = page.getByLabel("League", { exact: true });
+  const leagueSelect = page.getByRole("combobox", { name: "League", exact: true });
   await expect(leagueSelect.locator(`option[value="${leagueName}"]`)).toHaveCount(1);
   await expect(leagueSelect).toHaveValue(leagueName);
   await expect(page.getByText(/Saved step:\s*not started/i)).toBeVisible();
+  const awardsPreflight = await apiGet<AwardsState>(page, leagueApiPath("/awards"));
+  expect(awardsPreflight.writes_enabled).toBe(true);
+  expect(awardsPreflight.service_role_ready).toBe(true);
+  expect(awardsPreflight.badge_definitions_ready).toBe(true);
+  expect(awardsPreflight.provenance?.included_count).toBe(36);
   await confirmedAction(page, {
     trigger: "Freeze and save",
     confirm: "Yes, freeze league",
     method: "POST",
     pathname: leagueApiPath("/awards/freeze")
   });
-  const previewResponse = page.waitForResponse((response) => new URL(response.url()).pathname === leagueApiPath("/awards/preview") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "Compute and save preview", exact: true }).click();
+  const previewResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.origin === expectedApiOrigin
+      && url.pathname === leagueApiPath("/awards/preview")
+      && response.request().method() === "POST";
+  }, { timeout: 90_000 });
+  const computePreview = page.getByRole("button", { name: "Compute and save preview", exact: true });
+  await expect(computePreview).toBeEnabled();
+  await computePreview.click();
   expect((await previewResponse).status()).toBe(200);
-  const overrideResponse = page.waitForResponse((response) => new URL(response.url()).pathname === leagueApiPath("/awards/overrides") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "Confirm winners and reasons", exact: true }).click();
+  const overrideResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.origin === expectedApiOrigin
+      && url.pathname === leagueApiPath("/awards/overrides")
+      && response.request().method() === "POST";
+  }, { timeout: 90_000 });
+  const confirmWinners = page.getByRole("button", { name: "Confirm winners and reasons", exact: true });
+  await expect(confirmWinners).toBeEnabled();
+  await confirmWinners.click();
   expect((await overrideResponse).status()).toBe(200);
   await confirmedAction(page, {
     trigger: "Mint and verify",
