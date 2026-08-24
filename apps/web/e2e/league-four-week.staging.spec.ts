@@ -353,7 +353,10 @@ async function runWeek(
   const courtsPanel = page.locator('article[aria-labelledby="league-live-courts-heading"]');
   await expect(courtsPanel).toBeVisible();
   const formatSelects = courtsPanel.getByRole("combobox", { name: "Format", exact: true });
-  const playerLists = courtsPanel.getByLabel("Players, one per line", { exact: true });
+  const playerLists = courtsPanel.getByRole("textbox", {
+    name: "Players, one per line",
+    exact: true,
+  });
   await expect(formatSelects).toHaveCount(plan.courtSizes.length);
   await expect(playerLists).toHaveCount(plan.courtSizes.length);
   for (let index = 0; index < plan.courtSizes.length; index += 1) {
