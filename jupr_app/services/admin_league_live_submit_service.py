@@ -36,6 +36,7 @@ from jupr_app.services.direct_match_entry_service import DirectMatchConflictErro
 
 
 CONFIRM_SUBMIT_ROUND = "SUBMIT LEAGUE ROUND"
+CONFIRM_RETRY_ROUND = "RETRY LEAGUE ROUND"
 CONFIRM_RECONCILE_ROUND = "RECONCILE LEAGUE ROUND"
 CONFIRM_COMPENSATE_ROUND = "VERIFY LEAGUE COMPENSATION"
 CONFIRM_CREATE_GUEST = "CREATE LIVE GUEST"
@@ -899,6 +900,75 @@ def reconcile_admin_league_live_round_publish(
         actor_role=actor_role,
         source=source,
         reconciliation=True,
+    )
+
+
+def retry_admin_league_live_round_publish(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_id: str,
+    round_number: int,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_league_live_round_retry",
+) -> dict[str, Any]:
+    """Retry the exact retained zero-write publish request after a reload."""
+    ensure_admin_league_live_submit_enabled()
+    ensure_admin_league_live_publish_schema_ready(supabase)
+    if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_RETRY_ROUND:
+        raise ValueError(f"Type {CONFIRM_RETRY_ROUND} to retry the retained round publish.")
+    operation = _fetch_publish_operation(
+        supabase,
+        club_id=str(club_id),
+        session_id=str(session_id),
+        round_number=max(1, int(round_number)),
+    )
+    if operation is None:
+        raise ValueError("No durable publish operation exists for this round.")
+    status = str(operation.get("status") or "")
+    if status not in {"intent", "publishing", "retryable"}:
+        if status in {"published", "reconciling", "recovery_required"}:
+            raise LeagueLiveConflictError(
+                "Official match evidence may exist for this round. Use Reconcile round instead of retrying the publish."
+            )
+        if status == "completed":
+            raise LeagueLiveConflictError("This round publish is already complete. Reload the League Live session.")
+        raise LeagueLiveConflictError(
+            "This retained publish is not retryable. Reload its durable status before taking another action."
+        )
+    request = _as_dict(operation.get("request_json"))
+    matches = _as_list(request.get("matches"))
+    if not request or not matches:
+        raise LeagueLivePersistenceError(
+            "The retained League Live publish request is incomplete. Do not create a new key; inspect the durable operation."
+        )
+    return submit_admin_league_live_round_publish(
+        supabase,
+        club_id=str(club_id),
+        session_id=str(session_id),
+        round_number=int(operation.get("round_number") or round_number),
+        matches=matches,
+        expected_match_count=_safe_int(request.get("expected_match_count"), len(matches)) or len(matches),
+        expected_updated_at=str(request.get("expected_updated_at") or ""),
+        expected_operation_key=str(
+            request.get("expected_operation_key") or operation.get("plan_operation_key") or ""
+        ),
+        idempotency_key=str(operation.get("idempotency_key") or ""),
+        actor_email=actor_email,
+        actor_role=actor_role,
+        confirmation_text=CONFIRM_SUBMIT_ROUND,
+        round_label=request.get("round_label"),
+        match_date=request.get("match_date"),
+        preview=_as_dict(request.get("preview")),
+        courts=_as_list(request.get("courts")),
+        movement_overrides=_as_list(request.get("movement_overrides")),
+        override_reason=request.get("override_reason"),
+        roster_change=_as_dict(request.get("roster_change")) or None,
+        bench_player_ids=_as_list(request.get("bench_player_ids")),
+        bench_override_reason=request.get("bench_override_reason"),
+        source=source,
     )
 
 

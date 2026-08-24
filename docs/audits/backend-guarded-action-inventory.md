@@ -1,6 +1,6 @@
 # Backend guarded-action inventory
 
-Audit date: 2026-08-13
+Audit date: 2026-08-24
 
 Audited revision: `dcf08791` baseline, with the guarded-action remediation and forward trigger-function migration working-tree update described below.
 
@@ -12,21 +12,21 @@ This document is an evidence inventory, not a claim that every unsafe-method rou
 
 | Measure | Count | Result |
 |---|---:|---|
-| Unsafe-method FastAPI contracts | **197** | Complete AST inventory |
-| `POST` / `PATCH` / `PUT` / `DELETE` | **158 / 30 / 8 / 1** | All enumerated below |
-| Admin-prefixed / public contracts | **166 / 31** | Admin routes resolve authenticated club-scoped access; public routes use task-specific tokens, secrets, identity, and/or anti-abuse controls |
-| Contracts in `OPEN_WRITE_ROUTES` | **197** | Exact match to the AST inventory |
+| Unsafe-method FastAPI contracts | **198** | Complete AST inventory |
+| `POST` / `PATCH` / `PUT` / `DELETE` | **159 / 30 / 8 / 1** | All enumerated below |
+| Admin-prefixed / public contracts | **167 / 31** | Admin routes resolve authenticated club-scoped access; public routes use task-specific tokens, secrets, identity, and/or anti-abuse controls |
+| Contracts in `OPEN_WRITE_ROUTES` | **198** | Exact match to the AST inventory |
 | Missing from staging write-wave manifest | **0** | Pass |
 | Stale/extra manifest entries | **0** | Pass |
 | Additional named-wave assignments beyond each route's primary assignment | **12** | Intentional overlap across 10 route contracts is listed below |
-| Request contracts carrying a typed-confirmation field | **135** | Post-remediation count; one is a preview request where the field is not required; apply-mode dry runs bypass phrases intentionally |
+| Request contracts carrying a typed-confirmation field | **136** | Post-remediation count; one is a preview request where the field is not required; apply-mode dry runs bypass phrases intentionally |
 | Request contracts carrying expected-state/CAS input | **99** | Post-remediation count; nested retained requests are included, and some additional guarded families derive a server-side fingerprint |
 | Request contracts carrying an idempotency/operation key | **105** | Post-remediation count; nested retained requests are included, and some tournament operations derive a deterministic server-side operation key |
-| Contracts carrying neither direct CAS nor a client replay key | **58** | Post-remediation count; includes four proof-only reconciliation requests, read-only previews/resolvers, and action-level gaps; it does **not** mean 58 unprotected writes |
+| Contracts carrying neither direct CAS nor a client replay key | **59** | Post-remediation count; includes server-retained recovery requests, proof-only reconciliation requests, read-only previews/resolvers, and action-level gaps; it does **not** mean 59 unprotected writes |
 
 ### Verdict
 
-There is **no externally exposed route that bypasses the global environment/write-wave boundary** in the audited tree. `StagingWriteWaveMiddleware` is fail-closed for every unsafe method, production writes remain disabled unless explicitly enabled, and the checked-in open-wave manifest covers all 197 contracts exactly (`services/api/middleware.py`, `scripts/staging_write_waves.py`, `tests/test_staging_write_wave_guards.py`, `tests/test_permanent_staging_write_mode.py`).
+There is **no externally exposed route that bypasses the global environment/write-wave boundary** in the audited tree. `StagingWriteWaveMiddleware` is fail-closed for every unsafe method, production writes remain disabled unless explicitly enabled, and the checked-in open-wave manifest covers all 198 contracts exactly (`services/api/middleware.py`, `scripts/staging_write_waves.py`, `tests/test_staging_write_wave_guards.py`, `tests/test_permanent_staging_write_mode.py`).
 
 The strongest mutation families already meet most of the interaction standard: live-ladder operations, tournament guarded operations, direct match entry, replay/exclusion recovery, team competition, and public live writes use combinations of compare-and-swap, stable operation identity, durable intent/completion rows, atomic RPCs, audit evidence, and explicit reconciliation.
 
@@ -38,6 +38,7 @@ The following changes are implemented in the working tree using the existing pri
 
 | IDs | Status | Implemented guarantee | Explicit residual / deferred work |
 |---|---|---|---|
+| `BE-030` / `BE-198` | **Implemented** | Round publish persists its exact request and idempotency key before Match Uploader runs. A zero-evidence `intent`, `publishing`, or `retryable` operation can be retried after reload only through authenticated `RETRY LEAGUE ROUND`; the server reuses the retained request/key and verifies deterministic match contexts before any repeat write. Reconcile remains limited to states with official-match evidence. | No new schema is required. Match publication remains governed by the existing atomic direct-match RPC and League Live publish ledger. |
 | `BE-026` / `BE-196` | **Implemented with residual** | Requires a stable idempotency key; records intent before session creation; exact completed retry replays the original result; changed payload/key reuse is rejected; uncertain failure is retained as `recovery_required`; authenticated inspection and proof-only `RECONCILE LIVE SESSION` are available. | Session, court rows, service audit, and ledger completion are not one SQL transaction. A create-session RPC is still the preferred final atomic form and requires a reviewed migration. |
 | `BE-050` / `BE-195` | **Implemented with residual** | Requires `SAVE SOCIAL MATCH`, field-level browser-loaded `expected_current`, and an idempotency key; applies CAS filters; exact replay is safe; stale and uncertain outcomes return structured `409` envelopes; authenticated inspection and proof-only `RECONCILE SOCIAL MATCH` are available. | Domain update and completion audit are not one SQL transaction. Required-audit failure still uses CAS rollback plus the durable recovery ledger. A dedicated RPC is deferred. |
 | `BE-059` / `BE-193` | **Implemented with residual** | Requires `CREATE PLAYERS`, a reviewed canonical player-list fingerprint, and an idempotency key; missing players are inserted in one multi-row PostgreSQL statement; readback/counts are verified; exact retry replays; uncertain readback can be resolved with proof-only `RECONCILE PLAYER BATCH`. | The player insert statement is atomic, but intent, player insert, domain audit, and ledger completion are separate transactions. A batch RPC with integrated receipt/audit remains deferred. |
@@ -49,7 +50,7 @@ The following changes are implemented in the working tree using the existing pri
 
 ## Audit method and stable IDs
 
-The inventory was generated from Python AST traversal of all route modules beneath `services/api`, then statically traced through request models and imported `jupr_app/services` functions. The original filename/line traversal IDs `BE-001` through `BE-192` are preserved unchanged. Five registered reconciliation contracts are appended as `BE-193` through `BE-197`; future routes must continue appending rather than renumbering existing rows.
+The inventory was generated from Python AST traversal of all route modules beneath `services/api`, then statically traced through request models and imported `jupr_app/services` functions. The original filename/line traversal IDs `BE-001` through `BE-192` are preserved unchanged. Five registered reconciliation contracts are appended as `BE-193` through `BE-197`, followed by the retained League Live publish retry as `BE-198`; future routes must continue appending rather than renumbering existing rows.
 
 The following are deliberately separate concepts:
 
@@ -86,7 +87,7 @@ Ten contracts have more than one named-wave assignment: `BE-025` through `BE-029
 |---|---|---|---|---|
 | Generic guarded diagnostics/tools: `BE-001`–`BE-003`, selected `BE-101`–`BE-106` | `jupr_app/services/admin_guarded_write_service.py`; `supabase/migrations/20260719204500_admin_diagnostics_guarded_operations.sql` | Request fingerprint plus unique operation key; exact completed request can replay | Intent is persisted before mutation; ambiguous completion becomes recovery-required; guarded operation RPC is transactional | Strong |
 | Live ladder/session operations: `BE-004`–`BE-024`, `BE-064`–`BE-065`, and guarded admin generator operations | `jupr_app/services/admin_live_ladder_operation_service.py`; `supabase/migrations/20260719201500_live_ladder_admin_operations.sql` | Stable idempotency key, expected-version lease, deterministic SHA operation key; unique `(club, surface, operation, entity, idempotency)` | Intent/completion ledger; exact replay and reconcile; recovery directs administrators to Match Log/Replay History when necessary | Strong |
-| League Live submit/recovery: `BE-030`–`BE-033`, `BE-196` | `jupr_app/services/admin_league_live_submit_service.py`, `admin_league_live_service.py`; live-operation tables/RPCs in Supabase migrations | Expected session state plus idempotency for publish/create; explicit operation key on round writes and session-create reconciliation | Submit, round reconcile, verified compensation, and proof-only session-create reconcile are distinct guarded actions | Strong; older snapshot writes have lighter replay guarantees |
+| League Live submit/recovery: `BE-030`–`BE-033`, `BE-196`, `BE-198` | `jupr_app/services/admin_league_live_submit_service.py`, `admin_league_live_service.py`; live-operation tables/RPCs in Supabase migrations | Expected session state plus idempotency for publish/create; explicit operation key on round writes and session-create reconciliation; zero-evidence retry reuses the server-retained request/key | Submit, retained round retry, round reconcile, verified compensation, and proof-only session-create reconcile are distinct guarded actions | Strong; older snapshot writes have lighter replay guarantees |
 | League awards/lifecycle: `BE-034`–`BE-047` | `jupr_app/services/admin_league_awards_service.py`, `admin_league_manager_lifecycle_service.py`, `admin_league_manager_update_service.py`, roster services | Awards uses config version, preview/final fingerprints, and idempotency on irreversible stages; basic league/roster updates are phrase-only | Awards workflow records guarded operation evidence; legacy settings/roster paths audit but are not uniformly CAS/replay safe | Mixed |
 | Match canonical/log/replay: `BE-048`–`BE-057`, `BE-092`, `BE-195` | `jupr_app/services/admin_match_canonical_audit_service.py`, `admin_match_log_service.py`, exclusion/recovery services; `supabase/migrations/20260719172000_replay_job_idempotency.sql` | Replay and exclusion/recovery use stable keys/expected state; remediated `BE-050` uses reviewed field values, CAS, phrase, and stable operation key | Replay jobs and match-edit operations have uniqueness/RLS; exclusion recovery is explicit; `BE-195` proves the reviewed before or intended after state without rerunning the Club Social edit, but domain/audit SQL atomicity remains deferred | Stronger; `BE-050`/`BE-195` application guard and exact recovery complete with atomic-RPC residual |
 | Direct match entry/upload: `BE-058`–`BE-061`, `BE-166`, `BE-193` | `jupr_app/services/direct_match_write_service.py`, `admin_match_uploader_service.py`; `supabase/migrations/20260726222339_atomic_direct_match_entry.sql` | Match submits carry an idempotency key and expected source context; remediated player creation carries reviewed fingerprint and idempotency | One RPC commits match, aggregate updates, receipt, and audit atomically; `BE-059` uses a one-statement player insert plus durable application ledger, and `BE-193` reconciles only from frozen preflight plus authoritative readback | Strong for match writes; `BE-059`/`BE-193` retain an atomic-RPC residual |
@@ -109,7 +110,7 @@ This mapping is based on API client calls and route/component names. It is a sta
 | `BE-001`–`BE-003` | Admin Badge diagnostics | `apps/web/app/admin/badges/BadgeDiagnosticsPanel.tsx` |
 | `BE-004`–`BE-018` | Admin Challenge Ladder | `apps/web/app/admin/challenge-ladder/ChallengeLadderAdminPanel.tsx` |
 | `BE-019`–`BE-024` | Legacy JUPR Live admin | `apps/web/app/admin/jupr-live/JuprLiveAdminPanel.tsx` |
-| `BE-025`–`BE-033`, `BE-196` | League Manager live rounds and session-create recovery | `apps/web/app/admin/league-manager/live/LeagueLiveRoundPanel.tsx` |
+| `BE-025`–`BE-033`, `BE-196`, `BE-198` | League Manager live rounds, retained publish retry, and session-create recovery | `apps/web/app/admin/league-manager/live/LeagueLiveRoundPanel.tsx` |
 | `BE-034`–`BE-047` | League Manager settings, roster, lifecycle, awards | `apps/web/app/admin/league-manager/LeagueManagerPanel.tsx`, `apps/web/lib/adminLeagueManagerApi.ts` |
 | `BE-048`–`BE-049` | Match canonical audit | `apps/web/app/admin/match-canonical-audit/MatchCanonicalAuditPanel.tsx` |
 | `BE-050`–`BE-057`, `BE-195` | Match Log social, apply, exclusion, recovery | `apps/web/app/admin/match-log/MatchLogWorkspace.tsx` and `MatchLog*Panel.tsx` siblings |
@@ -495,9 +496,9 @@ The confirmation column is the phrase enforced by the backend, not the wording o
 |---|---|---|---|---|---|
 | BE-192 | `POST /clubs/{club_slug}/verified-updates/request` — `post_verified_updates_request` | — | — | — | public-intake-auth |
 
-#### Appended authenticated reconciliation contracts
+#### Appended authenticated recovery contracts
 
-These IDs are deliberately appended after the original `BE-001`–`BE-192` inventory. Each route inspects the frozen operation evidence and authoritative stored state; it does not rerun the original domain mutation.
+These IDs are deliberately appended after the original `BE-001`–`BE-192` inventory. `BE-193`–`BE-197` inspect frozen operation evidence and authoritative stored state without rerunning the original mutation. `BE-198` is a distinct zero-evidence retry: it replays only the exact server-retained League Live request and idempotency key after verifying that the durable state is retryable.
 
 | ID | Route / surface | Backend confirmation phrase | CAS / reviewed state | Idempotency | Staging wave |
 |---|---|---|---|---|---|
@@ -506,6 +507,7 @@ These IDs are deliberately appended after the original `BE-001`–`BE-192` inven
 | BE-195 | Club Social — `POST /admin/clubs/{club_id}/match-log/social/operations/{operation_key}/reconcile` — `post_admin_match_log_social_operation_reconcile` | `RECONCILE SOCIAL MATCH` | — | — | match-player |
 | BE-196 | League Live — `POST /admin/clubs/{club_id}/league-manager/live-operations/{operation_key}/reconcile` — `post_admin_league_live_create_reconcile` | `RECONCILE LIVE SESSION` | — | — | league-live-domain,league-live-submit |
 | BE-197 | Tournament Ops — `POST /admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams/import-registrations/operations/{operation_reference}/reconcile` — `post_admin_tournament_registration_team_import_reconcile` | `RECONCILE REGISTRATION IMPORT` | retained_request.expected_state_fingerprint,retained_request.expected_draw_updated_at | retained_request.idempotency_key | tournament-operations |
+| BE-198 | League Live — `POST /admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/retry` — `post_admin_league_live_round_retry` | `RETRY LEAGUE ROUND` | server-retained expected_updated_at,expected_operation_key | server-retained idempotency_key | league-live-submit |
 
 ## Action-level findings and required remediation
 
@@ -610,14 +612,14 @@ Every new or remediated consequential write should meet all applicable checks be
 The audit reran a dependency-free AST/manifest check and obtained:
 
 ```text
-unsafe_routes=197 manifest=197 missing=0 stale=0 overlaps=12 open_flags=32
+unsafe_routes=198 manifest=198 missing=0 stale=0 overlaps=12 open_flags=32
 ```
 
 The repository's boundary-equivalent tests are:
 
 ```bash
-# Registered unsafe-method contracts (AST-based in the audit script): 197
-# OPEN_WRITE_ROUTES entries: 197
+# Registered unsafe-method contracts (AST-based in the audit script): 198
+# OPEN_WRITE_ROUTES entries: 198
 # Set comparison: 0 missing, 0 stale
 
 pytest -q tests/test_staging_write_wave_guards.py \
@@ -646,4 +648,4 @@ Final result for this exact backend-remediation command: **146 passed**, with th
 
 The final frozen candidate broad run completed with **2835 passed, 9 failed, and 40 warnings**. The exact `dcf08791` baseline completed with **2756 passed, 10 failed, and 40 warnings**. Each of the candidate's nine failures belongs to the baseline's ten-failure set; one baseline failure now passes and no new interaction-standard regression remains. These counts are regression evidence rather than a claim that the repository-wide suite is globally green.
 
-Re-run the AST/manifest comparison whenever a FastAPI route decorator changes. The stable-ID table should be updated in the same pull request; new unsafe routes receive IDs after `BE-197`. Four authenticated operation-inspection routes remain safe-method `GET` contracts; the five separately appended proof-only reconciliation routes `BE-193`–`BE-197` are `POST` contracts and therefore raise the unsafe-route and staging-manifest totals from 192 to 197.
+Re-run the AST/manifest comparison whenever a FastAPI route decorator changes. The stable-ID table should be updated in the same pull request; new unsafe routes receive IDs after `BE-198`. Four authenticated operation-inspection routes remain safe-method `GET` contracts; five separately appended proof-only reconciliation routes `BE-193`–`BE-197` and the server-retained League Live retry `BE-198` are `POST` contracts, raising the unsafe-route and staging-manifest totals from 192 to 198.

@@ -550,6 +550,7 @@ def build_admin_league_live_status(supabase: Any | None, *, club_id: str) -> dic
             "round_plan_endpoint": None,
             "submit_enabled": False,
             "round_submit_endpoint": None,
+            "round_retry_endpoint": None,
             "round_reconcile_endpoint": None,
             "round_compensate_endpoint": None,
             "guest_endpoint": None,
@@ -566,6 +567,7 @@ def build_admin_league_live_status(supabase: Any | None, *, club_id: str) -> dic
             "round_plan_endpoint": None,
             "submit_enabled": False,
             "round_submit_endpoint": None,
+            "round_retry_endpoint": None,
             "round_reconcile_endpoint": None,
             "round_compensate_endpoint": None,
             "guest_endpoint": None,
@@ -585,6 +587,11 @@ def build_admin_league_live_status(supabase: Any | None, *, club_id: str) -> dic
         "submit_enabled": submit_enabled,
         "round_submit_endpoint": (
             "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/submit"
+            if submit_enabled
+            else None
+        ),
+        "round_retry_endpoint": (
+            "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/retry"
             if submit_enabled
             else None
         ),

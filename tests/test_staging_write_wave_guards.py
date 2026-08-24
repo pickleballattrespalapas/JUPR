@@ -174,6 +174,10 @@ def test_wave_matching_is_exact_and_unknown_or_none_never_allows_writes() -> Non
         "/admin/clubs/fixture/match-log/exclusions/"
         "00000000-0000-4000-8000-000000000001/recover"
     )
+    league_live_retry_path = (
+        "/admin/clubs/fixture/league-manager/live-sessions/"
+        "00000000-0000-4000-8000-000000000001/rounds/1/retry"
+    )
 
     assert wave_allows_request("public-intake-auth", "POST", intake_path)
     assert not wave_allows_request("public-intake-auth", "POST", f"{intake_path}/extra")
@@ -191,6 +195,16 @@ def test_wave_matching_is_exact_and_unknown_or_none_never_allows_writes() -> Non
     )
     assert not wave_allows_request(
         NO_WRITE_WAVE, "POST", round_robin_preview_path
+    )
+    assert wave_allows_request(
+        "league-live-submit", "POST", league_live_retry_path
+    )
+    assert wave_allows_request("open", "POST", league_live_retry_path)
+    assert not wave_allows_request(
+        "league-live-domain", "POST", league_live_retry_path
+    )
+    assert not wave_allows_request(
+        "league-live-submit", "POST", f"{league_live_retry_path}/extra"
     )
     assert not wave_allows_request("match-player", "POST", exclusion_path)
     assert wave_allows_request(
