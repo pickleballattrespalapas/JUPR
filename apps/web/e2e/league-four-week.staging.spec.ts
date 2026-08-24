@@ -211,15 +211,33 @@ async function gotoLeaguePage(page: Page, pathname: string, leagueId: string): P
 async function chooseOption(select: Locator, value: string): Promise<void> {
   await expect(select).toBeVisible();
   await expect(select).toBeEnabled();
-  await select.evaluate((element, nextValue) => {
-    if (!(element instanceof HTMLSelectElement)) throw new Error("Expected a select element.");
-    if (![...element.options].some((option) => option.value === nextValue)) {
-      throw new Error(`Option ${nextValue} is unavailable.`);
-    }
-    element.value = nextValue;
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-  }, value);
+  if ((await select.inputValue()) !== value) {
+    await select.evaluate((element, nextValue) => {
+      if (!(element instanceof HTMLSelectElement)) throw new Error("Expected a select element.");
+      if (![...element.options].some((option) => option.value === nextValue)) {
+        throw new Error(`Option ${nextValue} is unavailable.`);
+      }
+      element.value = nextValue;
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value);
+  }
+  await expect(select).toHaveValue(value);
+}
+
+async function chooseHiddenOption(select: Locator, value: string): Promise<void> {
+  await expect(select).toBeEnabled();
+  if ((await select.inputValue()) !== value) {
+    await select.evaluate((element, nextValue) => {
+      if (!(element instanceof HTMLSelectElement)) throw new Error("Expected a select element.");
+      if (![...element.options].some((option) => option.value === nextValue)) {
+        throw new Error(`Option ${nextValue} is unavailable.`);
+      }
+      element.value = nextValue;
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value);
+  }
   await expect(select).toHaveValue(value);
 }
 
@@ -267,7 +285,7 @@ async function runWeek(
   await expect(page.getByRole("heading", { name: "1. Setup", exact: true })).toBeVisible();
   const leagueSelect = page.getByRole("combobox", { name: "League", exact: true });
   await expect(leagueSelect.locator(`option[value="${leagueName}"]`)).toHaveCount(1, { timeout: 30_000 });
-  await chooseOption(leagueSelect, leagueName);
+  await chooseHiddenOption(leagueSelect, leagueName);
   await expect(page.getByRole("button", { name: "Continue to Players", exact: true })).toBeEnabled();
   await page.getByLabel("Week", { exact: true }).fill(`Week ${plan.week}`);
   await page.getByLabel("Round #", { exact: true }).fill("1");
@@ -605,6 +623,7 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
   await gotoLeaguePage(page, "/admin/league-manager/awards", leagueId);
   const leagueSelect = page.getByRole("combobox", { name: "League", exact: true });
   await expect(leagueSelect.locator(`option[value="${leagueName}"]`)).toHaveCount(1);
+  await chooseHiddenOption(leagueSelect, leagueName);
   await expect(leagueSelect).toHaveValue(leagueName);
   await expect(page.getByText(/Saved step:\s*not started/i)).toBeVisible();
   const awardsPreflight = await apiGet<AwardsState>(page, leagueApiPath("/awards"));
