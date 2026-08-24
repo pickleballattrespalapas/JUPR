@@ -265,7 +265,9 @@ async function runWeek(
   await gotoLeaguePage(page, "/admin/league-manager/live", leagueId);
   await expect(page.getByRole("heading", { name: `${leagueName} live rounds`, exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "1. Setup", exact: true })).toBeVisible();
-  await expect(page.getByRole("combobox", { name: "League", exact: true })).toHaveValue(leagueName);
+  const leagueSelect = page.getByRole("combobox", { name: "League", exact: true });
+  await expect(leagueSelect.locator(`option[value="${leagueName}"]`)).toHaveCount(1, { timeout: 30_000 });
+  await chooseOption(leagueSelect, leagueName);
   await expect(page.getByRole("button", { name: "Continue to Players", exact: true })).toBeEnabled();
   await page.getByLabel("Week", { exact: true }).fill(`Week ${plan.week}`);
   await page.getByLabel("Round #", { exact: true }).fill("1");
