@@ -230,9 +230,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261105000000",
         "20261106000000",
     )
-    assert len(names) == 72
+    assert len(names) == 73
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 72
+    assert len(contract["required_ledger_names"]) == 73
     assert "tournament_complete_registration_editor" in contract[
         "required_ledger_names"
     ]
