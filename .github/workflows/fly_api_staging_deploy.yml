@@ -434,11 +434,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git diff --name-only "$GITHUB_SHA^1" "$GITHUB_SHA" | grep -Fxq 'apps/web/e2e/league-live-session.staging.spec.ts'; then
+          changed_files="$(git diff --name-only "$GITHUB_SHA^1" "$GITHUB_SHA")"
+          if grep -Fxq 'apps/web/e2e/league-four-week.staging.spec.ts' <<<"$changed_files"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "spec=e2e/league-four-week.staging.spec.ts" >> "$GITHUB_OUTPUT"
+            echo "The exact staging candidate includes the explicitly reviewed four-week League Live browser acceptance."
+          elif grep -Fxq 'apps/web/e2e/league-live-session.staging.spec.ts' <<<"$changed_files"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "spec=e2e/league-live-session.staging.spec.ts" >> "$GITHUB_OUTPUT"
             echo "The exact staging candidate includes an explicitly reviewed League Live browser acceptance change."
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "spec=" >> "$GITHUB_OUTPUT"
             echo "No explicit League Live browser acceptance change is present."
           fi
 
@@ -495,16 +502,34 @@ jobs:
           [[ "$deployment_origin" =~ ^https://[a-z0-9]([a-z0-9-]{0,180}[a-z0-9])?-[a-z0-9]{8,64}-pickleballattrespalapas1\.vercel\.app$ ]]
           export STAGING_WEB_BASE_URL="$deployment_origin"
           export JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN="$deployment_origin"
-          export JUPR_LEAGUE_LIVE_ALLOW_MUTATION_E2E=1
           export JUPR_PARITY_MUTATION_CONFIRMATION="RUN DISPOSABLE STAGING WRITES"
-          export JUPR_LEAGUE_LIVE_E2E_SESSION_ID=d7221db1-db24-52d2-90fc-b667c16e0193
-          export JUPR_LEAGUE_LIVE_E2E_OPERATION_ID=87a15480-a0d4-4a1d-922f-f200d6e4f259
-          export JUPR_LEAGUE_LIVE_E2E_LEAGUE_ID=9
-          export JUPR_LEAGUE_LIVE_E2E_LEAGUE_NAME="Acceptance Flex 0822A"
-          export JUPR_LEAGUE_LIVE_E2E_LEAGUE_TYPE=Individual
-          export JUPR_LEAGUE_LIVE_E2E_MATCH_DATE=2026-08-24
-          export JUPR_LEAGUE_LIVE_E2E_REPORT_PATH="$RUNNER_TEMP/staging-handoff/league-live-e2e.json"
-          npx playwright test e2e/league-live-session.staging.spec.ts
+          acceptance_spec="${{ steps.league-live-e2e.outputs.spec }}"
+          case "$acceptance_spec" in
+            e2e/league-four-week.staging.spec.ts)
+              candidate_suffix="${GITHUB_SHA:0:7}-${GITHUB_RUN_ATTEMPT}"
+              export JUPR_FOUR_WEEK_ALLOW_MUTATION_E2E=1
+              export JUPR_FOUR_WEEK_E2E_LEAGUE_NAME="Acceptance Four Week Flex ${candidate_suffix}"
+              export JUPR_FOUR_WEEK_E2E_ASPEN_NAME="E2E Created Aspen ${candidate_suffix}"
+              export JUPR_FOUR_WEEK_E2E_BIRCH_NAME="E2E Created Birch ${candidate_suffix}"
+              export JUPR_FOUR_WEEK_E2E_CLOVER_NAME="E2E Created Clover ${candidate_suffix}"
+              export JUPR_FOUR_WEEK_E2E_REPORT_PATH="$RUNNER_TEMP/staging-handoff/league-four-week-e2e.json"
+              ;;
+            e2e/league-live-session.staging.spec.ts)
+              export JUPR_LEAGUE_LIVE_ALLOW_MUTATION_E2E=1
+              export JUPR_LEAGUE_LIVE_E2E_SESSION_ID=d7221db1-db24-52d2-90fc-b667c16e0193
+              export JUPR_LEAGUE_LIVE_E2E_OPERATION_ID=87a15480-a0d4-4a1d-922f-f200d6e4f259
+              export JUPR_LEAGUE_LIVE_E2E_LEAGUE_ID=9
+              export JUPR_LEAGUE_LIVE_E2E_LEAGUE_NAME="Acceptance Flex 0822A"
+              export JUPR_LEAGUE_LIVE_E2E_LEAGUE_TYPE=Individual
+              export JUPR_LEAGUE_LIVE_E2E_MATCH_DATE=2026-08-24
+              export JUPR_LEAGUE_LIVE_E2E_REPORT_PATH="$RUNNER_TEMP/staging-handoff/league-live-e2e.json"
+              ;;
+            *)
+              echo "Refusing unknown League Live browser acceptance spec: $acceptance_spec" >&2
+              exit 1
+              ;;
+          esac
+          npx playwright test "$acceptance_spec" --retries=0 --forbid-only
 
       - name: End League Live browser acceptance auth session
         if: always() && steps.league-live-e2e.outputs.run == 'true'
@@ -516,6 +541,17 @@ jobs:
           python scripts/prepare_parity_staging_session.py \
             cleanup \
             --report-dir "$RUNNER_TEMP/league-live-e2e"
+
+      - name: Upload failed League Live browser evidence
+        if: failure() && steps.league-live-e2e.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: league-live-browser-failure-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Upload successful staging handoff
         if: steps.staging-posture.outputs.write_wave == 'open'
