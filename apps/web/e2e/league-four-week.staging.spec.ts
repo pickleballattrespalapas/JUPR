@@ -467,13 +467,13 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
   await page.getByRole("button", { name: "2. Schedule", exact: true }).click();
   await page.getByLabel("Start date", { exact: true }).fill("2026-08-24");
   await page.getByLabel("Weeks (or use an end date)", { exact: true }).fill("4");
-  await page.getByLabel("Weekday", { exact: true }).selectOption("0");
+  await expect(page.getByRole("combobox", { name: "Weekday", exact: true })).toHaveValue("0");
   await page.getByRole("button", { name: "3. Courts & live play", exact: true }).click();
   await page.getByLabel("Total courts available", { exact: true }).fill("3");
   await page.getByLabel("Maximum courts this league may use", { exact: true }).fill("3");
-  await page.getByLabel("Ladder pod size", { exact: true }).selectOption("4");
+  await expect(page.getByRole("combobox", { name: "Ladder pod size", exact: true })).toHaveValue("4");
   await page.getByRole("button", { name: "4. Match & standings", exact: true }).click();
-  await page.getByLabel("Match structure", { exact: true }).selectOption("one_game");
+  await expect(page.getByRole("combobox", { name: "Match structure", exact: true })).toHaveValue("one_game");
   await page.getByRole("button", { name: "5. Awards & eligibility", exact: true }).click();
   await page.getByLabel("Minimum games for awards", { exact: true }).fill("1");
   await confirmedAction(page, {
@@ -500,7 +500,7 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
     const fieldset = awardsSetup.getByRole("group", { name: label, exact: true });
     const enabled = fieldset.getByLabel("Enabled", { exact: true });
     if (!(await enabled.isChecked())) await enabled.check();
-    await fieldset.getByLabel("Places", { exact: true }).selectOption("1");
+    await expect(fieldset.getByRole("combobox", { name: "Places", exact: true })).toHaveValue("1");
     await fieldset.getByLabel(/^Minimum /).fill("1");
   }
   const awardsConfigResponse = page.waitForResponse((response) => {
@@ -515,7 +515,7 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
   await gotoLeaguePage(page, "/admin/league-manager/roster", leagueId);
   await expect(page.getByLabel("Search players", { exact: true })).toBeVisible();
   await page.getByLabel("Show", { exact: true }).selectOption("not_in_league");
-  await page.getByLabel("Action", { exact: true }).selectOption("activate");
+  await expect(page.getByRole("combobox", { name: "Action", exact: true })).toHaveValue("activate");
   for (const playerId of rosterPlayerIds) {
     await page.getByLabel("Search players", { exact: true }).fill(String(playerId));
     const row = page.locator("tr").filter({ hasText: `#${playerId}` });
