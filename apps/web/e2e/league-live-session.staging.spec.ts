@@ -28,6 +28,12 @@ const retainedOperationId = String(
 const expectedLeagueName = String(
   process.env.JUPR_LEAGUE_LIVE_E2E_LEAGUE_NAME || ""
 ).trim();
+const expectedLeagueId = String(
+  process.env.JUPR_LEAGUE_LIVE_E2E_LEAGUE_ID || ""
+).trim();
+const expectedLeagueType = String(
+  process.env.JUPR_LEAGUE_LIVE_E2E_LEAGUE_TYPE || ""
+).trim();
 const matchDate = String(
   process.env.JUPR_LEAGUE_LIVE_E2E_MATCH_DATE || ""
 ).trim();
@@ -170,7 +176,9 @@ test("recovers retained Round 1 and completes the five-round League Live session
   expect(adminToken).not.toBe("");
   expect(sessionId).toMatch(/^[0-9a-f-]{36}$/);
   expect(retainedOperationId).toMatch(/^[0-9a-f-]{36}$/);
+  expect(expectedLeagueId).toBe("9");
   expect(expectedLeagueName).not.toBe("");
+  expect(expectedLeagueType).toBe("Individual");
   expect(matchDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   expect(reportPath).not.toBe("");
 
@@ -208,11 +216,20 @@ test("recovers retained Round 1 and completes the five-round League Live session
     { token: adminToken, email: adminEmail, allowedOrigin: expectedWebOrigin }
   );
 
-  const documentResponse = await page.goto("/admin/league-manager/live", {
+  const liveRoute = new URL("/admin/league-manager/live", expectedWebOrigin);
+  liveRoute.searchParams.set("league_id", expectedLeagueId);
+  liveRoute.searchParams.set("league", expectedLeagueName);
+  liveRoute.searchParams.set("league_name", expectedLeagueName);
+  liveRoute.searchParams.set("mode", expectedLeagueType);
+  const documentResponse = await page.goto(liveRoute.toString(), {
     waitUntil: "domcontentloaded"
   });
   expect(documentResponse?.status()).toBeLessThan(400);
-  await expect(page.getByRole("heading", { name: /live rounds/i }).first()).toBeVisible();
+  await expect(page).toHaveURL(liveRoute.toString());
+  await expect(page.getByRole("heading", {
+    name: `${expectedLeagueName} live rounds`,
+    exact: true
+  })).toBeVisible();
 
   const sessionSelect = page.getByLabel("Existing sessions", { exact: true });
   await expect(sessionSelect).toBeEnabled({ timeout: 30_000 });
@@ -274,6 +291,7 @@ test("recovers retained Round 1 and completes the five-round League Live session
       environment: "staging",
       production_targets_contacted: false,
       session_id: sessionId,
+      league_id: expectedLeagueId,
       league_name: expectedLeagueName,
       status: after.session.status,
       current_round: after.session.current_round,

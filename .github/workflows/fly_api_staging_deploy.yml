@@ -499,7 +499,9 @@ jobs:
           export JUPR_PARITY_MUTATION_CONFIRMATION="RUN DISPOSABLE STAGING WRITES"
           export JUPR_LEAGUE_LIVE_E2E_SESSION_ID=d7221db1-db24-52d2-90fc-b667c16e0193
           export JUPR_LEAGUE_LIVE_E2E_OPERATION_ID=87a15480-a0d4-4a1d-922f-f200d6e4f259
+          export JUPR_LEAGUE_LIVE_E2E_LEAGUE_ID=9
           export JUPR_LEAGUE_LIVE_E2E_LEAGUE_NAME="Acceptance Flex 0822A"
+          export JUPR_LEAGUE_LIVE_E2E_LEAGUE_TYPE=Individual
           export JUPR_LEAGUE_LIVE_E2E_MATCH_DATE=2026-08-24
           export JUPR_LEAGUE_LIVE_E2E_REPORT_PATH="$RUNNER_TEMP/staging-handoff/league-live-e2e.json"
           npx playwright test e2e/league-live-session.staging.spec.ts
