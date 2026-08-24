@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 SPEC = Path("apps/web/e2e/league-live-session.staging.spec.ts")
+FOUR_WEEK_SPEC = Path("apps/web/e2e/league-four-week.staging.spec.ts")
 WORKFLOW = Path(".github/workflows/fly_api_staging_deploy.yml")
 
 
@@ -52,4 +53,39 @@ def test_fly_workflow_runs_league_live_e2e_once_for_an_explicit_spec_change() ->
     assert "JUPR_LEAGUE_LIVE_E2E_LEAGUE_ID=9" in text
     assert 'JUPR_LEAGUE_LIVE_E2E_LEAGUE_NAME="Acceptance Flex 0822A"' in text
     assert "JUPR_LEAGUE_LIVE_E2E_LEAGUE_TYPE=Individual" in text
+    assert "apps/web/e2e/league-four-week.staging.spec.ts" in text
+    assert "spec=e2e/league-four-week.staging.spec.ts" in text
+    assert "JUPR_FOUR_WEEK_ALLOW_MUTATION_E2E=1" in text
+    assert 'candidate_suffix="${GITHUB_SHA:0:7}-${GITHUB_RUN_ATTEMPT}"' in text
+    assert 'JUPR_FOUR_WEEK_E2E_LEAGUE_NAME="Acceptance Four Week Flex ${candidate_suffix}"' in text
+    assert 'JUPR_FOUR_WEEK_E2E_ASPEN_NAME="E2E Created Aspen ${candidate_suffix}"' in text
+    assert 'JUPR_FOUR_WEEK_E2E_BIRCH_NAME="E2E Created Birch ${candidate_suffix}"' in text
+    assert 'JUPR_FOUR_WEEK_E2E_CLOVER_NAME="E2E Created Clover ${candidate_suffix}"' in text
+    assert 'npx playwright test "$acceptance_spec" --retries=0 --forbid-only' in text
+    assert "- name: Upload failed League Live browser evidence" in text
+    assert "if: failure() && steps.league-live-e2e.outputs.run == 'true'" in text
+    assert "dnoockbwfenunhcibwfn" not in text
+
+
+def test_four_week_acceptance_is_guarded_and_verifies_the_full_story() -> None:
+    text = FOUR_WEEK_SPEC.read_text(encoding="utf-8")
+
+    assert "JUPR_FOUR_WEEK_ALLOW_MUTATION_E2E" in text
+    assert "JUPR_FOUR_WEEK_E2E_LEAGUE_NAME" in text
+    assert "JUPR_FOUR_WEEK_E2E_ASPEN_NAME" in text
+    assert "JUPR_FOUR_WEEK_E2E_BIRCH_NAME" in text
+    assert "JUPR_FOUR_WEEK_E2E_CLOVER_NAME" in text
+    assert "JUPR_FOUR_WEEK_E2E_REPORT_PATH" in text
+    assert "RUN DISPOSABLE STAGING WRITES" in text
+    assert "https://juprleagues-api-staging.fly.dev" in text
+    assert 'test.describe.configure({ mode: "serial", retries: 0 })' in text
+    assert "production_targets_contacted: false" in text
+    assert "expected_match_count: 36" in text
+    assert "expected_session_count: 4" in text
+    assert "expected_schedule_weeks: 4" in text
+    assert "991001" in text
+    assert "991023" in text
+    assert 'trigger: "Freeze and save"' in text
+    assert 'trigger: "Mint and verify"' in text
+    assert 'trigger: "Archive completed league"' in text
     assert "dnoockbwfenunhcibwfn" not in text
