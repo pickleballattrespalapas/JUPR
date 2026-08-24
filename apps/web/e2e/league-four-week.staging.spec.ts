@@ -140,6 +140,10 @@ function leagueRoute(pathname: string, leagueId: string): string {
   return route.toString();
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function apiGet<T>(page: Page, pathname: string): Promise<T> {
   const response = await page.request.get(apiPath(pathname), {
     headers: { Authorization: `Bearer ${adminToken}` }
@@ -271,13 +275,26 @@ async function runWeek(
   await page.getByRole("button", { name: "Continue to Players", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "2. Players", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Select all rostered players", exact: true }).click();
   const rosterSection = page.getByRole("heading", { name: "League roster", exact: true }).locator("..");
   const rosterAttendance = rosterSection.locator('input[type="checkbox"]');
-  await expect(rosterAttendance).toHaveCount(rosterPlayerIds.length);
-  if (plan.rosterAttendance < rosterPlayerIds.length) {
-    await rosterAttendance.last().uncheck();
+  const currentLeague = await apiGet<LeagueDetail>(page, leagueApiPath());
+  const baseMembers = new Map(
+    (currentLeague.roster || [])
+      .filter((row) => row.in_league && rosterPlayerIds.includes(row.player_id as typeof rosterPlayerIds[number]))
+      .map((row) => [row.player_id, row])
+  );
+  expect(baseMembers.size).toBe(rosterPlayerIds.length);
+  expect(await rosterAttendance.evaluateAll((nodes) => nodes.filter((node) => (node as HTMLInputElement).checked).length)).toBe(0);
+  for (const playerId of rosterPlayerIds.slice(0, plan.rosterAttendance)) {
+    const member = baseMembers.get(playerId);
+    expect(member, `Original roster member ${playerId} is unavailable`).toBeDefined();
+    const checkbox = rosterSection.getByRole("checkbox", {
+      name: new RegExp(`^${escapeRegExp(String(member?.player_name || ""))}(?: ·|$)`)
+    });
+    await expect(checkbox, `Original roster member ${playerId} is ambiguous`).toHaveCount(1);
+    await checkbox.check();
   }
+  expect(await rosterAttendance.evaluateAll((nodes) => nodes.filter((node) => (node as HTMLInputElement).checked).length)).toBe(plan.rosterAttendance);
 
   if (plan.pasted.length) {
     await page.getByPlaceholder("Alex Rivera, Casey Lee\nMorgan Chen").fill(plan.pasted.join("\n"));
