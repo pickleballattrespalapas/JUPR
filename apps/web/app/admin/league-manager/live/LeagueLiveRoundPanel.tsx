@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
 import type { AdminLeagueLiveStatusResponse, AdminLeagueManagerDetailResponse, AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
-import type { AdminMatchUploaderRoundRobinCourt, AdminMatchUploaderRoundRobinMatch, AdminMatchUploaderRoundRobinPreview, AdminMatchUploaderStatusResponse } from "@/lib/adminMatchUploaderApi";
+import type { AdminMatchUploaderCreatePlayersResult, AdminMatchUploaderRoundRobinCourt, AdminMatchUploaderRoundRobinMatch, AdminMatchUploaderRoundRobinPreview, AdminMatchUploaderStatusResponse } from "@/lib/adminMatchUploaderApi";
 import type { PublicPlayer } from "@/lib/api";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
@@ -20,6 +20,14 @@ type Props = {
 
 type CourtDraft = { court: string; formatType: string; playerNames: string };
 type ScoreDraft = { scoreT1: string; scoreT2: string };
+type WorkflowStep = 1 | 2 | 3 | 4 | 5 | 6;
+type PastedPlayerResolution = {
+  inputName: string;
+  status: "existing" | "missing" | "ambiguous";
+  playerId?: number;
+  playerName?: string;
+};
+type MissingPlayerDraft = { name: string; startingJupr: string };
 type MatchStructure = {
   kind: "fixed_games" | "best_of";
   games: number;
@@ -64,28 +72,148 @@ type LeagueLiveCreateRecovery = { operationKey: string; status: string; message:
 type StoredLeagueLiveCreateRecovery = LeagueLiveCreateRecovery & { version: 1 };
 type LeagueLiveCreateOperationResponse = { ok: boolean; operation_key: string; status: string; result?: LeagueLiveWriteResponse | null; error?: string | null; recovery_required?: boolean; updated_at?: string | null };
 type LeagueLiveCreateReconcileResponse = Partial<LeagueLiveWriteResponse> & { ok: boolean; status?: string; recovery_required?: boolean; error?: string | null };
+type LeagueLivePlayerCreateRecovery = { operationKey: string; status: string; message: string; leagueName?: string };
+type StoredLeagueLivePlayerCreateRecovery = LeagueLivePlayerCreateRecovery & { version: 1 };
+type StoredLeagueLiveRoundDraft = {
+  version: 1;
+  sessionId: string;
+  roundNumber: number;
+  sessionUpdatedAt: string;
+  courtFingerprint: string;
+  workflowStep: WorkflowStep;
+  matchDate: string;
+  weekTag: string;
+  roundLabel: string;
+  preview: AdminMatchUploaderRoundRobinPreview;
+  scores: Record<string, ScoreDraft>;
+  scoreReviewMode: boolean;
+  scoresReviewed: boolean;
+  movementPlan: LeagueLiveRoundPlan | null;
+  movementPlanStale: boolean;
+  movementOverrides: Record<number, string>;
+  overrideReason: string;
+  rosterAction: "none" | "add" | "substitute";
+  incomingPlayerId: string;
+  replacedPlayerId: string;
+  guestPlayers: Array<{ id: number; name: string; rating?: number | null }>;
+  benchOverrideIds: number[];
+  benchOverrideReason: string;
+};
+type LeagueLivePlayerOperationResponse = {
+  ok: boolean;
+  operation_key?: string;
+  status: string;
+  result?: AdminMatchUploaderCreatePlayersResult | null;
+  result_json?: AdminMatchUploaderCreatePlayersResult | null;
+  error?: string | null;
+  error_text?: string | null;
+  recovery_required?: boolean;
+};
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
-const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
+const inputStyle = { width: "100%", minWidth: 0, boxSizing: "border-box" as const, padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 const DEFAULT_MATCH_STRUCTURE: MatchStructure = { kind: "fixed_games", games: 1, result_counting: "each_game", completion: "all_games" };
+const WORKFLOW_STEPS: Array<{ id: WorkflowStep; label: string }> = [
+  { id: 1, label: "Setup" },
+  { id: 2, label: "Players" },
+  { id: 3, label: "Courts and Preview" },
+  { id: 4, label: "Score Entry with Review" },
+  { id: 5, label: "Movement" },
+  { id: 6, label: "Repeat or Finish" }
+];
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
 }
 
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function splitNames(value: string): string[] {
   return String(value || "").replace(/,/g, "\n").split("\n").map((item) => item.trim()).filter(Boolean);
 }
 
+function normalizePlayerName(value: string): string {
+  return String(value || "").replace(/\s+/gu, " ").trim();
+}
+
+function playerNameKey(value: string): string {
+  return normalizePlayerName(value).toLocaleLowerCase("en-US");
+}
+
+function parsePastedPlayerNames(value: string): string[] {
+  return String(value || "")
+    .replace(/,/g, "\n")
+    .split("\n")
+    .map(normalizePlayerName)
+    .filter(Boolean);
+}
+
+function duplicatePastedPlayerNames(names: string[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Map<string, string>();
+  for (const name of names) {
+    const key = playerNameKey(name);
+    if (seen.has(key)) duplicates.set(key, name);
+    seen.add(key);
+  }
+  return [...duplicates.values()];
+}
+
+function sameNumberSet(left: number[], right: number[]): boolean {
+  const leftSet = new Set(left.map(Number));
+  const rightSet = new Set(right.map(Number));
+  return leftSet.size === rightSet.size && [...leftSet].every((value) => rightSet.has(value));
+}
+
+function resolvePastedPlayers(names: string[], knownPlayers: PublicPlayer[]): PastedPlayerResolution[] {
+  const existingPlayersByName = new Map<string, PublicPlayer[]>();
+  for (const player of knownPlayers) {
+    const key = playerNameKey(player.name);
+    if (!key) continue;
+    existingPlayersByName.set(key, [...(existingPlayersByName.get(key) || []), player]);
+  }
+  return names.map((inputName) => {
+    const matches = existingPlayersByName.get(playerNameKey(inputName)) || [];
+    if (matches.length > 1) return { inputName, status: "ambiguous" as const, playerName: `${matches.length} club players share this name` };
+    if (matches.length === 1) return { inputName, status: "existing" as const, playerId: Number(matches[0].id), playerName: matches[0].name };
+    return { inputName, status: "missing" as const };
+  });
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function reviewedPlayerBatchFingerprint(players: Array<{ name: string; starting_jupr: number }>): Promise<string> {
+  const reviewed = {
+    players: players.map((player) => ({
+      name: normalizePlayerName(player.name),
+      starting_jupr: Number(player.starting_jupr).toFixed(4)
+    }))
+  };
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(reviewed)));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function scoreIsValid(score: ScoreDraft): boolean {
-  const a = Number(score.scoreT1);
-  const b = Number(score.scoreT2);
+  const left = score.scoreT1.trim();
+  const right = score.scoreT2.trim();
+  if (!/^(0|[1-9]\d*)$/.test(left) || !/^(0|[1-9]\d*)$/.test(right)) return false;
+  const a = Number(left);
+  const b = Number(right);
   return Number.isInteger(a) && Number.isInteger(b) && a >= 0 && b >= 0 && a !== b && a + b > 0;
 }
 
@@ -205,6 +333,14 @@ function courtsToPayload(courts: CourtDraft[], currentRound: number) {
   }));
 }
 
+function courtDraftFingerprint(courts: CourtDraft[]): string {
+  return canonicalJson(courts.map((court) => ({
+    court: court.court.trim(),
+    format_type: court.formatType.trim().toLowerCase(),
+    player_names: splitNames(court.playerNames).map(playerNameKey)
+  })));
+}
+
 function courtsFromPersisted(courts: LeagueLiveCourt[], currentRound: number, fallback: Array<Record<string, unknown>> = []): CourtDraft[] {
   const scoped = courts.filter((court) => Number(court.round_number) === Number(currentRound));
   const rows = scoped.length ? scoped : fallback.map((row, index) => ({
@@ -231,6 +367,58 @@ function activeRosterPayload(detail: AdminLeagueManagerDetailResponse | null, at
   }));
 }
 
+function selectedSessionRosterPayload(
+  detail: AdminLeagueManagerDetailResponse | null,
+  knownPlayers: PublicPlayer[],
+  selectedPlayerIds: number[]
+): Array<Record<string, unknown>> {
+  const leagueRowsById = new Map((detail?.roster || []).map((row) => [Number(row.player_id), row]));
+  const clubPlayersById = new Map(knownPlayers.map((player) => [Number(player.id), player]));
+  return selectedPlayerIds.flatMap((playerId) => {
+    const leagueRow = leagueRowsById.get(Number(playerId));
+    if (leagueRow) {
+      return [{
+        player_id: Number(leagueRow.player_id),
+        player_name: leagueRow.player_name,
+        rating: leagueRow.rating,
+        rating_jupr: leagueRow.rating_jupr,
+        wins: leagueRow.wins,
+        losses: leagueRow.losses,
+        matches_played: leagueRow.matches_played
+      }];
+    }
+    const player = clubPlayersById.get(Number(playerId));
+    if (!player) return [];
+    return [{
+      player_id: Number(player.id),
+      player_name: player.name,
+      rating: player.rating,
+      rating_jupr: player.rating_jupr,
+      wins: player.wins,
+      losses: player.losses,
+      matches_played: player.matches_played
+    }];
+  });
+}
+
+function playerJuprLabel(player: PublicPlayer): string {
+  const jupr = player.rating_jupr ?? (player.rating == null ? null : Number(player.rating) / 400);
+  return jupr == null || !Number.isFinite(Number(jupr)) ? "—" : Number(jupr).toFixed(2);
+}
+
+function publicPlayersFromBatch(payload: AdminMatchUploaderCreatePlayersResult | null | undefined): PublicPlayer[] {
+  return (payload?.players || []).map((player) => ({
+    id: Number(player.id),
+    name: player.name,
+    rating: player.rating,
+    rating_jupr: player.rating == null ? null : Number(player.rating) / 400,
+    wins: player.wins,
+    losses: player.losses,
+    matches_played: player.matches_played,
+    is_active: player.is_active
+  }));
+}
+
 function movementSummary(movement?: LeagueMovementPayload | Record<string, unknown> | null): string {
   if (!movement || typeof movement !== "object") return "—";
   const rows = Array.isArray((movement as LeagueMovementPayload).rows) ? (movement as LeagueMovementPayload).rows : [];
@@ -238,8 +426,28 @@ function movementSummary(movement?: LeagueMovementPayload | Record<string, unkno
   return moved ? `${moved} move(s)` : "No movement";
 }
 
+function persistedPublishedRoundNumber(
+  session: LeagueLiveSession,
+  rounds: LeagueLiveRound[],
+  operations: LeagueLivePublishOperation[]
+): number | null {
+  const submittedRounds = rounds
+    .filter((round) => round.status === "submitted")
+    .map((round) => Number(round.round_number))
+    .filter((roundNumber) => Number.isFinite(roundNumber));
+  if (session.status === "complete") {
+    return submittedRounds.length ? Math.max(...submittedRounds) : Number(session.current_round || 1);
+  }
+  const currentRoundNumber = Number(session.current_round || 1);
+  if (!submittedRounds.includes(currentRoundNumber)) return null;
+  const currentRoundOperations = operations.filter((operation) => Number(operation.round_number) === currentRoundNumber);
+  if (currentRoundOperations.length && !currentRoundOperations.some((operation) => operation.status === "completed")) return null;
+  return currentRoundNumber;
+}
+
 export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, uploaderStatus, players, liveDomainStatus }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
+  const [workflowStep, setWorkflowStep] = useState<WorkflowStep>(1);
   const [leagues, setLeagues] = useState<string[]>([]);
   const [leagueName, setLeagueName] = useState("");
   const [loadedLeagueName, setLoadedLeagueName] = useState("");
@@ -252,6 +460,16 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [matchStructure, setMatchStructure] = useState<MatchStructure>(DEFAULT_MATCH_STRUCTURE);
   const [sessionRoster, setSessionRoster] = useState<LeagueLiveRosterRow[]>([]);
   const [attendeePlayerIds, setAttendeePlayerIds] = useState<number[]>([]);
+  const [knownPlayers, setKnownPlayers] = useState<PublicPlayer[]>(players);
+  const [pastedPlayerText, setPastedPlayerText] = useState("");
+  const [pastedPlayerResolutions, setPastedPlayerResolutions] = useState<PastedPlayerResolution[]>([]);
+  const [pasteDuplicateNames, setPasteDuplicateNames] = useState<string[]>([]);
+  const [pasteResolutionCurrent, setPasteResolutionCurrent] = useState(true);
+  const [pastedSelectedPlayerIds, setPastedSelectedPlayerIds] = useState<number[]>([]);
+  const [missingPlayerDrafts, setMissingPlayerDrafts] = useState<MissingPlayerDraft[]>([]);
+  const [creatingMissingPlayers, setCreatingMissingPlayers] = useState(false);
+  const [playerCreateRecovery, setPlayerCreateRecovery] = useState<LeagueLivePlayerCreateRecovery | null>(null);
+  const [checkingPlayerCreateRecovery, setCheckingPlayerCreateRecovery] = useState(false);
   const [liveSessions, setLiveSessions] = useState<LeagueLiveSession[]>([]);
   const [sessionId, setSessionId] = useState("");
   const [loadedSessionId, setLoadedSessionId] = useState("");
@@ -265,6 +483,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [courts, setCourts] = useState<CourtDraft[]>([{ court: "1", formatType: "4-player", playerNames: "" }]);
   const [preview, setPreview] = useState<AdminMatchUploaderRoundRobinPreview | null>(null);
   const [scores, setScores] = useState<Record<string, ScoreDraft>>({});
+  const [scoreReviewMode, setScoreReviewMode] = useState(false);
+  const [scoresReviewed, setScoresReviewed] = useState(false);
   const [rosterSuggestion, setRosterSuggestion] = useState<LeagueLiveRosterSuggestion | null>(null);
   const [movementPlan, setMovementPlan] = useState<LeagueLiveRoundPlan | null>(null);
   const [movementPlanStale, setMovementPlanStale] = useState(false);
@@ -286,13 +506,52 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [message, setMessage] = useState<string | null>(null);
   const [createRecovery, setCreateRecovery] = useState<LeagueLiveCreateRecovery | null>(null);
   const [checkingCreateRecovery, setCheckingCreateRecovery] = useState(false);
+  const [roundPublished, setRoundPublished] = useState(false);
+  const [lastPublishedRound, setLastPublishedRound] = useState<number | null>(null);
   const createSessionOperationRef = useRef<{ fingerprint: string; key: string } | null>(null);
+  const createPlayersOperationRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const leagueListRequest = useLatestRequestGuard(accessToken, clearProtectedLiveWorkspace);
   const leagueDetailRequest = useLatestRequestGuard(accessToken);
   const sessionListRequest = useLatestRequestGuard(accessToken);
   const sessionDetailRequest = useLatestRequestGuard(accessToken);
   const actionRequest = useLatestRequestGuard(accessToken);
   const createRecoveryStorageKey = `jupr-league-live-create-recovery:${clubId}`;
+  const playerCreateRecoveryStorageKey = `jupr-league-live-player-create-recovery:${clubId}`;
+
+  function roundDraftStorageKey(targetSessionId: string, targetRound: number): string {
+    return `jupr-league-live-round-draft:${clubId}:${targetSessionId}:${targetRound}`;
+  }
+
+  function clearStoredRoundDraft(targetSessionId: string, targetRound: number) {
+    if (!targetSessionId) return;
+    try {
+      globalThis.sessionStorage?.removeItem(roundDraftStorageKey(targetSessionId, targetRound));
+    } catch {
+      // A successful durable publish remains authoritative if local cleanup is blocked.
+    }
+  }
+
+  useEffect(() => {
+    setKnownPlayers((current) => {
+      const byId = new Map(current.map((player) => [Number(player.id), player]));
+      for (const player of players) byId.set(Number(player.id), player);
+      return [...byId.values()].sort((left, right) => left.name.localeCompare(right.name));
+    });
+  }, [players]);
+
+  useEffect(() => {
+    setPlayerCreateRecovery(null);
+    try {
+      const raw = globalThis.sessionStorage?.getItem(playerCreateRecoveryStorageKey);
+      if (!raw) return;
+      const stored = JSON.parse(raw) as Partial<StoredLeagueLivePlayerCreateRecovery>;
+      if (stored.version === 1 && typeof stored.operationKey === "string" && typeof stored.status === "string" && typeof stored.message === "string") {
+        setPlayerCreateRecovery(stored as StoredLeagueLivePlayerCreateRecovery);
+      }
+    } catch {
+      // In-memory recovery remains available when session storage is blocked.
+    }
+  }, [playerCreateRecoveryStorageKey]);
 
   useEffect(() => {
     setCreateRecovery(null);
@@ -330,21 +589,109 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  const currentRound = Math.max(1, Number(roundNumber) || 1);
-  const safeTotalRounds = Math.max(currentRound, Number(totalRounds) || currentRound);
+  function retainPlayerCreateRecovery(recovery: LeagueLivePlayerCreateRecovery) {
+    setPlayerCreateRecovery(recovery);
+    try {
+      globalThis.sessionStorage?.setItem(
+        playerCreateRecoveryStorageKey,
+        JSON.stringify({ version: 1, ...recovery } satisfies StoredLeagueLivePlayerCreateRecovery)
+      );
+    } catch {
+      // The in-memory guard still prevents a second player batch.
+    }
+  }
+
+  function clearPlayerCreateRecovery() {
+    setPlayerCreateRecovery(null);
+    createPlayersOperationRef.current = null;
+    try {
+      globalThis.sessionStorage?.removeItem(playerCreateRecoveryStorageKey);
+    } catch {
+      // A conclusive server result remains authoritative.
+    }
+  }
+
+  function restoreStoredRoundDraft(sessionRow: LeagueLiveSession, persistedCourts: LeagueLiveCourt[]): WorkflowStep | null {
+    const targetRound = Number(sessionRow.current_round || 1);
+    const targetCourts = courtsFromPersisted(persistedCourts, targetRound, sessionRow.current_court_state_json || []);
+    const key = roundDraftStorageKey(sessionRow.id, targetRound);
+    try {
+      const raw = globalThis.sessionStorage?.getItem(key);
+      if (!raw) return null;
+      const stored = JSON.parse(raw) as Partial<StoredLeagueLiveRoundDraft>;
+      const valid = stored.version === 1
+        && stored.sessionId === sessionRow.id
+        && Number(stored.roundNumber) === targetRound
+        && stored.sessionUpdatedAt === String(sessionRow.updated_at || "")
+        && stored.courtFingerprint === courtDraftFingerprint(targetCourts)
+        && stored.preview && typeof stored.preview === "object"
+        && stored.scores && typeof stored.scores === "object";
+      if (!valid) {
+        globalThis.sessionStorage?.removeItem(key);
+        return null;
+      }
+      setPreview(stored.preview as AdminMatchUploaderRoundRobinPreview);
+      setScores(stored.scores as Record<string, ScoreDraft>);
+      setScoreReviewMode(stored.scoreReviewMode === true);
+      setScoresReviewed(stored.scoresReviewed === true);
+      setMovementPlan((stored.movementPlan as LeagueLiveRoundPlan | null | undefined) || null);
+      setMovementPlanStale(stored.movementPlanStale === true);
+      setMovementOverrides((stored.movementOverrides as Record<number, string> | undefined) || {});
+      setOverrideReason(String(stored.overrideReason || ""));
+      setRosterAction(["add", "substitute"].includes(String(stored.rosterAction)) ? stored.rosterAction as "add" | "substitute" : "none");
+      setIncomingPlayerId(String(stored.incomingPlayerId || ""));
+      setReplacedPlayerId(String(stored.replacedPlayerId || ""));
+      setGuestPlayers(Array.isArray(stored.guestPlayers) ? stored.guestPlayers.map((player) => ({ id: Number(player.id), name: String(player.name), rating: player.rating == null ? null : Number(player.rating) })) : []);
+      setBenchOverrideIds(Array.isArray(stored.benchOverrideIds) ? stored.benchOverrideIds.map(Number) : []);
+      setBenchOverrideReason(String(stored.benchOverrideReason || ""));
+      setMatchDate(String(stored.matchDate || ""));
+      setWeekTag(String(stored.weekTag || sessionRow.week_tag || "Week 1"));
+      setRoundLabel(String(stored.roundLabel || `Round ${targetRound}`));
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(stored.matchDate || ""))) return 1;
+      const requestedStep = Number(stored.workflowStep);
+      if (requestedStep === 6 && stored.scoresReviewed && stored.movementPlan && !stored.movementPlanStale) return 6;
+      if (requestedStep >= 5 && stored.scoresReviewed) return 5;
+      return 4;
+    } catch {
+      try {
+        globalThis.sessionStorage?.removeItem(key);
+      } catch {
+        // Corrupt local draft stays ignored if browser storage is unavailable.
+      }
+      return null;
+    }
+  }
+
+  const parsedCurrentRound = Number(roundNumber);
+  const parsedTotalRounds = Number(totalRounds);
+  const roundContextValid = Number.isInteger(parsedCurrentRound)
+    && Number.isInteger(parsedTotalRounds)
+    && parsedCurrentRound >= 1
+    && parsedCurrentRound <= parsedTotalRounds
+    && parsedTotalRounds <= 50;
+  const currentRound = Number.isInteger(parsedCurrentRound) && parsedCurrentRound >= 1 && parsedCurrentRound <= 50 ? parsedCurrentRound : 1;
+  const safeTotalRounds = Number.isInteger(parsedTotalRounds) && parsedTotalRounds >= currentRound && parsedTotalRounds <= 50 ? parsedTotalRounds : currentRound;
+  const matchDateValid = /^\d{4}-\d{2}-\d{2}$/.test(matchDate);
   const participationMode = participationModeFromDetail(detail);
   const activeLeagueMembers = useMemo(
     () => (detail?.roster || []).filter((row) => row.in_league),
     [detail?.roster]
   );
-  const playerOptions = useMemo(() => players.map((player) => player.name).filter(Boolean).sort((a, b) => a.localeCompare(b)), [players]);
+  const playerOptions = useMemo(() => knownPlayers.map((player) => player.name).filter(Boolean).sort((a, b) => a.localeCompare(b)), [knownPlayers]);
+  const selectedSessionPlayers = useMemo(() => {
+    const byId = new Map(knownPlayers.map((player) => [Number(player.id), player]));
+    return attendeePlayerIds.flatMap((playerId) => {
+      const player = byId.get(Number(playerId));
+      return player ? [player] : [];
+    });
+  }, [knownPlayers, attendeePlayerIds]);
   const rosterPlayerIds = useMemo(() => new Set(sessionRoster.map((row) => Number(row.player_id))), [sessionRoster]);
   const incomingPlayerOptions = useMemo(
     () => [
-      ...players.map((player) => ({ id: Number(player.id), name: player.name, rating: player.rating })),
+      ...knownPlayers.map((player) => ({ id: Number(player.id), name: player.name, rating: player.rating })),
       ...guestPlayers
     ].filter((player, index, rows) => !rosterPlayerIds.has(Number(player.id)) && rows.findIndex((candidate) => Number(candidate.id) === Number(player.id)) === index).sort((a, b) => a.name.localeCompare(b.name)),
-    [players, guestPlayers, rosterPlayerIds]
+    [knownPlayers, guestPlayers, rosterPlayerIds]
   );
   const activeSessionRoster = useMemo(() => sessionRoster.filter((row) => row.status === "active"), [sessionRoster]);
   const allPreviewMatches = (preview?.courts || []).flatMap((court) => court.matches || []);
@@ -352,6 +699,21 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const completeSeriesCount = seriesStates.filter((state) => state.complete).length;
   const validScoreCount = seriesStates.reduce((total, state) => total + state.playedGames, 0);
   const allSeriesComplete = allPreviewMatches.length > 0 && completeSeriesCount === allPreviewMatches.length;
+  const scoreReviewRows = allPreviewMatches.flatMap((match) => {
+    const state = seriesScoreState(match.row_id, scores, matchStructure);
+    return Array.from({ length: state.playedGames }, (_, index) => {
+      const gameNumber = index + 1;
+      const score = scores[scoreKey(match.row_id, gameNumber)] || { scoreT1: "", scoreT2: "" };
+      return {
+        key: scoreKey(match.row_id, gameNumber),
+        court: match.court,
+        game: gameNumber,
+        teamOne: match.t1.map((player) => player.name).join(" / "),
+        score: `${score.scoreT1}-${score.scoreT2}`,
+        teamTwo: match.t2.map((player) => player.name).join(" / ")
+      };
+    });
+  });
   const sessionIsCurrentLeague = Boolean(
     loadedSessionId
     && loadedSessionId === sessionId
@@ -360,6 +722,61 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     && sessionLeagueName === leagueName
     && sessionLeagueName === loadedLeagueName
   );
+  const hasEnteredRoundScores = Object.values(scores).some(scoreHasValue);
+  const hasUnsubmittedRoundWork = Boolean(sessionIsCurrentLeague && preview && (hasEnteredRoundScores || scoresReviewed || movementPlan));
+
+  useEffect(() => {
+    if (!sessionIsCurrentLeague || !loadedSessionId || !sessionUpdatedAt) return;
+    const key = `jupr-league-live-round-draft:${clubId}:${loadedSessionId}:${currentRound}`;
+    try {
+      if (roundPublished) {
+        globalThis.sessionStorage?.removeItem(key);
+        return;
+      }
+      if (!preview) {
+        globalThis.sessionStorage?.removeItem(key);
+        return;
+      }
+      const draft: StoredLeagueLiveRoundDraft = {
+        version: 1,
+        sessionId: loadedSessionId,
+        roundNumber: currentRound,
+        sessionUpdatedAt,
+        courtFingerprint: courtDraftFingerprint(courts),
+        workflowStep,
+        matchDate,
+        weekTag,
+        roundLabel,
+        preview,
+        scores,
+        scoreReviewMode,
+        scoresReviewed,
+        movementPlan,
+        movementPlanStale,
+        movementOverrides,
+        overrideReason,
+        rosterAction,
+        incomingPlayerId,
+        replacedPlayerId,
+        guestPlayers,
+        benchOverrideIds,
+        benchOverrideReason
+      };
+      globalThis.sessionStorage?.setItem(key, JSON.stringify(draft));
+    } catch {
+      // The in-memory workflow remains usable when browser storage is unavailable.
+    }
+  }, [benchOverrideIds, benchOverrideReason, clubId, courts, currentRound, guestPlayers, incomingPlayerId, loadedSessionId, matchDate, movementOverrides, movementPlan, movementPlanStale, overrideReason, preview, replacedPlayerId, rosterAction, roundLabel, roundPublished, scoreReviewMode, scores, scoresReviewed, sessionIsCurrentLeague, sessionUpdatedAt, weekTag, workflowStep]);
+
+  useEffect(() => {
+    if (!hasUnsubmittedRoundWork) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    globalThis.addEventListener("beforeunload", warnBeforeUnload);
+    return () => globalThis.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [hasUnsubmittedRoundWork]);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -394,7 +811,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     rounds: LeagueLiveRound[] = [],
     operations: LeagueLivePublishOperation[] = [],
     leagueDetail: AdminLeagueManagerDetailResponse | null = null
-  ) {
+  ): number | null {
+    const publishedRoundNumber = persistedPublishedRoundNumber(sessionRow, rounds, operations);
     setSessionId(sessionRow.id);
     setLoadedSessionId(sessionRow.id);
     setSessionLeagueName(sessionRow.league_name);
@@ -412,16 +830,27 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setSessionNotes(sessionRow.notes || "");
     setSessionRoster((sessionRow.roster_json || []) as LeagueLiveRosterRow[]);
     setAttendeePlayerIds(((sessionRow.roster_json || []) as LeagueLiveRosterRow[]).map((row) => Number(row.player_id)));
+    setPastedPlayerText("");
+    setPastedPlayerResolutions([]);
+    setPasteDuplicateNames([]);
+    setPasteResolutionCurrent(true);
+    setPastedSelectedPlayerIds([]);
+    setMissingPlayerDrafts([]);
     setRoundHistory(rounds || []);
     setPublishOperations(operations || []);
     setCourts(courtsFromPersisted(courtsRows, sessionRow.current_round || 1, sessionRow.current_court_state_json || []));
     setPreview(null);
     setScores({});
+    setScoreReviewMode(false);
+    setScoresReviewed(false);
     setMovementPlan(null);
     setMovementPlanStale(false);
     setMovementOverrides({});
     setRatingReview(null);
     setBenchOverrideIds(((sessionRow.roster_json || []) as LeagueLiveRosterRow[]).filter((row) => row.status === "bench").map((row) => Number(row.player_id)));
+    setRoundPublished(publishedRoundNumber != null);
+    setLastPublishedRound(publishedRoundNumber);
+    return publishedRoundNumber;
   }
 
   function clearRoundDerivedState() {
@@ -430,10 +859,18 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setLoadedLeagueName("");
     setSessionRoster([]);
     setAttendeePlayerIds([]);
+    setPastedPlayerText("");
+    setPastedPlayerResolutions([]);
+    setPasteDuplicateNames([]);
+    setPasteResolutionCurrent(true);
+    setPastedSelectedPlayerIds([]);
+    setMissingPlayerDrafts([]);
     setRosterSuggestion(null);
     setCourts([{ court: "1", formatType: "4-player", playerNames: "" }]);
     setPreview(null);
     setScores({});
+    setScoreReviewMode(false);
+    setScoresReviewed(false);
     setMovementPlan(null);
     setMovementPlanStale(false);
     setMovementOverrides({});
@@ -448,6 +885,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setGuestName("");
     setGuestJupr("");
     setGuestReason("");
+    setRoundPublished(false);
+    setLastPublishedRound(null);
   }
 
   function clearPersistedSessionBinding(selectedSessionId = "") {
@@ -466,6 +905,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setPublishOperations([]);
     setCompensationReference("");
     setCompensationReason("");
+    setWorkflowStep(1);
     clearRoundDerivedState();
   }
 
@@ -496,6 +936,32 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     if (movementPlan) setMovementPlanStale(true);
   }
 
+  function invalidateScoreReview() {
+    setScoreReviewMode(false);
+    setScoresReviewed(false);
+    setMovementPlan(null);
+    setMovementPlanStale(false);
+    setMovementOverrides({});
+  }
+
+  function invalidateRoundDraft(message: string) {
+    setPreview(null);
+    setScores({});
+    invalidateScoreReview();
+    setRoundPublished(false);
+    setLastPublishedRound(null);
+    createSessionOperationRef.current = null;
+    setWorkflowStep(1);
+    setMessage(message);
+  }
+
+  function setupContextError(): string | null {
+    if (!roundContextValid) return "Use whole numbers with 1 ≤ Round # ≤ Total rounds ≤ 50 before continuing.";
+    if (!matchDateValid) return "Confirm this round's date before continuing; a resumed session never assumes today's date.";
+    if (sessionIsCurrentLeague && sessionStatus !== "active") return `This persisted session is ${sessionStatus.replace(/_/g, " ")}; activate it before continuing.`;
+    return null;
+  }
+
   function invalidateFlexRosterPlan(message: string) {
     setRosterSuggestion(null);
     setSessionRoster([]);
@@ -504,6 +970,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setCourts([{ court: "1", formatType: "4-player", playerNames: "" }]);
     setPreview(null);
     setScores({});
+    setScoreReviewMode(false);
+    setScoresReviewed(false);
     setMovementPlan(null);
     setMovementPlanStale(false);
     setMovementOverrides({});
@@ -514,6 +982,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
 
   function replaceFlexAttendance(playerIds: number[], message: string) {
     setAttendeePlayerIds([...new Set(playerIds)]);
+    setPastedSelectedPlayerIds([]);
     invalidateFlexRosterPlan(message);
   }
 
@@ -521,7 +990,233 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setAttendeePlayerIds((current) => attending
       ? [...new Set([...current, playerId])]
       : current.filter((id) => id !== playerId));
-    invalidateFlexRosterPlan("Attendance changed. Build fresh Flex courts before creating the session.");
+    if (!attending) setPastedSelectedPlayerIds((current) => current.filter((id) => id !== playerId));
+    invalidateFlexRosterPlan(participationMode === "flex"
+      ? "Attendance changed. Build fresh Flex courts before creating the session."
+      : "Set session players changed. Rebuild the court plan before continuing.");
+  }
+
+  function appendSelectedPlayerIds(playerIds: number[]) {
+    setAttendeePlayerIds((current) => [...new Set([...current, ...playerIds.map(Number)])]);
+  }
+
+  function appendPastedPlayerIds(playerIds: number[]) {
+    const normalizedIds = [...new Set(playerIds.map(Number))];
+    const newlySelectedIds = normalizedIds.filter((playerId) => !attendeePlayerIds.includes(playerId));
+    setPastedSelectedPlayerIds((current) => [...new Set([...current, ...newlySelectedIds])]);
+    appendSelectedPlayerIds(normalizedIds);
+  }
+
+  function changePastedPlayerText(nextText: string) {
+    const pastedSelection = new Set(pastedSelectedPlayerIds.map(Number));
+    if (pastedSelection.size) {
+      setAttendeePlayerIds((current) => current.filter((playerId) => !pastedSelection.has(Number(playerId))));
+    }
+    setPastedSelectedPlayerIds([]);
+    setPastedPlayerText(nextText);
+    setPasteDuplicateNames([]);
+    setPastedPlayerResolutions([]);
+    setMissingPlayerDrafts([]);
+    setPasteResolutionCurrent(!nextText.trim());
+    invalidateFlexRosterPlan(nextText.trim()
+      ? "Pasted player names changed. Resolve the complete list again before building courts."
+      : "Pasted player list cleared. Review the selected session players before rebuilding courts.");
+  }
+
+  function removeSelectedPlayer(playerId: number) {
+    setAttendeePlayerIds((current) => current.filter((id) => Number(id) !== Number(playerId)));
+    setPastedSelectedPlayerIds((current) => current.filter((id) => Number(id) !== Number(playerId)));
+    invalidateFlexRosterPlan("Session players changed. Build a fresh court plan before continuing.");
+  }
+
+  function resolvePlayerNames() {
+    const parsedNames = parsePastedPlayerNames(pastedPlayerText);
+    const duplicates = duplicatePastedPlayerNames(parsedNames);
+    setPasteDuplicateNames(duplicates);
+    setPasteResolutionCurrent(false);
+    setPastedPlayerResolutions([]);
+    setMissingPlayerDrafts([]);
+    if (!parsedNames.length) {
+      setMessage("Paste at least one player name, separated by commas or new lines.");
+      return;
+    }
+    if (duplicates.length) {
+      setMessage(`Remove duplicate pasted name${duplicates.length === 1 ? "" : "s"}: ${duplicates.join(", ")}.`);
+      return;
+    }
+    const resolutions = resolvePastedPlayers(parsedNames, knownPlayers);
+    const resolvedIds = resolutions.flatMap((row) => row.status === "existing" && row.playerId ? [Number(row.playerId)] : []);
+    const missing = resolutions.filter((row) => row.status === "missing").map((row) => ({ name: row.inputName, startingJupr: "" }));
+    setPastedPlayerResolutions(resolutions);
+    setMissingPlayerDrafts(missing);
+    appendPastedPlayerIds(resolvedIds);
+    setPasteResolutionCurrent(true);
+    invalidateFlexRosterPlan(
+      missing.length
+        ? `Matched ${resolvedIds.length} existing player${resolvedIds.length === 1 ? "" : "s"}. Enter a Starting JUPR for ${missing.length} new player${missing.length === 1 ? "" : "s"}.`
+        : `Resolved and added ${resolvedIds.length} existing player${resolvedIds.length === 1 ? "" : "s"}.`
+    );
+  }
+
+  async function createMissingPlayers() {
+    if (playerCreateRecovery) {
+      setMessage(`Check exact player operation ${playerCreateRecovery.operationKey} before creating another batch.`);
+      return;
+    }
+    const reviewedPlayers = missingPlayerDrafts.map((draft) => ({
+      name: normalizePlayerName(draft.name),
+      starting_jupr: Number(draft.startingJupr)
+    }));
+    const invalid = reviewedPlayers.find((player) => !player.name || !Number.isFinite(player.starting_jupr) || player.starting_jupr < 1 || player.starting_jupr > 7);
+    if (invalid) {
+      setMessage("Every new player needs an explicit Starting JUPR between 1.0 and 7.0; no default is assumed.");
+      return;
+    }
+    const duplicateNames = duplicatePastedPlayerNames(reviewedPlayers.map((player) => player.name));
+    if (duplicateNames.length) {
+      setMessage(`Remove duplicate player name${duplicateNames.length === 1 ? "" : "s"}: ${duplicateNames.join(", ")}.`);
+      return;
+    }
+    if (!reviewedPlayers.length) {
+      setMessage("There are no missing players to create.");
+      return;
+    }
+    setCreatingMissingPlayers(true);
+    setMessage(null);
+    try {
+      const reviewedFingerprint = await reviewedPlayerBatchFingerprint(reviewedPlayers);
+      const requestFingerprint = canonicalJson({ players: reviewedPlayers, reviewed_fingerprint: reviewedFingerprint });
+      const idempotencyKey = createPlayersOperationRef.current?.fingerprint === requestFingerprint
+        ? createPlayersOperationRef.current.key
+        : `league-live-players:${globalThis.crypto.randomUUID()}`;
+      createPlayersOperationRef.current = { fingerprint: requestFingerprint, key: idempotencyKey };
+      const payload = await requestJson<AdminMatchUploaderCreatePlayersResult>(`/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/players`, {
+        method: "POST",
+        body: JSON.stringify({
+          players: reviewedPlayers,
+          reviewed_fingerprint: reviewedFingerprint,
+          idempotency_key: idempotencyKey,
+          confirmation_text: "CREATE PLAYERS",
+          source: "next_league_live_pasted_players"
+        })
+      });
+      createPlayersOperationRef.current = null;
+      const created = publicPlayersFromBatch(payload);
+      setKnownPlayers((current) => {
+        const byId = new Map(current.map((player) => [Number(player.id), player]));
+        for (const player of created) byId.set(Number(player.id), player);
+        return [...byId.values()].sort((left, right) => left.name.localeCompare(right.name));
+      });
+      const createdByName = new Map(created.map((player) => [playerNameKey(player.name), player]));
+      const createdIds = missingPlayerDrafts.flatMap((draft) => {
+        const player = createdByName.get(playerNameKey(draft.name));
+        return player ? [Number(player.id)] : [];
+      });
+      appendPastedPlayerIds(createdIds);
+      setPastedPlayerResolutions((current) => current.map((row) => {
+        const player = createdByName.get(playerNameKey(row.inputName));
+        return player ? { ...row, status: "existing", playerId: Number(player.id), playerName: player.name } : row;
+      }));
+      setMissingPlayerDrafts([]);
+      invalidateFlexRosterPlan(`Created or confirmed ${payload.accepted_count ?? createdIds.length} player profile${(payload.accepted_count ?? createdIds.length) === 1 ? "" : "s"} and added them to this session.`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unable to create the missing players.";
+      if (leagueLiveWriteIsUncertain(error)) {
+        const operationKey = error instanceof LeagueLiveRequestError && error.operationKey
+          ? error.operationKey
+          : createPlayersOperationRef.current?.key;
+        if (operationKey) {
+          retainPlayerCreateRecovery({ operationKey, status: "uncertain", message: errorMessage, leagueName });
+          setMessage(`${errorMessage} Exact player operation ${operationKey} is retained; inspect it before creating another batch.`);
+        } else {
+          setMessage(`${errorMessage} The outcome is uncertain; inspect Player Editor before retrying.`);
+        }
+      } else {
+        createPlayersOperationRef.current = null;
+        setMessage(errorMessage);
+      }
+    } finally {
+      setCreatingMissingPlayers(false);
+    }
+  }
+
+  function applyRecoveredPlayers(result: AdminMatchUploaderCreatePlayersResult | null | undefined, addToCurrentSession = true) {
+    const recoveredPlayers = publicPlayersFromBatch(result);
+    if (!recoveredPlayers.length) return;
+    setKnownPlayers((current) => {
+      const byId = new Map(current.map((player) => [Number(player.id), player]));
+      for (const player of recoveredPlayers) byId.set(Number(player.id), player);
+      return [...byId.values()].sort((left, right) => left.name.localeCompare(right.name));
+    });
+    if (!addToCurrentSession) return;
+    appendPastedPlayerIds(recoveredPlayers.map((player) => Number(player.id)));
+    const recoveredByName = new Map(recoveredPlayers.map((player) => [playerNameKey(player.name), player]));
+    setPastedPlayerResolutions((current) => current.map((row) => {
+      const player = recoveredByName.get(playerNameKey(row.inputName));
+      return player ? { ...row, status: "existing", playerId: Number(player.id), playerName: player.name } : row;
+    }));
+    setMissingPlayerDrafts((current) => current.filter((draft) => !recoveredByName.has(playerNameKey(draft.name))));
+  }
+
+  async function inspectPlayerCreateOperation() {
+    const recovery = playerCreateRecovery;
+    if (!recovery) return;
+    if (recovery.leagueName && recovery.leagueName !== leagueName) {
+      setMessage(`This retained player batch belongs to ${recovery.leagueName}. Select that league before reconciling it; no players were added to ${leagueName || "the current workspace"}.`);
+      return;
+    }
+    const addRecoveredPlayersToSession = Boolean(recovery.leagueName && recovery.leagueName === leagueName);
+    const operationPath = `/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/player-operations/${encodeURIComponent(recovery.operationKey)}`;
+    setCheckingPlayerCreateRecovery(true);
+    setMessage(null);
+    try {
+      const operation = await requestJson<LeagueLivePlayerOperationResponse>(operationPath);
+      const operationStatus = String(operation.status || "unknown");
+      const recoveredResult = operation.result || operation.result_json;
+      if (operationStatus === "completed") {
+        applyRecoveredPlayers(recoveredResult, addRecoveredPlayersToSession);
+        clearPlayerCreateRecovery();
+        setMessage(addRecoveredPlayersToSession
+          ? `Exact player operation ${recovery.operationKey} completed and its players were added to this session.`
+          : `Exact player operation ${recovery.operationKey} completed. Its club players were recovered but not added to a session because the original league context was unavailable.`);
+        return;
+      }
+      if (operationStatus === "failed" && operation.recovery_required !== true) {
+        clearPlayerCreateRecovery();
+        setMessage(`Exact player operation ${recovery.operationKey} is proven failed. Review the player list before submitting a new batch.`);
+        return;
+      }
+      const reconciled = await requestJson<AdminMatchUploaderCreatePlayersResult>(`${operationPath}/reconcile`, {
+        method: "POST",
+        body: JSON.stringify({
+          confirmation_text: "RECONCILE PLAYER BATCH",
+          source: "next_league_live_player_operation_reconcile"
+        })
+      });
+      if (reconciled.ok && reconciled.recovery_required !== true) {
+        applyRecoveredPlayers(reconciled, addRecoveredPlayersToSession);
+        clearPlayerCreateRecovery();
+        setMessage(addRecoveredPlayersToSession
+          ? `Exact player operation ${recovery.operationKey} was reconciled and its players were added to this session.`
+          : `Exact player operation ${recovery.operationKey} was reconciled. Its club players were recovered but not added to a session because the original league context was unavailable.`);
+        return;
+      }
+      if (String(reconciled.status || "") === "failed" && reconciled.recovery_required !== true) {
+        clearPlayerCreateRecovery();
+        setMessage(`Exact player operation ${recovery.operationKey} is proven failed and created no players. Review the list, then submit a new batch if needed.`);
+        return;
+      }
+      retainPlayerCreateRecovery({
+        ...recovery,
+        status: String(reconciled.status || operationStatus),
+        message: operation.error || operation.error_text || recovery.message
+      });
+      setMessage(`Exact player operation ${recovery.operationKey} still needs recovery. Do not create another player batch.`);
+    } catch (error) {
+      setMessage(`${error instanceof Error ? error.message : "Unable to inspect the player operation."} Operation ${recovery.operationKey} remains retained; do not retry with a new key.`);
+    } finally {
+      setCheckingPlayerCreateRecovery(false);
+    }
   }
 
   async function fetchRosterSuggestion(
@@ -530,13 +1225,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     requestedBenchReason = "",
     requestedAttendeeIds: number[] = attendeePlayerIds
   ): Promise<LeagueLiveRosterSuggestion> {
-    const attendeeFilter = participationModeFromDetail(leagueDetail) === "flex"
-      ? new Set(requestedAttendeeIds.map(Number))
-      : undefined;
+    const fallbackIds = (leagueDetail.roster || []).filter((row) => row.in_league).map((row) => Number(row.player_id));
+    const selectedIds = requestedAttendeeIds.length ? requestedAttendeeIds.map(Number) : fallbackIds;
     return requestJson<LeagueLiveRosterSuggestion>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live/roster-suggestion`, {
       method: "POST",
       body: JSON.stringify({
-        roster: activeRosterPayload(leagueDetail, attendeeFilter),
+        roster: selectedSessionRosterPayload(leagueDetail, knownPlayers, selectedIds),
         bench_player_ids: requestedBenchIds,
         bench_override_reason: requestedBenchReason || null,
         round_number: currentRound
@@ -644,6 +1338,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       }
       const suggestion = await fetchRosterSuggestion(payload, [], "", []);
       if (!leagueDetailRequest.isCurrent(generation)) return;
+      setAttendeePlayerIds((payload.roster || []).filter((row) => row.in_league).map((row) => Number(row.player_id)));
       applyRosterSuggestion(suggestion);
       setMessage(`Set participation: loaded the persistent league roster and suggested ${suggestion.courts.length} court(s). Resume an existing session to keep its saved pod positions.`);
     } catch (error) {
@@ -661,6 +1356,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   function selectLeague(selectedLeague: string) {
+    setWorkflowStep(1);
     setLeagueName(selectedLeague);
     void loadLeagueDetail(selectedLeague);
   }
@@ -699,10 +1395,68 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
+  async function buildPlayerPlanAndContinue() {
+    const setupError = setupContextError();
+    if (setupError) {
+      setWorkflowStep(1);
+      setMessage(setupError);
+      return;
+    }
+    if (!detail || detail.league.league_name !== leagueName) {
+      setMessage("Load the selected league before continuing from Players.");
+      return;
+    }
+    if (String(detail.league.league_type || "Individual").toLowerCase() !== "individual" || String(detail.league.match_format || "doubles").toLowerCase() !== "doubles") {
+      setMessage("This guided League Live workflow currently supports Individual Doubles leagues only. It will not publish a Singles or Team round through a doubles court contract.");
+      return;
+    }
+    if (pasteDuplicateNames.length) {
+      setMessage("Remove duplicate pasted names before continuing.");
+      return;
+    }
+    if (!pasteResolutionCurrent) {
+      setMessage("Resolve the current pasted player list before continuing.");
+      return;
+    }
+    if (playerCreateRecovery) {
+      setMessage(`Check exact player operation ${playerCreateRecovery.operationKey} before continuing.`);
+      return;
+    }
+    if (missingPlayerDrafts.length || pastedPlayerResolutions.some((row) => row.status !== "existing")) {
+      setMessage("Create every missing pasted player and make ambiguous club player names unique before continuing.");
+      return;
+    }
+    if (attendeePlayerIds.length < 4) {
+      setMessage("Select at least four session players before building courts.");
+      return;
+    }
+    if (sessionIsCurrentLeague && sessionRoster.length >= 4 && courts.some((court) => splitNames(court.playerNames).length)) {
+      setWorkflowStep(3);
+      setMessage("Saved session players and courts retained. Validate the assignments and generate this round's exact preview.");
+      return;
+    }
+    const generation = leagueDetailRequest.begin();
+    setBusy(true);
+    setMessage(null);
+    try {
+      const suggestion = await fetchRosterSuggestion(detail, [], "", attendeePlayerIds);
+      if (!leagueDetailRequest.isCurrent(generation)) return;
+      applyRosterSuggestion(suggestion);
+      setWorkflowStep(3);
+      setMessage(`${participationMode === "flex" ? "Fresh rating-seeded Flex" : "Set roster"} plan built ${suggestion.courts.length} court${suggestion.courts.length === 1 ? "" : "s"}. Review every assignment and generate the match preview.`);
+    } catch (error) {
+      if (leagueDetailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to build the session player plan.");
+    } finally {
+      if (leagueDetailRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
   async function applyRecoveredLiveSession(recovered: LeagueLiveCreateReconcileResponse) {
     if (!recovered.session) throw new Error("The completed operation did not include its League Live session.");
     const leagueDetail = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(recovered.session.league_name)}`);
     applySession(recovered.session, recovered.courts || [], recovered.rounds || [], [], leagueDetail);
+    setMatchDate("");
+    setWorkflowStep(1);
     setLiveSessions((current) => [
       ...current.filter((row) => row.id !== recovered.session?.id),
       recovered.session as LeagueLiveSession,
@@ -780,6 +1534,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   async function createSession(confirmationText: string): Promise<ActionCompletion> {
+    const setupError = setupContextError();
+    if (setupError) throw new Error(setupError);
     if (createRecovery) throw new Error(`Resolve exact operation ${createRecovery.operationKey} before creating another League Live session.`);
     if (!leagueName || !detail || loadedLeagueName !== leagueName || !rosterSuggestion || !sessionRoster.length) {
       const error = new Error("Load the selected league roster and court suggestion before creating a saved session.");
@@ -787,6 +1543,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       throw error;
     }
     const generation = actionRequest.begin();
+    const retainedPreview = preview;
+    const retainedScores = scores;
     const request = {
       league_name: leagueName,
       week_tag: weekTag,
@@ -815,6 +1573,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       createSessionOperationRef.current = null;
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the League Live creation response was applied.");
       applySession(payload.session, payload.courts || [], [], [], detail);
+      setPreview(retainedPreview);
+      setScores(retainedScores);
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before League Live sessions could be refreshed.");
       await loadSessions();
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the created session was confirmed.");
@@ -860,8 +1620,26 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       if (!sessionDetailRequest.isCurrent(generation)) return;
       const leagueDetail = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(payload.session.league_name)}`);
       if (!sessionDetailRequest.isCurrent(generation)) return;
-      applySession(payload.session, payload.courts || [], payload.rounds || [], payload.publish_operations || [], leagueDetail);
-      setMessage("Persisted League Live session loaded.");
+      const publishedRoundNumber = applySession(payload.session, payload.courts || [], payload.rounds || [], payload.publish_operations || [], leagueDetail);
+      const restoredDraftStep = publishedRoundNumber == null ? restoreStoredRoundDraft(payload.session, payload.courts || []) : null;
+      if (publishedRoundNumber != null) {
+        setMatchDate("");
+        setWorkflowStep(6);
+        setMessage(payload.session.status === "complete"
+          ? "Completed League Live session loaded."
+          : `Round ${publishedRoundNumber} is already published. Start the next round or finish this session.`);
+      } else if (restoredDraftStep != null) {
+        setWorkflowStep(payload.session.status === "active" ? restoredDraftStep : 1);
+        setMessage(payload.session.status === "active"
+          ? restoredDraftStep === 1
+            ? `Recovered the saved browser draft for Round ${payload.session.current_round}. Confirm its date before continuing.`
+            : `Recovered the saved browser draft for Round ${payload.session.current_round}. Review it before continuing.`
+          : `Recovered the saved browser draft for Round ${payload.session.current_round}. Resume this ${payload.session.status} session before editing or publishing it.`);
+      } else {
+        setMatchDate("");
+        setWorkflowStep(1);
+        setMessage("Persisted League Live session loaded. Confirm this round's date before reviewing its saved players and courts.");
+      }
     } catch (error) {
       if (sessionDetailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load persisted session.");
     } finally {
@@ -877,17 +1655,21 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  async function saveSessionSnapshot(confirmationText: string): Promise<ActionCompletion> {
+  async function saveSessionSnapshot(confirmationText: string, statusOverride = sessionStatus): Promise<ActionCompletion> {
     if (!requireCurrentSession("saving a snapshot")) throw new Error("Resume the current persisted session before saving a snapshot.");
     const generation = actionRequest.begin();
     const requestedSessionId = loadedSessionId;
+    const retainedPreview = preview;
+    const retainedScores = scores;
+    const retainedReviewMode = scoreReviewMode;
+    const retainedScoresReviewed = scoresReviewed;
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/snapshot`, {
         method: "PATCH",
         body: JSON.stringify({
-          status: sessionStatus,
+          status: statusOverride,
           week_tag: weekTag,
           total_rounds: safeTotalRounds,
           current_round: currentRound,
@@ -903,6 +1685,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       });
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the saved snapshot response was applied.");
       applySession(payload.session, payload.courts || [], roundHistory, publishOperations, detail);
+      setPreview(retainedPreview);
+      setScores(retainedScores);
+      setScoreReviewMode(retainedReviewMode);
+      setScoresReviewed(retainedScoresReviewed);
       setMessage("League Live session snapshot saved.");
       return actionSuccess("Session snapshot saved", "The League Live session snapshot was saved.");
     } catch (error) {
@@ -913,10 +1699,162 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
+  async function createSessionAndContinue(confirmationText: string): Promise<ActionCompletion> {
+    const completion = await createSession(confirmationText);
+    if (completion.status !== "success") return completion;
+    setWorkflowStep(4);
+    setMessage("Session saved. Enter every score, then review the exact teams and results before movement.");
+    return completion;
+  }
+
+  async function saveSnapshotAndContinue(confirmationText: string): Promise<ActionCompletion> {
+    const setupError = setupContextError();
+    if (setupError) throw new Error(setupError);
+    const completion = await saveSessionSnapshot(confirmationText);
+    if (completion.status !== "success") return completion;
+    setWorkflowStep(4);
+    setMessage("Session snapshot saved. Enter every score, then review the exact teams and results before movement.");
+    return completion;
+  }
+
+  async function resumePausedSession(confirmationText: string): Promise<ActionCompletion> {
+    if (!sessionIsCurrentLeague || !["paused", "setup"].includes(sessionStatus)) {
+      throw new Error("Only a saved setup or paused League Live session can be activated here.");
+    }
+    const completion = await saveSessionSnapshot(confirmationText, "active");
+    if (completion.status !== "success") return completion;
+    setSessionStatus("active");
+    setWorkflowStep(1);
+    setMessage("League Live session is active. Confirm this round's date, then continue through Players and the saved court preview.");
+    return actionSuccess("League Live session resumed", "The saved session is active and ready for its round date and operator review.");
+  }
+
+  async function pauseActiveSession(confirmationText: string): Promise<ActionCompletion> {
+    if (!sessionIsCurrentLeague || sessionStatus !== "active" || roundPublished) {
+      throw new Error("Only an active, unpublished League Live round can be paused here.");
+    }
+    const completion = await saveSessionSnapshot(confirmationText, "paused");
+    if (completion.status !== "success") return completion;
+    setSessionStatus("paused");
+    setWorkflowStep(1);
+    setMessage("League Live session paused. Its saved players and courts remain intact; resume it before editing or publishing.");
+    return actionSuccess("League Live session paused", "The persisted session is paused and its saved players and courts remain available.");
+  }
+
+  async function finishSession(confirmationText: string): Promise<ActionCompletion> {
+    if (!roundContextValid) throw new Error("Use a valid whole-number round range through 50 before finishing this session.");
+    if (!requireCurrentSession("finishing the session")) throw new Error("Resume the current persisted session before finishing it.");
+    const generation = actionRequest.begin();
+    const requestedSessionId = loadedSessionId;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/snapshot`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: "complete",
+          week_tag: weekTag,
+          total_rounds: safeTotalRounds,
+          current_round: currentRound,
+          roster: rosterForWrite(),
+          courts: courtsToPayload(courts, currentRound),
+          bench_player_ids: benchOverrideIds,
+          bench_override_reason: benchOverrideReason || null,
+          notes: sessionNotes,
+          expected_updated_at: sessionUpdatedAt,
+          confirmation_text: confirmationText,
+          source: "next_league_live_session_finish"
+        })
+      });
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before completion was applied.");
+      applySession(payload.session, payload.courts || [], roundHistory, publishOperations, detail);
+      setSessionStatus("complete");
+      setWorkflowStep(6);
+      setRoundPublished(true);
+      setMessage("League Live session completed. Its rounds, ratings, and recovery history remain available below.");
+      return actionSuccess("League session complete", "The League Live session was marked complete.");
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to finish the League Live session.");
+      throw error;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  function reviewEnteredScores() {
+    const setupError = setupContextError();
+    if (setupError) {
+      setWorkflowStep(1);
+      setMessage(setupError);
+      return;
+    }
+    if (!allSeriesComplete) {
+      setMessage(`Complete every matchup before review (${completeSeriesCount} of ${allPreviewMatches.length} complete).`);
+      return;
+    }
+    setScoresReviewed(false);
+    setScoreReviewMode(true);
+    setMessage("Nothing is official yet. Verify every team and score below.");
+  }
+
+  function confirmScoresAndContinue() {
+    if (!allSeriesComplete || !scoreReviewMode) {
+      setMessage("Open the score review and verify every matchup before continuing.");
+      return;
+    }
+    setScoresReviewed(true);
+    setScoreReviewMode(false);
+    setWorkflowStep(5);
+    setMessage("Scores reviewed. Preview the authoritative movement plan; any score edit will require another review.");
+  }
+
+  function editReviewedScores() {
+    setScoreReviewMode(false);
+    setScoresReviewed(false);
+    setWorkflowStep(4);
+    setMessage("Score review cleared. Edit the scores, then review them again.");
+  }
+
+  function startNextRound() {
+    if (!roundPublished || lastPublishedRound == null) {
+      setMessage("Publish the current round before starting the next round workflow.");
+      return;
+    }
+    if (!sessionIsCurrentLeague || sessionStatus !== "active") {
+      setMessage(`This session is ${sessionStatus.replace(/_/g, " ")} and cannot start another round.`);
+      return;
+    }
+    const nextRound = lastPublishedRound + 1;
+    if (!Number.isInteger(parsedTotalRounds) || nextRound > safeTotalRounds || safeTotalRounds > 50) {
+      setWorkflowStep(1);
+      setMessage(`Round ${lastPublishedRound} is the configured final round. Increase Total rounds to a whole number through 50, or finish the session.`);
+      return;
+    }
+    setRoundPublished(false);
+    setLastPublishedRound(null);
+    setRoundNumber(String(nextRound));
+    setRoundLabel(`Round ${nextRound}`);
+    setMatchDate("");
+    setScoreReviewMode(false);
+    setScoresReviewed(false);
+    setPreview(null);
+    setScores({});
+    setMovementPlan(null);
+    setMovementPlanStale(false);
+    setMovementOverrides({});
+    setOverrideReason("");
+    setRosterAction("none");
+    setIncomingPlayerId("");
+    setReplacedPlayerId("");
+    setWorkflowStep(1);
+    setMessage(`Round ${nextRound} is ready with the saved movement and roster order. Confirm its date before continuing.`);
+  }
+
   function updateCourt(index: number, patch: Partial<CourtDraft>) {
     setCourts((current) => current.map((row, idx) => idx === index ? { ...row, ...patch } : row));
     setPreview(null);
     setScores({});
+    invalidateScoreReview();
     markPlanStale();
   }
 
@@ -924,6 +1862,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setCourts((current) => [...current, { court: String(current.length + 1), formatType: "4-player", playerNames: "" }]);
     setPreview(null);
     setScores({});
+    invalidateScoreReview();
     markPlanStale();
   }
 
@@ -931,10 +1870,78 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setCourts((current) => current.filter((_, idx) => idx !== index).map((row, idx) => ({ ...row, court: String(idx + 1) })));
     setPreview(null);
     setScores({});
+    invalidateScoreReview();
     markPlanStale();
   }
 
+  function courtValidationErrors(): string[] {
+    const errors: string[] = [];
+    const seenNames = new Set<string>();
+    const seenCourtNumbers = new Set<number>();
+    const rosterByName = new Map(sessionRoster.map((row) => [playerNameKey(row.player_name), row]));
+    const clubPlayerNameCounts = knownPlayers.reduce((counts, player) => {
+      const key = playerNameKey(player.name);
+      counts.set(key, (counts.get(key) || 0) + 1);
+      return counts;
+    }, new Map<string, number>());
+    const benchedPlayerIds = new Set(benchOverrideIds.map(Number));
+    const expectedActiveNames = new Map(
+      sessionRoster
+        .filter((row) => !benchedPlayerIds.has(Number(row.player_id)))
+        .map((row) => [playerNameKey(row.player_name), row.player_name])
+    );
+    if (rosterSuggestion && !sameNumberSet(benchOverrideIds, rosterSuggestion.bench_player_ids || [])) {
+      errors.push("Bench selection changed. Refresh the roster suggestion before previewing courts.");
+    }
+    courts.forEach((court, index) => {
+      const label = `Court ${court.court || index + 1}`;
+      const rawCourtNumber = court.court.trim();
+      const courtNumber = Number(rawCourtNumber);
+      if (!/^[1-9]\d*$/.test(rawCourtNumber) || !Number.isSafeInteger(courtNumber)) {
+        errors.push(`${label}: court number must be a positive whole number.`);
+      } else if (seenCourtNumbers.has(courtNumber)) {
+        errors.push(`Court ${courtNumber} is listed more than once.`);
+      } else {
+        seenCourtNumbers.add(courtNumber);
+      }
+      const names = splitNames(court.playerNames);
+      const expectedSize = Number.parseInt(court.formatType, 10);
+      if (![4, 5].includes(expectedSize)) errors.push(`${label}: League Live supports four- or five-player courts.`);
+      else if (names.length !== expectedSize) errors.push(`${label}: ${court.formatType} requires exactly ${expectedSize} players.`);
+      for (const name of names) {
+        const key = playerNameKey(name);
+        if (seenNames.has(key)) errors.push(`${name} appears on more than one court.`);
+        seenNames.add(key);
+        const rosterRow = rosterByName.get(key);
+        if (!rosterRow) errors.push(`${name} is not in this session player roster.`);
+        else if (benchedPlayerIds.has(Number(rosterRow.player_id))) errors.push(`${name} is selected for the bench and cannot also be assigned to a court.`);
+        if ((clubPlayerNameCounts.get(key) || 0) > 1) errors.push(`${name} matches multiple club player IDs. Make those player names unique in Players before generating a League Live preview.`);
+      }
+    });
+    for (const [key, playerName] of expectedActiveNames) {
+      if (!seenNames.has(key)) errors.push(`${playerName} is active for this round but is not assigned to a court.`);
+    }
+    const orderedCourtNumbers = [...seenCourtNumbers].sort((left, right) => left - right);
+    if (orderedCourtNumbers.length === courts.length && orderedCourtNumbers.some((courtNumber, index) => courtNumber !== index + 1)) {
+      errors.push("Court numbers must be contiguous starting at 1.");
+    }
+    if (!courts.length) errors.push("Add at least one court.");
+    return [...new Set(errors)];
+  }
+
   async function generatePreview() {
+    const setupError = setupContextError();
+    if (setupError) {
+      setWorkflowStep(1);
+      setMessage(setupError);
+      return;
+    }
+    const validationErrors = courtValidationErrors();
+    if (validationErrors.length) {
+      setPreview(null);
+      setMessage(validationErrors.join(" "));
+      return;
+    }
     const generation = actionRequest.begin();
     setBusy(true);
     setMessage(null);
@@ -945,6 +1952,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         body: JSON.stringify({ courts: courtPayload, schedule_mode: "full", source: "next_league_manager_live_preview" })
       });
       if (!actionRequest.isCurrent(generation)) return;
+      if (payload.missing_players?.length) {
+        setPreview(null);
+        setMessage(`Missing players: ${payload.missing_players.join(", ")}. Return to Players and resolve them before continuing.`);
+        return;
+      }
       setPreview(payload);
       const nextScores: Record<string, ScoreDraft> = {};
       for (const match of (payload.courts || []).flatMap((court) => court.matches || [])) {
@@ -956,8 +1968,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       setMovementPlan(null);
       setMovementPlanStale(false);
       setMovementOverrides({});
-      if (payload.missing_players?.length) setMessage(`Missing players: ${payload.missing_players.join(", ")}`);
-      else setMessage(`Generated ${payload.match_count || 0} matchup slot(s) using ${matchStructureLabel(matchStructure)}. Save the session snapshot before leaving this page.`);
+      setScoreReviewMode(false);
+      setScoresReviewed(false);
+      setMessage(`Generated ${payload.match_count || 0} matchup slot(s) using ${matchStructureLabel(matchStructure)}. Review the court preview, then save the resumable session.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to generate round preview.");
     } finally {
@@ -1012,7 +2025,17 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   async function previewPythonMovement() {
+    const setupError = setupContextError();
+    if (setupError) {
+      setWorkflowStep(1);
+      setMessage(setupError);
+      return;
+    }
     if (!requireCurrentSession("previewing next-round movement")) return;
+    if (!scoresReviewed) {
+      setMessage("Review and confirm the entered scores before previewing movement.");
+      return;
+    }
     const matches = buildScoredMatches();
     if (!allSeriesComplete || !matches.length) {
       setMessage(`Complete every ${matchStructureLabel(matchStructure)} matchup before previewing next-round movement (${completeSeriesCount} of ${allPreviewMatches.length} complete).`);
@@ -1051,7 +2074,14 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   }
 
   async function submitRound(confirmationText: string): Promise<ActionCompletion> {
+    const setupError = setupContextError();
+    if (setupError) throw new Error(setupError);
     if (!requireCurrentSession("submitting official scores")) throw new Error("Resume the current persisted session before submitting official scores.");
+    if (!scoresReviewed) {
+      const error = new Error("Review and confirm every entered score before publishing the round.");
+      setMessage(error.message);
+      throw error;
+    }
     const matches = buildScoredMatches();
     if (!allSeriesComplete || !matches.length) {
       const error = new Error(`Complete every generated matchup before publishing (${completeSeriesCount} of ${allPreviewMatches.length} complete; ${matches.length} game result(s) ready).`);
@@ -1063,6 +2093,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       setMessage(error.message);
       throw error;
     }
+    const publishedRoundNumber = currentRound;
     const generation = actionRequest.begin();
     const requestedSessionId = loadedSessionId;
     const roundOperationKey = movementPlan.operation_key;
@@ -1106,6 +2137,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       setRatingReview(payload.rating_review || null);
       const movementText = plannedMovement?.applied ? ` Applied ${plannedMovement.rows.filter((row) => row.direction !== "stay").length} court movement(s) for the next round.` : " No court movement was required.";
       const successMessage = `${payload.idempotent_replay ? "Reconciled" : "Published"} ${payload.published_match_ids?.length ?? matches.length} league match(es) through one durable publish operation.${movementText}`;
+      clearStoredRoundDraft(requestedSessionId, publishedRoundNumber);
+      setLastPublishedRound(publishedRoundNumber);
+      setRoundPublished(true);
+      setWorkflowStep(6);
       setMessage(successMessage);
       return actionSuccess(payload.idempotent_replay ? "League round reconciled" : "League round published", successMessage);
     } catch (error) {
@@ -1123,6 +2158,16 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
+  }
+
+  async function publishRoundAndStay(confirmationText: string): Promise<ActionCompletion> {
+    const publishedRoundNumber = currentRound;
+    const completion = await submitRound(confirmationText);
+    if (completion.status !== "success") return completion;
+    setLastPublishedRound(publishedRoundNumber);
+    setRoundPublished(true);
+    setWorkflowStep(6);
+    return completion;
   }
 
   async function createGuest(confirmationText: string): Promise<ActionCompletion> {
@@ -1252,6 +2297,44 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
+  const liveCourtFormats = (uploaderStatus.round_robin_format_options || ["4-Player", "5-Player"])
+    .filter((option) => /^[45]-player$/i.test(option));
+  if (!liveCourtFormats.length) liveCourtFormats.push("4-Player", "5-Player");
+  const unresolvedPastedPlayers = pastedPlayerResolutions.filter((row) => row.status !== "existing").length;
+  const persistedSessionPlayable = !sessionIsCurrentLeague || sessionStatus === "active";
+  const setupReady = Boolean(detail && loadedLeagueName === leagueName && roundContextValid && matchDateValid && persistedSessionPlayable);
+  const playersReady = setupReady && attendeePlayerIds.length >= 4 && pasteResolutionCurrent && !pasteDuplicateNames.length && !unresolvedPastedPlayers && !playerCreateRecovery && Boolean(rosterSuggestion || (sessionIsCurrentLeague && sessionRoster.length >= 4));
+  const courtsReady = playersReady && Boolean(preview?.courts?.length) && sessionIsCurrentLeague;
+  const scoreEntryReady = courtsReady && scoresReviewed;
+  const movementReady = scoreEntryReady && Boolean(movementPlan) && !movementPlanStale;
+  const maxReachableStep: WorkflowStep = roundPublished
+    ? 6
+    : movementReady
+      ? 6
+      : scoreEntryReady
+        ? 5
+        : courtsReady
+          ? 4
+          : playersReady
+            ? 3
+            : setupReady
+              ? 2
+              : 1;
+
+  function navigateWorkflow(step: WorkflowStep) {
+    if (step >= 2 && step <= 5 && sessionIsCurrentLeague && (sessionStatus !== "active" || roundPublished)) {
+      setMessage(roundPublished
+        ? "This round is already published. Use Repeat or Finish to start the next round or close the session."
+        : `This session is ${sessionStatus.replace(/_/g, " ")}. Resume it from Setup before editing players, courts, or scores.`);
+      return;
+    }
+    if (step > maxReachableStep) {
+      setMessage(`Complete ${WORKFLOW_STEPS[maxReachableStep - 1].label} before opening ${WORKFLOW_STEPS[step - 1].label}.`);
+      return;
+    }
+    setWorkflowStep(step);
+  }
+
   if (!leagueStatus.enabled || !uploaderStatus.enabled || !liveDomainStatus.enabled) {
     return (
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
@@ -1285,115 +2368,389 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         </article>
       ) : null}
 
-      <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>1. League and persisted session</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>League<br /><select value={leagueName} onChange={(event) => selectLeague(event.target.value)} disabled={busy || !accessToken} aria-busy={busy && !leagues.length} style={inputStyle}><option value="" disabled>{busy && !leagues.length ? "Loading leagues…" : "Choose a league"}</option>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
-          <label>Week<br /><input value={weekTag} onChange={(event) => setWeekTag(event.target.value)} disabled={busy} style={inputStyle} /></label>
-          <label>Round #<br /><input value={roundNumber} onChange={(event) => { setRoundNumber(event.target.value); setRoundLabel(`Round ${event.target.value || 1}`); }} disabled={busy} style={inputStyle} /></label>
-          <label>Total rounds<br /><input value={totalRounds} onChange={(event) => setTotalRounds(event.target.value)} disabled={busy} style={inputStyle} /></label>
-          <label>Date<br /><input type="date" value={matchDate} onChange={(event) => setMatchDate(event.target.value)} disabled={busy} style={inputStyle} /></label>
-          <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh leagues"}</button>
-          <button type="button" onClick={() => void loadLeagueDetail()} disabled={busy || !leagueName} style={buttonStyle}>{loadingLeagueName ? "Loading roster…" : "Reload roster"}</button>
-        </div>
-        {loadingLeagueName ? <p role="status" style={{ color: "#475569" }}>Loading {loadingLeagueName}. Session writes remain unavailable until the replacement roster is ready.</p> : null}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.75rem", marginTop: "0.75rem", alignItems: "end" }}>
-          <label>Existing sessions<br />
-            <select value={sessionId} onChange={(event) => selectSession(event.target.value)} disabled={busy} style={inputStyle}>
-              <option value="">Select session…</option>
-              {liveSessions.map((row) => <option key={row.id} value={row.id}>{row.league_name} · {row.week_tag} · R{row.current_round}/{row.total_rounds} · {row.status}</option>)}
-            </select>
-          </label>
-          <button type="button" onClick={loadSessions} disabled={busy || !accessToken} style={ghostButtonStyle}>Refresh sessions</button>
-          <button type="button" onClick={() => void loadSessionDetail()} disabled={busy || !sessionId} style={ghostButtonStyle}>Retry selected session</button>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginTop: "0.75rem", alignItems: "end" }}>
-          <label>Session status<br /><select value={sessionStatus} onChange={(event) => setSessionStatus(event.target.value)} disabled={busy} style={inputStyle}><option>active</option><option>paused</option><option>complete</option><option>archived</option></select></label>
-          <label>Round label<br /><input value={roundLabel} onChange={(event) => setRoundLabel(event.target.value)} disabled={busy} style={inputStyle} /></label>
-          <label>Notes<br /><input value={sessionNotes} onChange={(event) => setSessionNotes(event.target.value)} disabled={busy} style={inputStyle} /></label>
-          <ConfirmAction
-            triggerLabel="Create persisted session"
-            title="Create this League Live session?"
-            description="This saves the current league, roster, bench, court, and round settings as a resumable session."
-            confirmLabel="Yes, create session"
-            confirmationText="CREATE LIVE SESSION"
-            disabled={busy || Boolean(createRecovery) || !leagueName || !detail || loadedLeagueName !== leagueName || !rosterSuggestion || !sessionRoster.length}
-            busy={busy}
-            onConfirm={createSession}
-          />
-        </div>
-        {detail && loadedLeagueName === leagueName && !sessionIsCurrentLeague && participationMode === "flex" ? (
-          <section style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #bfdbfe", borderRadius: "12px", background: "#eff6ff" }}>
-            <h3 style={{ marginTop: 0 }}>Flex attendance for this session</h3>
-            <p style={{ color: "#475569" }}>Select only the players who showed up today. Every new Flex session resets attendance and rebuilds rating-seeded pods/courts from this list.</p>
-            <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              <button type="button" onClick={() => replaceFlexAttendance(activeLeagueMembers.map((row) => Number(row.player_id)), "All active league members selected. Build fresh Flex courts when attendance is final.")} disabled={busy || !activeLeagueMembers.length} style={ghostButtonStyle}>Select all rostered players</button>
-              <button type="button" onClick={() => replaceFlexAttendance([], "Flex attendance cleared.")} disabled={busy || !attendeePlayerIds.length} style={ghostButtonStyle}>Clear attendance</button>
-            </p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.35rem" }}>
-              {activeLeagueMembers.map((row) => <label key={row.player_id} style={{ display: "flex", gap: "0.45rem", alignItems: "center" }}><input type="checkbox" checked={attendeePlayerIds.includes(Number(row.player_id))} onChange={(event) => changeFlexAttendance(Number(row.player_id), event.target.checked)} disabled={busy} /> {row.player_name}{row.overall_rating_jupr == null ? "" : ` · ${Number(row.overall_rating_jupr).toFixed(2)}`}</label>)}
+      <nav aria-label="League Live workflow" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 150px), 1fr))", gap: "0.5rem" }}>
+        {WORKFLOW_STEPS.map((step) => {
+          const active = workflowStep === step.id;
+          const sessionLocksEditing = step.id >= 2 && step.id <= 5 && sessionIsCurrentLeague && (sessionStatus !== "active" || roundPublished);
+          const available = step.id <= maxReachableStep && !sessionLocksEditing;
+          return (
+            <button
+              key={step.id}
+              type="button"
+              aria-current={active ? "step" : undefined}
+              onClick={() => navigateWorkflow(step.id)}
+              disabled={busy || !available}
+              style={{
+                ...ghostButtonStyle,
+                borderColor: active ? "#2563eb" : available ? "#94a3b8" : "#e2e8f0",
+                background: active ? "#dbeafe" : "white",
+                color: active ? "#1d4ed8" : available ? "#0f172a" : "#94a3b8",
+                textAlign: "left"
+              }}
+            >
+              <span style={{ display: "block", fontSize: "0.75rem" }}>Step {step.id}</span>
+              {step.label}
+            </button>
+          );
+        })}
+      </nav>
+
+      {message ? (
+        <p role="status" aria-live="polite" style={{ margin: 0, padding: "0.75rem 1rem", borderRadius: "10px", background: "#f8fafc", color: /unable|missing|duplicate|required|error|failed|stop/i.test(message) ? "#b91c1c" : "#166534" }}>
+          {message}
+        </p>
+      ) : null}
+
+      {workflowStep === 1 ? (
+        <article style={cardStyle} aria-labelledby="league-live-setup-heading">
+          <h2 id="league-live-setup-heading" style={{ marginTop: 0 }}>1. Setup</h2>
+          <p style={{ color: "#475569" }}>Choose the Individual Doubles league and round context, or resume a saved session. Singles and Team live rounds stay closed because this court workflow requires four distinct doubles players per match.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+            <label>League<br /><select value={leagueName} onChange={(event) => selectLeague(event.target.value)} disabled={busy || !accessToken} aria-busy={busy && !leagues.length} style={inputStyle}><option value="" disabled>{busy && !leagues.length ? "Loading leagues…" : "Choose a league"}</option>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+            <label>Week<br /><input value={weekTag} onChange={(event) => { setWeekTag(event.target.value); invalidateRoundDraft("Week changed. Generate and review a fresh preview before publishing."); }} disabled={busy || roundPublished || sessionStatus === "complete" || sessionStatus === "archived"} style={inputStyle} /></label>
+            <label>Round #<br /><input type="number" min={1} max={50} step={1} value={roundNumber} onChange={(event) => { setRoundNumber(event.target.value); setRoundLabel(`Round ${event.target.value || 1}`); invalidateRoundDraft("Round number changed. Generate and review a fresh preview before publishing."); }} disabled={busy || sessionIsCurrentLeague || roundPublished} style={inputStyle} /></label>
+            <label>Total rounds<br /><input type="number" min={1} max={50} step={1} value={totalRounds} onChange={(event) => { setTotalRounds(event.target.value); if (roundPublished) setMessage("Total rounds changed. Start the next round only after the new total is a valid whole number through 50."); else invalidateRoundDraft("Total rounds changed. Generate and review a fresh preview before publishing."); }} disabled={busy || sessionStatus === "complete" || sessionStatus === "archived"} style={inputStyle} /></label>
+            <label>Date *<br /><input required type="date" value={matchDate} onChange={(event) => { setMatchDate(event.target.value); invalidateRoundDraft("Round date changed. Generate and review a fresh preview before publishing."); }} disabled={busy || roundPublished || sessionStatus === "complete" || sessionStatus === "archived"} style={inputStyle} /></label>
+            <label>Round label<br /><input value={roundLabel} onChange={(event) => { setRoundLabel(event.target.value); invalidateRoundDraft("Round label changed. Review a fresh preview before publishing."); }} disabled={busy || roundPublished || sessionStatus === "complete" || sessionStatus === "archived"} style={inputStyle} /></label>
+            <label>Notes<br /><input value={sessionNotes} onChange={(event) => setSessionNotes(event.target.value)} disabled={busy} style={inputStyle} /></label>
+            <button type="button" onClick={() => void loadLeagueDetail()} disabled={busy || !leagueName || sessionIsCurrentLeague} style={ghostButtonStyle}>{loadingLeagueName ? "Loading roster…" : "Reload roster"}</button>
+          </div>
+          {loadingLeagueName ? <p role="status" style={{ color: "#475569" }}>Loading {loadingLeagueName}. Session writes remain unavailable until the replacement roster is ready.</p> : null}
+          {!roundContextValid ? <p role="alert" style={{ color: "#b91c1c" }}><strong>Round setup required:</strong> use whole numbers with 1 ≤ Round # ≤ Total rounds ≤ 50.</p> : null}
+          {!matchDateValid && !roundPublished ? <p role="alert" style={{ color: "#b91c1c" }}><strong>Date required:</strong> confirm the date for this round. A resumed session never assumes today&apos;s date.</p> : null}
+          {sessionIsCurrentLeague && ["paused", "setup"].includes(sessionStatus) ? (
+            <section style={{ marginTop: "0.75rem", padding: "0.75rem", border: "1px solid #f59e0b", borderRadius: "12px", background: "#fffbeb" }}>
+              <strong>This saved session is {sessionStatus}.</strong>
+              <p>Activate it before editing players, courts, or scores.</p>
+              <ConfirmAction triggerLabel={sessionStatus === "paused" ? "Resume session" : "Activate session"} title={sessionStatus === "paused" ? "Resume this League Live session?" : "Activate this League Live session?"} description="This changes only the persisted session status to active; saved players and courts remain intact." confirmLabel="Yes, make active" confirmationText="SAVE SESSION" disabled={busy} busy={busy} onConfirm={resumePausedSession} />
+            </section>
+          ) : null}
+          {sessionIsCurrentLeague && sessionStatus === "active" && !roundPublished ? (
+            <section style={{ marginTop: "0.75rem", padding: "0.75rem", border: "1px solid #cbd5e1", borderRadius: "12px", background: "#f8fafc" }}>
+              <strong>This saved session is active.</strong>
+              <p>Pause it when league-night work must stop; saved players and courts remain available for a guarded resume.</p>
+              <ConfirmAction triggerLabel="Pause session" title="Pause this League Live session?" description="This persists paused status without changing official matches, saved players, or saved courts." confirmLabel="Yes, pause session" confirmationText="SAVE SESSION" disabled={busy} busy={busy} onConfirm={pauseActiveSession} />
+            </section>
+          ) : null}
+          {sessionIsCurrentLeague && !["active", "paused", "setup"].includes(sessionStatus) ? <p role="alert" style={{ color: "#92400e" }}>This session is {sessionStatus}. Its players, courts, and scores are read-only; use Repeat or Finish and recovery/history below.</p> : null}
+          <section style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid #e2e8f0" }}>
+            <h3 style={{ marginTop: 0 }}>Resume a persisted session</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "0.75rem", alignItems: "end" }}>
+              <label>Existing sessions<br /><select value={sessionId} onChange={(event) => selectSession(event.target.value)} disabled={busy} style={inputStyle}><option value="">Select session…</option>{liveSessions.map((row) => <option key={row.id} value={row.id}>{row.league_name} · {row.week_tag} · R{row.current_round}/{row.total_rounds} · {row.status}</option>)}</select></label>
+              <button type="button" onClick={loadSessions} disabled={busy || !accessToken} style={ghostButtonStyle}>Refresh sessions</button>
+              <button type="button" onClick={() => void loadSessionDetail()} disabled={busy || !sessionId} style={ghostButtonStyle}>Retry selected session</button>
             </div>
-            <p style={{ marginBottom: 0 }}><button type="button" onClick={refreshRosterSuggestion} disabled={busy || !attendeePlayerIds.length} style={buttonStyle}>Build courts from {attendeePlayerIds.length} attendee{attendeePlayerIds.length === 1 ? "" : "s"}</button></p>
           </section>
-        ) : null}
-        {detail && loadedLeagueName === leagueName && !sessionIsCurrentLeague && participationMode === "set" ? <p style={{ color: "#475569" }}><strong>Set participation:</strong> the active league roster is the season roster. Resume an existing persisted session to retain its saved pods and positions; creating a new session seeds the initial positions once.</p> : null}
-        {rosterSuggestion ? (
-          <section style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #dbeafe", borderRadius: "12px", background: "#eff6ff" }}>
-            <h3 style={{ marginTop: 0 }}>Roster and bench suggestion</h3>
-            <p style={{ color: "#475569" }}>Uncheck or check bench assignments, explain any non-default choice, then validate and rebuild the courts.</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.35rem" }}>
-              {rosterSuggestion.roster.map((row) => (
+          <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center" }}>
+            <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={ghostButtonStyle}>{busy ? "Refreshing…" : "Refresh leagues"}</button>
+            <button type="button" onClick={() => setWorkflowStep(2)} disabled={busy || !setupReady} style={buttonStyle}>Continue to Players</button>
+          </p>
+        </article>
+      ) : null}
+
+      {workflowStep === 2 ? (
+        <article style={cardStyle} aria-labelledby="league-live-players-heading">
+          <h2 id="league-live-players-heading" style={{ marginTop: 0 }}>2. Players</h2>
+          {participationMode === "flex" ? (
+            <section style={{ padding: "0.75rem", border: "1px solid #bfdbfe", borderRadius: "12px", background: "#eff6ff" }}>
+              <h3 style={{ marginTop: 0 }}>Flex attendance for this session</h3>
+              <p style={{ color: "#475569" }}>Select today&apos;s attendees. Every new Flex session resets attendance and rebuilds rating-seeded pods/courts from this list.</p>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                <button type="button" onClick={() => replaceFlexAttendance(activeLeagueMembers.map((row) => Number(row.player_id)), "All active league members selected. Paste or add any non-roster attendees next.")} disabled={busy || !activeLeagueMembers.length} style={ghostButtonStyle}>Select all rostered players</button>
+                <button type="button" onClick={() => replaceFlexAttendance([], "Flex attendance cleared.")} disabled={busy || !attendeePlayerIds.length} style={ghostButtonStyle}>Clear attendance</button>
+              </div>
+            </section>
+          ) : null}
+          {participationMode === "set" ? <p style={{ color: "#475569" }}><strong>Set participation:</strong> the season roster starts selected. Resume a persisted session to retain its saved pods and positions; existing or newly created non-roster players can still be added for this night.</p> : null}
+
+          <section style={{ marginTop: "1rem" }}>
+            <h3>League roster</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.35rem" }}>
+              {activeLeagueMembers.map((row) => (
                 <label key={row.player_id} style={{ display: "flex", gap: "0.45rem", alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={benchOverrideIds.includes(Number(row.player_id))}
-                    disabled={busy}
-                    onChange={(event) => {
-                      setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id)));
-                      markPlanStale();
-                    }}
-                  />
-                  Bench {row.player_name}{row.court_number ? ` (currently Court ${row.court_number})` : ""}
+                  <input type="checkbox" checked={attendeePlayerIds.includes(Number(row.player_id))} onChange={(event) => changeFlexAttendance(Number(row.player_id), event.target.checked)} disabled={busy} />
+                  {row.player_name}{row.overall_rating_jupr == null ? "" : ` · ${Number(row.overall_rating_jupr).toFixed(2)}`}
                 </label>
               ))}
             </div>
-            <div data-responsive-bench-controls style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
-              <label>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="Required when changing the default bench" style={inputStyle} /></label>
-              <button type="button" onClick={refreshRosterSuggestion} disabled={busy} style={ghostButtonStyle}>Refresh roster suggestion</button>
-            </div>
-            <small style={{ color: "#64748b" }}>Roster fingerprint: {rosterSuggestion.fingerprint.slice(0, 16)}…</small>
+            <label style={{ display: "block", marginTop: "0.75rem" }}>Add an existing club player, including a non-roster player<br />
+              <select value="" onChange={(event) => { if (event.target.value) { appendSelectedPlayerIds([Number(event.target.value)]); invalidateFlexRosterPlan("Existing club player added. Build fresh courts when the player list is final."); } }} disabled={busy} style={inputStyle}>
+                <option value="">Choose an existing player…</option>
+                {knownPlayers.filter((player) => !attendeePlayerIds.includes(Number(player.id))).map((player) => <option key={String(player.id)} value={String(player.id)}>{player.name} · {playerJuprLabel(player)} · ID {player.id}</option>)}
+              </select>
+            </label>
           </section>
-        ) : null}
-        {sessionIsCurrentLeague ? <p style={{ color: "#475569" }}><strong>Active persisted session:</strong> {loadedSessionId}</p> : <p style={{ color: "#92400e" }}>Create or resume a persisted session for the selected league before submitting official scores.</p>}
-        {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("missing") || message.toLowerCase().includes("type") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
-      </article>
 
-      <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>2. Courts</h2>
-        <p style={{ color: "#475569" }}>Roster players are seeded from the selected league. Edit courts, then save a session snapshot so the night can be resumed.</p>
-        <datalist id="league-live-players">{playerOptions.map((name) => <option key={name} value={name} />)}</datalist>
-        {courts.map((court, index) => (
-          <div key={index} style={{ borderTop: index ? "1px solid #e2e8f0" : undefined, paddingTop: index ? "0.75rem" : 0, marginTop: index ? "0.75rem" : 0 }}>
-            <div data-responsive-court-grid style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: "0.75rem", alignItems: "start" }}>
-              <label>Court<br /><input value={court.court} onChange={(event) => updateCourt(index, { court: event.target.value })} disabled={busy} style={inputStyle} /></label>
-              <label>Format<br /><select value={court.formatType} onChange={(event) => updateCourt(index, { formatType: event.target.value })} disabled={busy} style={inputStyle}>{(uploaderStatus.round_robin_format_options || ["4-player"]).map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
-              <label>Players, one per line<br /><textarea value={court.playerNames} onChange={(event) => updateCourt(index, { playerNames: event.target.value })} disabled={busy} rows={4} style={inputStyle} /></label>
-              <button type="button" onClick={() => removeCourt(index)} disabled={busy} style={ghostButtonStyle}>Remove</button>
-            </div>
+          <section style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #e2e8f0", borderRadius: "12px" }}>
+            <h3 style={{ marginTop: 0 }}>Paste players</h3>
+            <p style={{ color: "#475569" }}>Paste names separated by commas or new lines. Existing club players are matched case-insensitively. Missing names must be created with an explicit Starting JUPR before continuing.</p>
+            <textarea value={pastedPlayerText} onChange={(event) => changePastedPlayerText(event.target.value)} disabled={busy || creatingMissingPlayers} rows={5} placeholder={"Alex Rivera, Casey Lee\nMorgan Chen"} style={inputStyle} />
+            <p><button type="button" onClick={resolvePlayerNames} disabled={busy || creatingMissingPlayers || !pastedPlayerText.trim() || Boolean(playerCreateRecovery)} style={ghostButtonStyle}>Resolve and add pasted players</button></p>
+            {!pasteResolutionCurrent && pastedPlayerText.trim() ? <p role="alert" style={{ color: "#92400e" }}><strong>Resolve required:</strong> the pasted list changed. Resolve the complete list before building courts; players added by the previous paste were removed from the session order.</p> : null}
+            {pasteDuplicateNames.length ? <p role="alert" style={{ color: "#b91c1c" }}><strong>Duplicate names rejected:</strong> {pasteDuplicateNames.join(", ")}. Remove duplicates and resolve the list again.</p> : null}
+            {pastedPlayerResolutions.length ? (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Pasted name</th><th align="left">Resolution</th><th align="left">Matched player</th></tr></thead><tbody>
+                  {pastedPlayerResolutions.map((row) => <tr key={playerNameKey(row.inputName)}><td>{row.inputName}</td><td>{row.status === "existing" ? "Existing player" : row.status === "ambiguous" ? "Ambiguous — make the duplicate club player names unique in Players, then reload" : "Missing — create new player"}</td><td>{row.playerName || "Not found"}</td></tr>)}
+                </tbody></table>
+              </div>
+            ) : null}
+            {missingPlayerDrafts.length ? (
+              <section style={{ marginTop: "1rem", padding: "0.75rem", borderRadius: "10px", background: "#fffbeb", border: "1px solid #f59e0b" }}>
+                <h4 style={{ marginTop: 0 }}>Create missing players</h4>
+                <p style={{ color: "#92400e" }}>Every new player must receive an explicit Starting JUPR from 1.0 through 7.0. No value is assumed.</p>
+                <div style={{ display: "grid", gap: "0.5rem" }}>
+                  {missingPlayerDrafts.map((draft, index) => (
+                    <div key={playerNameKey(draft.name)} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: "0.5rem" }}>
+                      <label>Name<br /><input value={draft.name} readOnly aria-readonly="true" style={{ ...inputStyle, background: "#f8fafc" }} /></label>
+                      <label>Starting JUPR *<br /><input required type="number" min={1} max={7} step={0.01} value={draft.startingJupr} onChange={(event) => setMissingPlayerDrafts((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, startingJupr: event.target.value } : row))} disabled={creatingMissingPlayers} placeholder="Required" style={inputStyle} /></label>
+                    </div>
+                  ))}
+                </div>
+                <p><button type="button" onClick={() => void createMissingPlayers()} disabled={creatingMissingPlayers || busy || Boolean(playerCreateRecovery) || missingPlayerDrafts.some((draft) => !Number.isFinite(Number(draft.startingJupr)) || Number(draft.startingJupr) < 1 || Number(draft.startingJupr) > 7)} style={buttonStyle}>{creatingMissingPlayers ? "Creating players…" : "Create missing players"}</button></p>
+              </section>
+            ) : null}
+            {playerCreateRecovery ? (
+              <section aria-live="polite" style={{ marginTop: "1rem", padding: "0.75rem", borderRadius: "10px", background: "#fffbeb", border: "1px solid #f59e0b" }}>
+                <strong>Player creation needs exact-operation recovery.</strong>
+                <p style={{ overflowWrap: "anywhere" }}>Operation: <code>{playerCreateRecovery.operationKey}</code>. Do not create another batch.</p>
+                <button type="button" onClick={() => void inspectPlayerCreateOperation()} disabled={checkingPlayerCreateRecovery || !accessToken} style={ghostButtonStyle}>{checkingPlayerCreateRecovery ? "Checking and reconciling…" : "Check and reconcile exact player operation"}</button>
+              </section>
+            ) : null}
+          </section>
+
+          <section style={{ marginTop: "1rem" }}>
+            <h3>Session player order ({selectedSessionPlayers.length})</h3>
+            <p style={{ color: "#475569" }}>This is the live-order source. Late arrivals added between rounds append to the order; substitutions replace the selected ordered player.</p>
+            {selectedSessionPlayers.length ? <ol>{selectedSessionPlayers.map((player) => <li key={String(player.id)} style={{ marginBottom: "0.35rem" }}>{player.name} · {playerJuprLabel(player)} <button type="button" onClick={() => removeSelectedPlayer(Number(player.id))} disabled={busy} style={{ ...ghostButtonStyle, padding: "0.2rem 0.55rem", marginLeft: "0.5rem" }}>Remove</button></li>)}</ol> : <p>No players selected.</p>}
+          </section>
+          <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between" }}>
+            <button type="button" onClick={() => setWorkflowStep(1)} disabled={busy} style={ghostButtonStyle}>Back to Setup</button>
+            <button type="button" onClick={() => void buildPlayerPlanAndContinue()} disabled={busy || creatingMissingPlayers || Boolean(playerCreateRecovery) || attendeePlayerIds.length < 4 || !pasteResolutionCurrent || Boolean(pasteDuplicateNames.length) || Boolean(unresolvedPastedPlayers)} style={buttonStyle}>{sessionIsCurrentLeague && sessionRoster.length ? "Continue with saved courts" : `Build courts from ${attendeePlayerIds.length} attendee${attendeePlayerIds.length === 1 ? "" : "s"}`}</button>
+          </p>
+        </article>
+      ) : null}
+
+      {workflowStep === 3 ? (
+        <article style={cardStyle} aria-labelledby="league-live-courts-heading">
+          <h2 id="league-live-courts-heading" style={{ marginTop: 0 }}>3. Courts and Preview</h2>
+          <p style={{ color: "#475569" }}>Review the rating-seeded roster and bench, validate each court, then preview the exact teams and match slots before creating or updating the persisted session.</p>
+          {rosterSuggestion ? (
+            <section style={{ padding: "0.75rem", border: "1px solid #dbeafe", borderRadius: "12px", background: "#eff6ff" }}>
+              <h3 style={{ marginTop: 0 }}>Roster and bench suggestion</h3>
+              <p style={{ color: "#475569" }}>{participationMode === "flex" ? "Fresh Flex courts are rating-seeded from this session's attendees." : "Set participation keeps saved pods and positions when a persisted session is resumed."} Select exactly the required bench count and explain any non-default choice.</p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.35rem" }}>
+                {rosterSuggestion.roster.map((row) => (
+                  <label key={row.player_id} style={{ display: "flex", gap: "0.45rem", alignItems: "center" }}>
+                    <input type="checkbox" checked={benchOverrideIds.includes(Number(row.player_id))} disabled={busy} onChange={(event) => { setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id))); setPreview(null); markPlanStale(); }} />
+                    Bench {row.player_name}{row.court_number ? ` (currently Court ${row.court_number})` : ""}
+                  </label>
+                ))}
+              </div>
+              <div data-responsive-bench-controls style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
+                <label>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); setPreview(null); markPlanStale(); }} disabled={busy} placeholder="Required when changing the default bench" style={inputStyle} /></label>
+                <button type="button" onClick={refreshRosterSuggestion} disabled={busy} style={ghostButtonStyle}>Refresh roster suggestion</button>
+              </div>
+              <small style={{ color: "#64748b" }}>Roster fingerprint: {rosterSuggestion.fingerprint.slice(0, 16)}…</small>
+            </section>
+          ) : sessionIsCurrentLeague ? <p style={{ color: "#475569" }}><strong>Saved session roster loaded.</strong> Its persisted player order, bench, and courts are shown below; generate the current-round preview to continue.</p> : <p role="alert" style={{ color: "#b91c1c" }}>Return to Players and build a roster plan first.</p>}
+
+          <datalist id="league-live-players">{playerOptions.map((name) => <option key={name} value={name} />)}</datalist>
+          <section style={{ marginTop: "1rem" }}>
+            <h3>Court assignments</h3>
+            {courts.map((court, index) => (
+              <div key={`${court.court}-${index}`} style={{ borderTop: index ? "1px solid #e2e8f0" : undefined, paddingTop: index ? "0.75rem" : 0, marginTop: index ? "0.75rem" : 0 }}>
+                <div data-responsive-court-grid style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: "0.75rem", alignItems: "start" }}>
+                  <label>Court<br /><input value={court.court} onChange={(event) => updateCourt(index, { court: event.target.value })} disabled={busy} style={inputStyle} /></label>
+                  <label>Format<br /><select value={court.formatType} onChange={(event) => updateCourt(index, { formatType: event.target.value })} disabled={busy} style={inputStyle}>{liveCourtFormats.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
+                  <label>Players, one per line<br /><textarea value={court.playerNames} onChange={(event) => updateCourt(index, { playerNames: event.target.value })} disabled={busy} rows={5} style={inputStyle} /></label>
+                  <button type="button" onClick={() => removeCourt(index)} disabled={busy || courts.length === 1} style={ghostButtonStyle}>Remove court</button>
+                </div>
+              </div>
+            ))}
+            <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}><button type="button" onClick={addCourt} disabled={busy} style={ghostButtonStyle}>Add court</button><button type="button" onClick={() => void generatePreview()} disabled={busy || (!rosterSuggestion && !sessionIsCurrentLeague)} style={buttonStyle}>Validate courts and generate preview</button></p>
+          </section>
+
+          {preview?.courts?.length ? (
+            <section style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #86efac", borderRadius: "12px", background: "#f0fdf4" }}>
+              <h3 style={{ marginTop: 0 }}>Match preview · {preview.match_count || 0} slots</h3>
+              {(preview.courts as AdminMatchUploaderRoundRobinCourt[]).map((court) => (
+                <section key={court.court} style={{ paddingTop: "0.5rem" }}>
+                  <h4 style={{ margin: "0 0 0.35rem" }}>Court {court.court} · {court.format_type}</h4>
+                  <ol>{(court.matches || []).map((match) => <li key={match.row_id}>{match.label}: {match.t1.map((player) => player.name).join(" / ")} vs {match.t2.map((player) => player.name).join(" / ")}</li>)}</ol>
+                </section>
+              ))}
+              <p style={{ marginBottom: 0, color: "#166534" }}>Preview only — no scores are official yet.</p>
+            </section>
+          ) : null}
+
+          {sessionIsCurrentLeague ? <p style={{ color: "#475569" }}><strong>Active persisted session:</strong> {loadedSessionId}</p> : <p style={{ color: "#92400e" }}>This session will be persisted after the court preview is ready.</p>}
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center" }}>
+            <button type="button" onClick={() => setWorkflowStep(2)} disabled={busy} style={ghostButtonStyle}>Back to Players</button>
+            {sessionIsCurrentLeague ? (
+              <ConfirmAction triggerLabel="Save preview and continue" title="Save this session snapshot?" description="This persists the current player order, bench, courts, round, and notes before score entry." confirmLabel="Yes, save and continue" confirmationText="SAVE SESSION" disabled={busy || !preview?.courts?.length || Boolean(courtValidationErrors().length)} busy={busy} onConfirm={saveSnapshotAndContinue} />
+            ) : (
+              <ConfirmAction triggerLabel="Create session and continue" title="Create this persisted League Live session?" description="This saves the reviewed player order, bench, courts, and round so the night can be resumed." confirmLabel="Yes, create and continue" confirmationText="CREATE LIVE SESSION" disabled={busy || Boolean(createRecovery) || !preview?.courts?.length || Boolean(courtValidationErrors().length) || !rosterSuggestion || !sessionRoster.length} busy={busy} onConfirm={createSessionAndContinue} />
+            )}
           </div>
-        ))}
-        <p><button type="button" onClick={addCourt} disabled={busy} style={ghostButtonStyle}>Add court</button> <button type="button" onClick={generatePreview} disabled={busy || !leagueName} style={buttonStyle}>Generate match slots</button></p>
-        <ConfirmAction
-          triggerLabel="Save session snapshot"
-          title="Save this League Live snapshot?"
-          description="This persists the current session status, roster, bench, courts, round, and notes."
-          confirmLabel="Yes, save snapshot"
-          confirmationText="SAVE SESSION"
-          disabled={busy || !sessionIsCurrentLeague}
-          busy={busy}
-          onConfirm={saveSessionSnapshot}
-        />
-      </article>
+        </article>
+      ) : null}
+
+      {workflowStep === 4 ? (
+        <article style={cardStyle} aria-labelledby="league-live-scores-heading">
+          <h2 id="league-live-scores-heading" style={{ marginTop: 0 }}>4. Score Entry with Review</h2>
+          <p style={{ color: "#475569" }}><strong>Configured format: {matchStructureLabel(matchStructure)}.</strong> League Live publishes the whole round only after every matchup is complete, the exact teams and scores are reviewed, and movement is approved.</p>
+          {!scoreReviewMode ? (
+            <>
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                {(preview?.courts || []).map((court) => (
+                  <section key={court.court} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem" }}>
+                    <h3 style={{ marginTop: 0 }}>Court {court.court} · {court.format_type}</h3>
+                    {(court.matches || []).map((match) => {
+                      const state = seriesScoreState(match.row_id, scores, matchStructure);
+                      return (
+                        <section key={match.row_id} style={{ borderTop: "1px solid #f1f5f9", padding: "0.75rem 0" }}>
+                          <div><strong>{match.label}</strong><br />{match.t1.map((player) => player.name).join(" / ")} vs {match.t2.map((player) => player.name).join(" / ")}</div>
+                          <div style={{ display: "grid", gap: "0.45rem", marginTop: "0.5rem" }}>
+                            {Array.from({ length: matchStructure.games }, (_, gameIndex) => {
+                              const gameNumber = gameIndex + 1;
+                              const key = scoreKey(match.row_id, gameNumber);
+                              const score = scores[key] || { scoreT1: "", scoreT2: "" };
+                              const afterClinch = state.clinchedAt != null && gameNumber > state.clinchedAt;
+                              const canClearUnexpectedScore = afterClinch && scoreHasValue(score);
+                              return (
+                                <div key={key} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 140px), 1fr))", gap: "0.6rem", alignItems: "center" }}>
+                                  <strong>Game {gameNumber}</strong>
+                                  <input aria-label={`${match.label} Game ${gameNumber} Team 1 score`} value={score.scoreT1} onChange={(event) => { setScores((current) => ({ ...current, [key]: { ...(current[key] || { scoreT1: "", scoreT2: "" }), scoreT1: event.target.value } })); setScoresReviewed(false); setScoreReviewMode(false); setMovementPlan(null); }} disabled={busy || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 1" style={inputStyle} />
+                                  <input aria-label={`${match.label} Game ${gameNumber} Team 2 score`} value={score.scoreT2} onChange={(event) => { setScores((current) => ({ ...current, [key]: { ...(current[key] || { scoreT1: "", scoreT2: "" }), scoreT2: event.target.value } })); setScoresReviewed(false); setScoreReviewMode(false); setMovementPlan(null); }} disabled={busy || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 2" style={inputStyle} />
+                                  <small style={{ color: afterClinch ? "#64748b" : scoreIsValid(score) ? "#166534" : "#64748b" }}>{afterClinch && !canClearUnexpectedScore ? "Not played — series already clinched" : scoreIsValid(score) ? "Complete" : "Enter a non-tied final score"}</small>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <p style={{ marginBottom: 0, color: state.complete ? "#166534" : "#92400e" }}>{state.complete ? `Matchup complete · ${state.playedGames} official game${state.playedGames === 1 ? "" : "s"}` : state.hasScoreAfterClinch ? "Clear any score entered after the series was clinched." : state.hasGap ? "Complete games in order without leaving a gap." : `Matchup incomplete · ${state.playedGames} game${state.playedGames === 1 ? "" : "s"} entered`}</p>
+                        </section>
+                      );
+                    })}
+                  </section>
+                ))}
+              </div>
+              <p style={{ color: "#475569" }}>Completed matchups: {completeSeriesCount} / {allPreviewMatches.length} · Official game results ready: {validScoreCount}</p>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between" }}>
+                <button type="button" onClick={() => setWorkflowStep(3)} disabled={busy} style={ghostButtonStyle}>Back to Courts and Preview</button>
+                <button type="button" onClick={reviewEnteredScores} disabled={busy || !allSeriesComplete || !roundContextValid || !matchDateValid || sessionStatus !== "active"} style={buttonStyle}>Review scores</button>
+              </div>
+            </>
+          ) : (
+            <section style={{ padding: "0.75rem", border: "1px solid #f59e0b", borderRadius: "12px", background: "#fffbeb" }}>
+              <h3 style={{ marginTop: 0 }}>Review entered scores</h3>
+              <p style={{ color: "#92400e" }}><strong>Nothing has been submitted.</strong> Verify court, teams, and score for every game.</p>
+              <p><strong>{roundLabel || `Round ${currentRound}`}</strong> · {weekTag || "No week label"} · {matchDate}</p>
+              <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Court</th><th align="left">Team 1</th><th align="center">Score</th><th align="left">Team 2</th></tr></thead><tbody>{scoreReviewRows.map((row) => <tr key={row.key}><td>{row.court}</td><td>{row.teamOne}</td><td align="center"><strong>{row.score}</strong></td><td>{row.teamTwo}</td></tr>)}</tbody></table></div>
+              <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between" }}>
+                <button type="button" onClick={editReviewedScores} disabled={busy} style={ghostButtonStyle}>Edit scores</button>
+                <button type="button" onClick={confirmScoresAndContinue} disabled={busy || !allSeriesComplete || !scoreReviewMode} style={buttonStyle}>Confirm scores and continue</button>
+              </p>
+            </section>
+          )}
+        </article>
+      ) : null}
+
+      {workflowStep === 5 ? (
+        <article style={cardStyle} aria-labelledby="league-live-movement-heading">
+          <h2 id="league-live-movement-heading" style={{ marginTop: 0 }}>5. Movement</h2>
+          <p style={{ color: "#475569" }}>Scores are reviewed but not official. Configure any between-round roster change, then preview the server-authoritative movement plan. League Live calculates the plan; this page only displays it.</p>
+          <section style={{ padding: "0.75rem", border: "1px solid #e2e8f0", borderRadius: "12px", marginBottom: "0.75rem" }}>
+            <h3 style={{ marginTop: 0 }}>Next-round player change</h3>
+            <p style={{ color: "#475569" }}>A late arrival appends to the live order. A substitution replaces the selected ordered player. Completed rounds never change.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>
+              <label>Action<br /><select value={rosterAction} onChange={(event) => { setRosterAction(event.target.value as "none" | "add" | "substitute"); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="none">No roster change</option><option value="add">Add late arrival</option><option value="substitute">Substitute player</option></select></label>
+              {rosterAction !== "none" ? <label>Incoming player<br /><select value={incomingPlayerId} onChange={(event) => { setIncomingPlayerId(event.target.value); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="">Select player…</option>{incomingPlayerOptions.map((player) => <option key={String(player.id)} value={String(player.id)}>{player.name}</option>)}</select></label> : null}
+              {rosterAction === "substitute" ? <label>Replace active player<br /><select value={replacedPlayerId} onChange={(event) => { setReplacedPlayerId(event.target.value); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="">Select player…</option>{activeSessionRoster.map((player) => <option key={player.player_id} value={String(player.player_id)}>{player.player_name}</option>)}</select></label> : null}
+            </div>
+            {liveDomainStatus.submit_enabled ? (
+              <details style={{ marginTop: "0.75rem" }}>
+                <summary>Create a new non-roster player for a late arrival</summary>
+                <p style={{ color: "#475569" }}>This creates a real club player linked to ratings and recovery. Starting JUPR and an operator reason are required.</p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+                  <label>Player name<br /><input value={guestName} onChange={(event) => setGuestName(event.target.value)} disabled={busy} style={inputStyle} /></label>
+                  <label>Starting JUPR *<br /><input required value={guestJupr} onChange={(event) => setGuestJupr(event.target.value)} disabled={busy} type="number" min="1" max="7" step="0.1" placeholder="Required" style={inputStyle} /></label>
+                  <label>Operator reason<br /><input value={guestReason} onChange={(event) => setGuestReason(event.target.value)} disabled={busy} placeholder="At least 10 characters" style={inputStyle} /></label>
+                  <ConfirmAction triggerLabel="Create late-arrival player" title="Create this club player?" description="This creates a real club player linked to ratings and Match Log recovery." confirmLabel="Yes, create player" confirmationText="CREATE LIVE GUEST" disabled={busy || !sessionIsCurrentLeague || !guestName.trim() || !Number.isFinite(Number(guestJupr)) || Number(guestJupr) < 1 || Number(guestJupr) > 7 || guestReason.trim().length < 10} busy={busy} onConfirm={createGuest} />
+                </div>
+              </details>
+            ) : null}
+            {sessionRoster.length ? (
+              <details style={{ marginTop: "0.75rem" }}>
+                <summary>Review next-round bench assignments</summary>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.35rem", marginTop: "0.5rem" }}>
+                  {sessionRoster.map((row) => <label key={row.player_id}><input type="checkbox" checked={benchOverrideIds.includes(Number(row.player_id))} onChange={(event) => { setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id))); markPlanStale(); }} disabled={busy} /> Bench {row.player_name}</label>)}
+                </div>
+                <label style={{ display: "block", marginTop: "0.5rem" }}>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="Required for a non-default bench" style={inputStyle} /></label>
+              </details>
+            ) : null}
+          </section>
+
+          {movementPlan ? (
+            <section style={{ padding: "0.75rem", border: `1px solid ${movementPlanStale ? "#fca5a5" : "#86efac"}`, borderRadius: "12px", background: movementPlanStale ? "#fef2f2" : "#f0fdf4" }}>
+              <h3 style={{ marginTop: 0 }}>Next-round movement plan</h3>
+              <p>{movementPlan.movement.applied ? `${movementPlan.movement.rows.filter((row) => row.direction !== "stay").length} player movement(s)` : "No court movement required"} for Round {movementPlan.movement.next_round}.</p>
+              <p style={{ color: movementPlanStale ? "#b91c1c" : "#166534" }}>{movementPlanStale ? "This plan is stale. Preview movement again before continuing." : `Verified operation key ${movementPlan.operation_key.slice(0, 16)}…`}</p>
+              <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Player</th><th align="right">Wins</th><th align="right">Diff</th><th align="left">From</th><th align="left">Planned</th><th align="left">Final target</th></tr></thead><tbody>{movementPlan.movement.rows.map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{row.wins}</td><td align="right">{row.differential}</td><td>Court {row.from_court}</td><td>Court {row.suggested_court}</td><td><select aria-label={`Final court for ${row.player_name}`} value={movementOverrides[row.player_id] || String(row.to_court)} onChange={(event) => { setMovementOverrides((current) => ({ ...current, [row.player_id]: event.target.value })); setMovementPlanStale(true); }} disabled={busy} style={inputStyle}>{courts.map((court) => <option key={court.court} value={court.court}>Court {court.court}</option>)}</select></td></tr>)}</tbody></table></div>
+              <h4>Authoritative next-round courts</h4>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "0.75rem" }}>
+                {movementPlan.next_courts.map((court) => <section key={court.court_number} style={{ padding: "0.75rem", border: "1px solid #bbf7d0", borderRadius: "10px", background: "white" }}><strong>Court {court.court_number}</strong><ol>{court.player_names.map((playerName, index) => <li key={`${court.court_number}-${index}-${playerName}`}>{playerName}</li>)}</ol></section>)}
+              </div>
+              <p><strong>Next-round bench:</strong> {movementPlan.bench.length ? movementPlan.bench.map((player) => player.player_name).join(", ") : "None"}.</p>
+              <label style={{ display: "block", marginTop: "0.75rem" }}>Manual movement override reason<br /><input value={overrideReason} onChange={(event) => { setOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="At least 10 characters when changing a planned target" style={inputStyle} /></label>
+            </section>
+          ) : null}
+          <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between" }}>
+            <button type="button" onClick={editReviewedScores} disabled={busy} style={ghostButtonStyle}>Back to score entry</button>
+            <span style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <button type="button" onClick={() => void previewPythonMovement()} disabled={busy || !scoresReviewed || !allSeriesComplete || !sessionIsCurrentLeague || !roundContextValid || !matchDateValid || sessionStatus !== "active"} style={ghostButtonStyle}>{busy ? "Planning…" : "Preview movement"}</button>
+              <button type="button" onClick={() => setWorkflowStep(6)} disabled={busy || !scoresReviewed || !movementPlan || movementPlanStale} style={buttonStyle}>Continue to Repeat or Finish</button>
+            </span>
+          </p>
+        </article>
+      ) : null}
+
+      {workflowStep === 6 ? (
+        <article style={cardStyle} aria-labelledby="league-live-finish-heading">
+          <h2 id="league-live-finish-heading" style={{ marginTop: 0 }}>6. Repeat or Finish</h2>
+          {!roundPublished ? (
+            <>
+              <p style={{ color: "#475569" }}>Final check for {roundLabel || `Round ${currentRound}`} · {weekTag || "No week label"} · {matchDate}: {scoreReviewRows.length} reviewed official game result{scoreReviewRows.length === 1 ? "" : "s"}; {movementPlan?.movement.rows.filter((row) => row.direction !== "stay").length || 0} planned court movement{(movementPlan?.movement.rows.filter((row) => row.direction !== "stay").length || 0) === 1 ? "" : "s"}.</p>
+              <section style={{ padding: "0.75rem", border: "1px solid #e2e8f0", borderRadius: "12px" }}>
+                <h3 style={{ marginTop: 0 }}>Reviewed round</h3>
+                <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Court</th><th align="left">Team 1</th><th align="center">Score</th><th align="left">Team 2</th></tr></thead><tbody>{scoreReviewRows.map((row) => <tr key={row.key}><td>{row.court}</td><td>{row.teamOne}</td><td align="center"><strong>{row.score}</strong></td><td>{row.teamTwo}</td></tr>)}</tbody></table></div>
+              </section>
+              {movementPlan ? <section style={{ marginTop: "0.75rem", padding: "0.75rem", border: "1px solid #86efac", borderRadius: "12px", background: "#f0fdf4" }}><h3 style={{ marginTop: 0 }}>Approved next-round roster and courts</h3><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "0.75rem" }}>{movementPlan.next_courts.map((court) => <div key={court.court_number}><strong>Court {court.court_number}</strong><ol>{court.player_names.map((playerName, index) => <li key={`${court.court_number}-${index}-${playerName}`}>{playerName}</li>)}</ol></div>)}</div><p><strong>Bench:</strong> {movementPlan.bench.length ? movementPlan.bench.map((player) => player.player_name).join(", ") : "None"}.</p></section> : null}
+              <p style={{ color: "#92400e" }}>Publishing writes every reviewed score as official, recalculates ratings, saves movement and the next roster/courts, and advances the persisted session in one durable operation.</p>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between" }}>
+                <button type="button" onClick={() => setWorkflowStep(5)} disabled={busy} style={ghostButtonStyle}>Back to Movement</button>
+                <ConfirmAction triggerLabel="Publish reviewed round" title={`Publish Round ${currentRound}?`} description="This makes every reviewed result official and applies the approved next-round movement." confirmLabel="Yes, publish the round" confirmationText="SUBMIT LEAGUE ROUND" tone="danger" disabled={busy || !scoresReviewed || !liveDomainStatus.submit_enabled || !allSeriesComplete || !sessionIsCurrentLeague || !movementPlan || movementPlanStale || !roundContextValid || !matchDateValid || sessionStatus !== "active"} busy={busy} onConfirm={publishRoundAndStay} />
+              </div>
+            </>
+          ) : (
+            <section style={{ padding: "1rem", border: "1px solid #86efac", borderRadius: "12px", background: "#f0fdf4" }}>
+              <h3 style={{ marginTop: 0 }}>{sessionStatus === "complete" ? "Session complete" : `Round ${lastPublishedRound ?? currentRound} published`}</h3>
+              {sessionStatus === "complete" ? (
+                <p>The session is closed. Round history, rating readback, recovery controls, and exports remain available below.</p>
+              ) : (
+                <>
+                  <p>Choose the next explicit operator action. Starting the next round uses the saved moved courts and roster; finishing marks this persisted session complete.</p>
+                  <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                    <button type="button" onClick={startNextRound} disabled={busy || sessionStatus !== "active" || lastPublishedRound == null || !Number.isInteger(parsedTotalRounds) || lastPublishedRound + 1 > safeTotalRounds} style={buttonStyle}>Start next round</button>
+                    <ConfirmAction triggerLabel="Finish session" title="Complete this League Live session?" description="This marks the persisted session complete. Published rounds and ratings remain unchanged." confirmLabel="Yes, complete session" confirmationText="SAVE SESSION" disabled={busy || !sessionIsCurrentLeague || sessionStatus !== "active" || !roundContextValid} busy={busy} onConfirm={finishSession} />
+                  </div>
+                  {lastPublishedRound != null && lastPublishedRound >= safeTotalRounds ? <p style={{ color: "#475569" }}>All {safeTotalRounds} configured rounds are complete. Finish the session, or return to Setup and deliberately extend the round count before publishing another round.</p> : null}
+                </>
+              )}
+            </section>
+          )}
+        </article>
+      ) : null}
 
       {roundHistory.length ? (
         <article style={cardStyle}>
@@ -1475,109 +2832,6 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         </article>
       ) : null}
 
-      {preview?.courts?.length ? (
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>3. Enter scores</h2>
-          <p style={{ color: "#475569" }}><strong>Configured format: {matchStructureLabel(matchStructure)}.</strong> Every played game becomes an official league game. {matchStructure.kind === "best_of" ? "A matchup closes as soon as one team clinches the series." : "Every configured game is required."} League Live publishes the whole round, recalculates statistics and movement, and safely resumes the same publish if interrupted.</p>
-          <div style={{ display: "grid", gap: "0.75rem" }}>
-            {(preview.courts as AdminMatchUploaderRoundRobinCourt[]).map((court) => (
-              <section key={court.court} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem" }}>
-                <h3 style={{ marginTop: 0 }}>Court {court.court} · {court.format_type}</h3>
-                {(court.matches || []).map((match: AdminMatchUploaderRoundRobinMatch) => {
-                  const state = seriesScoreState(match.row_id, scores, matchStructure);
-                  return (
-                    <section key={match.row_id} style={{ borderTop: "1px solid #f1f5f9", padding: "0.75rem 0" }}>
-                      <div><strong>{match.label}</strong><br />{match.t1.map((p) => p.name).join(" / ")} vs {match.t2.map((p) => p.name).join(" / ")}</div>
-                      <div style={{ display: "grid", gap: "0.45rem", marginTop: "0.5rem" }}>
-                        {Array.from({ length: matchStructure.games }, (_, gameIndex) => {
-                          const gameNumber = gameIndex + 1;
-                          const key = scoreKey(match.row_id, gameNumber);
-                          const score = scores[key] || { scoreT1: "", scoreT2: "" };
-                          const afterClinch = state.clinchedAt != null && gameNumber > state.clinchedAt;
-                          const canClearUnexpectedScore = afterClinch && scoreHasValue(score);
-                          return (
-                            <div key={key} style={{ display: "grid", gridTemplateColumns: "minmax(78px, 0.45fr) minmax(72px, 90px) minmax(72px, 90px) minmax(150px, 1fr)", gap: "0.6rem", alignItems: "center" }}>
-                              <strong>Game {gameNumber}</strong>
-                              <input aria-label={`${match.label} Game ${gameNumber} Team 1 score`} value={score.scoreT1} onChange={(event) => { setScores((current) => ({ ...current, [key]: { ...(current[key] || { scoreT1: "", scoreT2: "" }), scoreT1: event.target.value } })); markPlanStale(); }} disabled={busy || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 1" style={inputStyle} />
-                              <input aria-label={`${match.label} Game ${gameNumber} Team 2 score`} value={score.scoreT2} onChange={(event) => { setScores((current) => ({ ...current, [key]: { ...(current[key] || { scoreT1: "", scoreT2: "" }), scoreT2: event.target.value } })); markPlanStale(); }} disabled={busy || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 2" style={inputStyle} />
-                              <small style={{ color: afterClinch ? "#64748b" : scoreIsValid(score) ? "#166534" : "#64748b" }}>{afterClinch && !canClearUnexpectedScore ? "Not played — series already clinched" : scoreIsValid(score) ? "Complete" : "Enter a non-tied final score"}</small>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <p style={{ marginBottom: 0, color: state.complete ? "#166534" : "#92400e" }}>{state.complete ? `Matchup complete · ${state.playedGames} official game${state.playedGames === 1 ? "" : "s"}` : state.hasScoreAfterClinch ? "Clear any score entered after the series was clinched." : state.hasGap ? "Complete games in order without leaving a gap." : `Matchup incomplete · ${state.playedGames} game${state.playedGames === 1 ? "" : "s"} entered`}</p>
-                    </section>
-                  );
-                })}
-              </section>
-            ))}
-          </div>
-          <p style={{ color: "#475569" }}>Completed matchups: {completeSeriesCount} / {allPreviewMatches.length} · Official game results ready: {validScoreCount}</p>
-          <section style={{ padding: "0.75rem", border: "1px solid #e2e8f0", borderRadius: "12px", marginBottom: "0.75rem" }}>
-            <h3 style={{ marginTop: 0 }}>Next-round roster change</h3>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>
-              <label>Action<br /><select value={rosterAction} onChange={(event) => { setRosterAction(event.target.value as "none" | "add" | "substitute"); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="none">No roster change</option><option value="add">Add player</option><option value="substitute">Substitute player</option></select></label>
-              {rosterAction !== "none" ? <label>Incoming player<br /><select value={incomingPlayerId} onChange={(event) => { setIncomingPlayerId(event.target.value); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="">Select player…</option>{incomingPlayerOptions.map((player) => <option key={String(player.id)} value={String(player.id)}>{player.name}</option>)}</select></label> : null}
-              {rosterAction === "substitute" ? <label>Replace active player<br /><select value={replacedPlayerId} onChange={(event) => { setReplacedPlayerId(event.target.value); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="">Select player…</option>{activeSessionRoster.map((player) => <option key={player.player_id} value={String(player.player_id)}>{player.player_name}</option>)}</select></label> : null}
-            </div>
-            {liveDomainStatus.submit_enabled ? (
-              <details style={{ marginTop: "0.75rem" }}>
-                <summary>Create a guest player for this session</summary>
-                <p style={{ color: "#475569" }}>Guest creation makes a real club player record so ratings and Match Log recovery stay linked. Use Player Editor to retire an abandoned guest.</p>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-                  <label>Guest name<br /><input value={guestName} onChange={(event) => setGuestName(event.target.value)} disabled={busy} style={inputStyle} /></label>
-                  <label>Starting JUPR *<br /><input required value={guestJupr} onChange={(event) => setGuestJupr(event.target.value)} disabled={busy} type="number" min="1" max="7" step="0.1" placeholder="Required" style={inputStyle} /></label>
-                  <label>Operator reason<br /><input value={guestReason} onChange={(event) => setGuestReason(event.target.value)} disabled={busy} placeholder="At least 10 characters" style={inputStyle} /></label>
-                  <ConfirmAction
-                    triggerLabel="Create guest"
-                    title="Create this guest player?"
-                    description="This creates a real club player record linked to ratings and Match Log recovery."
-                    confirmLabel="Yes, create guest"
-                    confirmationText="CREATE LIVE GUEST"
-                    disabled={busy || !sessionIsCurrentLeague || !guestName.trim() || !Number.isFinite(Number(guestJupr)) || Number(guestJupr) < 1 || Number(guestJupr) > 7 || guestReason.trim().length < 10}
-                    busy={busy}
-                    onConfirm={createGuest}
-                  />
-                </div>
-              </details>
-            ) : null}
-            {sessionRoster.length ? (
-              <details style={{ marginTop: "0.75rem" }}>
-                <summary>Review next-round bench assignments</summary>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.35rem", marginTop: "0.5rem" }}>
-                  {sessionRoster.map((row) => <label key={row.player_id}><input type="checkbox" checked={benchOverrideIds.includes(Number(row.player_id))} onChange={(event) => { setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id))); markPlanStale(); }} disabled={busy} /> Bench {row.player_name}</label>)}
-                </div>
-                <label style={{ display: "block", marginTop: "0.5rem" }}>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="Required for a non-default bench" style={inputStyle} /></label>
-              </details>
-            ) : null}
-          </section>
-          {movementPlan ? (
-            <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "0.75rem" }}>
-              <strong>Next-round movement plan:</strong> {movementPlan.movement.applied ? `${movementPlan.movement.rows.filter((row) => row.direction !== "stay").length} player movement(s)` : "no court movement required"} for Round {movementPlan.movement.next_round}.
-              <p style={{ color: movementPlanStale ? "#b91c1c" : "#166534" }}>{movementPlanStale ? "This plan is stale. Preview movement again before submitting." : `Verified operation key ${movementPlan.operation_key.slice(0, 16)}…`}</p>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead><tr><th align="left">Player</th><th align="right">Wins</th><th align="right">Diff</th><th align="left">From</th><th align="left">Planned</th><th align="left">Final target</th></tr></thead>
-                  <tbody>{movementPlan.movement.rows.map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{row.wins}</td><td align="right">{row.differential}</td><td>Court {row.from_court}</td><td>Court {row.suggested_court}</td><td><select aria-label={`Final court for ${row.player_name}`} value={movementOverrides[row.player_id] || String(row.to_court)} onChange={(event) => { setMovementOverrides((current) => ({ ...current, [row.player_id]: event.target.value })); setMovementPlanStale(true); }} disabled={busy} style={inputStyle}>{courts.map((court) => <option key={court.court} value={court.court}>Court {court.court}</option>)}</select></td></tr>)}</tbody>
-                </table>
-              </div>
-              <label style={{ display: "block", marginTop: "0.75rem" }}>Manual movement override reason<br /><input value={overrideReason} onChange={(event) => { setOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="At least 10 characters when changing a planned target" style={inputStyle} /></label>
-            </article>
-          ) : null}
-          <p><button type="button" onClick={previewPythonMovement} disabled={busy || !allSeriesComplete || !sessionIsCurrentLeague} style={ghostButtonStyle}>{busy ? "Planning…" : "Preview movement"}</button></p>
-          <ConfirmAction
-            triggerLabel="Publish complete league round"
-            title="Publish this complete league round?"
-            description="This publishes every scored match as official, recalculates ratings and movement, and advances the persisted session."
-            confirmLabel="Yes, publish round"
-            confirmationText="SUBMIT LEAGUE ROUND"
-            tone="danger"
-            disabled={busy || !liveDomainStatus.submit_enabled || !allSeriesComplete || !sessionIsCurrentLeague || !movementPlan || movementPlanStale}
-            busy={busy}
-            onConfirm={submitRound}
-          />
-        </article>
-      ) : null}
     </div>
   );
 }

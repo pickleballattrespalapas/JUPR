@@ -20,7 +20,7 @@ export default async function LeagueManagerLivePage({ searchParams }: Props) {
     getAdminLeagueManagerStatus(clubId),
     getAdminLeagueLiveStatus(clubId),
     getAdminMatchUploaderStatus(clubId),
-    getClubPlayers(clubSlug)
+    getClubPlayers(clubSlug, { status: "all", limit: 1000, sort: "name" })
   ]);
 
   return (
