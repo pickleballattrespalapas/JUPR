@@ -20,6 +20,7 @@ const adminToken = String(process.env.STAGING_ADMIN_BEARER_TOKEN || "").trim();
 const expectedWebOrigin = String(
   process.env.JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN || ""
 ).trim().replace(/\/$/, "");
+const candidateSha = String(process.env.GITHUB_SHA || "").trim().toLowerCase();
 const leagueName = String(process.env.JUPR_FOUR_WEEK_E2E_LEAGUE_NAME || "").trim();
 const aspenName = String(process.env.JUPR_FOUR_WEEK_E2E_ASPEN_NAME || "").trim();
 const birchName = String(process.env.JUPR_FOUR_WEEK_E2E_BIRCH_NAME || "").trim();
@@ -97,6 +98,19 @@ type AwardsState = {
     final_awards?: Array<{ category_key: string }>;
     mint?: { status?: string; expected_count?: number; verified_count?: number };
   };
+};
+type AdminCapabilities = {
+  authorized: boolean;
+  user?: { email?: string | null };
+  assignments?: Array<{ club_id: string; role: string; permissions: string[] }>;
+};
+type DeploymentEnvironment = {
+  environment?: string | null;
+  git_commit_sha?: string | null;
+  api_origin?: string | null;
+  auth_origin?: string | null;
+  preview_isolation_active?: boolean;
+  preview_auth_isolation_active?: boolean;
 };
 
 test.describe.configure({ mode: "serial", retries: 0 });
@@ -210,6 +224,8 @@ async function runWeek(
   await gotoLeaguePage(page, "/admin/league-manager/live", leagueId);
   await expect(page.getByRole("heading", { name: `${leagueName} live rounds`, exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "1. Setup", exact: true })).toBeVisible();
+  await expect(page.getByLabel("League", { exact: true })).toHaveValue(leagueName);
+  await expect(page.getByRole("button", { name: "Continue to Players", exact: true })).toBeEnabled();
   await page.getByLabel("Week", { exact: true }).fill(`Week ${plan.week}`);
   await page.getByLabel("Round #", { exact: true }).fill("1");
   await page.getByLabel("Total rounds", { exact: true }).fill("1");
@@ -345,6 +361,8 @@ async function runWeek(
 
 test("creates, plays, awards, and archives a four-week Flex ladder league", async ({ page, context }) => {
   test.setTimeout(1_200_000);
+  page.setDefaultTimeout(20_000);
+  page.setDefaultNavigationTimeout(45_000);
 
   expect(mutationConfirmation).toBe("RUN DISPOSABLE STAGING WRITES");
   expect(expectedApiOrigin).toBe("https://juprleagues-api-staging.fly.dev");
@@ -354,6 +372,7 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
   );
   expect(adminEmail).not.toBe("");
   expect(adminToken).not.toBe("");
+  expect(candidateSha).toMatch(/^[0-9a-f]{40}$/);
   expect(leagueName).not.toBe("");
   expect(aspenName).not.toBe("");
   expect(birchName).not.toBe("");
@@ -362,16 +381,43 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
   expect(reportPath).not.toBe("");
 
   await bootstrapStagingContext(context);
+  const environmentResponse = await context.request.get(`${expectedWebOrigin}/api/environment`, {
+    failOnStatusCode: false
+  });
+  expect(environmentResponse.status(), "Immutable Vercel deployment environment check failed").toBe(200);
+  const environment = await environmentResponse.json() as DeploymentEnvironment;
+  await environmentResponse.dispose();
+  expect(environment).toMatchObject({
+    environment: "staging",
+    git_commit_sha: candidateSha,
+    api_origin: expectedApiOrigin,
+    auth_origin: expectedAuthOrigin,
+    preview_isolation_active: true,
+    preview_auth_isolation_active: true
+  });
+
+  const capabilities = await apiGet<AdminCapabilities>(
+    page,
+    `/admin/auth/capabilities?club_id=${encodeURIComponent(clubId)}`
+  );
+  expect(capabilities.authorized).toBe(true);
+  expect(capabilities.assignments?.some((assignment) => assignment.club_id === clubId)).toBe(true);
   await context.addInitScript(
-    ({ token, email, allowedOrigin }) => {
+    ({ token, email, allowedOrigin, verifiedCapabilities }) => {
       if (window.location.origin !== allowedOrigin) return;
       window.localStorage.setItem("jupr_admin_session_v1", JSON.stringify({
         access_token: token,
         token_type: "bearer",
-        user: { email }
+        capabilities: verifiedCapabilities,
+        user: { email: verifiedCapabilities.user?.email || email }
       }));
     },
-    { token: adminToken, email: adminEmail, allowedOrigin: expectedWebOrigin }
+    {
+      token: adminToken,
+      email: adminEmail,
+      allowedOrigin: expectedWebOrigin,
+      verifiedCapabilities: capabilities
+    }
   );
   await installAdminMutationFirewall(page);
 
@@ -380,13 +426,26 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
   expect(before.leagues.some((league) => league.league_name === leagueName), "Disposable league name must be unique").toBe(false);
 
   const createPage = new URL("/admin/league-manager/create", expectedWebOrigin).toString();
-  expect((await page.goto(createPage, { waitUntil: "domcontentloaded" }))?.status()).toBeLessThan(400);
-  await page.getByLabel("League name", { exact: true }).fill(leagueName);
-  await page.getByLabel("League mode", { exact: true }).selectOption("Individual");
-  await page.getByLabel("Match modality", { exact: true }).selectOption("doubles");
-  await page.getByLabel("Season format", { exact: true }).selectOption("ladder");
-  await page.getByLabel("Participation model", { exact: true }).selectOption("flex");
-  await page.getByLabel("Session operation", { exact: true }).selectOption("scheduled_rounds");
+  const browserCapabilitiesResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.origin === expectedApiOrigin
+      && url.pathname === "/admin/auth/capabilities"
+      && response.request().method() === "GET";
+  });
+  const createDocument = await page.goto(createPage, { waitUntil: "domcontentloaded" });
+  expect(createDocument?.status()).toBe(200);
+  expect(createDocument?.url()).toBe(createPage);
+  await expect(page).toHaveURL(createPage);
+  await expect(page.getByRole("heading", { name: "Start league setup", exact: true })).toBeVisible();
+  expect((await browserCapabilitiesResponse).status()).toBe(200);
+  const leagueNameInput = page.getByLabel("League name", { exact: true });
+  await expect(leagueNameInput).toBeVisible();
+  await leagueNameInput.fill(leagueName);
+  await expect(page.getByRole("combobox", { name: "League mode", exact: true })).toHaveValue("Individual");
+  await expect(page.getByRole("combobox", { name: "Match modality", exact: true })).toHaveValue("doubles");
+  await expect(page.getByRole("combobox", { name: "Season format", exact: true })).toHaveValue("ladder");
+  await expect(page.getByRole("combobox", { name: /^Participation model/ })).toHaveValue("flex");
+  await expect(page.getByRole("combobox", { name: "Session operation", exact: true })).toHaveValue("scheduled_rounds");
   await page.getByLabel("Minimum games", { exact: true }).fill("1");
   const createLeagueResponse = await confirmedAction(page, {
     trigger: "Create league",
@@ -490,7 +549,7 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
   await gotoLeaguePage(page, "/admin/league-manager/awards", leagueId);
   const leagueSelect = page.getByLabel("League", { exact: true });
   await expect(leagueSelect.locator(`option[value="${leagueName}"]`)).toHaveCount(1);
-  await leagueSelect.selectOption(leagueName);
+  await expect(leagueSelect).toHaveValue(leagueName);
   await expect(page.getByText(/Saved step:\s*not started/i)).toBeVisible();
   await confirmedAction(page, {
     trigger: "Freeze and save",

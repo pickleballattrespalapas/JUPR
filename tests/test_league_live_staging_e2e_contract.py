@@ -4,6 +4,7 @@ from pathlib import Path
 SPEC = Path("apps/web/e2e/league-live-session.staging.spec.ts")
 FOUR_WEEK_SPEC = Path("apps/web/e2e/league-four-week.staging.spec.ts")
 WORKFLOW = Path(".github/workflows/fly_api_staging_deploy.yml")
+LEAGUE_LIVE_PAGE = Path("apps/web/app/admin/league-manager/live/page.tsx")
 
 
 def test_league_live_mutation_e2e_is_explicit_staging_only_and_non_retrying() -> None:
@@ -83,9 +84,21 @@ def test_four_week_acceptance_is_guarded_and_verifies_the_full_story() -> None:
     assert "expected_match_count: 36" in text
     assert "expected_session_count: 4" in text
     assert "expected_schedule_weeks: 4" in text
+    assert "page.setDefaultTimeout(20_000)" in text
+    assert "page.setDefaultNavigationTimeout(45_000)" in text
+    assert "/admin/auth/capabilities?club_id=" in text
+    assert "capabilities: verifiedCapabilities" in text
+    assert 'git_commit_sha: candidateSha' in text
+    assert 'await expect(leagueSelect).toHaveValue(leagueName)' in text
     assert "991001" in text
     assert "991023" in text
     assert 'trigger: "Freeze and save"' in text
     assert 'trigger: "Mint and verify"' in text
     assert 'trigger: "Archive completed league"' in text
     assert "dnoockbwfenunhcibwfn" not in text
+
+
+def test_league_live_admin_player_lookup_bypasses_public_cache() -> None:
+    text = LEAGUE_LIVE_PAGE.read_text(encoding="utf-8")
+
+    assert 'getClubPlayers(clubSlug, { status: "all", limit: 1000, sort: "name", noStore: true })' in text
