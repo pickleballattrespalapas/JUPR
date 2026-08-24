@@ -283,7 +283,11 @@ async function runWeek(
   await gotoLeaguePage(page, "/admin/league-manager/live", leagueId);
   await expect(page.getByRole("heading", { name: `${leagueName} live rounds`, exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "1. Setup", exact: true })).toBeVisible();
-  const leagueSelect = page.getByRole("combobox", { name: "League", exact: true });
+  const leagueSelect = page.getByRole("combobox", {
+    name: "League",
+    exact: true,
+    includeHidden: true,
+  });
   await expect(leagueSelect.locator(`option[value="${leagueName}"]`)).toHaveCount(1, { timeout: 30_000 });
   await chooseHiddenOption(leagueSelect, leagueName);
   await expect(page.getByRole("button", { name: "Continue to Players", exact: true })).toBeEnabled();
@@ -621,7 +625,11 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
   expect(new Set(publishedMatchIds).size).toBe(36);
 
   await gotoLeaguePage(page, "/admin/league-manager/awards", leagueId);
-  const leagueSelect = page.getByRole("combobox", { name: "League", exact: true });
+  const leagueSelect = page.getByRole("combobox", {
+    name: "League",
+    exact: true,
+    includeHidden: true,
+  });
   await expect(leagueSelect.locator(`option[value="${leagueName}"]`)).toHaveCount(1);
   await chooseHiddenOption(leagueSelect, leagueName);
   await expect(leagueSelect).toHaveValue(leagueName);
