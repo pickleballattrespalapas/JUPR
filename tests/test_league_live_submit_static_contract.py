@@ -19,6 +19,8 @@ def test_next_uses_one_fastapi_complete_round_publish_path() -> None:
     assert "series_key: match.row_id" in panel
     assert "Retry exact league-round publish" in panel
     assert "() => submitRound(confirmationText)" in panel
+    assert "const operationReference = error instanceof LeagueLiveRequestError" in panel
+    assert "${failureDetail} Retry these exact scores" in panel
     assert "every played game still counts as an official league game" in Path(
         "apps/web/app/admin/league-manager/GuidedLeagueSettingsEditor.tsx"
     ).read_text(encoding="utf-8")
@@ -35,6 +37,7 @@ def test_publish_is_staging_only_python_authority_with_recovery() -> None:
         "ensure_admin_league_live_publish_schema_ready",
         "submit_admin_match_uploader_batch",
         "idempotency_key=f\"league-live:{key}\"",
+        "allow_league_live_context=True",
         "match_format=match_format",
         "recover_league_live_round_publish_response_loss_admin",
         "recovery_required",

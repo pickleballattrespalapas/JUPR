@@ -137,6 +137,7 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
         "idempotency_key": f"league-live:{plan['operation_key']}",
         "match_format": "doubles",
         "source": "next_league_live_all_match_publish",
+        "allow_league_live_context": True,
     }]
     actions = [row["action_type"] for row in tables["admin_activity_log"]]
     assert "submit_league_live_round_intent_admin" in actions
@@ -311,6 +312,100 @@ def test_missing_canonical_match_context_schema_fails_closed(monkeypatch) -> Non
     assert "schema is not ready" in response.json()["detail"]
     assert len(tables["admin_activity_log"]) == baseline_audits
     assert not tables["league_live_publish_operations"]
+
+
+def test_attempt_two_prewrite_rejection_recovers_once_with_the_same_operation(
+    monkeypatch,
+) -> None:
+    tables = _tables()
+    supabase = FakeSupabase(tables)
+    _install_submit_env(monkeypatch, supabase)
+    calls: list[str] = []
+
+    def reject_before_write(
+        _supabase,
+        *,
+        matches: list[dict[str, Any]],
+        idempotency_key: str,
+        **_kwargs,
+    ) -> None:
+        calls.append(idempotency_key)
+        assert all(row["context_type"] == "league_live_session" for row in matches)
+        raise ValueError("The match plan was rejected before any data was written.")
+
+    monkeypatch.setattr(
+        "jupr_app.services.admin_league_live_submit_service.submit_admin_match_uploader_batch",
+        reject_before_write,
+    )
+    client = TestClient(app)
+    session = _create(client).json()["session"]
+    plan = _plan(client, session).json()
+    request = _request(session, plan["operation_key"])
+    endpoint = (
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}"
+        "/rounds/1/submit"
+    )
+
+    first = client.post(
+        endpoint,
+        headers={"Authorization": "Bearer local"},
+        json=request,
+    )
+
+    assert first.status_code == 400, first.text
+    assert first.json()["detail"] == (
+        "The match plan was rejected before any data was written."
+    )
+    operation = tables["league_live_publish_operations"][0]
+    operation_id = operation["id"]
+    assert operation["status"] == "retryable"
+    assert operation["attempt_count"] == 1
+    assert operation["published_match_ids"] == []
+    assert not tables["matches"]
+
+    second = client.post(
+        endpoint,
+        headers={"Authorization": "Bearer local"},
+        json=request,
+    )
+
+    assert second.status_code == 400, second.text
+    assert tables["league_live_publish_operations"][0]["id"] == operation_id
+    assert tables["league_live_publish_operations"][0]["attempt_count"] == 2
+    assert tables["league_live_publish_operations"][0]["status"] == "retryable"
+    assert not tables["matches"]
+    assert calls == [
+        f"league-live:{plan['operation_key']}",
+        f"league-live:{plan['operation_key']}",
+    ]
+
+    publish_calls: list[int] = []
+    monkeypatch.setattr(
+        "jupr_app.services.admin_league_live_submit_service.submit_admin_match_uploader_batch",
+        _publisher(tables, calls=publish_calls),
+    )
+    recovered = client.post(
+        endpoint,
+        headers={"Authorization": "Bearer local"},
+        json=request,
+    )
+
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["publish_operation"]["id"] == operation_id
+    assert recovered.json()["publish_operation"]["status"] == "completed"
+    assert tables["league_live_publish_operations"][0]["attempt_count"] == 3
+    assert len(tables["matches"]) == 1
+    assert publish_calls == [1]
+
+    replay = client.post(
+        endpoint,
+        headers={"Authorization": "Bearer local"},
+        json=request,
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["idempotent_replay"] is True
+    assert len(tables["matches"]) == 1
+    assert publish_calls == [1]
 
 
 def test_response_loss_after_all_match_inserts_reconciles_before_any_republish(monkeypatch) -> None:
