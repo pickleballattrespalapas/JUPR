@@ -238,6 +238,7 @@ export default function TournamentOpsPanel({
   const teamSnapshotCasDisabled = drawCasWriteDisabled || !reviewedTeamVersions.length || reviewedTeamVersions.some((row) => !row.id || !row.updated_at);
   const gameSnapshotCasDisabled = teamSnapshotCasDisabled || !reviewedSourceGameVersions.length || reviewedSourceGameVersions.some((row) => !row.id || !row.updated_at);
   const shows = (name: Exclude<OpsWorkflow, "all">) => workflow === "all" || workflow === name;
+  const showsLegacyDrawRuntime = workflow === "all";
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -1186,6 +1187,7 @@ export default function TournamentOpsPanel({
               <ConfirmAction triggerLabel="Cancel selected empty draw" title="Cancel this empty draw?" description="This disables only the working draw after the server verifies it has no team, game, result, award, publication, or day-live evidence." confirmLabel="Yes, cancel empty draw" confirmationText="CANCEL EMPTY DRAW" tone="danger" disabled={drawCasWriteDisabled || !selectedDrawId} busy={busy} onConfirm={cancelEmptyDraw} />
             </div>
           </article>
+          {showsLegacyDrawRuntime ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Score game</h2>
             <p style={{ color: "#475569" }}>Select a matchup and enter the score. The configured scoring format is enforced; unusual but possible scores require an explicit review acknowledgement.</p>
@@ -1218,6 +1220,7 @@ export default function TournamentOpsPanel({
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate playoffs</h2><p style={{ color: "#475569" }}>After all round-robin games are scored, choose how many teams advance.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 180px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Advance count</strong><br /><select value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} style={inputStyle}><option value="4">4 teams</option><option value="5">5 teams</option><option value="6">6 teams</option></select></label><ConfirmAction triggerLabel="Generate playoffs" title="Generate the playoff bracket?" description={`This advances ${playoffAdvanceCount} teams from the reviewed round-robin results into the playoff bracket.`} confirmLabel="Yes, generate playoffs" confirmationText="GENERATE PLAYOFFS" disabled={gameSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generatePlayoffs} /></div></article>
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate podium</h2><p style={{ color: "#475569" }}>Creates draw-scoped podium rows from finalized playoffs, or from completed round-robin standings when no playoffs exist.</p><ConfirmAction triggerLabel="Generate podium" title="Generate podium placements?" description="This calculates and stores podium rows from the currently reviewed final results." confirmLabel="Yes, generate podium" confirmationText="GENERATE PODIUM" disabled={gameSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generatePodium} /></article>
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Review and award podium</h2><p style={{ color: "#475569" }}>Podium awards require current explicit review evidence and exact award versions. This legacy editor cannot mint awards.</p><Link href={tournamentRouteHref("/admin/tournaments/live-operations/podium", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open guarded Podium review</Link></article>
+          </> : null}
           </> : null}
 
           {operationsWriteReady && shows("results") ? (
@@ -1302,6 +1305,7 @@ export default function TournamentOpsPanel({
             </article>
           ) : null}
 
+          {showsLegacyDrawRuntime ? (
           <article data-testid="legacy-ops-human-summary" style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Human-readable live details</h2>
             <p style={{ color: "#475569" }}>Raw draw, player, team, game, and podium identifiers are intentionally hidden from this legacy workspace. Use the focused Live views for matchup cards, score corrections, and podium review.</p>
@@ -1311,6 +1315,7 @@ export default function TournamentOpsPanel({
               <Link href={tournamentRouteHref("/admin/tournaments/live-operations/podium", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open podium review</Link>
             </p>
           </article>
+          ) : null}
         </>
       ) : null}
 
