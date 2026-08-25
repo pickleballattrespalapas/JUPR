@@ -125,6 +125,33 @@ def test_draw_setup_and_recovery_is_reachable_from_live_operations() -> None:
     assert "Reconcile missing games" in panel
 
 
+def test_draw_setup_and_recovery_hides_retired_day_runtime_controls() -> None:
+    panel = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
+
+    assert 'const showsLegacyDrawRuntime = workflow === "all";' in panel
+    draw_workflow = panel.split('{operationsWriteReady && shows("draws") ? <>', 1)[1].split(
+        '{operationsWriteReady && shows("results")', 1
+    )[0]
+    runtime_start = draw_workflow.index("{showsLegacyDrawRuntime ? <>")
+    setup_only = draw_workflow[:runtime_start]
+    for heading in ("Team editor", "Round-robin schedule", "Cancel empty setup"):
+        assert heading in setup_only
+    legacy_runtime = draw_workflow[runtime_start:]
+    for heading in (
+        "Score game",
+        "Generate playoffs",
+        "Generate podium",
+        "Review and award podium",
+    ):
+        assert heading not in setup_only
+        assert heading in legacy_runtime
+
+    assert (
+        '{showsLegacyDrawRuntime ? (\n'
+        '          <article data-testid="legacy-ops-human-summary"'
+    ) in panel
+
+
 def test_registration_import_surfaces_excluded_needs_partner_warning_in_success_result() -> None:
     panel = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
 
