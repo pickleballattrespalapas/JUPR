@@ -37,7 +37,7 @@ def test_selected_tournament_ops_keeps_read_only_snapshots_and_hides_post_contro
     assert "Tournament and draw snapshots remain available." in panel
     assert "POST-backed previews and mutation controls are hidden" in panel
     assert 'operationsWriteReady && snapshot && shows("draws")' in panel
-    assert 'operationsWriteReady && shows("import")' in panel
+    assert 'operationsWriteReady && (shows("import") || workflow === "draws")' in panel
     assert 'operationsWriteReady && shows("draws")' in panel
     assert 'operationsWriteReady && shows("results")' in panel
     assert 'operationsWriteReady && shows("publish")' in panel
@@ -155,6 +155,28 @@ def test_draw_setup_and_recovery_hides_retired_day_runtime_controls() -> None:
         '{showsLegacyDrawRuntime ? (\n'
         '          <article data-testid="legacy-ops-human-summary"'
     ) in panel
+
+
+def test_draw_setup_exposes_confirmed_registration_import_without_advanced_bulk_import() -> None:
+    panel = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
+
+    shared_import = panel.split(
+        '{operationsWriteReady && (shows("import") || workflow === "draws") ? <>', 1
+    )[1].split('{operationsWriteReady && shows("draws") ? <>', 1)[0]
+    assert "Import confirmed registrations" in shared_import
+    assert 'triggerLabel="Import confirmed registrations"' in shared_import
+    assert "onConfirm={importRegistrations}" in shared_import
+    assert "disabled={registrationImportDisabled}" in shared_import
+    assert 'Registration import is closed because games already exist for this draw.' in shared_import
+    assert '{shows("import") ? (' in shared_import
+    assert "Bulk import teams" in shared_import.split('{shows("import") ? (', 1)[1]
+
+    assert "const registrationImportDisabled = drawCasWriteDisabled || !selectedDrawId || reviewedSourceGameVersions.length > 0;" in panel
+    assert "For registered divisions, import confirmed registrations above first." in panel
+    assert 'setRegistrationImportMode("REPLACE");' in panel.split("async function createDraw", 1)[1].split("async function executeRegistrationImport", 1)[0]
+    assert "const manualTeamRowsReady = teamRows.some" in panel
+    assert "disabled={drawCasWriteDisabled || !manualTeamRowsReady}" in panel
+    assert "Choose Player 1 for at least one team before saving manually." in panel
 
 
 def test_registration_import_surfaces_excluded_needs_partner_warning_in_success_result() -> None:
