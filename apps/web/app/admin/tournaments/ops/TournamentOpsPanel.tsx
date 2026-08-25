@@ -238,6 +238,7 @@ export default function TournamentOpsPanel({
   const reviewedSourceGameVersions = (snapshot?.games || [])
     .filter((row) => String(row.draw_id || "") === selectedDrawId)
     .map((row) => ({ id: String(row.id || ""), updated_at: String(row.updated_at || "") }));
+  const manualTeamRowsReady = teamRows.some((row) => row.player1_id.trim());
   const officialPublishReady = Boolean(snapshot?.operation_runtime?.official_publish_enabled);
   // One tab retains one exact registration-import request for this club. Block
   // every guarded Ops write until it is reconciled so navigating to another
@@ -245,6 +246,7 @@ export default function TournamentOpsPanel({
   const registrationImportBlocksWrites = registrationImportRecovery !== null;
   const guardedWriteDisabled = busy || !accessToken || !operationsWriteReady || !reviewedState || !registrationImportRecoveryLoaded || registrationImportBlocksWrites;
   const drawCasWriteDisabled = guardedWriteDisabled || !reviewedDrawUpdatedAt;
+  const registrationImportDisabled = drawCasWriteDisabled || !selectedDrawId || reviewedSourceGameVersions.length > 0;
   const teamSnapshotCasDisabled = drawCasWriteDisabled || !reviewedTeamVersions.length || reviewedTeamVersions.some((row) => !row.id || !row.updated_at);
   const gameSnapshotCasDisabled = teamSnapshotCasDisabled || !reviewedSourceGameVersions.length || reviewedSourceGameVersions.some((row) => !row.id || !row.updated_at);
   const shows = (name: Exclude<OpsWorkflow, "all">) => workflow === "all" || workflow === name;
@@ -393,6 +395,7 @@ export default function TournamentOpsPanel({
       const completion = actionSuccess("Draw created", `The draft draw${payload.draw?.name ? ` ${payload.draw.name}` : ""} was created.`);
       if (!actionRequest.isCurrent(generation)) return completion;
       setSelectedDrawId(nextDrawId);
+      setRegistrationImportMode("REPLACE");
       await loadOps(tournamentId, nextDrawId);
       if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Draw created${payload.draw?.name ? `: ${payload.draw.name}` : ""}.${operationSuffix(payload)}`);
@@ -1121,16 +1124,18 @@ export default function TournamentOpsPanel({
             </div>
           </article>
 
-          {operationsWriteReady && shows("import") ? <>
+          {operationsWriteReady && (shows("import") || workflow === "draws") ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Import confirmed registrations</h2>
             <p style={{ color: "#475569" }}>Imports confirmed registration entries for the selected draw’s registration day/division. Each registration must already be linked to a JUPR player.</p>
             <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
               <label><strong>Mode</strong><br /><select value={registrationImportMode} onChange={(event) => setRegistrationImportMode(event.target.value)} style={inputStyle}><option value="REPLACE">Replace current teams</option><option value="APPEND">Append after current teams</option></select></label>
-              <ConfirmAction triggerLabel="Import registrations" title={`${registrationImportMode === "REPLACE" ? "Replace teams from" : "Append teams from"} confirmed registrations?`} description={registrationImportMode === "REPLACE" ? "This replaces the draw's current team list with teams built from confirmed, player-linked registrations." : "This appends teams built from confirmed, player-linked registrations after the current teams."} confirmLabel={registrationImportMode === "REPLACE" ? "Yes, replace teams" : "Yes, append teams"} confirmationText="IMPORT REGISTRATIONS" tone={registrationImportMode === "REPLACE" ? "danger" : "default"} disabled={drawCasWriteDisabled || !selectedDrawId} busy={busy} onConfirm={importRegistrations} />
+              <ConfirmAction triggerLabel="Import confirmed registrations" title={`${registrationImportMode === "REPLACE" ? "Replace teams from" : "Append teams from"} confirmed registrations?`} description={registrationImportMode === "REPLACE" ? "This replaces the draw's current team list with teams built from confirmed, player-linked registrations." : "This appends teams built from confirmed, player-linked registrations after the current teams."} confirmLabel={registrationImportMode === "REPLACE" ? "Yes, replace teams" : "Yes, append teams"} confirmationText="IMPORT REGISTRATIONS" tone={registrationImportMode === "REPLACE" ? "danger" : "default"} disabled={registrationImportDisabled} busy={busy} onConfirm={importRegistrations} />
             </div>
+            {selectedDrawId && reviewedSourceGameVersions.length > 0 ? <p style={{ marginBottom: 0, color: "#92400e" }}>Registration import is closed because games already exist for this draw.</p> : null}
           </article>
 
+          {shows("import") ? (
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Bulk import teams</h2>
             <p style={{ color: "#475569" }}>Paste CSV or TSV with headers like <code>Player 1, Player 2, Seed, Notes</code>. Player names must match the club roster. Import is blocked after games exist.</p>
@@ -1140,15 +1145,16 @@ export default function TournamentOpsPanel({
               <ConfirmAction triggerLabel="Import teams" title={`${bulkTeamMode === "REPLACE" ? "Replace" : "Append"} teams from this file?`} description={bulkTeamMode === "REPLACE" ? "This replaces the draw's current teams with the reviewed CSV or TSV contents." : "This appends teams from the reviewed CSV or TSV contents after the current teams."} confirmLabel={bulkTeamMode === "REPLACE" ? "Yes, replace teams" : "Yes, append teams"} confirmationText="IMPORT TEAMS" tone={bulkTeamMode === "REPLACE" ? "danger" : "default"} disabled={drawCasWriteDisabled || !selectedDrawId} busy={busy} onConfirm={importBulkTeams} />
             </div>
           </article>
+          ) : null}
           </> : null}
 
           {operationsWriteReady && shows("draws") ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Team editor</h2>
-            <p style={{ color: "#475569" }}>Assign players manually, then review the full team list before saving.</p>
+            <p style={{ color: "#475569" }}>For registered divisions, import confirmed registrations above first. Use this editor only for deliberate manual setup or pre-game corrections.</p>
             {selectedDrawId && teamEditorPlayerChoicesReady ? (
               <>
-                <ConfirmAction triggerLabel="Save teams" title="Replace the draw's saved teams?" description="This saves the currently reviewed team rows as the authoritative team list for the selected draw." confirmLabel="Yes, save teams" confirmationText="SAVE TEAMS" tone="danger" disabled={drawCasWriteDisabled} busy={busy} onConfirm={saveTeams} />
+                <ConfirmAction triggerLabel="Save teams" title="Replace the draw's saved teams?" description="This saves the currently reviewed team rows as the authoritative team list for the selected draw." confirmLabel="Yes, save teams" confirmationText="SAVE TEAMS" tone="danger" disabled={drawCasWriteDisabled || !manualTeamRowsReady} disabledReason={!manualTeamRowsReady ? "Choose Player 1 for at least one team before saving manually." : undefined} busy={busy} onConfirm={saveTeams} />
                 <div style={{ overflowX: "auto", marginTop: "1rem" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "920px" }}>
                     <thead><tr>{["Team #", "Player 1", "Player 2", "Seed", "Notes", "Action"].map((header) => <th key={header} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>{header}</th>)}</tr></thead>
