@@ -29,6 +29,7 @@ CONFIRM_CREATE_SESSION = "CREATE LIVE SESSION"
 CONFIRM_SAVE_SESSION = "SAVE SESSION"
 CONFIRM_SAVE_ROUND = "SAVE ROUND"
 SESSION_STATUSES = {"setup", "active", "paused", "complete", "archived"}
+RESUMABLE_SESSION_STATUSES = ("setup", "active", "paused")
 ROUND_STATUSES = {"draft", "generated", "submitted", "voided"}
 
 
@@ -628,16 +629,25 @@ def list_admin_league_live_sessions(
     supabase: Any,
     *,
     club_id: str,
+    league_name: str | None = None,
     status: str | None = None,
+    resumable_only: bool = False,
     limit: int = 50,
 ) -> dict[str, Any]:
     _ensure_live_domain_enabled()
+    clean_league = _clean_text(league_name, limit=120)
+    if resumable_only and not clean_league:
+        raise ValueError("league_name is required when resumable_only is true")
     query: Any | None = None
     try:
         query = supabase.table("league_live_sessions").select("*").eq("club_id", str(club_id))
+        if clean_league:
+            query = query.eq("league_name", clean_league)
         clean_status = _clean_text(status, limit=40).lower()
         if clean_status:
             query = query.eq("status", clean_status)
+        if resumable_only:
+            query = query.in_("status", RESUMABLE_SESSION_STATUSES)
         rows = _safe_rows(query.order("updated_at", desc=True).limit(max(1, min(int(limit or 50), 200))).execute())
     except Exception as first_exc:
         try:

@@ -167,6 +167,71 @@ def test_admin_league_live_requires_server_only_supabase_key(monkeypatch):
     assert "SUPABASE_SERVICE_ROLE_KEY" in response.json()["detail"]
 
 
+def test_admin_league_live_resume_list_is_scoped_to_league_and_unfinished_statuses(monkeypatch):
+    tables = league_live_tables()
+    tables["league_live_sessions"] = [
+        {
+            "id": f"tuesday-{status}",
+            "club_id": "club",
+            "league_name": "Tuesday Ladder",
+            "week_tag": "Week 1",
+            "status": status,
+            "total_rounds": 5,
+            "current_round": 1,
+            "updated_at": f"2026-08-24T10:0{index}:00Z",
+        }
+        for index, status in enumerate(("setup", "active", "paused", "complete", "archived"))
+    ] + [
+        {
+            "id": "wednesday-active",
+            "club_id": "club",
+            "league_name": "Wednesday Ladder",
+            "week_tag": "Week 1",
+            "status": "active",
+            "total_rounds": 5,
+            "current_round": 1,
+            "updated_at": "2026-08-24T11:00:00Z",
+        },
+        {
+            "id": "other-club-active",
+            "club_id": "other-club",
+            "league_name": "Tuesday Ladder",
+            "week_tag": "Week 1",
+            "status": "active",
+            "total_rounds": 5,
+            "current_round": 1,
+            "updated_at": "2026-08-24T12:00:00Z",
+        },
+    ]
+    supabase = FakeSupabase(tables)
+    _install_env(monkeypatch, supabase)
+
+    response = TestClient(app).get(
+        "/admin/clubs/club/league-manager/live-sessions",
+        params={"league_name": "Tuesday Ladder", "resumable_only": "true", "limit": 100},
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["count"] == 3
+    assert {session["id"] for session in payload["sessions"]} == {
+        "tuesday-setup",
+        "tuesday-active",
+        "tuesday-paused",
+    }
+    assert {session["league_name"] for session in payload["sessions"]} == {"Tuesday Ladder"}
+    assert {session["status"] for session in payload["sessions"]} == {"setup", "active", "paused"}
+
+    missing_league = TestClient(app).get(
+        "/admin/clubs/club/league-manager/live-sessions",
+        params={"resumable_only": "true"},
+        headers={"Authorization": "Bearer local"},
+    )
+    assert missing_league.status_code == 400
+    assert "league_name is required" in missing_league.json()["detail"]
+
+
 def test_admin_league_live_status_fails_closed_without_server_only_key(monkeypatch):
     supabase = FakeSupabase(league_live_tables())
     _install_env(monkeypatch, supabase, service_role=False)

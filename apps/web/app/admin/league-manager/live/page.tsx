@@ -39,8 +39,10 @@ export default async function LeagueManagerLivePage({ searchParams }: Props) {
       {leagueStatus && liveDomainStatus && uploaderStatus ? (
         <SelectedLeaguePanelScope leagueName={leagueName}>
           <LeagueLiveRoundPanel
+            key={leagueName}
             apiBase={getAdminLeagueManagerApiBaseUrl()}
             clubId={clubId}
+            selectedLeagueName={leagueName}
             leagueStatus={leagueStatus}
             liveDomainStatus={liveDomainStatus}
             uploaderStatus={uploaderStatus}

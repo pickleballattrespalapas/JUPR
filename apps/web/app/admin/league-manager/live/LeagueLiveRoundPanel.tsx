@@ -12,6 +12,7 @@ import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 type Props = {
   apiBase: string | null;
   clubId: string;
+  selectedLeagueName: string;
   leagueStatus: AdminLeagueManagerStatusResponse;
   uploaderStatus: AdminMatchUploaderStatusResponse;
   players: PublicPlayer[];
@@ -115,6 +116,7 @@ const inputStyle = { width: "100%", minWidth: 0, boxSizing: "border-box" as cons
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 const DEFAULT_MATCH_STRUCTURE: MatchStructure = { kind: "fixed_games", games: 1, result_counting: "each_game", completion: "all_games" };
+const RESUMABLE_SESSION_STATUSES = new Set(["setup", "active", "paused"]);
 const RETRYABLE_PUBLISH_STATUSES = new Set(["intent", "publishing", "retryable"]);
 const RECONCILABLE_PUBLISH_STATUSES = new Set(["published", "reconciling", "recovery_required"]);
 const WORKFLOW_STEPS: Array<{ id: WorkflowStep; label: string }> = [
@@ -428,6 +430,13 @@ function movementSummary(movement?: LeagueMovementPayload | Record<string, unkno
   return moved ? `${moved} move(s)` : "No movement";
 }
 
+function resumableSessionsForLeague(sessions: LeagueLiveSession[], leagueName: string): LeagueLiveSession[] {
+  return sessions.filter((session) => (
+    session.league_name === leagueName
+    && RESUMABLE_SESSION_STATUSES.has(String(session.status || "").trim().toLowerCase())
+  ));
+}
+
 function persistedPublishedRoundNumber(
   session: LeagueLiveSession,
   rounds: LeagueLiveRound[],
@@ -447,11 +456,11 @@ function persistedPublishedRoundNumber(
   return currentRoundNumber;
 }
 
-export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, uploaderStatus, players, liveDomainStatus }: Props) {
+export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueName, leagueStatus, uploaderStatus, players, liveDomainStatus }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [workflowStep, setWorkflowStep] = useState<WorkflowStep>(1);
   const [leagues, setLeagues] = useState<string[]>([]);
-  const [leagueName, setLeagueName] = useState("");
+  const [leagueName, setLeagueName] = useState(selectedLeagueName);
   const [loadedLeagueName, setLoadedLeagueName] = useState("");
   const [weekTag, setWeekTag] = useState("Week 1");
   const [roundNumber, setRoundNumber] = useState("1");
@@ -1254,23 +1263,26 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setMovementPlanStale(false);
   }
 
-  async function loadLeagues() {
+  async function loadLeagues(): Promise<string> {
     const generation = leagueListRequest.begin();
     const selectedLeagueBeforeRefresh = leagueName;
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
-      if (!leagueListRequest.isCurrent(generation)) return;
+      if (!leagueListRequest.isCurrent(generation)) return "";
       const names = (payload.leagues || []).map((league) => league.league_name).filter(Boolean);
       setLeagues(names);
-      const selectedLeague = names.includes(selectedLeagueBeforeRefresh) ? selectedLeagueBeforeRefresh : (names[0] || "");
+      const selectedLeague = names.includes(selectedLeagueBeforeRefresh)
+        ? selectedLeagueBeforeRefresh
+        : names.includes(selectedLeagueName) ? selectedLeagueName : "";
       setLeagueName(selectedLeague);
       if (selectedLeague) await loadLeagueDetail(selectedLeague);
       else {
         clearPersistedSessionBinding();
         setMessage("No leagues are available.");
       }
+      return selectedLeague;
     } catch (error) {
       if (leagueListRequest.isCurrent(generation)) {
         setLeagues([]);
@@ -1278,12 +1290,20 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         clearPersistedSessionBinding();
         setMessage(error instanceof Error ? error.message : "Unable to load leagues.");
       }
+      return "";
     } finally {
       if (leagueListRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function loadSessions() {
+  async function loadSessions(selectedLeague = leagueName) {
+    const targetLeague = selectedLeague.trim();
+    if (!targetLeague) {
+      sessionListRequest.invalidate();
+      setLiveSessions([]);
+      setMessage("Select a league before loading unfinished live sessions.");
+      return;
+    }
     const generation = sessionListRequest.begin();
     const selectedSessionBeforeRefresh = sessionId;
     if (selectedSessionBeforeRefresh) {
@@ -1293,23 +1313,30 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<LeagueLiveListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions?limit=100`);
+      const query = new URLSearchParams({
+        league_name: targetLeague,
+        resumable_only: "true",
+        limit: "100",
+      });
+      const payload = await requestJson<LeagueLiveListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions?${query.toString()}`);
       if (!sessionListRequest.isCurrent(generation)) return;
-      const nextSessions = payload.sessions || [];
+      const nextSessions = resumableSessionsForLeague(payload.sessions || [], targetLeague);
       setLiveSessions(nextSessions);
       if (selectedSessionBeforeRefresh && nextSessions.some((row) => row.id === selectedSessionBeforeRefresh)) {
         await loadSessionDetail(selectedSessionBeforeRefresh);
       } else if (selectedSessionBeforeRefresh) {
         clearPersistedSessionBinding();
-        setMessage("The previously selected live session is no longer available.");
+        setMessage("The previously selected live session is complete or no longer available for this league.");
       } else {
-        setMessage(nextSessions.length ? `Loaded ${payload.count ?? nextSessions.length} persisted live session(s).` : "No persisted live sessions are available.");
+        setMessage(nextSessions.length
+          ? `Loaded ${nextSessions.length} unfinished live session(s) for ${targetLeague}.`
+          : `No unfinished live sessions are available for ${targetLeague}.`);
       }
     } catch (error) {
       if (sessionListRequest.isCurrent(generation)) {
         setLiveSessions([]);
         if (selectedSessionBeforeRefresh) clearPersistedSessionBinding(selectedSessionBeforeRefresh);
-        setMessage(error instanceof Error ? error.message : "Unable to load live sessions.");
+        setMessage(error instanceof Error ? error.message : `Unable to load unfinished live sessions for ${targetLeague}.`);
       }
     } finally {
       if (sessionListRequest.isCurrent(generation)) setBusy(false);
@@ -1363,12 +1390,14 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   function selectLeague(selectedLeague: string) {
     setWorkflowStep(1);
     setLeagueName(selectedLeague);
-    void loadLeagueDetail(selectedLeague);
+    sessionListRequest.invalidate();
+    setLiveSessions([]);
+    void loadLeagueDetail(selectedLeague).then(() => loadSessions(selectedLeague));
   }
 
   async function loadInitialWorkspace() {
-    await loadLeagues();
-    await loadSessions();
+    const selectedLeague = await loadLeagues();
+    if (selectedLeague) await loadSessions(selectedLeague);
   }
 
   useAuthenticatedAutoLoad(
@@ -1462,10 +1491,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     applySession(recovered.session, recovered.courts || [], recovered.rounds || [], [], leagueDetail);
     setMatchDate("");
     setWorkflowStep(1);
-    setLiveSessions((current) => [
+    setLiveSessions((current) => resumableSessionsForLeague([
       ...current.filter((row) => row.id !== recovered.session?.id),
       recovered.session as LeagueLiveSession,
-    ].sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || ""))));
+    ], selectedLeagueName).sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || ""))));
   }
 
   async function reconcileCreateSession(
@@ -1773,6 +1802,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       });
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before completion was applied.");
       applySession(payload.session, payload.courts || [], roundHistory, publishOperations, detail);
+      setLiveSessions((current) => current.filter((row) => row.id !== requestedSessionId));
       setSessionStatus("complete");
       setWorkflowStep(6);
       setRoundPublished(true);
@@ -2494,15 +2524,15 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           ) : null}
           {sessionIsCurrentLeague && !["active", "paused", "setup"].includes(sessionStatus) ? <p role="alert" style={{ color: "#92400e" }}>This session is {sessionStatus}. Its players, courts, and scores are read-only; use Repeat or Finish and recovery/history below.</p> : null}
           <section style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid #e2e8f0" }}>
-            <h3 style={{ marginTop: 0 }}>Resume a persisted session</h3>
+            <h3 style={{ marginTop: 0 }}>Resume an unfinished session</h3>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "0.75rem", alignItems: "end" }}>
-              <label>Existing sessions<br /><select value={sessionId} onChange={(event) => selectSession(event.target.value)} disabled={busy} style={inputStyle}><option value="">Select session…</option>{liveSessions.map((row) => <option key={row.id} value={row.id}>{row.league_name} · {row.week_tag} · R{row.current_round}/{row.total_rounds} · {row.status}</option>)}</select></label>
-              <button type="button" onClick={loadSessions} disabled={busy || !accessToken} style={ghostButtonStyle}>Refresh sessions</button>
+              <label>Unfinished sessions for this league<br /><select value={sessionId} onChange={(event) => selectSession(event.target.value)} disabled={busy} style={inputStyle}><option value="">Select session…</option>{liveSessions.map((row) => <option key={row.id} value={row.id}>{row.week_tag} · R{row.current_round}/{row.total_rounds} · {row.status}</option>)}</select></label>
+              <button type="button" onClick={() => void loadSessions()} disabled={busy || !accessToken || !leagueName} style={ghostButtonStyle}>Refresh sessions</button>
               <button type="button" onClick={() => void loadSessionDetail()} disabled={busy || !sessionId} style={ghostButtonStyle}>Retry selected session</button>
             </div>
           </section>
           <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center" }}>
-            <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={ghostButtonStyle}>{busy ? "Refreshing…" : "Refresh leagues"}</button>
+            <button type="button" onClick={() => void loadInitialWorkspace()} disabled={busy || !accessToken} style={ghostButtonStyle}>{busy ? "Refreshing…" : "Refresh leagues"}</button>
             <button type="button" onClick={() => setWorkflowStep(2)} disabled={busy || !setupReady} style={buttonStyle}>Continue to Players</button>
           </p>
         </article>
