@@ -4,9 +4,17 @@ from types import SimpleNamespace
 
 from jupr_app.services.public_league_results_service import (
     _league_matches,
+    _parse_week_num,
     build_public_league_results,
     get_public_league_results_overview,
 )
+
+
+def test_week_number_requires_an_explicit_week_label() -> None:
+    assert _parse_week_num("Week 2") == 2
+    assert _parse_week_num("League week #7 round 1") == 7
+    assert _parse_week_num("E2E 4dce01a8-32797001253-1") is None
+    assert _parse_week_num("2026-08-24") is None
 
 
 class FakeQuery:

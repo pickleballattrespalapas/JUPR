@@ -480,18 +480,24 @@ _LEGACY_PUBLIC_AWARD_KEYS = tuple(
 
 
 def _award_minimum(
-    config: Mapping[str, Any], meta_row: Mapping[str, Any]
+    config: Mapping[str, Any],
+    meta_row: Mapping[str, Any],
+    awards_config: Mapping[str, Any] | None = None,
 ) -> int:
     """Return the configured award threshold with a safe legacy fallback."""
 
+    defaults = awards_config if isinstance(awards_config, Mapping) else {}
     for value in (
         config.get("minimum"),
         config.get("min_games"),
         config.get("default_min_games"),
+        defaults.get("default_min_games"),
         meta_row.get("min_games"),
     ):
+        if value is None or value == "":
+            continue
         try:
-            return max(0, int(value or 0))
+            return max(0, int(value))
         except (TypeError, ValueError):
             continue
     return 0
@@ -599,7 +605,7 @@ def _public_award_races(
             if spec.get("recipient_type") == "team"
             else analytics.get("player_analytics", [])
         )
-        minimum = _award_minimum(config, meta_row)
+        minimum = _award_minimum(config, meta_row, awards_config)
         entries = _award_race_entries(spec, recipients, minimum=minimum)
         if not entries:
             continue

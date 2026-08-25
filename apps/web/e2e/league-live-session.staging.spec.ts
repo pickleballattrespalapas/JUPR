@@ -1,6 +1,12 @@
 import { writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 
-import { expect, test, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Page
+} from "@playwright/test";
 
 import {
   bootstrapStagingContext,
@@ -19,17 +25,8 @@ const mutationConfirmation = String(
 const expectedWebOrigin = String(
   process.env.JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN || ""
 ).trim().replace(/\/$/, "");
-const fixtureSessionId = String(
-  process.env.JUPR_LEAGUE_LIVE_E2E_SESSION_ID || ""
-).trim();
 const expectedLeagueName = String(
   process.env.JUPR_LEAGUE_LIVE_E2E_LEAGUE_NAME || ""
-).trim();
-const expectedLeagueId = String(
-  process.env.JUPR_LEAGUE_LIVE_E2E_LEAGUE_ID || ""
-).trim();
-const expectedLeagueType = String(
-  process.env.JUPR_LEAGUE_LIVE_E2E_LEAGUE_TYPE || ""
 ).trim();
 const matchDate = String(
   process.env.JUPR_LEAGUE_LIVE_E2E_MATCH_DATE || ""
@@ -40,7 +37,30 @@ const reportPath = String(
 const candidateSha = String(process.env.GITHUB_SHA || "").trim();
 const workflowRunId = String(process.env.GITHUB_RUN_ID || "").trim();
 const workflowRunAttempt = String(process.env.GITHUB_RUN_ATTEMPT || "").trim();
+const fixtureSource = "staging_league_live_browser_acceptance";
+const legacyAcceptanceLeagueName = "Acceptance Flex 0822A";
+const legacyAcceptanceWeekTags = new Set([
+  "E2E 4dce01a8-32797001253-1",
+  "E2E 9b956dfc-32802308745-1"
+]);
 let sessionId = "";
+let leagueId = "";
+let createdPlayerIds: number[] = [];
+let cleanupVerified = false;
+
+type PlayerFixture = {
+  id: number;
+  name: string;
+  rating: number;
+  active: boolean;
+  state_fingerprint: string;
+};
+
+type LeagueFixture = {
+  league_id?: string | number | null;
+  league_name: string;
+  status: string;
+};
 
 type PublishOperation = {
   id: string;
@@ -74,11 +94,294 @@ type LeagueLiveDetail = {
   publish_operations?: PublishOperation[];
 };
 
+type CleanupResult = {
+  leagueStatus: string;
+  inactivePlayerCount: number;
+};
+
+type MatchLogRow = {
+  id: number;
+  row_version: number;
+  league: string;
+  week_tag: string;
+  context_type: string;
+  is_active: boolean;
+};
+
 test.describe.configure({ mode: "serial", retries: 0 });
 test.skip(
   !allowMutation,
   "Set JUPR_LEAGUE_LIVE_ALLOW_MUTATION_E2E=1 only for an explicitly authorized staging session."
 );
+
+function apiPath(pathname: string): string {
+  return `${expectedApiOrigin}${pathname}`;
+}
+
+async function requestJson<T>(
+  request: APIRequestContext,
+  method: "GET" | "PATCH" | "POST",
+  pathname: string,
+  data?: Record<string, unknown>,
+  timeout = 90_000
+): Promise<T> {
+  const response = await request.fetch(apiPath(pathname), {
+    method,
+    headers: { Authorization: `Bearer ${adminToken}` },
+    data,
+    failOnStatusCode: false,
+    timeout
+  });
+  expect(response.status(), `${method} ${pathname} failed`).toBe(200);
+  const payload = await response.json() as T;
+  await response.dispose();
+  return payload;
+}
+
+async function excludeLegacyAcceptanceMatches(
+  request: APIRequestContext
+): Promise<number> {
+  const query = new URLSearchParams({
+    league: legacyAcceptanceLeagueName,
+    limit: "500"
+  });
+  const matchLog = await requestJson<{ matches?: MatchLogRow[] }>(
+    request,
+    "GET",
+    `/admin/clubs/${clubId}/match-log?${query.toString()}`
+  );
+  const matches = (matchLog.matches || []).filter((row) =>
+    legacyAcceptanceWeekTags.has(String(row.week_tag || ""))
+  );
+  if (matches.length === 0) return 0;
+
+  expect(matches).toHaveLength(30);
+  expect(new Set(matches.map((row) => row.id)).size).toBe(30);
+  expect(matches.every((row) => row.league === legacyAcceptanceLeagueName)).toBe(true);
+  expect(matches.every((row) => row.context_type === "league_live_session")).toBe(true);
+  expect(matches.every((row) => row.is_active)).toBe(true);
+  expect(matches.every((row) => Number(row.row_version) >= 1)).toBe(true);
+
+  const excluded = await requestJson<{
+    excluded_count?: number;
+    replay_status?: string;
+    operation_status?: string;
+  }>(
+    request,
+    "POST",
+    `/admin/clubs/${clubId}/match-log/exclude`,
+    {
+      targets: matches.map((row) => ({
+        match_id: Number(row.id),
+        expected_row_version: Number(row.row_version)
+      })),
+      confirmation_text: "DELETE",
+      idempotency_key: randomUUID(),
+      note: "Remove legacy League Live E2E matches from Acceptance Flex 0822A after isolating automated acceptance fixtures.",
+      source: `${fixtureSource}_legacy_cleanup`
+    },
+    240_000
+  );
+  expect(excluded.excluded_count).toBe(30);
+  expect(excluded.operation_status).toBe("succeeded");
+  expect(excluded.replay_status).toBe("succeeded");
+
+  const verified = await requestJson<{ matches?: MatchLogRow[] }>(
+    request,
+    "GET",
+    `/admin/clubs/${clubId}/match-log?${query.toString()}`
+  );
+  expect(
+    (verified.matches || []).filter((row) =>
+      legacyAcceptanceWeekTags.has(String(row.week_tag || ""))
+    )
+  ).toHaveLength(0);
+  return Number(excluded.excluded_count || 0);
+}
+
+async function cleanupRequest(
+  request: APIRequestContext,
+  method: "GET" | "PATCH" | "POST",
+  pathname: string,
+  data?: Record<string, unknown>
+): Promise<{ status: number; payload: Record<string, unknown> }> {
+  try {
+    const response = await request.fetch(apiPath(pathname), {
+      method,
+      headers: { Authorization: `Bearer ${adminToken}` },
+      data,
+      failOnStatusCode: false
+    });
+    const status = response.status();
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = await response.json() as Record<string, unknown>;
+    } catch {
+      payload = {};
+    }
+    await response.dispose();
+    return { status, payload };
+  } catch {
+    return { status: 0, payload: {} };
+  }
+}
+
+function leaguePath(suffix = ""): string {
+  return `/admin/clubs/${clubId}/league-manager/leagues/${encodeURIComponent(expectedLeagueName)}${suffix}`;
+}
+
+async function createDisposableFixtures(page: Page): Promise<{
+  roster: Array<Record<string, unknown>>;
+  courts: Array<Record<string, unknown>>;
+}> {
+  const runSuffix = `${candidateSha.slice(0, 7)}-${workflowRunId}-${workflowRunAttempt}`;
+  const players: PlayerFixture[] = [];
+  for (let index = 1; index <= 4; index += 1) {
+    const created = await requestJson<{ player?: PlayerFixture }>(
+      page.request,
+      "POST",
+      `/admin/clubs/${clubId}/players/editor/players`,
+      {
+        name: `League Live E2E P${index} ${runSuffix}`,
+        starting_jupr: 3 + index / 10,
+        idempotency_key: `league-live-e2e-player:${candidateSha}:${workflowRunId}:${workflowRunAttempt}:${index}`,
+        source: fixtureSource
+      }
+    );
+    const player = created.player;
+    expect(player?.id).toBeGreaterThan(0);
+    expect(player?.name).toContain("League Live E2E");
+    expect(player?.active).toBe(true);
+    players.push(player as PlayerFixture);
+    createdPlayerIds.push(Number(player?.id));
+  }
+  expect(new Set(createdPlayerIds).size).toBe(4);
+
+  const createdLeague = await requestJson<{ league?: LeagueFixture }>(
+    page.request,
+    "POST",
+    `/admin/clubs/${clubId}/league-manager/leagues`,
+    {
+      league_name: expectedLeagueName,
+      league_type: "Individual",
+      match_format: "doubles",
+      league_format: "ladder",
+      session_mode: "scheduled_rounds",
+      participation_mode: "flex",
+      description: "Disposable League Live browser acceptance fixture.",
+      min_games: 1,
+      k_factor: 32,
+      confirmation_text: "CREATE LEAGUE",
+      source: fixtureSource
+    }
+  );
+  leagueId = String(createdLeague.league?.league_id || "");
+  expect(leagueId).not.toBe("");
+  expect(createdLeague.league).toMatchObject({
+    league_name: expectedLeagueName,
+    status: "draft"
+  });
+
+  await requestJson(
+    page.request,
+    "POST",
+    leaguePath("/roster/batch"),
+    {
+      action: "activate",
+      player_ids: createdPlayerIds,
+      starting_rating: null,
+      idempotency_key: `league-live-e2e-roster:${candidateSha}:${workflowRunId}:${workflowRunAttempt}`,
+      confirmation_text: "SAVE LEAGUE ROSTER BATCH",
+      source: fixtureSource
+    }
+  );
+  const started = await requestJson<{ league?: LeagueFixture }>(
+    page.request,
+    "POST",
+    leaguePath("/lifecycle"),
+    {
+      action: "start",
+      confirmation_text: "START LEAGUE",
+      source: fixtureSource
+    }
+  );
+  expect(started.league?.status).toBe("active");
+
+  const roster = players.map((player, index) => ({
+    player_id: player.id,
+    player_name: player.name,
+    rating: player.rating,
+    status: "active",
+    court_number: 1,
+    slot: index + 1
+  }));
+  return {
+    roster,
+    courts: [{
+      round_number: 1,
+      court_number: 1,
+      format_type: "4-Player",
+      player_names: players.map((player) => player.name),
+      players_json: roster
+    }]
+  };
+}
+
+async function cleanupDisposableFixtures(
+  request: APIRequestContext
+): Promise<CleanupResult> {
+  let leagueStatus = "";
+  if (expectedLeagueName) {
+    let detail = await cleanupRequest(request, "GET", leaguePath());
+    if (detail.status === 200) {
+      const league = detail.payload.league as LeagueFixture | undefined;
+      leagueStatus = String(league?.status || "").toLowerCase();
+      if (["active", "paused"].includes(leagueStatus)) {
+        await cleanupRequest(request, "POST", leaguePath("/lifecycle"), {
+          action: "end",
+          confirmation_text: "END LEAGUE",
+          source: `${fixtureSource}_cleanup`
+        });
+        detail = await cleanupRequest(request, "GET", leaguePath());
+        leagueStatus = String((detail.payload.league as LeagueFixture | undefined)?.status || "").toLowerCase();
+      }
+      if (leagueStatus === "ended") {
+        await cleanupRequest(request, "POST", leaguePath("/lifecycle"), {
+          action: "archive",
+          confirmation_text: "ARCHIVE LEAGUE",
+          source: `${fixtureSource}_cleanup`
+        });
+        detail = await cleanupRequest(request, "GET", leaguePath());
+        leagueStatus = String((detail.payload.league as LeagueFixture | undefined)?.status || "").toLowerCase();
+      }
+    }
+  }
+
+  let inactivePlayerCount = 0;
+  for (const playerId of createdPlayerIds) {
+    const playerPath = `/admin/clubs/${clubId}/players/editor/players/${playerId}`;
+    let detail = await cleanupRequest(request, "GET", playerPath);
+    if (detail.status !== 200) continue;
+    let player = detail.payload.player as PlayerFixture | undefined;
+    if (player?.active) {
+      await cleanupRequest(request, "PATCH", playerPath, {
+        active: false,
+        expected_state_fingerprint: player.state_fingerprint,
+        idempotency_key: `league-live-e2e-deactivate:${candidateSha}:${workflowRunId}:${workflowRunAttempt}:${playerId}`,
+        source: `${fixtureSource}_cleanup`
+      });
+      detail = await cleanupRequest(request, "GET", playerPath);
+      player = detail.payload.player as PlayerFixture | undefined;
+    }
+    if (player && !player.active) inactivePlayerCount += 1;
+  }
+  return { leagueStatus, inactivePlayerCount };
+}
+
+test.afterEach(async ({ request }) => {
+  if (!allowMutation || cleanupVerified || (!leagueId && createdPlayerIds.length === 0)) return;
+  await cleanupDisposableFixtures(request);
+});
 
 async function fetchDetail(page: Page, targetSessionId = sessionId): Promise<LeagueLiveDetail> {
   const response = await page.request.get(
@@ -205,22 +508,17 @@ test("creates and completes a disposable five-round League Live session", async 
   );
   expect(adminEmail).not.toBe("");
   expect(adminToken).not.toBe("");
-  expect(fixtureSessionId).toMatch(/^[0-9a-f-]{36}$/);
-  expect(expectedLeagueId).toBe("9");
-  expect(expectedLeagueName).not.toBe("");
-  expect(expectedLeagueType).toBe("Individual");
+  expect(expectedLeagueName).toMatch(/^League Live E2E /);
   expect(matchDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   expect(reportPath).not.toBe("");
   expect(candidateSha).toMatch(/^[0-9a-f]{40}$/);
   expect(workflowRunId).toMatch(/^[1-9]\d*$/);
   expect(workflowRunAttempt).toMatch(/^[1-9]\d*$/);
 
-  const fixture = await fetchDetail(page, fixtureSessionId);
-  expect(fixture.session.league_name).toBe(expectedLeagueName);
-  const fixtureRoster = fixture.session.roster_json || [];
-  const fixtureCourts = fixture.session.current_court_state_json || [];
-  expect(fixtureRoster.length).toBeGreaterThanOrEqual(4);
-  expect(fixtureCourts).toHaveLength(1);
+  const legacyExcludedMatches = await excludeLegacyAcceptanceMatches(page.request);
+  const fixture = await createDisposableFixtures(page);
+  expect(fixture.roster).toHaveLength(4);
+  expect(fixture.courts).toHaveLength(1);
 
   const createResponse = await page.request.post(
     `${expectedApiOrigin}/admin/clubs/${clubId}/league-manager/live-sessions`,
@@ -228,18 +526,12 @@ test("creates and completes a disposable five-round League Live session", async 
       headers: { Authorization: `Bearer ${adminToken}` },
       data: {
         league_name: expectedLeagueName,
-        week_tag: `E2E ${candidateSha.slice(0, 8)}-${workflowRunId}-${workflowRunAttempt}`,
+        week_tag: "Week 1",
         total_rounds: 5,
         current_round: 1,
-        roster: fixtureRoster,
-        courts: fixtureCourts.map((court, index) => ({
-          ...court,
-          round_number: 1,
-          court_number: Number(court.court_number || court.court || index + 1),
-        })),
-        bench_player_ids: fixtureRoster
-          .filter((player) => String(player.status || "") === "bench")
-          .map((player) => Number(player.player_id)),
+        roster: fixture.roster,
+        courts: fixture.courts,
+        bench_player_ids: [],
         notes: "Disposable staging League Live browser acceptance session.",
         idempotency_key: `league-live-e2e:${candidateSha}:${workflowRunId}:${workflowRunAttempt}`,
         confirmation_text: "CREATE LIVE SESSION",
@@ -280,10 +572,10 @@ test("creates and completes a disposable five-round League Live session", async 
   );
 
   const liveRoute = new URL("/admin/league-manager/live", expectedWebOrigin);
-  liveRoute.searchParams.set("league_id", expectedLeagueId);
+  liveRoute.searchParams.set("league_id", leagueId);
   liveRoute.searchParams.set("league", expectedLeagueName);
   liveRoute.searchParams.set("league_name", expectedLeagueName);
-  liveRoute.searchParams.set("mode", expectedLeagueType);
+  liveRoute.searchParams.set("mode", "Individual");
   const documentResponse = await page.goto(liveRoute.toString(), {
     waitUntil: "domcontentloaded"
   });
@@ -355,22 +647,32 @@ test("creates and completes a disposable five-round League Live session", async 
   );
   expect(publishedMatchIds).toHaveLength(15);
   expect(new Set(publishedMatchIds).size).toBe(15);
+  const cleanup = await cleanupDisposableFixtures(page.request);
+  expect(cleanup.leagueStatus).toBe("archived");
+  expect(cleanup.inactivePlayerCount).toBe(4);
+  cleanupVerified = true;
 
   writeFileSync(
     reportPath,
     `${JSON.stringify({
-      schema_version: 1,
+      schema_version: 2,
       candidate_sha: String(process.env.GITHUB_SHA || ""),
       environment: "staging",
       production_targets_contacted: false,
       session_id: sessionId,
-      league_id: expectedLeagueId,
+      league_id: leagueId,
       league_name: expectedLeagueName,
       status: after.session.status,
       current_round: after.session.current_round,
       submitted_rounds: after.rounds.length,
       completed_publish_operations: after.publish_operations?.length || 0,
-      unique_published_matches: new Set(publishedMatchIds).size
+      unique_published_matches: new Set(publishedMatchIds).size,
+      legacy_acceptance_matches_excluded: legacyExcludedMatches,
+      isolated_player_ids: createdPlayerIds,
+      cleanup: {
+        league_status: cleanup.leagueStatus,
+        inactive_player_count: cleanup.inactivePlayerCount
+      }
     }, null, 2)}\n`,
     { encoding: "utf8", flag: "wx" }
   );
