@@ -24,6 +24,12 @@ def test_league_live_mutation_e2e_is_explicit_staging_only_and_non_retrying() ->
     assert "inactivePlayerCount).toBe(4)" in text
     assert 'const legacyAcceptanceLeagueName = "Acceptance Flex 0822A"' in text
     assert "/match-log/exclude" in text
+    assert (
+        "/match-log/exclusions/${encodeURIComponent(operation.id)}/recover"
+        in text
+    )
+    assert 'confirmation_text: "RECOVER"' in text
+    assert "recent_exclusion_operations" in text
     assert 'excluded.replay_status).toBe("succeeded")' in text
     assert "legacy_acceptance_matches_excluded" in text
     assert "GITHUB_RUN_ID" in text

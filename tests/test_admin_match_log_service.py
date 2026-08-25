@@ -334,6 +334,7 @@ def test_admin_match_log_surfaces_recent_exclusion_recovery(monkeypatch) -> None
             "recovery_stage": "badge_reconcile",
             "replay_job_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
             "error_text": "badge worker unavailable",
+            "source": "staging_league_live_browser_acceptance_legacy_cleanup",
             "affected_player_ids": [1, 2],
             "result_json": {"excluded_ids": [3]},
             "created_at": "2026-07-26T12:00:00Z",
@@ -350,6 +351,9 @@ def test_admin_match_log_surfaces_recent_exclusion_recovery(monkeypatch) -> None
     operation = payload["recent_exclusion_operations"][0]
     assert operation["status"] == "recovery_required"
     assert operation["recovery_stage"] == "badge_reconcile"
+    assert operation["source"] == (
+        "staging_league_live_browser_acceptance_legacy_cleanup"
+    )
     assert operation["affected_player_ids"] == [1, 2]
     assert operation["result_json"]["excluded_ids"] == [3]
 

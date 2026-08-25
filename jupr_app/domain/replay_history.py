@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import math
 import unicodedata
 from typing import Any, Callable, Dict, Optional
@@ -13,6 +14,7 @@ from jupr_app.domain.ratings import calculate_hybrid_elo
 
 FULL_RESET_LABEL = "ALL (Full System Reset)"
 _RESERVED_LEAGUE_NAMES = frozenset({"", "overall", "popup", "singles"})
+_LEAGUE_RATING_STORAGE_QUANTUM = Decimal("0.0001")
 
 
 class ReplayLeaseLostError(RuntimeError):
@@ -35,6 +37,25 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return float(default)
+
+
+def _league_rating_storage_value(value: Any) -> float:
+    """Match the numeric(10,4) league-rating columns before strict RPC checks."""
+
+    try:
+        parsed = Decimal(str(value))
+        if not parsed.is_finite():
+            raise InvalidOperation
+        return float(
+            parsed.quantize(
+                _LEAGUE_RATING_STORAGE_QUANTUM,
+                rounding=ROUND_HALF_UP,
+            )
+        )
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Replay History produced a non-finite league-rating value."
+        ) from exc
 
 
 def _normalize_league_name(value: Any) -> str:
@@ -1117,6 +1138,15 @@ def replay_history(
         )
         rebuilt_keys.add(row_key)
         reset_without_active_evidence += 1
+
+    # The durable writer verifies exact values after PostgreSQL stores these
+    # columns as numeric(10,4). Normalize at the application boundary so the
+    # write and its strict readback compare the same representation.
+    for row in new_rows:
+        row["rating"] = _league_rating_storage_value(row.get("rating"))
+        row["starting_rating"] = _league_rating_storage_value(
+            row.get("starting_rating")
+        )
 
     # ---------------------------------------------------------
     # Writes

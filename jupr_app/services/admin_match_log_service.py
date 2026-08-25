@@ -428,7 +428,7 @@ def _recent_match_exclusion_operations(
             supabase.table("match_exclusion_operations")
             .select(
                 "id,mode,status,recovery_stage,replay_job_id,error_text,"
-                "affected_player_ids,result_json,created_at,finished_at"
+                "affected_player_ids,result_json,source,created_at,finished_at"
             )
             .eq("club_id", str(club_id))
             .order("created_at", desc=True)
@@ -457,6 +457,7 @@ def _recent_match_exclusion_operations(
             "replay_job_id": str(row.get("replay_job_id") or "") or None,
             "error_text": _clean_text(row.get("error_text"), limit=500)
             or None,
+            "source": _clean_text(row.get("source"), limit=120) or None,
             "affected_player_ids": [
                 int(value) for value in row.get("affected_player_ids") or []
             ],

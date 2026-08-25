@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pandas as pd
@@ -370,6 +371,21 @@ def test_replay_history_ignores_soft_deleted_matches():
 def test_tracked_replay_fences_every_projection_write_batch():
     sb = _Supabase()
     sb.tables["players"] = _seed_players()
+    sb.tables["league_ratings"] = [
+        {
+            "club_id": "club",
+            "player_id": player_id,
+            "league_name": "Main",
+            "rating": 1200.123456,
+            "starting_rating": 1200.123456,
+            "wins": 0,
+            "losses": 0,
+            "matches_played": 0,
+            "is_active": True,
+            "inactive_at": None,
+        }
+        for player_id in range(1, 5)
+    ]
     sb.tables["matches"] = [
         {
             "id": 1,
@@ -434,6 +450,20 @@ def test_tracked_replay_fences_every_projection_write_batch():
     assert {
         row["last_game_at"] for row in players_batch["p_rows"]
     } == {"2024-01-01T00:00:00+00:00"}
+    league_batch = next(
+        payload
+        for name, payload in sb.rpc_calls
+        if name == "apply_replay_league_rating_rows_atomic"
+    )
+    assert league_batch["p_rows"]
+    assert {
+        Decimal(str(row["starting_rating"]))
+        for row in league_batch["p_rows"]
+    } == {Decimal("1200.1235")}
+    for row in league_batch["p_rows"]:
+        for field in ("rating", "starting_rating"):
+            value = Decimal(str(row[field]))
+            assert value == value.quantize(Decimal("0.0001"))
 
 
 def test_stale_replay_fence_stops_before_first_projection_mutation():
