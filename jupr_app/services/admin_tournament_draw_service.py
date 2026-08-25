@@ -21,6 +21,16 @@ from jupr_app.services.admin_tournament_guarded_operation import (
 CONFIRM_CREATE_DRAW = "CREATE DRAW"
 CONFIRM_CANCEL_EMPTY_DRAW = "CANCEL EMPTY DRAW"
 CONFIRM_CANCEL_EMPTY_EVENT = "CANCEL EMPTY EVENT"
+DISABLED_EVENT_STATUSES = {
+    "disabled",
+    "cancelled",
+    "canceled",
+    "inactive",
+    "archived",
+    "deleted",
+    "void",
+    "voided",
+}
 
 
 def _require_atomic_recovery(
@@ -56,6 +66,18 @@ def _event_label(row: dict[str, Any] | None) -> str:
     if family and division and family != division:
         return f"{family} / {division}"
     return division or family or "Tournament Draw"
+
+
+def _event_option_enabled(row: dict[str, Any]) -> bool:
+    enabled_value = row.get("enabled", True)
+    enabled = (
+        enabled_value
+        if isinstance(enabled_value, bool)
+        else str(enabled_value).strip().lower()
+        not in {"0", "false", "no", "off", "disabled", "cancelled", "canceled"}
+    )
+    status = _clean_text(row.get("status"), limit=40).lower()
+    return bool(enabled) and status not in DISABLED_EVENT_STATUSES
 
 
 def _fetch_event_option(supabase: Any, *, tournament_id: str, event_option_id: str) -> dict[str, Any] | None:
@@ -126,6 +148,8 @@ def create_admin_tournament_draw(
     event_option = _fetch_event_option(supabase, tournament_id=clean_tournament_id, event_option_id=clean_event_option_id or "")
     if clean_event_option_id and not event_option:
         raise ValueError("event option not found for this tournament")
+    if event_option and not _event_option_enabled(event_option):
+        raise ValueError("A draw cannot be created for a disabled or cancelled event.")
 
     clean_day_id = _clean_text(registration_day_id, limit=120) or None
     if event_option:
@@ -442,14 +466,7 @@ def cancel_admin_tournament_empty_event(
     )
     if event is None:
         raise ValueError("event option not found for this tournament")
-    enabled_value = event.get("enabled", True)
-    enabled = (
-        enabled_value
-        if isinstance(enabled_value, bool)
-        else str(enabled_value).strip().lower()
-        not in {"0", "false", "no", "off", "disabled", "cancelled", "canceled"}
-    )
-    if not enabled:
+    if not _event_option_enabled(event):
         raise ValueError("This event is already disabled.")
 
     dependency_tables = (
