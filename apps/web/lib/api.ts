@@ -56,7 +56,12 @@ export type LeaderboardResponse = {
   scopes: LeaderboardScope[];
   selected_scope: string;
   scope: LeaderboardScope;
-  filters: { status: "active" | "inactive" | "all"; search: string; sort: string };
+  filters: {
+    league_view: "active" | "past";
+    status: "active" | "inactive" | "all";
+    search: string;
+    sort: string;
+  };
   summary: {
     ranked_players: number;
     active_players: number;
@@ -507,6 +512,7 @@ export type LeagueResultsRecentMatch = {
 export type LeagueResultsResponse = {
   club: { id: string; slug: string; name: string };
   leagues: LeagueResultsLeague[];
+  past_leagues: LeagueResultsLeague[];
   selected_league?: string | null;
   league?: LeagueResultsLeague | null;
   standings: LeagueResultsStanding[];
@@ -570,6 +576,7 @@ export async function getClub(clubSlug: string): Promise<ApiResult<ClubSummary>>
 
 export type LeaderboardRequest = {
   leagueName?: string | null;
+  leagueView?: "active" | "past";
   status?: "active" | "inactive" | "all";
   search?: string | null;
   sort?: "rank" | "rating" | "matches" | "win_pct" | "gain" | "name";
@@ -584,6 +591,7 @@ export async function getClubLeaderboard(
 ): Promise<ApiResult<LeaderboardResponse>> {
   const params = new URLSearchParams();
   if (options.leagueName) params.set("league_name", String(options.leagueName));
+  if (options.leagueView) params.set("league_view", options.leagueView);
   if (options.status) params.set("status", options.status);
   if (options.search) params.set("q", String(options.search));
   if (options.sort) params.set("sort", options.sort);

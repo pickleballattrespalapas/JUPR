@@ -6,10 +6,13 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
 
+from jupr_app.services.public_league_visibility import league_is_public
+
 PLAYER_SELECT = "id,club_id,name,rating,starting_rating,wins,losses,matches_played,active,last_game_at,inactive_at,singles_rating,singles_wins,singles_losses,singles_matches_played,singles_last_game_at"
 PLAYER_BASE_SELECT = "id,club_id,name,rating,wins,losses,matches_played,active,last_game_at,inactive_at,singles_rating,singles_wins,singles_losses,singles_matches_played,singles_last_game_at"
 PLAYER_MINIMAL_SELECT = "id,club_id,name,rating,wins,losses,matches_played"
 LEAGUE_RATINGS_SELECT = "id,club_id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active"
+LEAGUE_META_VISIBILITY_SELECT = "club_id,league_name,is_active,status"
 MATCH_SELECT = "*"
 PLAYER_BADGE_SELECT = "club_id,player_id,badge_id,earned_at,context_type,context_id,value_num,value_json,revoked_at"
 PLAYER_BADGE_FALLBACK_SELECT = "club_id,player_id,badge_id,earned_at,context_type,context_id,value_num,value_json"
@@ -240,6 +243,23 @@ def _fetch_league_ratings(supabase: Any, club_id: str, player_id: int | str | No
         return _safe_rows(query.execute())
     except Exception:
         return []
+
+
+def _public_league_names(supabase: Any, club_id: str) -> set[str]:
+    try:
+        rows = _safe_rows(
+            supabase.table("leagues_metadata")
+            .select(LEAGUE_META_VISIBILITY_SELECT)
+            .eq("club_id", str(club_id))
+            .execute()
+        )
+    except Exception:
+        return set()
+    return {
+        str(row.get("league_name") or "").strip()
+        for row in rows
+        if league_is_public(row)
+    }
 
 
 def _fetch_recent_matches(supabase: Any, club_id: str, *, limit: int = 300) -> list[dict[str, Any]]:
@@ -935,7 +955,12 @@ def get_public_player_profile(
     if not row:
         return None
     player = _player_base(row)
-    league_ratings = [_public_league_rating(r) for r in _fetch_league_ratings(supabase, cid, player_id)]
+    public_league_names = _public_league_names(supabase, cid)
+    league_ratings = [
+        _public_league_rating(row)
+        for row in _fetch_league_ratings(supabase, cid, player_id)
+        if str(row.get("league_name") or "").strip() in public_league_names
+    ]
     league_ratings.sort(key=lambda r: str(r.get("league_name") or "").casefold())
 
     players = _fetch_players(supabase, cid)

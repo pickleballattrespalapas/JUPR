@@ -189,6 +189,9 @@ def test_team_league_and_award_admin_pages_are_complete_and_responsive() -> None
     public_detail = _read(
         "apps/web/app/clubs/[clubSlug]/team-leagues/[leagueName]/page.tsx"
     )
+    public_list = _read(
+        "apps/web/app/clubs/[clubSlug]/team-leagues/page.tsx"
+    )
 
     for target in ("settings", "roster", "teams", "live", "awards"):
         assert f"/admin/league-manager/{target}" in nav
@@ -217,6 +220,8 @@ def test_team_league_and_award_admin_pages_are_complete_and_responsive() -> None
     assert "minmax(min(100%, 200px)" in public_detail
     assert "minmax(min(100%, 120px)" in public_detail
     assert 'overflowX: "auto", maxWidth: "100%"' in public_detail
+    assert 'data-testid="public-team-league-view-toggle"' in public_list
+    assert '"Past leagues"' in public_list
     for source in (team_panel, roster_panel, awards_panel):
         assert "repeat(auto-fit" in source
         assert "overflowX: \"auto\"" in source

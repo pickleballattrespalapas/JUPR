@@ -29,6 +29,10 @@ from jupr_app.services.direct_match_entry_service import (
     DirectMatchRecoveryRequiredError,
     submit_atomic_direct_matches,
 )
+from jupr_app.services.public_league_visibility import (
+    normalize_public_league_view,
+    public_league_view,
+)
 from jupr_app.services.staging_write_guard import (
     require_staging_admin_team_league_writes,
     require_staging_public_team_league_writes,
@@ -58,9 +62,7 @@ PUBLIC_VISIBLE_STATUSES = {
     "active",
     "playoffs",
     "complete",
-    "archived",
 }
-PUBLIC_MANAGER_VISIBLE_STATUSES = {"active", "ended"}
 
 
 class TeamLeagueConflictError(RuntimeError):
@@ -487,7 +489,7 @@ def _manager_league_status(row: Mapping[str, Any] | None) -> str:
 def _manager_league_is_public(row: Mapping[str, Any] | None) -> bool:
     """Keep draft, paused, and archived manager records off public routes."""
 
-    return _manager_league_status(row) in PUBLIC_MANAGER_VISIBLE_STATUSES
+    return public_league_view(row) is not None
 
 
 def _manager_league_accepts_registration(row: Mapping[str, Any] | None) -> bool:
@@ -495,8 +497,9 @@ def _manager_league_accepts_registration(row: Mapping[str, Any] | None) -> bool:
 
 
 def list_public_team_leagues(
-    supabase: Any, *, club_id: str
+    supabase: Any, *, club_id: str, league_view: str = "active"
 ) -> dict[str, Any]:
+    clean_view = normalize_public_league_view(league_view)
     settings = _fetch_rows(
         supabase,
         "team_league_settings",
@@ -517,12 +520,18 @@ def list_public_team_leagues(
     visible = [
         _public_settings(row)
         for row in settings
-        if _manager_league_is_public(
+        if public_league_view(
             manager_by_name.get(_text(row.get("league_name"), 120).casefold())
         )
+        == clean_view
         and str(row.get("status") or "") in PUBLIC_VISIBLE_STATUSES
     ]
-    return {"ok": True, "leagues": visible, "league_count": len(visible)}
+    return {
+        "ok": True,
+        "league_view": clean_view,
+        "leagues": visible,
+        "league_count": len(visible),
+    }
 
 
 def get_public_team_league(
@@ -647,7 +656,11 @@ def get_public_team_league(
         for fixture in fixtures
     ]
     registration_supported = _online_team_registration_supported(settings)
-    registration_open = _registration_is_open(settings) and registration_supported
+    registration_open = (
+        _manager_league_accepts_registration(manager)
+        and _registration_is_open(settings)
+        and registration_supported
+    )
     from jupr_app.services.admin_league_awards_service import (
         get_public_league_award_progress,
     )

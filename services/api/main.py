@@ -484,19 +484,28 @@ def _normalize_public_leaderboard_projection(payload: dict[str, Any]) -> dict[st
     ]
     scope = payload.get("scope") if isinstance(payload.get("scope"), dict) else {}
     filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+    league_view = "past" if str(filters.get("league_view") or "").lower() == "past" else "active"
+    default_scope = "" if league_view == "past" else "OVERALL"
+    selected_scope = str(payload.get("selected_scope") or default_scope)
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     pagination = payload.get("pagination") if isinstance(payload.get("pagination"), dict) else {}
     snapshot_rows = _normalize_public_leaderboard_rows([payload["snapshot"]]) if isinstance(payload.get("snapshot"), dict) else []
     highlights = payload.get("highlights") if isinstance(payload.get("highlights"), dict) else {}
     return {
         "scopes": scopes,
-        "selected_scope": str(payload.get("selected_scope") or "OVERALL"),
+        "selected_scope": selected_scope,
         "scope": {
-            "name": str(scope.get("name") or payload.get("selected_scope") or "OVERALL"),
-            "label": str(scope.get("label") or scope.get("name") or payload.get("selected_scope") or "Overall"),
+            "name": str(scope.get("name") or selected_scope),
+            "label": str(
+                scope.get("label")
+                or scope.get("name")
+                or selected_scope
+                or "Past leagues"
+            ),
             "min_games": max(0, int(scope.get("min_games") or 0)),
         },
         "filters": {
+            "league_view": league_view,
             "status": str(filters.get("status") or "active"),
             "search": str(filters.get("search") or ""),
             "sort": str(filters.get("sort") or "rank"),
@@ -527,6 +536,7 @@ def _build_leaderboard_response(
     club_slug: str,
     league_name: str | None,
     *,
+    league_view: str = "active",
     status: str = "active",
     search: str | None = None,
     sort: str = "rank",
@@ -542,6 +552,7 @@ def _build_leaderboard_response(
             supabase,
             club_id=club_id,
             league_name=league_name,
+            league_view=league_view,
             status=status,
             search=search,
             sort=sort,
@@ -979,6 +990,7 @@ install_admin_tournament_team_competition_routes(app, get_supabase_client=get_su
 def get_club_leaderboard(
     club_slug: str,
     league_name: str | None = Query(default=None),
+    league_view: str = Query(default="active", pattern="^(active|past)$"),
     status: str = Query(default="active"),
     q: str | None = Query(default=None, max_length=120),
     sort: str = Query(default="rank"),
@@ -989,6 +1001,7 @@ def get_club_leaderboard(
     return _build_leaderboard_response(
         club_slug,
         league_name,
+        league_view=league_view,
         status=status,
         search=q,
         sort=sort,
@@ -1002,6 +1015,7 @@ def get_club_leaderboard(
 def get_club_leaderboard_compat(
     club_slug: str,
     league_name: str | None = Query(default=None),
+    league_view: str = Query(default="active", pattern="^(active|past)$"),
     status: str = Query(default="active"),
     q: str | None = Query(default=None, max_length=120),
     sort: str = Query(default="rank"),
@@ -1012,6 +1026,7 @@ def get_club_leaderboard_compat(
     return _build_leaderboard_response(
         club_slug,
         league_name,
+        league_view=league_view,
         status=status,
         search=q,
         sort=sort,

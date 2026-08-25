@@ -107,11 +107,20 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
 }
 
 export async function getPublicTeamLeagues(
-  clubSlug: string
+  clubSlug: string,
+  leagueView: "active" | "past" = "active"
 ): Promise<
-  ApiResult<{ ok: boolean; leagues: TeamLeagueSettings[]; league_count: number }>
+  ApiResult<{
+    ok: boolean;
+    league_view: "active" | "past";
+    leagues: TeamLeagueSettings[];
+    league_count: number;
+  }>
 > {
-  return fetchJson(`/clubs/${encodeURIComponent(clubSlug)}/team-leagues`);
+  const query = leagueView === "past" ? "?view=past" : "";
+  return fetchJson(
+    `/clubs/${encodeURIComponent(clubSlug)}/team-leagues${query}`
+  );
 }
 
 export async function getPublicTeamLeague(

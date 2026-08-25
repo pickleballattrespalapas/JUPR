@@ -7,12 +7,12 @@ from jupr_app.services.public_league_results_service import (
     _build_resolved_league_results,
     _public_league_meta,
 )
+from jupr_app.services.public_league_visibility import league_is_public
 
 ADMIN_LEAGUE_RESULTS_META_SELECT = (
     "id,club_id,league_name,league_type,match_format,is_active,status,min_games,k_factor,"
     "schedule_config,awards_config"
 )
-PUBLIC_LEAGUE_STATUSES = {"active", "published", "live"}
 
 
 def _safe_rows(response: Any) -> list[dict[str, Any]]:
@@ -49,10 +49,7 @@ def _exact_league_metadata(
 
 
 def _is_publicly_visible(metadata: dict[str, Any]) -> bool:
-    status = str(metadata.get("status") or "").strip().lower()
-    return metadata.get("is_active") is not False and (
-        not status or status in PUBLIC_LEAGUE_STATUSES
-    )
+    return league_is_public(metadata)
 
 
 def build_admin_league_results(

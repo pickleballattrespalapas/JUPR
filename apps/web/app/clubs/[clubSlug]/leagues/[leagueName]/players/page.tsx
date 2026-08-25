@@ -67,6 +67,9 @@ export default async function PublicLeaguePlayerSummariesPage({ params, searchPa
     requestedPlayer
   );
   const found = data?.selected_league === leagueName;
+  const leagueView = data?.past_leagues.some((league) => league.name === leagueName)
+    ? "past"
+    : "active";
 
   if (error || !data || !found) {
     return (
@@ -78,7 +81,7 @@ export default async function PublicLeaguePlayerSummariesPage({ params, searchPa
         <article style={{ ...cardStyle, borderColor: "#fecaca", background: "#fef2f2" }}>
           <h2 style={{ marginTop: 0 }}>Player summaries unavailable</h2>
           <p style={{ color: "#7f1d1d" }}>
-            {error || "This league is not currently available as an active public league."}
+            {error || "This league is not available as an active or finished public league."}
           </p>
           <Link href={`/clubs/${params.clubSlug}/leagues`}>Return to all leagues</Link>
         </article>
@@ -100,7 +103,7 @@ export default async function PublicLeaguePlayerSummariesPage({ params, searchPa
         Open any player’s league record, weekly trend, rating movement, and recent matches.
       </p>
 
-      <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="player" />
+      <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="player" leagueView={leagueView} />
 
       <div style={{ ...cardStyle, marginBottom: "1rem" }}>
         <LeaguePlayerSelect

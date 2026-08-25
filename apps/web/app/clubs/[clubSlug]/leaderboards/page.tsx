@@ -9,9 +9,11 @@ type LeaderboardPageProps = {
 
 type SortKey = "rank" | "rating" | "matches" | "win_pct" | "gain" | "name";
 type StatusKey = "active" | "inactive" | "all";
+type LeagueView = "active" | "past";
 
 type ViewState = {
   league: string;
+  leagueView: LeagueView;
   status: StatusKey;
   sort: SortKey;
   search: string;
@@ -57,6 +59,10 @@ function normalizeStatus(value: string | null): StatusKey {
   return "active";
 }
 
+function normalizeLeagueView(value: string | null): LeagueView {
+  return value === "past" ? "past" : "active";
+}
+
 function positiveInt(value: string | null, fallback: number, maximum = 100000): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 1) return fallback;
@@ -72,6 +78,7 @@ function pageHref(
   const next = { ...state, ...overrides };
   const params = new URLSearchParams();
   if (next.league && next.league !== "OVERALL") params.set("league", next.league);
+  if (next.leagueView === "past") params.set("league_view", "past");
   if (next.status !== "active") params.set("status", next.status);
   if (next.sort !== "rank") params.set("sort", next.sort);
   if (next.search) params.set("q", next.search);
@@ -186,7 +193,8 @@ function qualificationLabel(entry: LeaderboardEntry, overall: boolean): string {
 
 export default async function ClubLeaderboardPage({ params, searchParams }: LeaderboardPageProps) {
   const { clubSlug } = params;
-  const requestedLeague = firstParam(searchParams, "league") || "OVERALL";
+  const leagueView = normalizeLeagueView(firstParam(searchParams, "league_view"));
+  const requestedLeague = firstParam(searchParams, "league") || (leagueView === "past" ? "" : "OVERALL");
   const selectedStatus = normalizeStatus(firstParam(searchParams, "status"));
   const selectedSort = normalizeSort(firstParam(searchParams, "sort"));
   const search = (firstParam(searchParams, "q") || "").trim().slice(0, 120);
@@ -196,6 +204,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
   const offset = (page - 1) * pageSize;
   const { data, error } = await getClubLeaderboard(clubSlug, {
     leagueName: requestedLeague,
+    leagueView,
     status: selectedStatus,
     search,
     sort: selectedSort,
@@ -219,9 +228,10 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
     );
   }
 
-  const selectedLeague = data.selected_scope || "OVERALL";
+  const selectedLeague = data.selected_scope || (data.filters.league_view === "active" ? "OVERALL" : "");
   const state: ViewState = {
     league: selectedLeague,
+    leagueView: data.filters.league_view,
     status: data.filters.status,
     sort: normalizeSort(data.filters.sort),
     search: data.filters.search,
@@ -240,9 +250,32 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Leaderboards</p>
       <h1 style={{ marginTop: 0 }}>{clubName} leaderboards</h1>
       <p style={{ color: "#475569", maxWidth: "780px" }}>
-        Overall and league standings use the same rating, qualification, and badge projections as the club app. Active players are shown by default.
+        {state.leagueView === "past"
+          ? "Review final standings for finished public leagues. Active players are shown by default."
+          : "Overall and active-league standings use the same rating, qualification, and badge projections as the club app. Active players are shown by default."}
       </p>
       <p style={{ color: "#475569" }}><Link href={`/clubs/${encodeURIComponent(clubSlug)}/players`}>Browse all player profiles</Link></p>
+
+      <nav aria-label="Leaderboard league collections" data-testid="leaderboard-league-view-toggle" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+        {(["active", "past"] as LeagueView[]).map((option) => {
+          const active = option === state.leagueView;
+          return (
+            <Link
+              key={option}
+              href={pageHref(clubSlug, state, {
+                leagueView: option,
+                league: option === "active" ? "OVERALL" : "",
+                player: "",
+                page: 1
+              })}
+              aria-current={active ? "page" : undefined}
+              style={{ border: `1px solid ${active ? "#2563eb" : "#cbd5e1"}`, borderRadius: "999px", padding: "0.45rem 0.75rem", background: active ? "#dbeafe" : "white", color: active ? "#1d4ed8" : "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}
+            >
+              {option === "active" ? "Active leagues" : "Past leagues"}
+            </Link>
+          );
+        })}
+      </nav>
 
       <nav aria-label="Leaderboard scope" data-testid="leaderboard-scope-tabs" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
         {data.scopes.map((scope) => {
@@ -263,7 +296,8 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
 
       <div style={{ ...cardStyle, display: "grid", gap: "0.85rem", marginBottom: "1rem" }}>
         <form method="get" action={`/clubs/${encodeURIComponent(clubSlug)}/leaderboards`} data-testid="leaderboard-search-form" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "end" }}>
-          {selectedLeague !== "OVERALL" ? <input type="hidden" name="league" value={selectedLeague} /> : null}
+          {selectedLeague && selectedLeague !== "OVERALL" ? <input type="hidden" name="league" value={selectedLeague} /> : null}
+          {state.leagueView === "past" ? <input type="hidden" name="league_view" value="past" /> : null}
           {state.status !== "active" ? <input type="hidden" name="status" value={state.status} /> : null}
           {state.sort !== "rank" ? <input type="hidden" name="sort" value={state.sort} /> : null}
           {state.pageSize !== DEFAULT_PAGE_SIZE ? <input type="hidden" name="per_page" value={state.pageSize} /> : null}
@@ -310,7 +344,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
         <article style={cardStyle}><strong>Leaderboard scopes</strong><br />{data.summary.leaderboard_scopes}</article>
       </div>
 
-      {!overall ? (
+      {selectedLeague && !overall ? (
         <p style={{ ...cardStyle, background: "#f8fafc", color: "#475569" }} data-testid="leaderboard-qualification-note">
           Qualification for {selectedLeague}: {minGames > 0 ? `at least ${minGames} recorded games.` : "every ranked player currently qualifies."}
         </p>
@@ -341,15 +375,20 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
         </article>
       ) : null}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
+      {selectedLeague ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
         <BarList title="Highest rating" rows={data.highlights.highest_rating} value={(row) => Number(row.rating_jupr ?? 0)} detail={(row) => ratingLabel(row.rating_jupr)} clubSlug={clubSlug} />
         <BarList title="Most improved" rows={data.highlights.most_improved} value={(row) => Number(row.rating_gain_jupr ?? 0)} detail={(row) => signedRatingLabel(row.rating_gain_jupr)} clubSlug={clubSlug} />
         <BarList title="Best win %" rows={data.highlights.best_win_pct} value={(row) => Number(row.win_pct ?? 0)} detail={(row) => percentLabel(row.win_pct)} clubSlug={clubSlug} />
         <BarList title="Most wins" rows={data.highlights.most_wins} value={(row) => Number(row.wins ?? 0)} detail={(row) => `${Number(row.wins ?? 0)} wins`} clubSlug={clubSlug} />
-      </div>
+      </div> : null}
 
       {data.summary.ranked_players === 0 ? (
-        <div style={cardStyle} data-testid="leaderboard-empty-state"><strong>No leaderboard data is currently available.</strong><p style={{ marginBottom: 0, color: "#475569" }}>Recorded matches will populate this scope.</p></div>
+        <div style={cardStyle} data-testid="leaderboard-empty-state">
+          <strong>{state.leagueView === "past" && !selectedLeague ? "No past leagues have been published yet." : "No leaderboard data is currently available."}</strong>
+          <p style={{ marginBottom: 0, color: "#475569" }}>
+            {state.leagueView === "past" && !selectedLeague ? "Finished public leagues will appear here." : "Recorded matches will populate this scope."}
+          </p>
+        </div>
       ) : entries.length === 0 ? (
         <div style={cardStyle} data-testid="leaderboard-filter-empty-state"><strong>No players match these filters.</strong><p style={{ marginBottom: 0 }}><Link href={pageHref(clubSlug, state, { search: "", status: "active", player: "", page: 1 })}>Reset search and status</Link></p></div>
       ) : (
