@@ -59,6 +59,7 @@ type LiveCommandBody = {
   game_id?: string;
   score_a?: number;
   score_b?: number;
+  unusual_score_acknowledged?: boolean;
   advance_count?: number;
   playoff_winner_bonus_elo?: number;
 };
@@ -80,6 +81,7 @@ const CONFIRMATIONS: Record<LiveCommand, string> = {
   publish_official_matches: "PUBLISH MATCHES"
 };
 const ACTIVE_OPERATION_STATUSES: ReadonlySet<string> = new Set(["intent", "mutated", "recovery_required"]);
+const NON_PLAYED_RESULT_TYPES: ReadonlySet<string> = new Set(["FORFEIT", "NO_SHOW", "RETIREMENT"]);
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -105,6 +107,22 @@ function isScored(game: Record<string, unknown>): boolean {
   const scoreA = numericValue(game.score_a);
   const scoreB = numericValue(game.score_b);
   return scoreA != null && scoreB != null && scoreA !== scoreB && Boolean(game.winner_team_id);
+}
+
+function gameResultType(game: Record<string, unknown>): string {
+  return String(game.result_type || "PLAYED").toUpperCase();
+}
+
+function isNonPlayedGame(game: Record<string, unknown>): boolean {
+  return NON_PLAYED_RESULT_TYPES.has(gameResultType(game));
+}
+
+function resultTypeLabel(game: Record<string, unknown>): string {
+  const resultType = gameResultType(game);
+  if (resultType === "NO_SHOW") return "No-show";
+  if (resultType === "RETIREMENT") return "Retirement";
+  if (resultType === "FORFEIT") return "Forfeit";
+  return resultType === "PLAYED" ? "Played" : resultType.replace(/_/g, " ").toLowerCase();
 }
 
 function gameSortKey(game: Record<string, unknown>): string {
@@ -148,7 +166,7 @@ function matchupLabel(
 ): string {
   const teamA = teamLabel(teamsById.get(String(game.team_a_id || "")), snapshot);
   const teamB = teamLabel(teamsById.get(String(game.team_b_id || "")), snapshot);
-  const status = isScored(game) ? "Final" : "Open";
+  const status = isNonPlayedGame(game) ? `${resultTypeLabel(game)} — not played` : isScored(game) ? "Final" : "Open";
   return `${gameLabel(game)} — ${teamA} vs ${teamB} — ${status}`;
 }
 
@@ -175,7 +193,11 @@ function readPendingCommand(clubId: string, tournamentId: string, drawId: string
   }
 }
 
-function StatusChip({ scored }: { scored: boolean }) {
+function StatusChip({ game }: { game: Record<string, unknown> }) {
+  if (isNonPlayedGame(game)) {
+    return <span className={styles.neutralChip}>{resultTypeLabel(game)} · not played</span>;
+  }
+  const scored = isScored(game);
   return <span className={scored ? styles.successChip : styles.openChip}>{scored ? "Final" : "Open"}</span>;
 }
 
@@ -227,6 +249,7 @@ export default function TournamentLivePanel({
   const [scoreGameId, setScoreGameId] = useState("");
   const [scoreA, setScoreA] = useState("");
   const [scoreB, setScoreB] = useState("");
+  const [unusualScoreAcknowledged, setUnusualScoreAcknowledged] = useState(false);
   const [roundFilter, setRoundFilter] = useState("all");
   const [gameStatusFilter, setGameStatusFilter] = useState("all");
   const [scoreConfirmation, setScoreConfirmation] = useState(false);
@@ -253,7 +276,10 @@ export default function TournamentLivePanel({
       sortedGames: games
     };
   }, [snapshot]);
-  const selectedGame = sortedGames.find((game) => String(game.id || "") === scoreGameId) || sortedGames.find((game) => !isScored(game)) || sortedGames[0] || null;
+  const selectedGame = sortedGames.find((game) => String(game.id || "") === scoreGameId && !isNonPlayedGame(game))
+    || sortedGames.find((game) => !isNonPlayedGame(game) && !isScored(game))
+    || sortedGames.find((game) => !isNonPlayedGame(game))
+    || null;
   const roundOptions = [...new Set(sortedGames.map((game) => String(game.rr_round_number || game.playoff_round || "Other")))];
   const filteredGames = sortedGames.filter((game) => {
     const round = String(game.rr_round_number || game.playoff_round || "Other");
@@ -262,6 +288,7 @@ export default function TournamentLivePanel({
   });
   const lifecycle = snapshot?.lifecycle;
   const officialReadiness = lifecycle?.domain_readiness?.official_publish;
+  const completionReadiness = lifecycle?.domain_readiness?.completion;
   const archiveReadiness = lifecycle?.domain_readiness?.archive;
   const activeOperations = (snapshot?.operations || []).filter((operation) => ACTIVE_OPERATION_STATUSES.has(operation.status));
   const pendingOperation = pendingCommand
@@ -284,15 +311,18 @@ export default function TournamentLivePanel({
     boardRequest.invalidate(); actionRequest.invalidate();
     setBusy(false); setNotice(null);
     setDraws([]); setDrawLifecycle([]); setSelectedDrawId(initialDrawId || ""); setSnapshot(null);
-    setScoreGameId(""); setScoreA(""); setScoreB(""); setScoreConfirmation(false); setPendingCommand(null); setLastResult(null);
+    setScoreGameId(""); setScoreA(""); setScoreB(""); setUnusualScoreAcknowledged(false); setScoreConfirmation(false); setPendingCommand(null); setLastResult(null);
   }
 
   function seedScoreEditor(nextSnapshot: AdminTournamentLiveSnapshotResponse | null) {
     const games = [...(nextSnapshot?.games || [])].sort((left, right) => gameSortKey(left).localeCompare(gameSortKey(right)));
-    const target = games.find((game) => !isScored(game)) || games[0] || null;
+    const target = games.find((game) => !isNonPlayedGame(game) && !isScored(game))
+      || games.find((game) => !isNonPlayedGame(game))
+      || null;
     setScoreGameId(target ? String(target.id || "") : "");
     setScoreA(target?.score_a == null ? "" : String(target.score_a));
     setScoreB(target?.score_b == null ? "" : String(target.score_b));
+    setUnusualScoreAcknowledged(false);
     setScoreConfirmation(false);
   }
 
@@ -377,7 +407,8 @@ export default function TournamentLivePanel({
       setNotice({ tone: operableDraws.length ? "success" : "info", text: operableDraws.length ? `Loaded ${operableDraws.length} prepared draw(s).` : "This tournament has no operable draws. Build or reactivate one in Tournament Ops." });
       if (nextSelectedDrawId !== selectedDrawId) replaceDrawInUrl(nextSelectedDrawId);
       if (!nextSelectedDrawId) {
-        setSnapshot(null);
+        setSnapshot(["overview", "results", "publish-overview", "closeout", "status"].includes(view) ? payload : null);
+        seedScoreEditor(null);
         setPendingCommand(null);
       }
     } catch (error) {
@@ -427,9 +458,14 @@ export default function TournamentLivePanel({
   }
 
   function selectScoreGame(game: Record<string, unknown>) {
+    if (isNonPlayedGame(game)) {
+      setNotice({ tone: "info", text: `${resultTypeLabel(game)} results are locked as non-played outcomes. Use the guarded Day Workspace to review or change that outcome.` });
+      return;
+    }
     setScoreGameId(String(game.id || ""));
     setScoreA(game.score_a == null ? "" : String(game.score_a));
     setScoreB(game.score_b == null ? "" : String(game.score_b));
+    setUnusualScoreAcknowledged(false);
     setScoreConfirmation(false);
   }
 
@@ -594,18 +630,41 @@ export default function TournamentLivePanel({
       setNotice({ tone: "error", text: "Select a game before saving a score." });
       throw new Error("Select a game before saving a score.");
     }
+    if (isNonPlayedGame(selectedGame)) {
+      setNotice({ tone: "error", text: "This game has a non-played outcome and cannot be changed through ordinary score entry." });
+      throw new Error("This game has a non-played outcome and cannot be changed through ordinary score entry.");
+    }
+    if (!scoreA.trim() || !scoreB.trim()) {
+      setNotice({ tone: "error", text: "Enter both team scores before saving." });
+      throw new Error("Enter both team scores before saving.");
+    }
     const a = Number(scoreA);
     const b = Number(scoreB);
     if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0 || a === b) {
       setNotice({ tone: "error", text: "Enter two non-tied, non-negative whole-number scores." });
       throw new Error("Enter two non-tied, non-negative whole-number scores.");
     }
-    return submitCommand("save_score", confirmationText, { game_id: String(selectedGame.id || ""), score_a: a, score_b: b });
+    return submitCommand("save_score", confirmationText, {
+      game_id: String(selectedGame.id || ""),
+      score_a: a,
+      score_b: b,
+      unusual_score_acknowledged: unusualScoreAcknowledged
+    });
   }
 
   function validateScoreDraft() {
     if (!selectedGame) {
       setNotice({ tone: "error", text: "Select a matchup before reviewing a score." });
+      return;
+    }
+    if (isNonPlayedGame(selectedGame)) {
+      setScoreConfirmation(false);
+      setNotice({ tone: "error", text: "This game has a non-played outcome and cannot be changed through ordinary score entry." });
+      return;
+    }
+    if (!scoreA.trim() || !scoreB.trim()) {
+      setScoreConfirmation(false);
+      setNotice({ tone: "error", text: "Enter both team scores before reviewing the result." });
       return;
     }
     const a = Number(scoreA);
@@ -661,6 +720,180 @@ export default function TournamentLivePanel({
       return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setNotice({ tone: "error", text: error instanceof Error ? error.message : "Unable to review the podium." });
+      throw error;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function transitionTournamentStatus(
+    action: "complete" | "archive" | "unarchive",
+    confirmationText: string
+  ): Promise<ActionCompletion> {
+    if (!selectedTournamentId) {
+      throw new Error("Return to Tournament Manager and select a tournament first.");
+    }
+    const expectedUpdatedAt = String(
+      lifecycle?.tournament?.updated_at || selectedTournament?.updated_at || ""
+    );
+    if (!expectedUpdatedAt) {
+      throw new Error("Reload the authoritative tournament version before changing status.");
+    }
+    const generation = actionRequest.begin();
+    const tournamentId = selectedTournamentId;
+    const drawId = selectedDrawId;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const result = await requestJson<AdminTournamentWriteResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/status-action`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            action,
+            expected_updated_at: expectedUpdatedAt,
+            confirmation_text: confirmationText,
+            source: "next_tournament_closeout"
+          })
+        }
+      );
+      const details = action === "complete"
+        ? "The tournament is complete and publicly available in Past tournaments with its immutable closeout receipt."
+        : action === "archive"
+          ? "The completed tournament moved to the hidden archive. Its official results and closeout evidence were retained."
+          : "The archived tournament was restored to Completed and is public again in Past tournaments.";
+      const completion = actionSuccess(
+        action === "complete"
+          ? "Tournament completed"
+          : action === "archive"
+            ? "Tournament archived"
+            : "Tournament restored",
+        details
+      );
+      if (!actionRequest.isCurrent(generation)) return completion;
+      try {
+        if (drawId) {
+          const board = await fetchBoard(tournamentId, drawId);
+          if (actionRequest.isCurrent(generation)) {
+            hydrateBoard(board, tournamentId, drawId);
+          }
+        } else {
+          const board = await requestJson<AdminTournamentLiveSnapshotResponse>(
+            `/admin/clubs/${encodeURIComponent(clubId)}/tournament-live/tournaments/${encodeURIComponent(tournamentId)}/snapshot`
+          );
+          assertSnapshotIdentity(board, tournamentId);
+          if (actionRequest.isCurrent(generation)) {
+            setSnapshot(board);
+            setDraws(board.draws || []);
+            setDrawLifecycle(board.lifecycle?.draws || []);
+          }
+        }
+      } catch {
+        if (result.tournament) {
+          setSnapshot((current) => current ? {
+            ...current,
+            tournament: { ...current.tournament, ...result.tournament },
+            lifecycle: current.lifecycle ? {
+              ...current.lifecycle,
+              tournament: { ...current.lifecycle.tournament, ...result.tournament }
+            } : current.lifecycle
+          } : current);
+        }
+      }
+      if (actionRequest.isCurrent(generation)) {
+        setNotice({ tone: "success", text: details });
+      }
+      return completion;
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) {
+        setNotice({
+          tone: "error",
+          text: error instanceof Error
+            ? error.message
+            : "Unable to change tournament status. Retry the identical action so the server can reconcile its receipt."
+        });
+      }
+      throw error;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function recoverDrawSchedule(
+    action: "reconcile" | "rebuild" | "cancel",
+    confirmationText: string
+  ): Promise<ActionCompletion> {
+    if (!snapshot?.ops_state_fingerprint || !selectedTournamentId || !selectedDrawId) {
+      throw new Error("Reload the authoritative Tournament Ops version before repairing this draw.");
+    }
+    const reviewedDraw = snapshot.draws.find((draw) => draw.id === selectedDrawId);
+    if (!reviewedDraw?.updated_at) {
+      throw new Error("The selected draw has no reviewed version. Reload before repairing it.");
+    }
+    const expectedTeamVersions = snapshot.teams
+      .filter((team) => !team.draw_id || String(team.draw_id) === selectedDrawId)
+      .map((team) => ({ id: String(team.id || ""), updated_at: String(team.updated_at || "") }))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    if (
+      action !== "cancel"
+      && (!expectedTeamVersions.length || expectedTeamVersions.some((row) => !row.id || !row.updated_at))
+    ) {
+      throw new Error("The reviewed team version set is incomplete. Reload before repairing games.");
+    }
+    const generation = actionRequest.begin();
+    const tournamentId = selectedTournamentId;
+    const drawId = selectedDrawId;
+    const endpoint = action === "cancel"
+      ? `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/cancel-empty`
+      : `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/games/round-robin/${action}`;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const result = await requestJson<AdminTournamentWriteResponse>(endpoint, {
+        method: "POST",
+        body: JSON.stringify({
+          expected_state_fingerprint: snapshot.ops_state_fingerprint,
+          expected_draw_updated_at: reviewedDraw.updated_at,
+          ...(action === "cancel" ? {} : { expected_team_versions: expectedTeamVersions }),
+          confirmation_text: confirmationText,
+          source: `next_tournament_live_${action === "cancel" ? "cancel_empty_draw" : `round_robin_${action}`}`
+        })
+      });
+      const detail = action === "reconcile"
+        ? "Missing current-roster pairings were added while every valid existing game was preserved."
+        : action === "rebuild"
+          ? "The reviewed unstarted game set was replaced with one complete round robin."
+          : "The server verified the draw was empty and disabled it without changing tournament results.";
+      const completion = actionSuccess(
+        action === "reconcile"
+          ? "Round robin reconciled"
+          : action === "rebuild"
+            ? "Round robin rebuilt"
+            : "Empty draw cancelled",
+        detail
+      );
+      if (!actionRequest.isCurrent(generation)) return completion;
+      setLastResult(result);
+      if (action === "cancel") {
+        setDraws((current) => current.filter((draw) => draw.id !== drawId));
+        setDrawLifecycle((current) => current.filter((draw) => draw.draw_id !== drawId));
+        setSelectedDrawId("");
+        setSnapshot(null);
+        setPendingCommand(null);
+        replaceDrawInUrl("");
+      } else {
+        const board = await fetchBoard(tournamentId, drawId);
+        if (actionRequest.isCurrent(generation)) hydrateBoard(board, tournamentId, drawId);
+      }
+      if (actionRequest.isCurrent(generation)) setNotice({ tone: "success", text: detail });
+      return completion;
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) {
+        setNotice({
+          tone: "error",
+          text: error instanceof Error ? error.message : "Unable to repair this draw."
+        });
+      }
       throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
@@ -758,6 +991,7 @@ export default function TournamentLivePanel({
   const totalGames = counts?.games ?? sortedGames.length;
   const finalizedGames = counts?.finalized_games ?? sortedGames.filter(isScored).length;
   const openGames = counts?.open_games ?? Math.max(0, totalGames - finalizedGames);
+  const ratingPublishEligibleGames = counts?.rating_publish_eligible_games ?? totalGames;
   const duplicatePublications = counts?.duplicate_publications ?? counts?.duplicate_official_links ?? 0;
   const uncertainOperations = counts?.uncertain_operations ?? counts?.recovery_required_operations ?? 0;
   const podiumEntryCount = counts?.podium_entries ?? (lifecycle?.draws || []).reduce((total, draw) => total + draw.podium.length, 0);
@@ -766,6 +1000,7 @@ export default function TournamentLivePanel({
   const selectedTotalGames = selectedDrawCounts?.games ?? sortedGames.length;
   const selectedFinalizedGames = selectedDrawCounts?.finalized_games ?? sortedGames.filter(isScored).length;
   const selectedOpenGames = selectedDrawCounts?.open_games ?? Math.max(0, selectedTotalGames - selectedFinalizedGames);
+  const selectedRatingPublishEligibleGames = selectedDrawCounts?.rating_publish_eligible_games ?? selectedTotalGames;
   const currentPodiumReview = Boolean(
     selectedLifecycleDraw?.review_evidence
       && (selectedLifecycleDraw.review_evidence.current ?? selectedLifecycleDraw.review_evidence.reviewed)
@@ -786,20 +1021,42 @@ export default function TournamentLivePanel({
       && lifecycle?.runtime_capability?.archive_writes_enabled
       && lifecycle?.runtime_capability?.archive_atomic_commit_enabled
   );
+  const unarchiveAtomicAvailable = Boolean(
+    lifecycle?.runtime_capability?.unarchive_available
+      && lifecycle?.runtime_capability?.archive_writes_enabled
+      && lifecycle?.runtime_capability?.archive_atomic_commit_enabled
+  );
+  const completionAtomicAvailable = Boolean(
+    lifecycle?.runtime_capability?.completion_available
+      && lifecycle?.runtime_capability?.completion_writes_enabled
+      && lifecycle?.runtime_capability?.completion_atomic_commit_enabled
+  );
+  const tournamentStatus = String(
+    lifecycle?.tournament?.status || selectedTournament?.status || ""
+  ).toUpperCase();
 
   const gameCards = (games: Array<Record<string, unknown>>, editable: boolean) => (
     <div className={`${styles.gameCards} ${styles.mobileGames}`}>
-      {games.map((game) => (
-        <article key={String(game.id || matchupLabel(game, teamsById, snapshot))} className={styles.gameCard}>
-          <div className={styles.headingRow}>
-            <strong>{gameLabel(game)}</strong>
-            <StatusChip scored={isScored(game)} />
-          </div>
-          <p className={styles.matchup}>{teamLabel(teamsById.get(String(game.team_a_id || "")), snapshot)} <span>vs</span> {teamLabel(teamsById.get(String(game.team_b_id || "")), snapshot)}</p>
-          <p className={styles.resultLine}>{isScored(game) ? `${shortValue(game.score_a)}–${shortValue(game.score_b)}` : "Score pending"}</p>
-          {editable ? <button type="button" className={styles.secondaryButton} onClick={() => selectScoreGame(game)}>{isScored(game) ? "Correct score" : "Enter score"}</button> : null}
-        </article>
-      ))}
+      {games.map((game) => {
+        const nonPlayed = isNonPlayedGame(game);
+        const winner = teamLabel(teamsById.get(String(game.winner_team_id || "")), snapshot);
+        return (
+          <article key={String(game.id || matchupLabel(game, teamsById, snapshot))} className={styles.gameCard}>
+            <div className={styles.headingRow}>
+              <strong>{gameLabel(game)}</strong>
+              <StatusChip game={game} />
+            </div>
+            <p className={styles.matchup}>{teamLabel(teamsById.get(String(game.team_a_id || "")), snapshot)} <span>vs</span> {teamLabel(teamsById.get(String(game.team_b_id || "")), snapshot)}</p>
+            {nonPlayed ? (
+              <p className={styles.resultLine}><strong>{resultTypeLabel(game)} — not played.</strong> Winner: {winner}. {shortValue(game.result_note)}</p>
+            ) : (
+              <p className={styles.resultLine}>{isScored(game) ? `${shortValue(game.score_a)}–${shortValue(game.score_b)}` : "Score pending"}</p>
+            )}
+            {editable && !nonPlayed ? <button type="button" className={styles.secondaryButton} onClick={() => selectScoreGame(game)}>{isScored(game) ? "Correct score" : "Enter score"}</button> : null}
+            {editable && nonPlayed ? <p className={styles.muted}>Locked here. Review or change non-played outcomes in the guarded Day Workspace.</p> : null}
+          </article>
+        );
+      })}
     </div>
   );
 
@@ -837,18 +1094,29 @@ export default function TournamentLivePanel({
     <article className={styles.card}>
       <div className={styles.headingRow}>
         <div><p className={styles.eyebrow}>{view === "corrections" ? "Correction" : "Live score"}</p><h2>{selectedGame ? gameLabel(selectedGame) : "Select a matchup"}</h2></div>
-        {selectedGame ? <StatusChip scored={isScored(selectedGame)} /> : null}
+        {selectedGame ? <StatusChip game={selectedGame} /> : null}
       </div>
       <CommandBlockers readiness={scoreReadiness} />
       {selectedGame ? (
         <>
           <div className={styles.scorecard}>
             <div><span>Team A</span><strong>{teamLabel(teamsById.get(String(selectedGame.team_a_id || "")), snapshot)}</strong></div>
-            <label htmlFor="score-a">Team A score<input id="score-a" value={scoreA} onChange={(event) => { setScoreA(event.target.value); setScoreConfirmation(false); }} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
+            <label htmlFor="score-a">Team A score<input id="score-a" value={scoreA} onChange={(event) => { setScoreA(event.target.value); setUnusualScoreAcknowledged(false); setScoreConfirmation(false); }} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
             <div className={styles.versus}>vs</div>
-            <label htmlFor="score-b">Team B score<input id="score-b" value={scoreB} onChange={(event) => { setScoreB(event.target.value); setScoreConfirmation(false); }} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
+            <label htmlFor="score-b">Team B score<input id="score-b" value={scoreB} onChange={(event) => { setScoreB(event.target.value); setUnusualScoreAcknowledged(false); setScoreConfirmation(false); }} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
             <div><span>Team B</span><strong>{teamLabel(teamsById.get(String(selectedGame.team_b_id || "")), snapshot)}</strong></div>
           </div>
+          <label className={styles.muted} style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", marginTop: "0.75rem" }}>
+            <input
+              type="checkbox"
+              checked={unusualScoreAcknowledged}
+              onChange={(event) => {
+                setUnusualScoreAcknowledged(event.target.checked);
+                setScoreConfirmation(false);
+              }}
+            />
+            I reviewed this score and confirm it is intentional if the server classifies it as unusual.
+          </label>
           {isScored(selectedGame) ? <p><strong>Before correction:</strong> {shortValue(selectedGame.score_a)}–{shortValue(selectedGame.score_b)} · <strong>After correction:</strong> {scoreA || "—"}–{scoreB || "—"}</p> : null}
           {!scoreConfirmation ? <button type="button" className={styles.primaryButton} onClick={validateScoreDraft} disabled={!scoreReadiness.ready || busy}>Review score</button> : (
             <section className={styles.confirmationCard} aria-label="Score confirmation">
@@ -939,7 +1207,35 @@ export default function TournamentLivePanel({
       {snapshot && view === "draws" ? (
         <>
           <article className={styles.card}><h2>Draws & schedule</h2><p className={styles.muted}>Round and court cards keep the tournament schedule readable without a page-wide technical table.</p>{gameCards(sortedGames, false)}</article>
-          <article className={styles.card}><h2>Progress this draw</h2><div className={styles.commandGrid}><section className={styles.commandCard}><h3>Round robin</h3><CommandBlockers readiness={rrReadiness} /><ConfirmAction triggerLabel="Generate games" title="Generate round-robin games?" description="Create the reviewed Python schedule from the current teams." confirmLabel="Yes, generate games" confirmationText={rrReadiness.confirmation || CONFIRMATIONS.generate_round_robin} disabled={!rrReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("generate_round_robin", confirmationText)} /></section><section className={styles.commandCard}><h3>Playoffs</h3><CommandBlockers readiness={playoffReadiness} /><label htmlFor="advance-count">Advance count<input id="advance-count" value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} type="number" min={4} max={6} className={styles.input} /></label><ConfirmAction triggerLabel="Generate playoffs" title="Generate the playoff bracket?" description={`Advance the top ${playoffAdvanceCount} teams after every round-robin score is final.`} confirmLabel="Yes, generate playoffs" confirmationText={playoffReadiness.confirmation || CONFIRMATIONS.generate_playoffs} disabled={!playoffReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("generate_playoffs", confirmationText, { advance_count: Number(playoffAdvanceCount) })} /></section></div></article>
+          <article className={styles.card}>
+            <h2>Progress this draw</h2>
+            <div className={styles.commandGrid}>
+              <section className={styles.commandCard}>
+                <h3>Round robin</h3>
+                <CommandBlockers readiness={rrReadiness} />
+                <ConfirmAction triggerLabel="Generate games" title="Generate round-robin games?" description="Create the reviewed Python schedule from the current teams." confirmLabel="Yes, generate games" confirmationText={rrReadiness.confirmation || CONFIRMATIONS.generate_round_robin} disabled={!rrReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("generate_round_robin", confirmationText)} />
+              </section>
+              <section className={styles.commandCard}>
+                <h3>Repair a partial schedule</h3>
+                <p className={styles.muted}>Reconcile preserves all valid games and adds only missing pairings. Rebuild is limited to a wholly unstarted schedule.</p>
+                <div className={styles.buttonRow}>
+                  <ConfirmAction triggerLabel="Reconcile missing games" title="Reconcile this partial round robin?" description="Preserve every valid existing game, including finalized results, and insert only missing current-roster pairings." confirmLabel="Yes, reconcile games" confirmationText="RECONCILE GAMES" disabled={!snapshot.ops_state_fingerprint || !sortedGames.length} busy={busy} onConfirm={(text) => recoverDrawSchedule("reconcile", text)} />
+                  <ConfirmAction triggerLabel="Rebuild unstarted games" title="Rebuild this unstarted round robin?" description="Replace the reviewed unstarted round-robin game set. The server refuses this after any result or downstream evidence exists." confirmLabel="Yes, rebuild games" confirmationText="REBUILD GAMES" tone="danger" disabled={!snapshot.ops_state_fingerprint || !sortedGames.length} busy={busy} onConfirm={(text) => recoverDrawSchedule("rebuild", text)} />
+                </div>
+              </section>
+              <section className={styles.commandCard}>
+                <h3>Playoffs</h3>
+                <CommandBlockers readiness={playoffReadiness} />
+                <label htmlFor="advance-count">Advance count<input id="advance-count" value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} type="number" min={4} max={6} className={styles.input} /></label>
+                <ConfirmAction triggerLabel="Generate playoffs" title="Generate the playoff bracket?" description={`Advance the top ${playoffAdvanceCount} teams after every round-robin score is final.`} confirmLabel="Yes, generate playoffs" confirmationText={playoffReadiness.confirmation || CONFIRMATIONS.generate_playoffs} disabled={!playoffReadiness.ready} busy={busy} onConfirm={(confirmationText) => submitCommand("generate_playoffs", confirmationText, { advance_count: Number(playoffAdvanceCount) })} />
+              </section>
+              <section className={styles.commandCard}>
+                <h3>Cancel empty draw</h3>
+                <p className={styles.muted}>The server permits this only when the draw has no teams, games, podium, awards, official matches, or day-live evidence.</p>
+                <ConfirmAction triggerLabel="Cancel empty draw" title="Cancel this empty draw?" description="Disable only this verified-empty draw. No participant, game, result, or publication evidence is removed." confirmLabel="Yes, cancel empty draw" confirmationText="CANCEL EMPTY DRAW" tone="danger" disabled={!snapshot.ops_state_fingerprint || Boolean(snapshot.teams.length || snapshot.games.length || snapshot.podium.length)} busy={busy} onConfirm={(text) => recoverDrawSchedule("cancel", text)} />
+              </section>
+            </div>
+          </article>
         </>
       ) : null}
 
@@ -968,24 +1264,48 @@ export default function TournamentLivePanel({
         <><article className={styles.card}><div className={styles.headingRow}><div><h2>Review results</h2><p className={styles.muted}>Human-readable division and draw state, standings, podium readiness, corrections, and exceptions.</p></div><Link href={tournamentRouteHref("/admin/tournaments/publish/import-results", routeContext)} className={styles.secondaryLink}>Import results</Link></div><div className={styles.drawCards}>{(lifecycle?.draws || []).map((draw) => <section key={draw.draw_id} className={styles.commandCard}><div className={styles.headingRow}><h3>{draw.name}</h3><span className={draw.readiness.official_publish.ready ? styles.successChip : styles.recoveryChip}>{draw.readiness.official_publish.ready ? "Ready" : "Blocked"}</span></div><p>{draw.counts.finalized_games || 0} of {draw.counts.games || 0} scores complete · {(draw.counts.open_games || 0)} missing</p><h4>Standings</h4>{draw.standings.length ? <ol>{draw.standings.slice(0, 8).map((row, index) => <li key={String(row.team_id || index)}>{teamLabel(teamsById.get(String(row.team_id || "")), snapshot)} · {shortValue(row.wins)} wins</li>)}</ol> : <p className={styles.muted}>Standings are not available yet.</p>}<h4>Podium readiness</h4><LifecycleBlockers readiness={draw.readiness.official_publish} /></section>)}</div>{!(lifecycle?.draws || []).length ? <p className={styles.muted}>Reload authoritative lifecycle state to review divisions.</p> : null}</article><article className={styles.card}><h2>Selected draw results</h2>{gameCards(sortedGames, false)}</article></>
       ) : null}
 
-      {snapshot && view === "publish-overview" ? <div className={styles.moduleGrid}>{[["Review results", "/admin/tournaments/ops/results", `${finalizedGames} of ${totalGames} scores complete.`], ["Import results", "/admin/tournaments/publish/import-results", "Separate DUPR CSV preview and guarded import workspace."], ["Publish divisions", "/admin/tournaments/ops/publish", officialReadiness?.ready ? "Tournament prerequisites are complete." : "Publishing is blocked by tournament prerequisites."], ["Tournament closeout", "/admin/tournaments/publish/closeout", archiveAtomicAvailable ? "Review the final server-enforced closeout prerequisites." : "Archive is unavailable until atomic closeout commit is installed."]].map(([title, path, detail]) => <Link key={path} href={tournamentRouteHref(path, routeContext)} className={styles.moduleCard}><h2>{title}</h2><p>{detail}</p></Link>)}</div> : null}
+      {snapshot && view === "publish-overview" ? <div className={styles.moduleGrid}>{[["Review results", "/admin/tournaments/ops/results", `${finalizedGames} of ${totalGames} scores complete.`], ["Import results", "/admin/tournaments/publish/import-results", "Separate DUPR CSV preview and guarded import workspace."], ["Publish divisions", "/admin/tournaments/ops/publish", officialReadiness?.ready ? "Tournament prerequisites are complete." : "Publishing is blocked by tournament prerequisites."], ["Tournament closeout", "/admin/tournaments/publish/closeout", completionAtomicAvailable || tournamentStatus === "COMPLETED" ? "Review the final server-enforced completion and archive controls." : "Completion remains blocked until every closeout prerequisite passes."]].map(([title, path, detail]) => <Link key={path} href={tournamentRouteHref(path, routeContext)} className={styles.moduleCard}><h2>{title}</h2><p>{detail}</p></Link>)}</div> : null}
 
       {snapshot && view === "publish" ? (
-        <article className={styles.card}><h2>Publish divisions</h2><div className={styles.readinessColumns}><section className={styles.commandCard}><h3>Tournament readiness</h3><LifecycleBlockers readiness={officialReadiness} /></section><section className={styles.commandCard}><h3>Runtime capability</h3><p><span className={runtimeCanPublish ? styles.successChip : styles.recoveryChip}>{runtimeCanPublish ? "Available" : "Unavailable"}</span></p><p className={styles.muted}>The dedicated official-publish permission, service role, operation store, and audit store must all be available. Environment permission never means this tournament is ready.</p></section></div><h3>{selectedLifecycleDraw?.name || "Selected draw"}</h3><p>{selectedFinalizedGames} of {selectedTotalGames} games finalized · {selectedOpenGames} open · {selectedDrawCounts?.published_games || 0} official matches</p><div className={styles.dangerCard}><h3>Official rated matches</h3><LifecycleBlockers readiness={officialReadiness} /><CommandBlockers readiness={publishReadiness} /><label htmlFor="winner-bonus">Playoff winner bonus Elo<input id="winner-bonus" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} type="number" min={0} max={40} step={1} className={styles.input} disabled={!publishActuallyReady || !runtimeCanPublish} /></label><ConfirmAction triggerLabel="Publish official matches" title="Publish all verified games as official rated matches?" description={`This terminal write publishes the exact reviewed tournament games and applies a ${publishBonusElo || "0"}-Elo playoff-winner bonus.`} confirmLabel="Yes, publish official matches" confirmationText={publishReadiness.confirmation || CONFIRMATIONS.publish_official_matches} tone="danger" disabled={!publishActuallyReady || !runtimeCanPublish} busy={busy} onConfirm={(text) => submitCommand("publish_official_matches", text, { playoff_winner_bonus_elo: Number(publishBonusElo) })} /></div></article>
+        <article className={styles.card}><h2>Publish divisions</h2><div className={styles.readinessColumns}><section className={styles.commandCard}><h3>Tournament readiness</h3><LifecycleBlockers readiness={officialReadiness} /></section><section className={styles.commandCard}><h3>Runtime capability</h3><p><span className={runtimeCanPublish ? styles.successChip : styles.recoveryChip}>{runtimeCanPublish ? "Available" : "Unavailable"}</span></p><p className={styles.muted}>The dedicated official-publish permission, service role, operation store, and audit store must all be available. Environment permission never means this tournament is ready.</p></section></div><h3>{selectedLifecycleDraw?.name || "Selected draw"}</h3><p>{selectedFinalizedGames} of {selectedTotalGames} games finalized · {selectedOpenGames} open · {selectedDrawCounts?.published_games || 0} of {selectedRatingPublishEligibleGames} played games published</p><div className={styles.dangerCard}><h3>Official rated matches</h3><LifecycleBlockers readiness={officialReadiness} /><CommandBlockers readiness={publishReadiness} /><label htmlFor="winner-bonus">Playoff winner bonus Elo<input id="winner-bonus" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} type="number" min={0} max={40} step={1} className={styles.input} disabled={!publishActuallyReady || !runtimeCanPublish} /></label><ConfirmAction triggerLabel="Publish official matches" title="Publish all played games as official rated matches?" description={`This terminal write publishes the exact reviewed, rating-eligible played games and applies a ${publishBonusElo || "0"}-Elo playoff-winner bonus. Forfeits, no-shows, and retirements remain visible tournament results but are never rated.`} confirmLabel="Yes, publish official matches" confirmationText={publishReadiness.confirmation || CONFIRMATIONS.publish_official_matches} tone="danger" disabled={!publishActuallyReady || !runtimeCanPublish} busy={busy} onConfirm={(text) => submitCommand("publish_official_matches", text, { playoff_winner_bonus_elo: Number(publishBonusElo) })} /></div></article>
       ) : null}
 
       {snapshot && view === "closeout" ? (
-        <article className={styles.card}><h2>Tournament closeout</h2><p className={styles.muted}>Live status cards are authoritative where records exist; operational follow-ups remain clearly marked Needs review.</p><div className={styles.closeoutGrid}>{[
+        <article className={styles.card}><h2>Tournament closeout</h2><p className={styles.muted}>Completion is the public terminal state. Archive is a later, reversible visibility action for an already completed tournament.</p><div className={styles.closeoutGrid}>{[
           ["Divisions", counts?.draws ? "Complete" : "Blocked", `${counts?.draws || 0} draw${counts?.draws === 1 ? "" : "s"}`],
           ["Scores", openGames === 0 && totalGames > 0 ? "Complete" : "Blocked", `${finalizedGames} finalized; ${openGames} open`],
           ["Podiums", lifecycle?.draws.length && lifecycle.draws.every((draw) => Boolean(draw.review_evidence && (draw.review_evidence.current ?? draw.review_evidence.reviewed))) ? "Complete" : "Blocked", `${podiumEntryCount} entries; explicit review required`],
           ["Awards", counts?.expected_awards === counts?.verified_awards && !counts?.unexpected_awards ? "Complete" : "Blocked", `${counts?.verified_awards || 0} of ${counts?.expected_awards || 0} verified`],
-          ["Official matches", counts?.published_games === totalGames && !duplicatePublications ? "Complete" : "Blocked", `${counts?.published_games || 0} of ${totalGames} linked; ${duplicatePublications} duplicate`],
+          ["Official matches", counts?.published_games === ratingPublishEligibleGames && !duplicatePublications ? "Complete" : "Blocked", `${counts?.published_games || 0} of ${ratingPublishEligibleGames} played games linked; ${duplicatePublications} duplicate`],
           ["Replay / audit evidence", !counts?.active_operations && !uncertainOperations ? "Complete" : "Blocked", `${counts?.active_operations || 0} active; ${uncertainOperations} uncertain`],
           ["Communications", "Needs review", "Confirm participant result communication before archive."],
           ["Payments, extras, and fulfillment", "Needs review", "Offline payment and fulfillment exceptions require operator review."],
-          ["Archive readiness", archiveReadiness?.ready && archiveAtomicAvailable ? "Complete" : "Blocked", !archiveAtomicAvailable ? "Atomic archive commit is unavailable; no archive write is permitted." : archiveReadiness?.ready ? "All server-enforced archive prerequisites passed." : `${lifecycleBlockerMessages(archiveReadiness).length} blocker(s)`]
-        ].map(([title, stateValue, detail]) => <section key={title} className={styles.closeoutCard}><div className={styles.headingRow}><h3>{title}</h3><span className={stateValue === "Complete" ? styles.successChip : stateValue === "Needs review" ? styles.neutralChip : styles.recoveryChip}>{stateValue}</span></div><p>{detail}</p></section>)}</div><section className={styles.dangerCard}><h3>Archive unavailable</h3><LifecycleBlockers readiness={archiveReadiness} /><p><strong>No archive write is available.</strong> The server requires an atomic database commit that rechecks all closeout evidence under lock; that commit surface is not installed.</p></section></article>
+          ["Completion readiness", completionReadiness?.ready || tournamentStatus === "COMPLETED" || tournamentStatus === "ARCHIVED" ? "Complete" : "Blocked", completionReadiness?.ready ? "All server-enforced completion prerequisites passed." : `${lifecycleBlockerMessages(completionReadiness).length} blocker(s)`]
+        ].map(([title, stateValue, detail]) => <section key={title} className={styles.closeoutCard}><div className={styles.headingRow}><h3>{title}</h3><span className={stateValue === "Complete" ? styles.successChip : stateValue === "Needs review" ? styles.neutralChip : styles.recoveryChip}>{stateValue}</span></div><p>{detail}</p></section>)}</div>
+          {tournamentStatus !== "COMPLETED" && tournamentStatus !== "ARCHIVED" ? (
+            <section className={styles.dangerCard}>
+              <h3>Complete tournament</h3>
+              <LifecycleBlockers readiness={completionReadiness} />
+              <p>Completion atomically records the public Past-tournament state and an immutable closeout receipt. It does not hide results.</p>
+              <ConfirmAction triggerLabel="Complete tournament" title="Complete this tournament?" description="The server will recheck every score, podium, award, official match, and recovery prerequisite under lock, then atomically set Completed and write its closeout receipt." confirmLabel="Yes, complete tournament" confirmationText="COMPLETE" tone="danger" disabled={!completionReadiness?.ready || !completionAtomicAvailable} busy={busy} onConfirm={(text) => transitionTournamentStatus("complete", text)} />
+            </section>
+          ) : null}
+          {tournamentStatus === "COMPLETED" ? (
+            <section className={styles.dangerCard}>
+              <h3>Completed and public</h3>
+              <p>This tournament is visible in Past tournaments. Archive it only when you intentionally want to hide that public history.</p>
+              <LifecycleBlockers readiness={archiveReadiness} />
+              <ConfirmAction triggerLabel="Move to hidden archive" title="Hide this completed tournament?" description="This preserves all official data and its completion receipt but removes the tournament from public Past results. You can restore it later." confirmLabel="Yes, archive tournament" confirmationText="ARCHIVE" tone="danger" disabled={!archiveReadiness?.ready || !archiveAtomicAvailable} busy={busy} onConfirm={(text) => transitionTournamentStatus("archive", text)} />
+            </section>
+          ) : null}
+          {tournamentStatus === "ARCHIVED" ? (
+            <section className={styles.commandCard}>
+              <h3>Archived and hidden</h3>
+              <p>Restore this tournament to Completed to make its Past results public again.</p>
+              <ConfirmAction triggerLabel="Restore completed tournament" title="Restore this tournament?" description="This changes only visibility: Archived becomes Completed, while official results and the closeout receipt remain unchanged." confirmLabel="Yes, restore tournament" confirmationText="UNARCHIVE" disabled={!unarchiveAtomicAvailable} busy={busy} onConfirm={(text) => transitionTournamentStatus("unarchive", text)} />
+            </section>
+          ) : null}
+        </article>
       ) : null}
 
       {snapshot && view === "status" ? <><article className={styles.card}><h2>Status and recovery</h2><p>Actual score and publication operations appear below with reconciliation status and optional technical evidence. Archive lifecycle controls live only in Tournament Closeout.</p><div className={styles.statsGrid}><div><span>Active operations</span><strong>{counts?.active_operations || activeOperations.length}</strong></div><div><span>Uncertain operations</span><strong>{uncertainOperations}</strong></div><div><span>Duplicate publications</span><strong>{duplicatePublications}</strong></div></div></article>{operationEvidence}</> : null}

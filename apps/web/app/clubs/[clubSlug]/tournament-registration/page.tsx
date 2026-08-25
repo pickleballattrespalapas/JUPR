@@ -2,6 +2,7 @@ import Link from "next/link";
 import PublicTournamentNav from "@/components/PublicTournamentNav";
 import { getClubTournamentRegistration } from "@/lib/tournamentRegistrationApi";
 import TournamentRegistrationForm from "./TournamentRegistrationForm";
+import EditLinkRequestForm from "./EditLinkRequestForm";
 
 type TournamentRegistrationPageProps = {
   params: { clubSlug: string };
@@ -41,6 +42,7 @@ export default async function TournamentRegistrationPage({
     : tournament?.id
       ? `tournament_id=${encodeURIComponent(tournament.id)}`
       : "";
+  const venueMapQuery = settings?.venue_address || settings?.location_name || "";
 
   return (
     <section>
@@ -193,6 +195,30 @@ export default async function TournamentRegistrationPage({
         </div>
       ) : null}
 
+      {tournament && venueMapQuery ? (
+        <article style={{ ...cardStyle, marginBottom: "1rem" }}>
+          <h2 style={{ marginTop: 0 }}>Venue</h2>
+          {settings?.location_name ? <p><strong>{settings.location_name}</strong></p> : null}
+          {settings?.venue_address ? <p>{settings.venue_address}</p> : null}
+          {settings?.timezone ? <p style={{ color: "#475569" }}>Tournament time zone: {settings.timezone}</p> : null}
+          <p>
+            <a
+              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venueMapQuery)}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open map
+            </a>
+          </p>
+          {settings?.venue_directions ? (
+            <div>
+              <h3>Arrival directions</h3>
+              <p style={{ whiteSpace: "pre-wrap" }}>{settings.venue_directions}</p>
+            </div>
+          ) : null}
+        </article>
+      ) : null}
+
       {tournament && !data?.registration_open ? (
         <article style={{ ...cardStyle, marginBottom: "1rem" }}>
           <h2 style={{ marginTop: 0 }}>Registration is closed</h2>
@@ -218,6 +244,25 @@ export default async function TournamentRegistrationPage({
             commerce={data.commerce ?? null}
           />
         </div>
+      ) : null}
+
+      {tournament ? (
+        <article
+          id="manage-registration"
+          style={{ ...cardStyle, marginBottom: "1rem", scrollMarginTop: "1rem" }}
+        >
+          <h2 style={{ marginTop: 0 }}>Manage an existing registration</h2>
+          <p style={{ color: "#475569" }}>
+            Request a secure link to edit an event, change partner details, or
+            add another event. For privacy, the response is the same whether or
+            not a matching registration exists.
+          </p>
+          <EditLinkRequestForm
+            clubSlug={clubSlug}
+            tournamentId={tournament.id}
+            registrationSlug={settings?.registration_slug ?? null}
+          />
+        </article>
       ) : null}
 
       {tournament ? (
@@ -251,6 +296,12 @@ export default async function TournamentRegistrationPage({
               style={{ fontWeight: 800 }}
             >
               Tournament Roster
+            </Link>
+            <Link
+              href={`/clubs/${clubSlug}/tournament-team-results`}
+              style={{ fontWeight: 800 }}
+            >
+              Four-player Team Results
             </Link>
           </span>
         </article>

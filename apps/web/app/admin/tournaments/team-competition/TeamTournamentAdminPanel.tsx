@@ -211,7 +211,10 @@ export default function TeamTournamentAdminPanel({
     Record<string, { mixed: "STRAIGHT" | "CROSS"; tiebreakPlayerId: string }>
   >({});
   const [scoreDrafts, setScoreDrafts] = useState<
-    Record<string, { scoreA: string; scoreB: string }>
+    Record<
+      string,
+      { scoreA: string; scoreB: string; unusualScoreAcknowledged: boolean }
+    >
   >({});
   const [reconcileDrafts, setReconcileDrafts] = useState<
     Record<string, { officialMatchId: string; reason: string }>
@@ -634,10 +637,10 @@ export default function TeamTournamentAdminPanel({
                           }
                         />
                         <span>
-                          <strong>Allow substitutes</strong>
+                          <strong>Allow roster replacement between matches</strong>
                           <br />
-                          Roster replacements remain reasoned, version checked,
-                          and blocked after play starts.
+                          Use this roster action, not check-in. Replacements remain
+                          reasoned, version checked, and blocked by active-match play.
                         </span>
                       </label>
                     </>
@@ -650,7 +653,7 @@ export default function TeamTournamentAdminPanel({
                       ? "Standard singles or doubles"
                       : eventFormat(configDraft) === "COMBINED_RATING_CAP"
                         ? `Combined-rating doubles · below ${configDraft.combinedRatingCap || "—"}`
-                        : `Four-player team · ${configDraft.allowSubstitutes ? "substitutes allowed" : "no substitutes"} · ${configDraft.tiebreakMode === "SKINNY_RELAY" ? "skinny-singles relay" : "one singles game"} · ${configDraft.playoffFormat.replaceAll("_", " ").toLowerCase()}`}
+                        : `Four-player team · ${configDraft.allowSubstitutes ? "roster replacement allowed between matches" : "pre-play roster correction only"} · ${configDraft.tiebreakMode === "SKINNY_RELAY" ? "skinny-singles relay" : "one singles game"} · ${configDraft.playoffFormat.replaceAll("_", " ").toLowerCase()}`}
                   </p>
                 ) : null}
                 <div className={styles.actions}>
@@ -1557,7 +1560,8 @@ export default function TeamTournamentAdminPanel({
                           scoreA:
                             game.score_a == null ? "" : String(game.score_a),
                           scoreB:
-                            game.score_b == null ? "" : String(game.score_b)
+                            game.score_b == null ? "" : String(game.score_b),
+                          unusualScoreAcknowledged: false
                         };
                         const reconcile = reconcileDrafts[game.id] || {
                           officialMatchId: "",
@@ -1625,6 +1629,22 @@ export default function TeamTournamentAdminPanel({
                                   }
                                 />
                               </div>
+                              <label className={styles.check}>
+                                <input
+                                  type="checkbox"
+                                  checked={score.unusualScoreAcknowledged}
+                                  onChange={(event) =>
+                                    setScoreDrafts((current) => ({
+                                      ...current,
+                                      [game.id]: {
+                                        ...score,
+                                        unusualScoreAcknowledged: event.target.checked
+                                      }
+                                    }))
+                                  }
+                                />
+                                I reviewed and acknowledge this unusual score
+                              </label>
                               <ConfirmAction
                                 triggerLabel="Save score"
                                 title="Finalize this team game score?"
@@ -1642,13 +1662,17 @@ export default function TeamTournamentAdminPanel({
                                 onConfirm={(confirmation) => {
                                   if (!matchup) throw new Error("Matchup is missing.");
                                   return mutate(
-                                    `score:${game.id}:${game.version}:${matchup.version}`,
+                                    `score:${game.id}:${game.version}:${matchup.version}:${
+                                      score.unusualScoreAcknowledged ? "ack" : "standard"
+                                    }`,
                                     `${basePath}/games/${encodeURIComponent(
                                       game.id
                                     )}/score`,
                                     {
                                       score_a: Number(score.scoreA),
                                       score_b: Number(score.scoreB),
+                                      unusual_score_acknowledged:
+                                        score.unusualScoreAcknowledged,
                                       expected_game_version: game.version,
                                       expected_matchup_version: matchup.version
                                     },

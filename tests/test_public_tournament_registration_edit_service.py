@@ -627,10 +627,16 @@ def test_registration_edit_rejects_slug_for_another_open_tournament(monkeypatch)
     supabase, storage, _registration_id, token = _registered_supabase(monkeypatch)
     storage["tournament_registration_settings"][0]["registration_status"] = "closed"
     storage["tournaments"].append(
-        {"id": "t2", "club_id": "club-1", "name": "Other Open", "status": "DRAFT", "created_at": "2026-01-02T00:00:00Z"}
+        {"id": "t2", "club_id": "club-1", "name": "Other Open", "status": "ACTIVE", "created_at": "2026-01-02T00:00:00Z"}
     )
     storage["tournament_registration_settings"].append(
-        {"id": "rs2", "tournament_id": "t2", "registration_slug": "other-open", "registration_status": "open"}
+        {
+            "id": "rs2",
+            "tournament_id": "t2",
+            "registration_slug": "other-open",
+            "registration_status": "open",
+            "builder_draft_json": {"published_at": "2026-08-01T00:00:00Z"},
+        }
     )
 
     with pytest.raises(ValueError, match="different tournament"):

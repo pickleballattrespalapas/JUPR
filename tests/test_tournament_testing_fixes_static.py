@@ -66,7 +66,10 @@ def test_manual_partner_write_is_one_transaction_and_one_canonical_team() -> Non
     assert "new.id::text" in sql
     assert "v_partner_selection.id::text" in sql
     assert 'PUBLIC_REGISTRATION_CANONICAL_CREATE_RPC = (' in repo
-    assert 'response = rpc(\n            PUBLIC_REGISTRATION_CANONICAL_CREATE_RPC' in repo
+    assert 'ADMIN_REGISTRATION_CANONICAL_CREATE_RPC = (' in repo
+    assert "else PUBLIC_REGISTRATION_CANONICAL_CREATE_RPC" in repo
+    assert 'response = rpc(\n            canonical_create_rpc' in repo
+    assert "trusted_admin_create=True" in repo
 
 
 def test_manual_partner_ui_requires_identity_and_new_player_baseline() -> None:

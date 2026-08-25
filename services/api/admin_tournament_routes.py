@@ -23,8 +23,16 @@ from jupr_app.services.admin_tournament_award_service import award_admin_tournam
 from jupr_app.services.admin_tournament_bulk_service import bulk_update_admin_tournament_registrations
 from jupr_app.services.admin_tournament_bulk_team_import_service import import_admin_tournament_bulk_teams
 from jupr_app.services.admin_tournament_delete_service import delete_admin_tournament_draft
-from jupr_app.services.admin_tournament_draw_service import create_admin_tournament_draw
-from jupr_app.services.admin_tournament_game_service import generate_admin_tournament_round_robin_games
+from jupr_app.services.admin_tournament_draw_service import (
+    cancel_admin_tournament_empty_event,
+    cancel_admin_tournament_empty_draw,
+    create_admin_tournament_draw,
+)
+from jupr_app.services.admin_tournament_game_service import (
+    generate_admin_tournament_round_robin_games,
+    rebuild_admin_tournament_round_robin_games,
+    reconcile_admin_tournament_round_robin_games,
+)
 from jupr_app.services.admin_tournament_match_publish_service import (
     build_admin_tournament_official_publish_plan,
     publish_admin_tournament_draw_matches,
@@ -48,6 +56,9 @@ from jupr_app.services.admin_tournament_registration_import_service import impor
 from jupr_app.services.admin_tournament_registration_import_recovery_service import (
     REGISTRATION_IMPORT_RECONCILE_CONFIRMATION,
     reconcile_admin_tournament_registration_import_operation,
+)
+from jupr_app.services.admin_tournament_recovery_reconciliation_service import (
+    reconcile_admin_tournament_ops_recovery,
 )
 from jupr_app.services.admin_tournament_results_import_service import (
     apply_admin_tournament_results_import,
@@ -81,7 +92,10 @@ from jupr_app.services.admin_tournament_guarded_operation import (
 from jupr_app.services.admin_tournament_lifecycle_service import (
     require_admin_tournament_official_publish_readiness,
 )
-from jupr_app.services.admin_tournament_status_service import apply_admin_tournament_status_action
+from jupr_app.services.admin_tournament_status_service import (
+    apply_admin_tournament_status_action,
+    reconcile_admin_tournament_status_action,
+)
 from jupr_app.services.admin_tournament_team_service import replace_admin_tournament_draw_teams
 from jupr_app.services.admin_tournament_team_competition_service import (
     is_admin_team_tournament_enabled,
@@ -216,6 +230,7 @@ class AdminTournamentResultsImportCommitRequest(BaseModel):
     match_reviews: dict[str, dict[str, Any]] = Field(default_factory=dict)
     podium_refs: dict[str, str | None] = Field(default_factory=dict)
     allow_duplicate_mapping: bool = False
+    unusual_scores_acknowledged: bool = False
     expected_review_fingerprint: str = ""
     expected_state_fingerprint: str | None = None
     expected_draw_updated_at: str | None = None
@@ -234,6 +249,19 @@ class AdminTournamentRoundRobinGenerateRequest(BaseModel):
     expected_team_versions: list[AdminTournamentRowVersion] = Field(default_factory=list)
     confirmation_text: str = ""
     source: str = "next_tournament_admin_generate_round_robin"
+
+
+class AdminTournamentEmptyDrawCancelRequest(BaseModel):
+    expected_state_fingerprint: str | None = None
+    expected_draw_updated_at: str
+    confirmation_text: str = ""
+    source: str = "next_tournament_admin_cancel_empty_draw"
+
+
+class AdminTournamentEmptyEventCancelRequest(BaseModel):
+    expected_state_fingerprint: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_tournament_admin_cancel_empty_event"
 
 
 class AdminTournamentPlayoffGenerateRequest(BaseModel):
@@ -286,6 +314,7 @@ class AdminTournamentOfficialMatchPublishRequest(BaseModel):
 class AdminTournamentGameScoreRequest(BaseModel):
     score_a: int
     score_b: int
+    unusual_score_acknowledged: bool = False
     expected_state_fingerprint: str | None = None
     expected_game_updated_at: str | None = None
     expected_draw_updated_at: str | None = None
@@ -843,6 +872,273 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         except Exception as exc:
             _handle(exc)
 
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/games/round-robin/reconcile")
+    def post_admin_tournament_round_robin_games_reconcile(
+        club_id: str,
+        tournament_id: str,
+        draw_id: str,
+        payload: AdminTournamentRoundRobinGenerateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            _require_confirmation(payload.confirmation_text, "RECONCILE GAMES")
+            kwargs = {
+                "club_id": str(club_id),
+                "tournament_id": str(tournament_id),
+                "draw_id": str(draw_id),
+                "actor_email": actor_email,
+                "actor_role": actor_role,
+                "confirmation_text": payload.confirmation_text,
+                "expected_draw_updated_at": payload.expected_draw_updated_at,
+                "expected_team_versions": [
+                    _dump_model(row) for row in payload.expected_team_versions
+                ],
+                "source": payload.source,
+                "atomic": True,
+            }
+            return _guarded_ops_mutation(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                action="ops_round_robin_reconcile",
+                entity_type="tournament_event_draw",
+                entity_id=str(draw_id),
+                expected_state=str(payload.expected_state_fingerprint or ""),
+                payload={
+                    "draw_id": str(draw_id),
+                    "expected_draw_updated_at": payload.expected_draw_updated_at,
+                    "expected_team_versions": [
+                        _dump_model(row) for row in payload.expected_team_versions
+                    ],
+                    "preserve_existing_games": True,
+                },
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+                preflight=lambda: reconcile_admin_tournament_round_robin_games(
+                    supabase, **kwargs, dry_run=True
+                ),
+                reconcile=lambda operation: reconcile_admin_tournament_ops_recovery(
+                    supabase,
+                    club_id=str(club_id),
+                    tournament_id=str(tournament_id),
+                    action="ops_round_robin_reconcile",
+                    entity_id=str(draw_id),
+                    operation=operation,
+                ),
+                mutate=lambda: reconcile_admin_tournament_round_robin_games(
+                    supabase, **kwargs
+                ),
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/games/round-robin/rebuild")
+    def post_admin_tournament_round_robin_games_rebuild(
+        club_id: str,
+        tournament_id: str,
+        draw_id: str,
+        payload: AdminTournamentRoundRobinGenerateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            _require_confirmation(payload.confirmation_text, "REBUILD GAMES")
+            kwargs = {
+                "club_id": str(club_id),
+                "tournament_id": str(tournament_id),
+                "draw_id": str(draw_id),
+                "actor_email": actor_email,
+                "actor_role": actor_role,
+                "confirmation_text": payload.confirmation_text,
+                "expected_draw_updated_at": payload.expected_draw_updated_at,
+                "expected_team_versions": [
+                    _dump_model(row) for row in payload.expected_team_versions
+                ],
+                "source": payload.source,
+                "atomic": True,
+            }
+            return _guarded_ops_mutation(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                action="ops_round_robin_rebuild",
+                entity_type="tournament_event_draw",
+                entity_id=str(draw_id),
+                expected_state=str(payload.expected_state_fingerprint or ""),
+                payload={
+                    "draw_id": str(draw_id),
+                    "expected_draw_updated_at": payload.expected_draw_updated_at,
+                    "expected_team_versions": [
+                        _dump_model(row) for row in payload.expected_team_versions
+                    ],
+                    "replace_unstarted_games": True,
+                },
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+                preflight=lambda: rebuild_admin_tournament_round_robin_games(
+                    supabase, **kwargs, dry_run=True
+                ),
+                reconcile=lambda operation: reconcile_admin_tournament_ops_recovery(
+                    supabase,
+                    club_id=str(club_id),
+                    tournament_id=str(tournament_id),
+                    action="ops_round_robin_rebuild",
+                    entity_id=str(draw_id),
+                    operation=operation,
+                ),
+                mutate=lambda: rebuild_admin_tournament_round_robin_games(
+                    supabase, **kwargs
+                ),
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/cancel-empty")
+    def post_admin_tournament_empty_draw_cancel(
+        club_id: str,
+        tournament_id: str,
+        draw_id: str,
+        payload: AdminTournamentEmptyDrawCancelRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            _require_confirmation(payload.confirmation_text, "CANCEL EMPTY DRAW")
+            kwargs = {
+                "club_id": str(club_id),
+                "tournament_id": str(tournament_id),
+                "draw_id": str(draw_id),
+                "expected_draw_updated_at": payload.expected_draw_updated_at,
+                "actor_email": actor_email,
+                "actor_role": actor_role,
+                "confirmation_text": payload.confirmation_text,
+                "source": payload.source,
+                "atomic": True,
+            }
+            return _guarded_ops_mutation(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                action="ops_empty_draw_cancel",
+                entity_type="tournament_event_draw",
+                entity_id=str(draw_id),
+                expected_state=str(payload.expected_state_fingerprint or ""),
+                payload={
+                    "draw_id": str(draw_id),
+                    "expected_draw_updated_at": payload.expected_draw_updated_at,
+                    "status": "cancelled",
+                },
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+                preflight=lambda: cancel_admin_tournament_empty_draw(
+                    supabase, **kwargs, dry_run=True
+                ),
+                reconcile=lambda operation: reconcile_admin_tournament_ops_recovery(
+                    supabase,
+                    club_id=str(club_id),
+                    tournament_id=str(tournament_id),
+                    action="ops_empty_draw_cancel",
+                    entity_id=str(draw_id),
+                    operation=operation,
+                ),
+                mutate=lambda: cancel_admin_tournament_empty_draw(
+                    supabase, **kwargs
+                ),
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/events/{event_option_id}/cancel-empty")
+    def post_admin_tournament_empty_event_cancel(
+        club_id: str,
+        tournament_id: str,
+        event_option_id: str,
+        payload: AdminTournamentEmptyEventCancelRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            _require_confirmation(payload.confirmation_text, "CANCEL EMPTY EVENT")
+            kwargs = {
+                "club_id": str(club_id),
+                "tournament_id": str(tournament_id),
+                "event_option_id": str(event_option_id),
+                "actor_email": actor_email,
+                "actor_role": actor_role,
+                "confirmation_text": payload.confirmation_text,
+                "source": payload.source,
+                "atomic": True,
+            }
+            return _guarded_ops_mutation(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                action="ops_empty_event_cancel",
+                entity_type="tournament_event_option",
+                entity_id=str(event_option_id),
+                expected_state=str(payload.expected_state_fingerprint or ""),
+                payload={
+                    "event_option_id": str(event_option_id),
+                    "enabled": False,
+                    "status": "cancelled",
+                },
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+                preflight=lambda: cancel_admin_tournament_empty_event(
+                    supabase, **kwargs, dry_run=True
+                ),
+                reconcile=lambda operation: reconcile_admin_tournament_ops_recovery(
+                    supabase,
+                    club_id=str(club_id),
+                    tournament_id=str(tournament_id),
+                    action="ops_empty_event_cancel",
+                    entity_id=str(event_option_id),
+                    operation=operation,
+                ),
+                mutate=lambda: cancel_admin_tournament_empty_event(
+                    supabase, **kwargs
+                ),
+            )
+        except Exception as exc:
+            _handle(exc)
+
     @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/results-import/preview")
     def post_admin_tournament_results_import_preview(
         club_id: str,
@@ -918,6 +1214,7 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 "match_reviews": payload.match_reviews,
                 "podium_refs": payload.podium_refs,
                 "allow_duplicate_mapping": payload.allow_duplicate_mapping,
+                "unusual_scores_acknowledged": payload.unusual_scores_acknowledged,
                 "expected_review_fingerprint": payload.expected_review_fingerprint,
                 "actor_email": actor_email,
                 "actor_role": actor_role,
@@ -940,6 +1237,7 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                     "raw_text_fingerprint": stable_tournament_admin_fingerprint(payload.raw_text),
                     "review_fingerprint": payload.expected_review_fingerprint,
                     "allow_duplicate_mapping": payload.allow_duplicate_mapping,
+                    "unusual_scores_acknowledged": payload.unusual_scores_acknowledged,
                     "expected_draw_updated_at": payload.expected_draw_updated_at,
                 },
                 actor_email=actor_email,
@@ -1265,6 +1563,7 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 "game_id": str(game_id),
                 "score_a": payload.score_a,
                 "score_b": payload.score_b,
+                "unusual_score_acknowledged": payload.unusual_score_acknowledged,
                 "actor_email": actor_email,
                 "actor_role": actor_role,
                 "confirmation_text": payload.confirmation_text,
@@ -1285,6 +1584,7 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                     "game_id": str(game_id),
                     "score_a": payload.score_a,
                     "score_b": payload.score_b,
+                    "unusual_score_acknowledged": payload.unusual_score_acknowledged,
                     "expected_game_updated_at": payload.expected_game_updated_at,
                     "expected_draw_updated_at": payload.expected_draw_updated_at,
                 },
@@ -1305,9 +1605,13 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
             normalized_action = str(payload.action).strip().lower()
-            if normalized_action not in {"archive", "unarchive"}:
-                raise ValueError("action must be archive or unarchive")
-            expected_confirmation = "ARCHIVE" if normalized_action == "archive" else "UNARCHIVE"
+            if normalized_action not in {"complete", "archive", "unarchive"}:
+                raise ValueError("action must be complete, archive, or unarchive")
+            expected_confirmation = {
+                "complete": "COMPLETE",
+                "archive": "ARCHIVE",
+                "unarchive": "UNARCHIVE",
+            }[normalized_action]
             _require_confirmation(payload.confirmation_text, expected_confirmation)
             operation_payload = {"action": payload.action}
             operation_identity = build_tournament_admin_operation_request(
@@ -1320,8 +1624,9 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 expected_state=str(payload.expected_updated_at or ""),
                 payload=operation_payload,
             )
-            preflight = lambda: apply_admin_tournament_status_action(supabase, club_id=str(club_id), tournament_id=str(tournament_id), action=payload.action, expected_updated_at=str(payload.expected_updated_at or ""), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source, dry_run=True)
-            mutate = lambda: apply_admin_tournament_status_action(supabase, club_id=str(club_id), tournament_id=str(tournament_id), action=payload.action, expected_updated_at=str(payload.expected_updated_at or "") if tournament_admin_guarded_runtime_enabled("tournament") else None, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, guarded_operation_key=str(operation_identity["operation_key"]) if tournament_admin_guarded_runtime_enabled("tournament") else None, source=payload.source)
+            guarded_terminal = tournament_admin_guarded_runtime_enabled("tournament")
+            preflight = lambda: apply_admin_tournament_status_action(supabase, club_id=str(club_id), tournament_id=str(tournament_id), action=payload.action, expected_updated_at=str(payload.expected_updated_at or ""), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source, dry_run=True, atomic=guarded_terminal)
+            mutate = lambda: apply_admin_tournament_status_action(supabase, club_id=str(club_id), tournament_id=str(tournament_id), action=payload.action, expected_updated_at=str(payload.expected_updated_at or "") if guarded_terminal else None, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, guarded_operation_key=str(operation_identity["operation_key"]) if guarded_terminal else None, request_fingerprint=str(operation_identity["request_fingerprint"]) if guarded_terminal else None, source=payload.source, atomic=guarded_terminal)
             return _guarded_admin_mutation(
                 supabase,
                 club_id=str(club_id),
@@ -1337,6 +1642,13 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 actor_role=actor_role,
                 source=payload.source,
                 preflight=preflight,
+                reconcile=lambda operation: reconcile_admin_tournament_status_action(
+                    supabase,
+                    club_id=str(club_id),
+                    tournament_id=str(tournament_id),
+                    action=normalized_action,
+                    operation_key=str(operation.get("operation_key") or ""),
+                ),
                 mutate=mutate,
             )
         except Exception as exc:

@@ -259,6 +259,8 @@ export type AdminTournamentLifecycleBlocker = {
 
 export type AdminTournamentLifecycleReadiness = {
   ready: boolean;
+  complete?: boolean;
+  state?: "ready" | "blocked" | "complete" | string;
   blockers: AdminTournamentLifecycleBlocker[];
 };
 
@@ -276,6 +278,7 @@ export type AdminTournamentLifecycleCounts = {
   verified_awards?: number;
   unexpected_awards?: number;
   published_games?: number;
+  rating_publish_eligible_games?: number;
   unpublished_games?: number;
   official_matches?: number;
   duplicate_publications?: number;
@@ -300,6 +303,7 @@ export type AdminTournamentLifecycleDraw = {
   review_evidence?: Record<string, unknown> | null;
   readiness: {
     official_publish: AdminTournamentLifecycleReadiness;
+    completion?: AdminTournamentLifecycleReadiness;
     archive: AdminTournamentLifecycleReadiness;
   };
 };
@@ -316,6 +320,7 @@ export type AdminTournamentLifecycle = {
   draws: AdminTournamentLifecycleDraw[];
   domain_readiness: {
     official_publish: AdminTournamentLifecycleReadiness;
+    completion?: AdminTournamentLifecycleReadiness;
     archive: AdminTournamentLifecycleReadiness;
   };
   runtime_capability: Record<string, unknown>;
@@ -422,9 +427,10 @@ export type AdminTournamentResultsImportPreviewResponse = {
   matches: Array<Record<string, unknown>>;
   match_reviews: Record<string, { include?: boolean; stage?: string }>;
   teams: Array<Record<string, unknown>>;
+  score_reviews?: Array<Record<string, unknown>>;
   podium_candidates: string[];
   podium_refs: Record<string, string | null>;
-  summary: { imported_players: number; teams: number; matches: number; create_players: number };
+  summary: { imported_players: number; teams: number; matches: number; create_players: number; unusual_scores?: number };
   errors: string[];
   warnings: string[];
 };

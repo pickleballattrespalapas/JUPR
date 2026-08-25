@@ -57,6 +57,9 @@ export default async function TournamentRegistrationConfirmationPage({ params, s
   const rosterQuery = new URLSearchParams();
   if (data?.settings?.registration_slug) rosterQuery.set("tournament", data.settings.registration_slug);
   else if (data?.tournament.id) rosterQuery.set("tournament_id", data.tournament.id);
+  const manageRegistrationHref = `/clubs/${clubSlug}/tournament-registration${
+    rosterQuery.toString() ? `?${rosterQuery.toString()}` : ""
+  }#manage-registration`;
 
   return (
     <section style={{ maxWidth: "900px" }}>
@@ -87,15 +90,35 @@ export default async function TournamentRegistrationConfirmationPage({ params, s
             {data.selections.map((selection, index) => (
               <article key={`${selection.day_label}-${selection.event_family_label}-${selection.event_label}-${index}`} style={cardStyle}>
                 <strong>{selection.event_family_label} — {selection.event_label}</strong>
-                <p style={{ margin: "0.35rem 0 0", color: "#64748b" }}>{selection.day_label}{selection.event_date ? ` · ${dateLabel(selection.event_date)}` : ""}</p>
+                <p style={{ margin: "0.35rem 0 0", color: "#64748b" }}>
+                  {(selection.scheduled_days?.length
+                    ? selection.scheduled_days
+                        .map((day) =>
+                          day.event_date
+                            ? `${day.label} · ${dateLabel(day.event_date)}`
+                            : day.label
+                        )
+                        .join(" · ")
+                    : `${selection.day_label}${selection.event_date ? ` · ${dateLabel(selection.event_date)}` : ""}`)}
+                </p>
                 <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
                   {[selection.skill_label, selection.age_label].filter(Boolean).join(" · ") || "Open division"} · ${Number(selection.price_usd || 0).toFixed(2)}
                 </p>
                 {selection.partner_mode ? <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>Partner status: {selection.partner_mode}{selection.partner_name ? ` · ${selection.partner_name}` : ""}</p> : null}
+                <p style={{ margin: "0.75rem 0 0" }}>
+                  <Link href={manageRegistrationHref} style={{ fontWeight: 800 }}>
+                    Edit this event
+                  </Link>
+                </p>
               </article>
             ))}
             {!data.selections.length ? <p style={{ color: "#92400e", background: "#fffbeb", borderRadius: "10px", padding: "0.75rem" }}>No event selections were found. Contact tournament staff if this is unexpected.</p> : null}
           </div>
+          <p>
+            <Link href={manageRegistrationHref} style={{ fontWeight: 800 }}>
+              + Add Event
+            </Link>
+          </p>
 
           {commerceLines.length ? (
             <>

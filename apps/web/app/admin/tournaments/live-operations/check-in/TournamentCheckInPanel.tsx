@@ -217,14 +217,14 @@ export default function TournamentCheckInPanel({
     }));
   }
 
-  function changeAttendee(registrationId: string, substitutePlayerId: string): void {
+  function restoreOriginalRegistrant(registrationId: string): void {
     patchDraft(registrationId, {
-      substitutePlayerId,
+      substitutePlayerId: "",
       attendanceStatus: "EXPECTED",
       waiverVerified: false
     });
     setMessage(
-      "Attending player changed. Reconfirm check-in and the attending player's waiver before saving."
+      "Original registrant restored. Reconfirm attendance and the registered player's waiver before saving."
     );
   }
 
@@ -475,26 +475,21 @@ export default function TournamentCheckInPanel({
                 const draft = drafts[card.registration_id] || initialDraft(card);
                 const currentAttendance = draft.attendanceStatus;
                 const saving = savingId === card.registration_id;
-                const draftSubstitute = snapshot.player_options.find(
-                  (player) => String(player.id) === draft.substitutePlayerId
+                const hasLegacySubstitute = card.attendee.is_approved_substitute;
+                const legacySubstitutePending = Boolean(
+                  hasLegacySubstitute && draft.substitutePlayerId
                 );
-                const savedAttendeeUnavailable = Boolean(
-                  draft.substitutePlayerId &&
-                  (!draftSubstitute || !card.substitution.allowed)
-                );
-                const attendingName =
-                  draftSubstitute?.name ||
-                  (savedAttendeeUnavailable
-                    ? card.attendee.name
-                    : card.original_registrant.name);
+                const attendingName = legacySubstitutePending
+                  ? card.attendee.name
+                  : card.original_registrant.name;
                 return (
                   <article className={styles.registrantCard} key={card.registration_id}>
                     <div className={styles.cardHeader}>
                       <div>
                         <h3>{attendingName}</h3>
-                        {draftSubstitute ? (
+                        {legacySubstitutePending ? (
                           <p className={styles.muted}>
-                            Approved substitute for {card.original_registrant.name}
+                            Legacy saved substitute evidence for {card.original_registrant.name}
                           </p>
                         ) : <p className={styles.muted}>Registered player</p>}
                       </div>
@@ -537,7 +532,7 @@ export default function TournamentCheckInPanel({
                             <label className={styles.checkLabel} key={value}>
                               <input
                                 checked={currentAttendance === value}
-                                disabled={saving || savedAttendeeUnavailable}
+                                disabled={saving || legacySubstitutePending}
                                 name={`attendance-${card.registration_id}`}
                                 onChange={() =>
                                   patchDraft(card.registration_id, {
@@ -554,7 +549,7 @@ export default function TournamentCheckInPanel({
                         <label className={styles.checkLabel}>
                           <input
                             checked={draft.waiverVerified}
-                            disabled={saving || savedAttendeeUnavailable}
+                            disabled={saving || legacySubstitutePending}
                             onChange={(event) =>
                               patchDraft(card.registration_id, {
                                 waiverVerified: event.target.checked
@@ -575,50 +570,28 @@ export default function TournamentCheckInPanel({
                         </span>
                       </div>
                       <div>
-                        <label className={styles.field}>
-                          Approved substitute
-                          <select
-                            className={styles.select}
-                            disabled={
-                              saving ||
-                              (!card.substitution.allowed &&
-                                !card.attendee.is_approved_substitute)
-                            }
-                            onChange={(event) =>
-                              changeAttendee(card.registration_id, event.target.value)
-                            }
-                            value={draft.substitutePlayerId}
-                          >
-                            <option value="">Original registrant is attending</option>
-                            {savedAttendeeUnavailable ? (
-                              <option disabled value={draft.substitutePlayerId}>
-                                Saved attendee is unavailable — choose again
-                              </option>
-                            ) : null}
-                            {(card.substitution.allowed
-                              ? snapshot.player_options
-                              : []
-                            )
-                              .filter(
-                                (player) => player.id !== card.original_registrant.player_id
-                              )
-                              .map((player) => (
-                                <option key={player.id} value={player.id}>{player.name}</option>
-                              ))}
-                          </select>
-                        </label>
-                        {!card.substitution.allowed ? (
-                          <p className={`${styles.notice} ${styles.error}`} role="status">
-                            <strong>Substitute assignment unavailable.</strong>{" "}
-                            {card.substitution.blocker.detail}
-                          </p>
-                        ) : null}
-                        {savedAttendeeUnavailable ? (
+                        {legacySubstitutePending ? (
                           <p className={`${styles.notice} ${styles.error}`} role="alert">
-                            Saved attendee is unavailable. Choose the original registrant
-                            or an active substitute before saving.
+                            <strong>Legacy saved substitute: {card.attendee.name}.</strong>{" "}
+                            This historical attendee is read-only. Restore the original
+                            registrant before changing or reconfirming check-in.
+                            <br /><br />
+                            <button
+                              className={`${styles.button} ${styles.secondaryButton}`}
+                              disabled={saving}
+                              onClick={() => restoreOriginalRegistrant(card.registration_id)}
+                              type="button"
+                            >
+                              Restore original registrant
+                            </button>
                           </p>
-                        ) : null}
+                        ) : (
+                          <p className={styles.notice} role="status">
+                            <strong>Roster changes do not happen at check-in.</strong>{" "}
+                            Correct the authoritative draw or four-player team roster before
+                            play. Check-in records the registered player only.
+                          </p>
+                        )}
                         <label className={styles.field}>
                           Operator note
                           <textarea
@@ -651,7 +624,7 @@ export default function TournamentCheckInPanel({
                     <div className={styles.actions}>
                       <button
                         className={styles.button}
-                        disabled={Boolean(savingId) || savedAttendeeUnavailable}
+                        disabled={Boolean(savingId) || legacySubstitutePending}
                         onClick={() => void save(card)}
                         type="button"
                       >

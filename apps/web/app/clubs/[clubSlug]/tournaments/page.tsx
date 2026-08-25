@@ -100,7 +100,11 @@ export default async function PublicTournamentsPage({
     ? (data?.days || []).map((day) => ({
         day,
         events: (data?.events || []).filter(
-          (event) => event.registration_day_id === day.id
+          (event) =>
+            (event.scheduled_day_ids?.length
+              ? event.scheduled_day_ids
+              : [event.registration_day_id]
+            ).includes(day.id)
         )
       }))
     : [];
@@ -124,6 +128,14 @@ export default async function PublicTournamentsPage({
         <p style={{ color: "#334155", maxWidth: "820px" }}>
           Select a tournament to open its Tournament Home, registration, roster,
           and Partner Board.
+        </p>
+        <p>
+          <Link
+            href={`/clubs/${params.clubSlug}/tournaments/past`}
+            style={{ fontWeight: 800 }}
+          >
+            Past tournaments
+          </Link>
         </p>
 
         {error ? (
@@ -340,6 +352,12 @@ export default async function PublicTournamentsPage({
               label: "Partner Board",
               description: "Find players who opted into public partner requests.",
               module: "partner-board" as const
+            },
+            {
+              label: "Live & Results",
+              description:
+                "Follow completed scores, standings, playoff brackets, and medalists.",
+              module: "results" as const
             }
           ].map((item) => (
             <article key={item.module} style={cardStyle}>
@@ -469,6 +487,17 @@ export default async function PublicTournamentsPage({
       ) : null}
 
       <p style={{ marginTop: "1rem" }}>
+        <Link
+          href={publicTournamentHref(
+            params.clubSlug,
+            "results",
+            currentId,
+            currentSlug
+          )}
+        >
+          View singles and doubles live results
+        </Link>
+        {" · "}
         <Link href={`/clubs/${params.clubSlug}/tournament-team-results`}>
           View published four-player team results
         </Link>

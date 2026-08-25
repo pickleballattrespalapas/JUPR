@@ -26,6 +26,7 @@ class AdminTournamentDayLiveExpected(BaseModel):
     game_version: str | None = Field(default=None, max_length=120)
     court_version: str | int | None = None
     queue_version: str | int | None = None
+    queue_entry_version: str | int | None = None
 
 
 class AdminTournamentDayLivePayload(BaseModel):
@@ -36,6 +37,10 @@ class AdminTournamentDayLivePayload(BaseModel):
     game_id: str | None = Field(default=None, max_length=160)
     score_a: int | None = None
     score_b: int | None = None
+    unusual_score_acknowledgement: bool | None = None
+    result_type: Literal["FORFEIT", "NO_SHOW", "RETIREMENT"] | None = None
+    winner_team_id: str | None = Field(default=None, max_length=160)
+    result_note: str | None = Field(default=None, max_length=500)
 
 
 class AdminTournamentDayLiveCommandRequest(BaseModel):
@@ -47,6 +52,7 @@ class AdminTournamentDayLiveCommandRequest(BaseModel):
         "auto_fill_courts",
         "score_and_release",
         "correct_completed_score",
+        "record_non_played_result",
         "generate_playoffs",
         "close_day",
     ]
@@ -117,7 +123,11 @@ def install_admin_tournament_day_live_routes(app, *, get_supabase_client) -> Non
             raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client()
         action = str(payload.action)
-        if action in {"score_and_release", "correct_completed_score"}:
+        if action in {
+            "score_and_release",
+            "correct_completed_score",
+            "record_non_played_result",
+        }:
             required_permissions = (PERMISSION_ENTER_SCORES,)
         else:
             required_permissions = (PERMISSION_MANAGE_TOURNAMENTS,)

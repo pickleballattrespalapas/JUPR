@@ -131,3 +131,34 @@ def test_legacy_admin_tools_cannot_bypass_canonical_tournament_publish() -> None
     assert "Backfill Missing Tournament Matches" not in streamlit_tools
     assert "_run_tournament_match_backfill" not in streamlit_tools
     assert "submit_match_batch" not in streamlit_tools
+
+
+def test_legacy_tournament_score_surfaces_reject_blank_and_lock_non_played_results() -> None:
+    live = _read("apps/web/app/admin/tournament-live/TournamentLivePanel.tsx")
+    ops = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
+
+    for source in (live, ops):
+        assert "NON_PLAYED_RESULT_TYPES" in source
+        assert "isNonPlayedGame" in source
+        assert "scoreA.trim()" in source
+        assert "scoreB.trim()" in source
+        assert "cannot be changed through ordinary score entry" in source
+        assert "not played" in source
+
+    assert "scoreableGames" in ops
+    assert 'aria-label="Non-played tournament outcomes"' in ops
+    assert "editable && !nonPlayed" in live
+    assert "guarded Day Workspace" in live
+
+
+def test_tournament_home_and_closeout_handle_terminal_publication_without_a_draw() -> None:
+    home = _read("apps/web/app/admin/tournaments/tournament/TournamentHomePanel.tsx")
+    live = _read("apps/web/app/admin/tournament-live/TournamentLivePanel.tsx")
+
+    assert "officialPublishComplete" in home
+    assert 'official_publish.state || "").toLowerCase() === "complete"' in home
+    assert "!officialPublishComplete" in home
+    assert "Review completed tournament" in home
+    assert '["overview", "results", "publish-overview", "closeout", "status"].includes(view) ? payload : null' in live
+    assert "setSnapshot(board)" in live
+    assert "lifecycle: current.lifecycle" in live

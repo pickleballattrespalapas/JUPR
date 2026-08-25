@@ -544,6 +544,7 @@ def _request(
         "auto_fill_courts": "AUTO FILL COURTS",
         "score_and_release": "SAVE SCORE AND RELEASE COURT",
         "correct_completed_score": "CORRECT COMPLETED SCORE",
+        "record_non_played_result": "RECORD NON-PLAYED RESULT",
         "generate_playoffs": "GENERATE PLAYOFFS",
         "close_day": "CLOSE TOURNAMENT DAY",
     }
@@ -1263,6 +1264,135 @@ def test_score_release_and_next_fill_are_one_atomic_rpc(monkeypatch) -> None:
     assert str(params["p_expected_queue_version"]) == "11"
     assert result["snapshot"]["courts"][0]["current_assignment"]["game_id"] == "game-c"
     assert result["snapshot"]["summary"]["completed_games"] == 1
+
+
+def test_unusual_score_requires_acknowledgement_before_atomic_score_rpc(monkeypatch) -> None:
+    snapshot = _workspace_snapshot()
+    snapshot["courts"][0].update(
+        {
+            "state": "ON_COURT",
+            "current_assignment": {
+                "id": "queue-a",
+                "game_id": "game-a",
+                "state": "ON_COURT",
+                "version": "5",
+            },
+        }
+    )
+    snapshot["games"] = [
+        {
+            "id": "game-a",
+            "draw_id": "draw-a",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "team_a": {"team_id": "team-a1"},
+            "team_b": {"team_id": "team-a2"},
+            "scoring": {"format": "GAME_TO_11", "target": 11, "win_by_two": True},
+            "version": "game-a-v1",
+        }
+    ]
+    supabase = FakeSupabase()
+    _install_command_harness(monkeypatch, supabase, snapshot)
+    request = _request(
+        "score_and_release",
+        snapshot,
+        payload={
+            "game_id": "game-a",
+            "score_a": 76,
+            "score_b": 11,
+            "unusual_score_acknowledgement": False,
+        },
+        draw_version="3",
+        game_version="game-a-v1",
+        court_version="2",
+    )
+    with pytest.raises(ValueError, match="explicit acknowledgement"):
+        _execute(supabase, request)
+    assert supabase.rpc_calls == []
+
+
+def test_explicit_missing_scoring_configuration_never_uses_legacy_default() -> None:
+    with pytest.raises(ValueError, match="missing or unsupported"):
+        day_live._score_review(
+            {"id": "game-a", "scoring": {"format": None, "blocker": "missing"}},
+            11,
+            7,
+            acknowledged=False,
+        )
+
+    assert day_live._score_review(
+        {"id": "legacy-game"},
+        11,
+        7,
+        acknowledged=False,
+    )["scoring_format"] == "GAME_TO_11"
+
+
+def test_non_played_result_uses_atomic_queue_cas_and_progression_evidence(monkeypatch) -> None:
+    before = _workspace_snapshot()
+    before["games"] = [
+        {
+            "id": "game-a",
+            "draw_id": "draw-a",
+            "state": "BLOCKED",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "team_a": {"team_id": "team-a1", "name": "Alpha", "participant_names": []},
+            "team_b": {"team_id": "team-a2", "name": "Bravo", "participant_names": []},
+            "scoring": {"format": "GAME_TO_11", "target": 11, "win_by_two": True},
+            "version": "game-a-v1",
+            "queue_entry_version": "6",
+            "court_id": None,
+        }
+    ]
+    after = deepcopy(before)
+    after["games"][0].update(
+        {
+            "state": "COMPLETED",
+            "score_a": 11,
+            "score_b": 0,
+            "winner_team_id": "team-a1",
+            "result_type": "NO_SHOW",
+            "result_note": "Bravo did not report by the published grace deadline.",
+        }
+    )
+    after["summary"]["completed_games"] = 1
+    supabase = FakeSupabase()
+    state = _install_command_harness(monkeypatch, supabase, (before, after))
+    supabase.rpc_handlers["admin_record_non_played_tournament_day_game_cas"] = lambda _params: {
+        "ok": True,
+        "non_played_result": True,
+        "rating_publish_eligible": False,
+    }
+    request = _request(
+        "record_non_played_result",
+        before,
+        payload={
+            "game_id": "game-a",
+            "result_type": "NO_SHOW",
+            "winner_team_id": "team-a1",
+            "result_note": "Bravo did not report by the published grace deadline.",
+        },
+        game_version="game-a-v1",
+        queue_entry_version="6",
+    )
+    result = _execute(supabase, request)
+
+    assert [name for name, _params in supabase.rpc_calls] == [
+        "admin_record_non_played_tournament_day_game_cas"
+    ]
+    params = supabase.rpc_calls[0][1]
+    assert params["p_expected_queue_entry_version"] == 6
+    assert params["p_expected_court_version"] is None
+    assert params["p_result_type"] == "NO_SHOW"
+    assert params["p_game_patch"]["score_a"] == 11
+    assert params["p_game_patch"]["score_b"] == 0
+    assert params["p_dependency_updates"] == []
+    guarded_payload = state["runner_calls"][0]["payload"]
+    assert guarded_payload["score_evidence"]["outcome"]["rating_publish_eligible"] is False
+    assert result["snapshot"]["games"][0]["result_type"] == "NO_SHOW"
 
 
 def test_score_evidence_resolves_only_the_selected_draw_dependencies() -> None:

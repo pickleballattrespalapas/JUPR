@@ -101,7 +101,11 @@ def test_day_console_renders_authoritative_courts_and_progression_controls() -> 
         "lib/tournamentDayWorkspaceState.mjs"
     )
     assert "Confirm & release court" in panel
-    assert "Do not record a forfeit as a score" in panel
+    assert "Use the non-played outcome command" in panel
+    assert '"record_non_played_result"' in panel
+    assert "synthetic progression result" in panel
+    assert "Unusual score" in panel
+    assert "unusual_score_acknowledgement" in panel
     assert "draw.readiness.assignments" in panel
     assert "Court assignment evidence" in panel
     assert "entry.note ||" in panel
@@ -125,13 +129,34 @@ def test_day_console_corrects_only_server_authorized_completed_scores() -> None:
     assert "After correction" in panel
     assert "CORRECT COMPLETED SCORE" in state
     assert 'submitCommand(\n                          "correct_completed_score"' in panel
-    assert "draw_version: selectedCorrectionDraw.version" in panel
-    assert "game_version: selectedCorrectionGame.version" in panel
+    assert "expected: expectedVersions({ draw_version: draw.version, game_version: game.version })" in panel
+    assert "correctionEditor.expected" in panel
     assert "PLAYOFF_RESET_REQUIRED" in panel
     assert "redirect(tournamentRouteHref" in route
     assert 'panel: "corrections"' in route
     assert "context.dayId" in route
     assert "Day-owned completed scores must use the guarded tournament-day correction workspace" in legacy
+
+
+def test_day_score_outcome_and_correction_editors_are_version_fenced_and_isolated() -> None:
+    panel = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.tsx")
+
+    assert panel.count("expected: AdminTournamentDayCommandExpected") >= 3
+    assert "reviewedGame: ReviewedGameTruth" in panel
+    assert "reviewedAssignmentVersion" in panel
+    assert "reviewedGameStillCurrent" in panel
+    assert "expectedSnapshotChanged" in panel
+    assert "Score editor closed because authoritative tournament-day state changed" in panel
+    assert "Correction editor closed because the reviewed result" in panel
+    assert "Non-played outcome editor closed because the reviewed matchup" in panel
+    assert "scoreEditor.expected" in panel
+    assert "correctionEditor.expected" in panel
+    assert "outcomeEditor.expected" in panel
+    assert "setCorrectionEditor(null);\n    setOutcomeEditor(null);" in panel
+    assert "setScoreEditor(null);\n    setCorrectionEditor(null);" in panel
+    assert 'id="non-played-outcome-editor"' in panel
+    assert 'document.getElementById("non-played-outcome-editor")' in panel
+    assert "scrollIntoView" in panel
 
 
 def test_day_snapshot_identity_is_checked_for_club_tournament_and_day() -> None:

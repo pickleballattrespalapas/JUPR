@@ -9,6 +9,7 @@ import {
   retainedDayCommandStorageKey,
   validateDayCorrectionDraft,
   validateDayScoreDraft,
+  validateNonPlayedOutcomeDraft,
   visibleServerQueue,
   workspaceScopeKey
 } from "../lib/tournamentDayWorkspaceState.mjs";
@@ -73,20 +74,48 @@ assert.equal(
   "jupr_tournament_day_ops_pending_v1:club-a:tournament-1:day-1"
 );
 
-assert.deepEqual(validateDayScoreDraft("11", "7"), { ok: true, scoreA: 11, scoreB: 7 });
+assert.equal(validateDayScoreDraft("11", "7").ok, true);
+assert.equal(validateDayScoreDraft("11", "7").unusual, false);
 for (const [scoreA, scoreB] of [["9", "9"], ["-1", "11"], ["11.5", "7"], ["", "7"]]) {
   const result = validateDayScoreDraft(scoreA, scoreB);
   assert.equal(result.ok, false, `${scoreA}-${scoreB} must not reach confirmation`);
 }
 
-assert.deepEqual(
-  validateDayCorrectionDraft("7", "11", 11, 7),
-  { ok: true, scoreA: 7, scoreB: 11 }
-);
+assert.equal(validateDayCorrectionDraft("7", "11", 11, 7).ok, true);
 assert.deepEqual(
   validateDayCorrectionDraft("11", "7", 11, 7),
   { ok: false, message: "Enter a changed final score before review." }
 );
 assert.equal(validateDayCorrectionDraft("9", "9", 11, 7).ok, false);
+assert.equal(
+  validateDayScoreDraft("11", "7", { format: null, blocker: "missing" }).ok,
+  false,
+  "an explicit configuration blocker must never fall back to a legacy format"
+);
+
+const fatFinger = validateDayScoreDraft(
+  "76",
+  "11",
+  { format: "GAME_TO_11", target: 11, win_by_two: true }
+);
+assert.equal(fatFinger.ok, true);
+assert.equal(fatFinger.unusual, true);
+assert.equal(fatFinger.acknowledgementRequired, true);
+assert.equal(
+  validateDayScoreDraft(
+    "76",
+    "11",
+    { format: "GAME_TO_11", target: 11, win_by_two: true },
+    true
+  ).acknowledgementRequired,
+  false
+);
+assert.equal(
+  validateDayScoreDraft("1", "0", { format: "BEST_2_OF_3", target: 2 }).ok,
+  false,
+  "BEST_2_OF_3 uses games won and cannot finish 1-0"
+);
+assert.equal(validateNonPlayedOutcomeDraft("NO_SHOW", "team-a", "Opponent absent").ok, true);
+assert.equal(validateNonPlayedOutcomeDraft("", "team-a", "Opponent absent").ok, false);
 
 console.log("tournament day workspace state contract: ok");

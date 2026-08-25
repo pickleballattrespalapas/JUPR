@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,7 +18,7 @@ from jupr_app.services.admin_tournament_match_publish_service import (
 )
 from jupr_app.services.admin_tournament_ops_service import get_admin_tournament_ops_state_fingerprint
 from jupr_app.services.admin_tournament_podium_review_service import review_admin_tournament_draw_podium
-from tests.test_admin_match_log_service import FakeSupabase
+from tests.test_admin_match_log_service import FakeQuery, FakeSupabase
 from tests.test_admin_tournament_podium_review_service import podium_review_tables
 
 
@@ -143,6 +144,59 @@ def _ready_tables(monkeypatch) -> tuple[dict[str, list[dict]], FakeSupabase]:
     _review_draw(supabase, tables, "draw-1")
     _add_awards(tables, "draw-1")
     return tables, supabase
+
+
+class _EventOptionsReadFailureSupabase(FakeSupabase):
+    def table(self, name):
+        if name == "tournament_event_options":
+            raise RuntimeError("simulated event-option evidence outage")
+        return super().table(name)
+
+
+class _ShortRangePageQuery(FakeQuery):
+    def __init__(self, *args, page_cap: int, range_calls: list[tuple[int, int]], **kwargs):
+        super().__init__(*args, **kwargs)
+        self.page_cap = int(page_cap)
+        self.range_calls = range_calls
+        self.range_start: int | None = None
+        self.range_end: int | None = None
+
+    def limit(self, value):
+        # This also makes the regression fail against the former one-shot
+        # implementation, which could not distinguish a server-capped page.
+        self.limit_value = min(int(value), self.page_cap)
+        return self
+
+    def range(self, start, end):
+        self.range_start = int(start)
+        self.range_end = int(end)
+        self.range_calls.append((self.range_start, self.range_end))
+        return self
+
+    def execute(self):
+        response = super().execute()
+        if self.range_start is None or self.range_end is None:
+            return response
+        stop = min(self.range_end + 1, self.range_start + self.page_cap)
+        return SimpleNamespace(data=list(response.data)[self.range_start:stop])
+
+
+class _ShortRangePageSupabase(FakeSupabase):
+    def __init__(self, tables, *, page_cap: int):
+        super().__init__(tables)
+        self.page_cap = int(page_cap)
+        self.event_option_range_calls: list[tuple[int, int]] = []
+
+    def table(self, name):
+        if name == "tournament_event_options":
+            return _ShortRangePageQuery(
+                self.tables,
+                name,
+                operations=self.operations,
+                page_cap=self.page_cap,
+                range_calls=self.event_option_range_calls,
+            )
+        return super().table(name)
 
 
 def _official_match_for_game(
@@ -335,6 +389,110 @@ def test_empty_active_primary_draw_blocks_tournament_wide_closeout(monkeypatch) 
     assert lifecycle["domain_readiness"]["archive"]["ready"] is False
 
 
+def test_enabled_event_without_draw_blocks_completion_until_explicitly_disabled(monkeypatch) -> None:
+    tables, supabase = _ready_tables(monkeypatch)
+    tables["tournament_event_options"].append(
+        {
+            "id": "event-empty",
+            "tournament_id": "tour-1",
+            "division_name": "Women's 3.0",
+            "enabled": True,
+            "status": "active",
+        }
+    )
+
+    lifecycle = build_admin_tournament_lifecycle(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+    )
+    blocker = next(
+        row
+        for row in lifecycle["domain_readiness"]["completion"]["blockers"]
+        if row["code"] == "EVENT_DRAW_MISSING"
+    )
+    assert blocker["entity_id"] == "event-empty"
+
+    tables["tournament_event_options"][0].update(
+        {"enabled": False, "status": "cancelled"}
+    )
+    after_cancel = build_admin_tournament_lifecycle(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+    )
+    assert not any(
+        row["code"] == "EVENT_DRAW_MISSING"
+        for row in after_cancel["domain_readiness"]["completion"]["blockers"]
+    )
+
+
+def test_event_option_evidence_failure_blocks_completion(monkeypatch) -> None:
+    tables, supabase = _ready_tables(monkeypatch)
+    _publish_draw_with_immutable_evidence(tables, supabase, "draw-1")
+    tables["tournaments"][0]["status"] = "ACTIVE"
+    tables["tournament_event_options"].append(
+        {
+            "id": "event-missing",
+            "tournament_id": "tour-1",
+            "division_name": "Missing division",
+            "enabled": True,
+            "status": "active",
+        }
+    )
+
+    lifecycle = build_admin_tournament_lifecycle(
+        _EventOptionsReadFailureSupabase(tables),
+        club_id="club",
+        tournament_id="tour-1",
+    )
+
+    assert lifecycle["evidence"]["event_options_available"] is False
+    assert lifecycle["domain_readiness"]["completion"]["ready"] is False
+    assert any(
+        blocker["code"] == "EVENT_OPTION_EVIDENCE_UNAVAILABLE"
+        for blocker in lifecycle["domain_readiness"]["completion"]["blockers"]
+    )
+
+
+def test_short_server_capped_pages_are_exhausted_before_completion(monkeypatch) -> None:
+    tables, supabase = _ready_tables(monkeypatch)
+    _publish_draw_with_immutable_evidence(tables, supabase, "draw-1")
+    tables["tournaments"][0]["status"] = "ACTIVE"
+    tables["tournament_event_options"] = [
+        {
+            "id": "event-1",
+            "tournament_id": "tour-1",
+            "division_name": "Existing division",
+            "enabled": True,
+            "status": "active",
+        },
+        {
+            "id": "event-missing",
+            "tournament_id": "tour-1",
+            "division_name": "Missing division",
+            "enabled": True,
+            "status": "active",
+        },
+    ]
+    capped = _ShortRangePageSupabase(tables, page_cap=1)
+
+    lifecycle = build_admin_tournament_lifecycle(
+        capped,
+        club_id="club",
+        tournament_id="tour-1",
+    )
+
+    assert [start for start, _ in capped.event_option_range_calls] == [0, 1, 2]
+    assert lifecycle["evidence"]["event_options_available"] is True
+    assert lifecycle["domain_readiness"]["completion"]["ready"] is False
+    assert any(
+        blocker["code"] == "EVENT_DRAW_MISSING"
+        and blocker.get("entity_id") == "event-missing"
+        for blocker in lifecycle["domain_readiness"]["completion"]["blockers"]
+    )
+
+
 def test_active_team_parent_draw_blocks_closeout_until_canonical_team_review_exists(monkeypatch) -> None:
     tables, supabase = _ready_tables(monkeypatch)
     tables["tournament_event_draws"].append(
@@ -441,7 +599,7 @@ def test_already_published_draw_does_not_block_another_ready_draw(monkeypatch) -
     assert published["publication_evidence"]["complete"] is True
 
 
-def test_archive_requires_one_official_link_per_game_and_rejects_duplicates(monkeypatch) -> None:
+def test_completion_requires_one_official_link_per_game_and_rejects_duplicates(monkeypatch) -> None:
     tables, supabase = _ready_tables(monkeypatch)
     _publish_draw_with_immutable_evidence(tables, supabase, "draw-1")
     lifecycle = build_admin_tournament_lifecycle(
@@ -449,7 +607,7 @@ def test_archive_requires_one_official_link_per_game_and_rejects_duplicates(monk
         club_id="club",
         tournament_id="tour-1",
     )
-    assert lifecycle["domain_readiness"]["archive"]["ready"] is True
+    assert lifecycle["domain_readiness"]["completion"]["ready"] is True
 
     tables["matches"].append(deepcopy(tables["matches"][0]))
     lifecycle = build_admin_tournament_lifecycle(
@@ -457,11 +615,59 @@ def test_archive_requires_one_official_link_per_game_and_rejects_duplicates(monk
         club_id="club",
         tournament_id="tour-1",
     )
-    blockers = lifecycle["domain_readiness"]["archive"]["blockers"]
+    blockers = lifecycle["domain_readiness"]["completion"]["blockers"]
     assert any(row["code"] == "OFFICIAL_LINKS_DUPLICATE" for row in blockers)
 
 
-def test_archive_domain_readiness_is_not_presented_as_actionable_without_atomic_commit(monkeypatch) -> None:
+def test_completion_counts_only_played_games_as_rating_publication_eligible(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    tables = podium_review_tables()
+    tables["tournament_games"][0].update(
+        {"result_type": "FORFEIT", "rating_publish_eligible": False}
+    )
+    supabase = FakeSupabase(tables)
+    _review_draw(supabase, tables, "draw-1")
+    _add_awards(tables, "draw-1")
+
+    plan = _publish_draw_with_immutable_evidence(tables, supabase, "draw-1")
+    lifecycle = build_admin_tournament_lifecycle(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+    )
+
+    assert len(plan["tournament_game_ids"]) == 2
+    assert lifecycle["counts"]["games"] == 3
+    assert lifecycle["counts"]["rating_publish_eligible_games"] == 2
+    assert lifecycle["counts"]["published_games"] == 2
+    assert lifecycle["counts"]["unpublished_games"] == 0
+    assert lifecycle["domain_readiness"]["completion"]["ready"] is True
+
+
+def test_all_non_played_draw_can_complete_without_rating_publications(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    tables = podium_review_tables()
+    for game in tables["tournament_games"]:
+        game.update({"result_type": "NO_SHOW", "rating_publish_eligible": False})
+    supabase = FakeSupabase(tables)
+    _review_draw(supabase, tables, "draw-1")
+    _add_awards(tables, "draw-1")
+
+    lifecycle = build_admin_tournament_lifecycle(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+    )
+
+    assert lifecycle["counts"]["games"] == 3
+    assert lifecycle["counts"]["rating_publish_eligible_games"] == 0
+    assert lifecycle["counts"]["published_games"] == 0
+    assert lifecycle["counts"]["unpublished_games"] == 0
+    assert lifecycle["draws"][0]["publication_evidence"]["complete"] is True
+    assert lifecycle["domain_readiness"]["completion"]["ready"] is True
+
+
+def test_completion_capability_reports_atomic_support_without_contradiction(monkeypatch) -> None:
     tables, supabase = _ready_tables(monkeypatch)
     _publish_draw_with_immutable_evidence(tables, supabase, "draw-1")
 
@@ -469,14 +675,19 @@ def test_archive_domain_readiness_is_not_presented_as_actionable_without_atomic_
         supabase,
         club_id="club",
         tournament_id="tour-1",
-        runtime_capability={"operations_mutations_enabled": True},
+        runtime_capability={
+            "operations_mutations_enabled": True,
+            "tournament_mutations_enabled": True,
+        },
     )
 
-    assert lifecycle["domain_readiness"]["archive"]["ready"] is True
+    assert lifecycle["domain_readiness"]["completion"]["ready"] is True
+    assert lifecycle["runtime_capability"]["completion_available"] is True
+    assert lifecycle["runtime_capability"]["completion_atomic_commit_enabled"] is True
     assert lifecycle["runtime_capability"]["archive_available"] is False
-    assert lifecycle["runtime_capability"]["archive_atomic_commit_enabled"] is False
-    assert lifecycle["runtime_capability"]["archive_blocker"]["code"] == "ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE"
-    assert lifecycle["next_action"]["key"] != "archive_tournament"
+    assert lifecycle["runtime_capability"]["archive_atomic_commit_enabled"] is True
+    assert "archive_blocker" not in lifecycle["runtime_capability"]
+    assert lifecycle["next_action"]["key"] == "complete_tournament"
 
 
 def test_soft_deleted_match_is_not_official_publication_evidence(monkeypatch) -> None:
@@ -543,7 +754,8 @@ def test_edited_official_match_payload_requires_reconciliation(monkeypatch) -> N
         tournament_id="tour-1",
     )
     assert replayed["counts"]["mismatched_official_matches"] == 0
-    assert replayed["domain_readiness"]["archive"]["ready"] is True
+    assert replayed["domain_readiness"]["completion"]["ready"] is True
+    assert replayed["domain_readiness"]["archive"]["ready"] is False
 
 
 def test_match_links_without_completed_publish_plan_fail_closed(monkeypatch) -> None:
@@ -608,14 +820,16 @@ def test_edited_official_match_classification_is_compared_to_immutable_publish_p
     ]
 
 
-def test_unsettled_match_log_recovery_blocks_publish_and_archive(monkeypatch) -> None:
+def test_tournament_linked_match_log_recovery_blocks_publish_and_completion(monkeypatch) -> None:
     tables, supabase = _ready_tables(monkeypatch)
+    _publish_draw_with_immutable_evidence(tables, supabase, "draw-1")
     tables["match_exclusion_operations"] = [
         {
             "id": "exclude-1",
             "club_id": "club",
             "status": "pending_replay",
             "replay_job_id": "replay-1",
+            "targets_json": [{"match_id": tables["matches"][0]["id"]}],
         }
     ]
     tables["replay_jobs"] = [
@@ -635,13 +849,90 @@ def test_unsettled_match_log_recovery_blocks_publish_and_archive(monkeypatch) ->
 
     assert lifecycle["counts"]["unsettled_match_exclusions"] == 1
     assert lifecycle["counts"]["unsettled_replay_jobs"] == 1
-    for action in ("official_publish", "archive"):
+    for action in ("official_publish", "completion"):
         codes = {
             row["code"]
             for row in lifecycle["domain_readiness"][action]["blockers"]
         }
         assert "MATCH_EXCLUSION_RECOVERY_UNSETTLED" in codes
         assert "MATCH_REPLAY_UNSETTLED" in codes
+
+
+def test_unrelated_club_match_log_recovery_does_not_block_tournament(monkeypatch) -> None:
+    tables, supabase = _ready_tables(monkeypatch)
+    _publish_draw_with_immutable_evidence(tables, supabase, "draw-1")
+    tables["match_exclusion_operations"] = [
+        {
+            "id": "exclude-other",
+            "club_id": "club",
+            "status": "pending_replay",
+            "replay_job_id": "replay-other",
+            "targets_json": [{"match_id": "unrelated-match"}],
+        }
+    ]
+    tables["replay_jobs"] = [
+        {
+            "id": "replay-other",
+            "club_id": "club",
+            "status": "pending",
+        }
+    ]
+
+    lifecycle = build_admin_tournament_lifecycle(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+    )
+
+    assert lifecycle["counts"]["unsettled_match_exclusions"] == 0
+    assert lifecycle["counts"]["unsettled_replay_jobs"] == 0
+    assert lifecycle["domain_readiness"]["completion"]["ready"] is True
+
+
+def test_historical_exclusion_and_replay_rows_are_filtered_before_read_bound(
+    monkeypatch,
+) -> None:
+    tables, supabase = _ready_tables(monkeypatch)
+    _publish_draw_with_immutable_evidence(tables, supabase, "draw-1")
+    linked_match_id = tables["matches"][0]["id"]
+    tables["match_exclusion_operations"] = [
+        {
+            "id": f"settled-{index}",
+            "club_id": "club",
+            "status": "succeeded",
+            "replay_job_id": f"settled-replay-{index}",
+            "targets_json": [{"match_id": f"historical-{index}"}],
+        }
+        for index in range(5001)
+    ] + [
+        {
+            "id": "linked-pending",
+            "club_id": "club",
+            "status": "pending_replay",
+            "replay_job_id": "linked-replay",
+            "targets_json": [{"match_id": linked_match_id}],
+        }
+    ]
+    tables["replay_jobs"] = [
+        {
+            "id": f"settled-replay-{index}",
+            "club_id": "club",
+            "status": "completed",
+        }
+        for index in range(5001)
+    ] + [
+        {"id": "linked-replay", "club_id": "club", "status": "pending"}
+    ]
+
+    lifecycle = build_admin_tournament_lifecycle(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+    )
+
+    assert lifecycle["counts"]["unsettled_match_exclusions"] == 1
+    assert lifecycle["counts"]["unsettled_replay_jobs"] == 1
+    assert not any("safe lifecycle read bound" in warning for warning in lifecycle["warnings"])
 
 
 def test_orphan_team_and_podium_evidence_blocks_closeout(monkeypatch) -> None:

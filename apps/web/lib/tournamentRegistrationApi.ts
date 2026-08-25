@@ -332,6 +332,10 @@ export type PublicRegistrationConfirmationResponse = {
     event_family_label: string;
     day_label: string;
     event_date?: string | null;
+    scheduled_days?: Array<{
+      label: string;
+      event_date?: string | null;
+    }> | null;
     skill_label?: string | null;
     age_label?: string | null;
     price_usd?: number | null;

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from tests.conftest import require_api_dependency
 from tests.test_api_contract_admin_tournament import FakeSupabase, tournament_tables
 from tests.test_admin_tournament_lifecycle_service import (
-    _official_match_for_game,
+    _publish_draw_with_immutable_evidence,
     _ready_tables,
 )
 from tests.test_admin_tournament_podium_review_service import podium_review_tables
@@ -76,47 +76,47 @@ def test_registration_write_has_versioned_audit_lifecycle_and_idempotent_replay(
     ]
 
 
-def test_ready_archive_is_blocked_before_durable_intent_without_atomic_rpc(monkeypatch) -> None:
-    tables, _ = _ready_tables(monkeypatch)
+def test_ready_completion_fails_closed_when_atomic_rpc_is_unavailable(monkeypatch) -> None:
+    tables, supabase = _ready_tables(monkeypatch)
+    tables["tournaments"][0]["status"] = "ACTIVE"
     tables["tournaments"][0]["updated_at"] = "2026-03-02T00:00:00Z"
-    tables["matches"] = [
-        _official_match_for_game(tables, game)
-        for game in tables["tournament_games"]
-    ]
-    tables["tournament_admin_operations"] = []
-    supabase = FakeSupabase(tables)
+    _publish_draw_with_immutable_evidence(tables, supabase, "draw-1")
     _install(monkeypatch, supabase)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS", "1")
     monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "tournament-mutations")
     request = {
-        "action": "archive",
+        "action": "complete",
         "expected_updated_at": "2026-03-02T00:00:00Z",
-        "confirmation_text": "ARCHIVE",
+        "confirmation_text": "COMPLETE",
     }
     client = TestClient(app)
     audit_count = len(tables["admin_activity_log"])
 
-    first = client.patch(
+    response = client.patch(
         "/admin/clubs/club/tournaments/admin/tournaments/tour-1/status-action",
         headers={"Authorization": "Bearer local"},
         json=request,
     )
-    replay = client.patch(
-        "/admin/clubs/club/tournaments/admin/tournaments/tour-1/status-action",
-        headers={"Authorization": "Bearer local"},
-        json=request,
-    )
+    # A failure after durable intent has an uncertain outcome and must force
+    # reconciliation rather than presenting as an ordinary server error.
+    assert response.status_code == 409, response.text
+    assert "may be partial or response-lost" in response.json()["detail"]
+    terminal_operations = [
+        row for row in tables["tournament_admin_operations"]
+        if row.get("action") == "tournament_complete"
+    ]
+    assert len(terminal_operations) == 1
+    assert terminal_operations[0]["status"] == "recovery_required"
+    assert "atomic tournament closeout snapshot is unavailable" in str(
+        terminal_operations[0].get("error_text") or ""
+    ).lower()
+    assert len(tables["admin_activity_log"]) > audit_count
+    assert tables["tournaments"][0]["status"] == "ACTIVE"
 
-    assert first.status_code == 403, first.text
-    assert replay.status_code == 403, replay.text
-    assert "ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE" in first.json()["detail"]
-    assert tables["tournament_admin_operations"] == []
-    assert len(tables["admin_activity_log"]) == audit_count
-    assert tables["tournaments"][0]["status"] == "PUBLISHED"
 
-
-def test_incomplete_archive_is_rejected_by_atomic_commit_gate_before_durable_intent(monkeypatch) -> None:
+def test_incomplete_completion_is_rejected_before_durable_intent(monkeypatch) -> None:
     tables = podium_review_tables()
+    tables["tournaments"][0]["status"] = "ACTIVE"
     tables["tournaments"][0]["updated_at"] = "2026-03-02T00:00:00Z"
     tables["tournament_admin_operations"] = []
     supabase = FakeSupabase(tables)
@@ -128,15 +128,15 @@ def test_incomplete_archive_is_rejected_by_atomic_commit_gate_before_durable_int
         "/admin/clubs/club/tournaments/admin/tournaments/tour-1/status-action",
         headers={"Authorization": "Bearer local"},
         json={
-            "action": "archive",
+            "action": "complete",
             "expected_updated_at": "2026-03-02T00:00:00Z",
-            "confirmation_text": "ARCHIVE",
+            "confirmation_text": "COMPLETE",
         },
     )
 
-    assert response.status_code == 403
-    assert "ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE" in response.json()["detail"]
-    assert tables["tournaments"][0]["status"] == "PUBLISHED"
+    assert response.status_code == 400
+    assert "Tournament completion is blocked" in response.json()["detail"]
+    assert tables["tournaments"][0]["status"] == "ACTIVE"
     assert tables["tournament_admin_operations"] == []
     assert tables["admin_activity_log"] == []
 

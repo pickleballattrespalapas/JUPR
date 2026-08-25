@@ -23,6 +23,11 @@ from jupr_app.domain.tournaments import (
     finalize_game,
     resolve_playoff_dependencies,
 )
+from jupr_app.domain.tournaments.score_policy import (
+    GAME_TARGETS,
+    require_tournament_score,
+    resolve_tournament_scoring_format,
+)
 from jupr_app.services.admin_tournament_guarded_operation import (
     StaleTournamentAdminStateError,
     TournamentAdminRecoveryRequiredError,
@@ -45,6 +50,7 @@ TOURNAMENT_DAY_LIVE_ENTITY = "tournament_registration_day"
 TOURNAMENT_DAY_LIVE_RECONCILE_CONFIRMATION = "RECONCILE DAY OPERATIONS"
 ACTIVE_OPERATION_STATUSES = {"intent", "mutated", "recovery_required"}
 ACTIVE_QUEUE_STATES = {"HELD", "CALLED", "ON_COURT"}
+NON_PLAYED_RESULT_TYPES = {"FORFEIT", "NO_SHOW", "RETIREMENT"}
 SUPPORTED_ADVANCE_COUNTS = (4, 5, 6)
 COMMAND_CONFIRMATIONS = {
     "activate_day": "ACTIVATE DAY",
@@ -54,6 +60,7 @@ COMMAND_CONFIRMATIONS = {
     "auto_fill_courts": "AUTO FILL COURTS",
     "score_and_release": "SAVE SCORE AND RELEASE COURT",
     "correct_completed_score": "CORRECT COMPLETED SCORE",
+    "record_non_played_result": "RECORD NON-PLAYED RESULT",
     "generate_playoffs": "GENERATE PLAYOFFS",
     "close_day": "CLOSE TOURNAMENT DAY",
 }
@@ -129,6 +136,54 @@ def _fingerprint(value: Any) -> str:
         _canonical(value), sort_keys=True, separators=(",", ":"), default=str
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _game_scoring(event: dict[str, Any] | None) -> dict[str, Any]:
+    try:
+        format_code = resolve_tournament_scoring_format(event)
+    except ValueError as exc:
+        return {
+            "format": None,
+            "target": None,
+            "win_by_two": None,
+            "best_of_three_score_semantics": None,
+            "blocker": str(exc),
+        }
+    return {
+        "format": format_code,
+        "target": GAME_TARGETS.get(format_code, 2),
+        "win_by_two": format_code != "BEST_2_OF_3",
+        "best_of_three_score_semantics": (
+            "games_won_2_0_or_2_1" if format_code == "BEST_2_OF_3" else None
+        ),
+        "blocker": None,
+    }
+
+
+def _score_review(
+    game: dict[str, Any],
+    score_a: int,
+    score_b: int,
+    *,
+    acknowledged: bool,
+) -> dict[str, Any]:
+    scoring = dict(game.get("scoring") or {})
+    # Compatibility for retained commands/snapshots created before scoring
+    # metadata was projected. Fresh authoritative snapshots always resolve the
+    # configured event and therefore include the ``scoring`` key, even when
+    # configuration is invalid. Never turn that explicit blocker into a legacy
+    # GAME_TO_11 default.
+    format_code = (
+        _text(scoring.get("format"))
+        if "scoring" in game
+        else "GAME_TO_11"
+    )
+    return require_tournament_score(
+        score_a,
+        score_b,
+        scoring_format=format_code,
+        unusual_score_acknowledged=acknowledged,
+    )
 
 
 def _blocker(code: str, message: str, **extra: Any) -> dict[str, Any]:
@@ -838,6 +893,7 @@ def build_admin_tournament_day_live_snapshot(
         team_a = teams_by_id.get(_text(game.get("team_a_id")))
         team_b = teams_by_id.get(_text(game.get("team_b_id")))
         draw = next((row for row in draws if _text(row.get("id")) == _text(game.get("draw_id"))), {})
+        scoring = _game_scoring(events.get(_text(game.get("event_option_id"))))
         day_draw = day_draw_by_draw.get(_text(game.get("draw_id"))) or {}
         correction_blockers: list[dict[str, Any]] = []
         run_state_for_game = _text((run or {}).get("state") or "DRAFT").upper()
@@ -919,6 +975,13 @@ def build_admin_tournament_day_live_snapshot(
                     "The current game must retain exact finalized result evidence before correction.",
                 )
             )
+        if _text(game.get("result_type") or "PLAYED").upper() != "PLAYED":
+            correction_blockers.append(
+                _blocker(
+                    "NON_PLAYED_RESULT",
+                    "Forfeit, no-show, and retirement outcomes must be reviewed as outcomes, not rewritten as played scores.",
+                )
+            )
         team_a_for_game = teams_by_id.get(_text(game.get("team_a_id"))) or {}
         team_b_for_game = teams_by_id.get(_text(game.get("team_b_id"))) or {}
         if (
@@ -957,6 +1020,11 @@ def build_admin_tournament_day_live_snapshot(
                 "team_b": _side(team_b, players),
                 "score_a": _safe_int(game.get("score_a")),
                 "score_b": _safe_int(game.get("score_b")),
+                "scoring": scoring,
+                "result_type": _text(game.get("result_type") or "PLAYED").upper(),
+                "result_note": game.get("result_note"),
+                "result_recorded_by": game.get("result_recorded_by"),
+                "score_review": dict(game.get("score_review_json") or {}),
                 "team_a_id": _text(game.get("team_a_id")) or None,
                 "team_b_id": _text(game.get("team_b_id")) or None,
                 "winner_team_id": _text(game.get("winner_team_id")) or None,
@@ -975,6 +1043,8 @@ def build_admin_tournament_day_live_snapshot(
                 ),
                 "updated_at": game.get("updated_at"),
                 "version": _text(game.get("updated_at")) or "0",
+                "queue_entry_version": str((queue or {}).get("version") or "0"),
+                "court_id": _text((queue or {}).get("court_id")) or None,
                 "blockers": (
                     [_blocker(_text(queue.get("blocker_code")) or "BLOCKED", _text(queue.get("blocker_detail")) or "This game is not currently eligible.")]
                     if queue and _text(queue.get("state")).upper() == "BLOCKED"
@@ -1500,6 +1570,7 @@ def build_admin_tournament_day_live_snapshot(
             "priority": _safe_int(row.get("priority"), position),
             "state": state or _text(row.get("state")).upper(),
             "version": str(row.get("version") or "0"),
+            "court_id": _text(row.get("court_id")) or None,
             "eligible_since": row.get("eligible_since"),
             "reason": (blockers[0]["code"] if blockers else row.get("blocker_code")),
             "note": (blockers[0]["message"] if blockers else row.get("blocker_detail")),
@@ -1728,7 +1799,19 @@ def build_admin_tournament_day_live_snapshot(
         "participant_claims": claim_rows,
         "draws": [{"id": row.get("id"), "updated_at": row.get("updated_at")} for row in draws],
         "teams": [{"id": row.get("id"), "updated_at": row.get("updated_at")} for row in teams],
-        "games": [{"id": row.get("id"), "updated_at": row.get("updated_at"), "score_a": row.get("score_a"), "score_b": row.get("score_b"), "winner_team_id": row.get("winner_team_id")} for row in games],
+        "games": [
+            {
+                "id": row.get("id"),
+                "updated_at": row.get("updated_at"),
+                "score_a": row.get("score_a"),
+                "score_b": row.get("score_b"),
+                "winner_team_id": row.get("winner_team_id"),
+                "result_type": row.get("result_type") or "PLAYED",
+                "result_note": row.get("result_note"),
+                "score_review_json": row.get("score_review_json") or {},
+            }
+            for row in games
+        ],
         "official_matches": [
             {
                 "id": row.get("id"),
@@ -1967,7 +2050,11 @@ def build_admin_tournament_day_live_snapshot(
 def _require_permission(actor_role: str, action: str) -> None:
     permission = (
         PERMISSION_ENTER_SCORES
-        if action in {"score_and_release", "correct_completed_score"}
+        if action in {
+            "score_and_release",
+            "correct_completed_score",
+            "record_non_played_result",
+        }
         else PERMISSION_MANAGE_TOURNAMENTS
     )
     if not has_permission(actor_role, permission):
@@ -1994,6 +2081,10 @@ def _normalize_request(request: dict[str, Any]) -> tuple[str, str, str, dict[str
     if expected.get("day_run_version") in (None, ""):
         raise StaleTournamentAdminStateError("A reviewed tournament day run version is required.")
     payload = dict(request.get("payload") or {})
+    if action in {"score_and_release", "correct_completed_score"} and set(payload) == {
+        "game_id", "score_a", "score_b"
+    }:
+        payload["unusual_score_acknowledgement"] = False
     payload_keys = {
         "activate_day": set(),
         "auto_fill_courts": set(),
@@ -2002,8 +2093,15 @@ def _normalize_request(request: dict[str, Any]) -> tuple[str, str, str, dict[str
         "pause_draw": {"draw_id"},
         "resume_draw": {"draw_id"},
         "generate_playoffs": {"draw_id", "advance_count"},
-        "score_and_release": {"game_id", "score_a", "score_b"},
-        "correct_completed_score": {"game_id", "score_a", "score_b"},
+        "score_and_release": {
+            "game_id", "score_a", "score_b", "unusual_score_acknowledgement"
+        },
+        "correct_completed_score": {
+            "game_id", "score_a", "score_b", "unusual_score_acknowledgement"
+        },
+        "record_non_played_result": {
+            "game_id", "result_type", "winner_team_id", "result_note"
+        },
     }[action]
     if set(payload) != payload_keys or any(payload[key] is None for key in payload_keys):
         raise ValueError(
@@ -2089,6 +2187,12 @@ def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], 
         game = _selected_game(snapshot, game_id)
         if not game:
             raise ValueError("Choose a game owned by this tournament day.")
+        _score_review(
+            game,
+            score_a,
+            score_b,
+            acknowledged=payload.get("unusual_score_acknowledgement") is True,
+        )
         if action == "correct_completed_score":
             if not game.get("correction_readiness", {}).get("ready"):
                 blockers = game.get("correction_readiness", {}).get("blockers") or []
@@ -2138,6 +2242,57 @@ def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], 
             )
         if expected.get("game_version") in (None, "") or (observed_game_version and str(expected.get("game_version")) != observed_game_version):
             raise StaleTournamentAdminStateError("Tournament game version changed after review.")
+    elif action == "record_non_played_result":
+        game = _selected_game(snapshot, _text(payload.get("game_id")))
+        if not game:
+            raise ValueError("Choose a game owned by this tournament day.")
+        result_type = _text(payload.get("result_type")).upper()
+        if result_type not in NON_PLAYED_RESULT_TYPES:
+            raise ValueError("Choose forfeit, no-show, or retirement.")
+        team_ids = {
+            _text((game.get("team_a") or {}).get("team_id")),
+            _text((game.get("team_b") or {}).get("team_id")),
+        }
+        winner_team_id = _text(payload.get("winner_team_id"))
+        if not winner_team_id or winner_team_id not in team_ids:
+            raise ValueError("Choose the winning team from this reviewed matchup.")
+        note = _text(payload.get("result_note"))
+        if not note:
+            raise ValueError("Add an operator note explaining the non-played result.")
+        if len(note) > 500:
+            raise ValueError("The non-played result note is limited to 500 characters.")
+        if _text(game.get("state")).upper() not in {
+            "WAITING", "HELD", "CALLED", "ON_COURT", "BLOCKED"
+        }:
+            raise ValueError("Only an unfinished queued game can receive a non-played result.")
+        if expected.get("game_version") in (None, "") or str(
+            expected.get("game_version")
+        ) != str(game.get("version")):
+            raise StaleTournamentAdminStateError(
+                "Tournament game version changed after outcome review."
+            )
+        if expected.get("queue_entry_version") in (None, "") or str(
+            expected.get("queue_entry_version")
+        ) != str(game.get("queue_entry_version")):
+            raise StaleTournamentAdminStateError(
+                "Tournament queue entry changed after outcome review."
+            )
+        court_id = _text(game.get("court_id"))
+        if court_id:
+            court = next(
+                (row for row in snapshot.get("courts", []) if _text(row.get("id")) == court_id),
+                None,
+            )
+            if not court or expected.get("court_version") in (None, "") or str(
+                expected.get("court_version")
+            ) != str(court.get("version")):
+                raise StaleTournamentAdminStateError(
+                    "Assigned court changed after outcome review."
+                )
+        elif expected.get("court_version") not in (None, "", 0, "0"):
+            raise StaleTournamentAdminStateError(
+                "This reviewed outcome no longer has the same court assignment."
+            )
 
 
 def _playoff_rows(
@@ -2216,6 +2371,12 @@ def _score_evidence(
     team_b_id = _text(game.get("team_b_id") or (game.get("team_b") or {}).get("team_id"))
     score_a = int(payload["score_a"])
     score_b = int(payload["score_b"])
+    score_review = _score_review(
+        game,
+        score_a,
+        score_b,
+        acknowledged=payload.get("unusual_score_acknowledgement") is True,
+    )
     raw_game = {
         "id": game_id,
         "team_a_id": team_a_id or None,
@@ -2278,6 +2439,39 @@ def _score_evidence(
         "source_draw_updated_at": draw.get("source_updated_at") or draw.get("version"),
         "game_patch": patch,
         "dependency_updates": dependencies,
+        "score_review": score_review,
+    }
+
+
+def _non_played_evidence(
+    snapshot: dict[str, Any], payload: dict[str, Any], actor_email: str
+) -> dict[str, Any]:
+    game = _selected_game(snapshot, _text(payload.get("game_id"))) or {}
+    scoring = dict(game.get("scoring") or {})
+    target = _safe_int(scoring.get("target"))
+    if target is None or target <= 0:
+        raise ValueError(
+            "The configured scoring target is unavailable for this non-played outcome."
+        )
+    winner_team_id = _text(payload.get("winner_team_id"))
+    team_a_id = _text((game.get("team_a") or {}).get("team_id"))
+    score_payload = {
+        "game_id": _text(game.get("id")),
+        "score_a": target if winner_team_id == team_a_id else 0,
+        "score_b": 0 if winner_team_id == team_a_id else target,
+        "unusual_score_acknowledgement": False,
+    }
+    score_evidence = _score_evidence(snapshot, score_payload)
+    return {
+        **score_evidence,
+        "outcome": {
+            "result_type": _text(payload.get("result_type")).upper(),
+            "winner_team_id": winner_team_id,
+            "result_note": _text(payload.get("result_note")),
+            "result_recorded_by": _text(actor_email),
+            "synthetic_progression_score": True,
+            "rating_publish_eligible": False,
+        },
     }
 
 
@@ -2305,7 +2499,19 @@ def _rpc(supabase: Any, name: str, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _operation_payload_base(action: str, expected: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    return {"action": action, "expected": dict(expected), "payload": dict(payload)}
+    command_payload = dict(payload)
+    operator_review: dict[str, Any] | None = None
+    if action in {"score_and_release", "correct_completed_score"}:
+        operator_review = {
+            "unusual_score_acknowledgement": command_payload.pop(
+                "unusual_score_acknowledgement", False
+            )
+            is True
+        }
+    result = {"action": action, "expected": dict(expected), "payload": command_payload}
+    if operator_review is not None:
+        result["operator_review"] = operator_review
+    return result
 
 
 def _activation_evidence(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -2391,7 +2597,7 @@ def execute_admin_tournament_day_live_command(
     if existing:
         request_json = existing.get("request_json") if isinstance(existing.get("request_json"), dict) else {}
         stored = request_json.get("payload") if isinstance(request_json.get("payload"), dict) else {}
-        stored_base = {key: stored.get(key) for key in ("action", "expected", "payload")}
+        stored_base = {key: stored.get(key) for key in base_payload}
         if _canonical(stored_base) != _canonical(base_payload) or _text(existing.get("expected_state")) != expected_state:
             raise ValueError("This idempotency key was already used for a different tournament day request.")
         operation_payload = dict(stored)
@@ -2417,6 +2623,14 @@ def execute_admin_tournament_day_live_command(
         elif action in {"score_and_release", "correct_completed_score"}:
             operation_payload["score_evidence"] = _score_evidence(
                 reviewed, submitted_payload
+            )
+        elif action == "record_non_played_result":
+            operation_payload["operator_authorization"] = {
+                "email": _text(actor_email).lower(),
+                "role": _text(actor_role).lower(),
+            }
+            operation_payload["score_evidence"] = _non_played_evidence(
+                reviewed, submitted_payload, actor_email
             )
         elif action == "generate_playoffs":
             draw = _selected_draw(reviewed, _text(submitted_payload.get("draw_id")))
@@ -2491,6 +2705,42 @@ def execute_admin_tournament_day_live_command(
                     "p_activation_evidence": dict(
                         operation_payload.get("activation_evidence") or {}
                     ),
+                },
+            )
+        if action == "record_non_played_result":
+            game_id = _text(submitted_payload.get("game_id"))
+            game = _selected_game(snapshot, game_id) or {}
+            score_evidence = dict(operation_payload.get("score_evidence") or {})
+            return _rpc(
+                supabase,
+                "admin_record_non_played_tournament_day_game_cas",
+                {
+                    **common,
+                    "p_game_id": game_id,
+                    "p_expected_queue_entry_version": int(
+                        expected.get("queue_entry_version") or 0
+                    ),
+                    "p_expected_court_version": (
+                        int(expected.get("court_version"))
+                        if expected.get("court_version") not in (None, "")
+                        else None
+                    ),
+                    "p_expected_game_updated_at": expected.get("game_version"),
+                    "p_expected_draw_updated_at": score_evidence.get(
+                        "source_draw_updated_at"
+                    ),
+                    "p_game_patch": dict(score_evidence.get("game_patch") or {}),
+                    "p_dependency_updates": list(
+                        score_evidence.get("dependency_updates") or []
+                    ),
+                    "p_result_type": _text(
+                        submitted_payload.get("result_type")
+                    ).upper(),
+                    "p_winner_team_id": _text(
+                        submitted_payload.get("winner_team_id")
+                    ),
+                    "p_result_note": _text(submitted_payload.get("result_note")),
+                    "p_actor_role": _text(actor_role).lower(),
                 },
             )
         if action in {"activate_draw", "pause_draw", "resume_draw"}:

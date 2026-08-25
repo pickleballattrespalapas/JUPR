@@ -410,6 +410,12 @@ def _build_official_match_payloads(
     payloads: list[dict[str, Any]] = []
     detected_format: str | None = None
     for index, game in enumerate(games, start=1):
+        result_type = _clean_text(game.get("result_type") or "PLAYED", limit=40).upper()
+        if result_type != "PLAYED":
+            # Day Live stores a synthetic score only so standings and bracket
+            # dependencies can advance. It is never evidence of a played,
+            # rating-eligible match.
+            continue
         score_a, score_b = _validate_scored_game(game, game_index=index)
         team_a = teams_by_id.get(str(game.get("team_a_id") or ""))
         team_b = teams_by_id.get(str(game.get("team_b_id") or ""))

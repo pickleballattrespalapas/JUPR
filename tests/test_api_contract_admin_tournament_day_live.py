@@ -135,7 +135,7 @@ def test_day_live_route_keeps_read_score_and_schedule_permissions_distinct() -> 
     assert "_resolve_tournament_role_or_403" in source
     assert "PERMISSION_ENTER_SCORES" in source
     assert "PERMISSION_MANAGE_TOURNAMENTS" in source
-    assert '"score_and_release", "correct_completed_score"' in source
+    assert '"score_and_release",\n            "correct_completed_score",\n            "record_non_played_result"' in source
     compact = "".join(source.split())
     assert "required_permissions=(PERMISSION_ENTER_SCORES,)" in compact
     assert "required_permissions=(PERMISSION_MANAGE_TOURNAMENTS,)" in compact

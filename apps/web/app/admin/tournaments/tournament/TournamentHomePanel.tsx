@@ -102,6 +102,17 @@ function phaseCards(
   const liveInProgress = Boolean(gamesExist && ((counts?.open_games || 0) > 0 || (counts?.finalized_games || 0) > 0));
   const publishReady = lifecycle?.domain_readiness.official_publish.ready;
   const publishBlockers = lifecycle?.domain_readiness.official_publish.blockers || [];
+  const ratingPublishEligibleGames = counts?.rating_publish_eligible_games ?? counts?.games ?? 0;
+  const publicationComplete = Boolean(
+    gamesExist
+      && (counts?.unpublished_games ?? Math.max(0, ratingPublishEligibleGames - (counts?.published_games || 0))) === 0
+      && !(counts?.duplicate_publications || counts?.duplicate_official_links)
+  );
+  const officialPublishComplete = Boolean(
+    publicationComplete
+      || lifecycle?.domain_readiness.official_publish.complete
+      || String(lifecycle?.domain_readiness.official_publish.state || "").toLowerCase() === "complete"
+  );
 
   return [
     {
@@ -157,7 +168,7 @@ function phaseCards(
     },
     {
       title: "Publish",
-      state: publishReady ? ((counts?.published_games || 0) === (counts?.games || 0) && Boolean(counts?.games) ? "Complete" : "Ready") : "Blocked",
+      state: officialPublishComplete ? "Complete" : publishReady ? "Ready" : "Blocked",
       description:
         "Review results, publish ready divisions, create official matches, complete replay, and close the tournament.",
       href: selectedHref(
@@ -168,6 +179,8 @@ function phaseCards(
       ),
       note: !lifecycle
         ? "Authoritative publish readiness is unavailable; publishing remains blocked"
+        : officialPublishComplete
+        ? `${counts?.published_games || 0} of ${ratingPublishEligibleGames} played games published`
         : publishReady
         ? "Results become official only through Publish"
         : publishBlockers.map((blocker) => blocker.message).join(" · ") || "Authoritative publish readiness is unavailable"
@@ -184,6 +197,16 @@ function nextAction(
 ): { label: string; href: string; reason: string } {
   const counts = lifecycle?.counts;
   const drawId = initialDrawId || lifecycle?.draws[0]?.draw_id || "";
+  const tournamentStatus = String(lifecycle?.tournament?.status || detail.tournament.status || "").toUpperCase();
+  if (tournamentStatus === "COMPLETED" || tournamentStatus === "ARCHIVED") {
+    return {
+      label: tournamentStatus === "ARCHIVED" ? "Review archived tournament" : "Review completed tournament",
+      href: selectedHref("/admin/tournaments/publish/closeout", tournamentId, tournamentName, drawId),
+      reason: tournamentStatus === "ARCHIVED"
+        ? "This tournament is archived and hidden from public Past results. Restore it from Tournament Closeout if needed."
+        : "This tournament is complete and public in Past tournaments. Archive remains an optional visibility action."
+    };
+  }
   if (!lifecycle) {
     return {
       label: "Review authoritative Live state",
@@ -198,19 +221,40 @@ function nextAction(
       reason: `${counts?.finalized_games || 0} of ${counts?.games || 0} games scored; ${counts?.open_games || 0} open.`
     };
   }
-  if ((counts?.games || 0) > 0 && !lifecycle?.domain_readiness.official_publish.ready) {
+  const ratingPublishEligibleGames = counts?.rating_publish_eligible_games ?? counts?.games ?? 0;
+  const unpublishedGames = counts?.unpublished_games ?? Math.max(0, ratingPublishEligibleGames - (counts?.published_games || 0));
+  const publicationComplete = Boolean(
+    (counts?.games || 0) > 0
+      && unpublishedGames === 0
+      && !(counts?.duplicate_publications || counts?.duplicate_official_links)
+  );
+  const officialPublishComplete = Boolean(
+    publicationComplete
+      || lifecycle.domain_readiness.official_publish.complete
+      || String(lifecycle.domain_readiness.official_publish.state || "").toLowerCase() === "complete"
+  );
+  if ((counts?.games || 0) > 0 && !lifecycle.domain_readiness.official_publish.ready && !officialPublishComplete) {
     return {
       label: "Resolve publish blockers",
       href: selectedHref("/admin/tournaments/ops/results", tournamentId, tournamentName, drawId),
       reason: lifecycle?.domain_readiness.official_publish.blockers.map((blocker) => blocker.message).join(" ") || "Publishing prerequisites remain incomplete."
     };
   }
-  const unpublishedGames = counts?.unpublished_games ?? Math.max(0, (counts?.games || 0) - (counts?.published_games || 0));
   if (lifecycle?.domain_readiness.official_publish.ready && unpublishedGames > 0) {
     return {
       label: "Publish ready divisions",
       href: selectedHref("/admin/tournaments/ops/publish", tournamentId, tournamentName, drawId),
       reason: "Every tournament prerequisite is complete; official publication is ready for deliberate review."
+    };
+  }
+  if (officialPublishComplete) {
+    const completionReady = Boolean(lifecycle.domain_readiness.completion?.ready);
+    return {
+      label: completionReady ? "Complete tournament" : "Review tournament closeout",
+      href: selectedHref("/admin/tournaments/publish/closeout", tournamentId, tournamentName, drawId),
+      reason: completionReady
+        ? "Every server-enforced completion prerequisite passed; review and confirm the terminal completion action."
+        : lifecycle.domain_readiness.completion?.blockers.map((blocker) => blocker.message).join(" ") || "Official publication is complete; review the remaining closeout evidence."
     };
   }
   if (!detail.tournament.start_date || !detail.tournament.end_date) {

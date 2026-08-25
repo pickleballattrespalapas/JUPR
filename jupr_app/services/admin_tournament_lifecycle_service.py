@@ -49,11 +49,6 @@ INACTIVE_DRAW_STATUSES = {
 }
 TOURNAMENT_LIFECYCLE_CONTRACT = "jupr:tournament-lifecycle:v1"
 TOURNAMENT_LIFECYCLE_AUTHORITY = "python_fastapi"
-ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE_CODE = "ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE"
-ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE_MESSAGE = (
-    "Tournament archive writes are temporarily disabled until lifecycle evidence "
-    "and the tournament status can be committed in one atomic database transaction."
-)
 
 
 def _safe_rows(response: Any) -> list[dict[str, Any]]:
@@ -72,21 +67,81 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
+def _enabled(value: Any, *, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "enabled", "active"}
+
+
 def _read_rows(
     supabase: Any,
     table_name: str,
     *,
     filters: tuple[tuple[str, Any], ...],
+    in_filters: tuple[tuple[str, tuple[Any, ...]], ...] = (),
     limit: int = 5000,
 ) -> tuple[list[dict[str, Any]], bool, str | None]:
     try:
-        query = supabase.table(table_name).select("*")
-        for key, value in filters:
-            query = query.eq(str(key), value)
-        rows = _safe_rows(query.limit(int(limit)).execute())
-        if len(rows) >= int(limit):
-            return [], False, f"{table_name} exceeded the safe lifecycle read bound."
-        return rows, True, None
+        safe_limit = max(1, int(limit))
+        page_size = min(500, safe_limit)
+        rows: list[dict[str, Any]] = []
+        offset = 0
+        seen_page_fingerprints: set[str] = set()
+        seen_row_ids: set[str] = set()
+
+        while True:
+            query = supabase.table(table_name).select("*")
+            for key, value in filters:
+                query = query.eq(str(key), value)
+            for key, values in in_filters:
+                query = query.in_(str(key), list(values))
+            if hasattr(query, "order"):
+                query = query.order("id", desc=False)
+            supports_range = hasattr(query, "range")
+            if supports_range:
+                query = query.range(offset, offset + page_size - 1)
+            else:
+                query = query.limit(safe_limit)
+
+            data = getattr(query.execute(), "data", None)
+            if not isinstance(data, list) or any(
+                not isinstance(row, dict) for row in data
+            ):
+                raise RuntimeError(f"{table_name} lifecycle evidence is unavailable")
+            page = [dict(row) for row in data]
+
+            if not supports_range:
+                if len(page) >= safe_limit:
+                    raise RuntimeError(
+                        f"{table_name} exceeded the safe lifecycle read bound"
+                    )
+                return page, True, None
+            if not page:
+                return rows, True, None
+
+            page_fingerprint = stable_tournament_admin_fingerprint(page)
+            if page_fingerprint in seen_page_fingerprints:
+                raise RuntimeError(f"{table_name} lifecycle pagination repeated a page")
+            seen_page_fingerprints.add(page_fingerprint)
+            page_row_ids = [str(row.get("id") or "") for row in page]
+            if any(not row_id for row_id in page_row_ids) or any(
+                row_id in seen_row_ids for row_id in page_row_ids
+            ):
+                raise RuntimeError(
+                    f"{table_name} lifecycle pagination returned unstable row identity"
+                )
+            seen_row_ids.update(page_row_ids)
+            rows.extend(page)
+            if len(rows) >= safe_limit:
+                raise RuntimeError(
+                    f"{table_name} exceeded the safe lifecycle read bound"
+                )
+            # Advance by the rows actually returned. PostgREST may cap a
+            # requested range below page_size; stopping on a short page or
+            # advancing by the requested size would silently skip evidence.
+            offset += len(page)
     except Exception:
         return [], False, f"{table_name} evidence is unavailable."
 
@@ -128,6 +183,31 @@ def _is_finalized_game(game: dict[str, Any], *, team_ids: set[str]) -> bool:
     expected_winner = team_a if score_a > score_b else team_b
     expected_loser = team_b if expected_winner == team_a else team_a
     return winner == expected_winner and loser == expected_loser
+
+
+def _is_rating_publish_eligible(game: dict[str, Any]) -> bool:
+    """Exclude non-played outcomes from official rating publication."""
+
+    result_type = str(game.get("result_type") or "PLAYED").strip().upper()
+    return result_type == "PLAYED" and game.get("rating_publish_eligible") is not False
+
+
+def _match_exclusion_target_ids(operation: dict[str, Any]) -> set[str]:
+    """Return only Match Log ids explicitly bound to an exclusion operation."""
+
+    target_ids = {
+        str(value)
+        for value in (operation.get("excluded_match_ids") or [])
+        if str(value)
+    }
+    targets = operation.get("targets_json")
+    if isinstance(targets, list):
+        target_ids.update(
+            str(row.get("match_id") or "")
+            for row in targets
+            if isinstance(row, dict) and str(row.get("match_id") or "")
+        )
+    return target_ids
 
 
 def _official_match_mismatch_fields(
@@ -724,7 +804,7 @@ def build_admin_tournament_lifecycle(
     )
     if warning:
         warnings.append(warning)
-    event_options, _, warning = _read_rows(
+    event_options, event_options_available, warning = _read_rows(
         supabase,
         "tournament_event_options",
         filters=(("tournament_id", clean_tournament_id),),
@@ -756,13 +836,19 @@ def build_admin_tournament_lifecycle(
         supabase,
         "match_exclusion_operations",
         filters=(("club_id", str(club_id)),),
+        in_filters=(("status", tuple(sorted(UNSETTLED_MATCH_EXCLUSION_STATUSES))),),
     )
     if warning:
         warnings.append(warning)
-    replay_jobs, replay_jobs_available, warning = _read_rows(
+    # Replay jobs are read only after the tournament's linked exclusions are
+    # known. Starting with an empty, available evidence set avoids a club-wide
+    # history scan for tournaments that have no linked exclusion recovery.
+    replay_jobs: list[dict[str, Any]] = []
+    replay_jobs_available = True
+    day_live_runs, day_live_runs_available, warning = _read_rows(
         supabase,
-        "replay_jobs",
-        filters=(("club_id", str(club_id)),),
+        "tournament_day_live_runs",
+        filters=(("tournament_id", clean_tournament_id),),
     )
     if warning:
         warnings.append(warning)
@@ -773,18 +859,18 @@ def build_admin_tournament_lifecycle(
         (teams_available, "TEAM_EVIDENCE_UNAVAILABLE", "Tournament team evidence is unavailable."),
         (games_available, "GAME_EVIDENCE_UNAVAILABLE", "Tournament game evidence is unavailable."),
         (podium_available, "PODIUM_EVIDENCE_UNAVAILABLE", "Tournament podium evidence is unavailable."),
+        (
+            event_options_available,
+            "EVENT_OPTION_EVIDENCE_UNAVAILABLE",
+            "Tournament event-option evidence is unavailable.",
+        ),
         (matches_available, "OFFICIAL_LINK_EVIDENCE_UNAVAILABLE", "Official Match Log links are unavailable."),
         (awards_available, "AWARD_EVIDENCE_UNAVAILABLE", "Podium award evidence is unavailable."),
         (operations_available, "OPERATION_EVIDENCE_UNAVAILABLE", "Tournament operation evidence is unavailable."),
         (
-            match_exclusions_available,
-            "MATCH_EXCLUSION_EVIDENCE_UNAVAILABLE",
-            "Match exclusion recovery evidence is unavailable.",
-        ),
-        (
-            replay_jobs_available,
-            "MATCH_REPLAY_EVIDENCE_UNAVAILABLE",
-            "Match replay evidence is unavailable.",
+            day_live_runs_available,
+            "DAY_LIVE_EVIDENCE_UNAVAILABLE",
+            "Tournament day-live closeout evidence is unavailable.",
         ),
     ):
         if not available:
@@ -802,6 +888,37 @@ def build_admin_tournament_lifecycle(
         and str(row.get("status") or "draft").strip().lower()
         not in INACTIVE_DRAW_STATUSES
     ]
+    active_primary_event_option_ids = {
+        str(row.get("event_option_id") or "")
+        for row in primary_draws
+        if str(row.get("event_option_id") or "")
+    }
+    enabled_event_options_without_draw = [
+        row
+        for row in event_options
+        if row.get("id")
+        and _enabled(row.get("enabled"), default=True)
+        and str(row.get("status") or "active").strip().lower()
+        not in INACTIVE_DRAW_STATUSES
+        and str(row.get("id") or "") not in active_primary_event_option_ids
+    ]
+    for event_option in enabled_event_options_without_draw:
+        event_id = str(event_option.get("id") or "")
+        event_name = str(
+            event_option.get("division_name")
+            or event_option.get("label")
+            or event_option.get("event_family_label")
+            or "Enabled event"
+        )
+        global_evidence_blockers.append(
+            _blocker(
+                "EVENT_DRAW_MISSING",
+                f"{event_name} is enabled but has no active tournament draw. Create its draw or explicitly cancel the empty event.",
+                scope="event",
+                entity_type="tournament_event_option",
+                entity_id=event_id,
+            )
+        )
     inactive_primary_draw_ids = {
         str(row.get("id") or "")
         for row in draws_all
@@ -943,6 +1060,45 @@ def build_admin_tournament_lifecycle(
         for row in match_rows_all
         if str(row.get("tournament_game_id") or "") in relevant_game_ids
     ]
+    tournament_match_ids = {
+        str(row.get("id") or "") for row in relevant_match_rows if row.get("id")
+    }
+    relevant_match_exclusion_operations = [
+        row
+        for row in match_exclusion_operations
+        if _match_exclusion_target_ids(row).intersection(tournament_match_ids)
+    ]
+    relevant_replay_job_ids = {
+        str(row.get("replay_job_id") or "")
+        for row in relevant_match_exclusion_operations
+        if str(row.get("replay_job_id") or "")
+    }
+    if relevant_replay_job_ids:
+        replay_jobs, replay_jobs_available, warning = _read_rows(
+            supabase,
+            "replay_jobs",
+            filters=(("club_id", str(club_id)),),
+            in_filters=(
+                ("id", tuple(sorted(relevant_replay_job_ids))),
+                ("status", tuple(sorted(UNSETTLED_REPLAY_JOB_STATUSES))),
+            ),
+        )
+        if warning:
+            warnings.append(warning)
+    if tournament_match_ids and not match_exclusions_available:
+        global_evidence_blockers.append(
+            _blocker(
+                "MATCH_EXCLUSION_EVIDENCE_UNAVAILABLE",
+                "Tournament-linked Match Log exclusion recovery evidence is unavailable.",
+            )
+        )
+    if relevant_replay_job_ids and not replay_jobs_available:
+        global_evidence_blockers.append(
+            _blocker(
+                "MATCH_REPLAY_EVIDENCE_UNAVAILABLE",
+                "Tournament-linked Match Log replay evidence is unavailable.",
+            )
+        )
     soft_deleted_matches = [
         row for row in relevant_match_rows if row.get("deleted_at") not in (None, "")
     ]
@@ -1012,21 +1168,22 @@ def build_admin_tournament_lifecycle(
         )
     unsettled_match_exclusions = [
         row
-        for row in match_exclusion_operations
+        for row in relevant_match_exclusion_operations
         if str(row.get("status") or "").strip().lower()
         in UNSETTLED_MATCH_EXCLUSION_STATUSES
     ]
     unsettled_replay_jobs = [
         row
         for row in replay_jobs
-        if str(row.get("status") or "").strip().lower()
+        if str(row.get("id") or "") in relevant_replay_job_ids
+        and str(row.get("status") or "").strip().lower()
         in UNSETTLED_REPLAY_JOB_STATUSES
     ]
     if unsettled_match_exclusions:
         operation_blockers.append(
             _blocker(
                 "MATCH_EXCLUSION_RECOVERY_UNSETTLED",
-                f"{len(unsettled_match_exclusions)} Match Log exclusion operation(s) are not fully reconciled.",
+                f"{len(unsettled_match_exclusions)} tournament-linked Match Log exclusion operation(s) are not fully reconciled.",
                 entity_type="match_exclusion_operation",
                 count=len(unsettled_match_exclusions),
             )
@@ -1035,9 +1192,23 @@ def build_admin_tournament_lifecycle(
         operation_blockers.append(
             _blocker(
                 "MATCH_REPLAY_UNSETTLED",
-                f"{len(unsettled_replay_jobs)} rating replay job(s) are pending or running for this club.",
+                f"{len(unsettled_replay_jobs)} tournament-linked rating replay job(s) are pending or running.",
                 entity_type="replay_job",
                 count=len(unsettled_replay_jobs),
+            )
+        )
+    active_day_live_runs = [
+        row
+        for row in day_live_runs
+        if str(row.get("state") or "").strip().upper() in {"ACTIVE", "PAUSED"}
+    ]
+    if active_day_live_runs:
+        operation_blockers.append(
+            _blocker(
+                "DAY_LIVE_RUN_OPEN",
+                f"{len(active_day_live_runs)} tournament day-live run(s) are still active or paused. Close them before tournament completion.",
+                entity_type="tournament_day_live_run",
+                count=len(active_day_live_runs),
             )
         )
 
@@ -1147,6 +1318,12 @@ def build_admin_tournament_lifecycle(
 
         draw_game_ids = [str(row.get("id") or "") for row in draw_games if row.get("id")]
         draw_game_id_set = set(draw_game_ids)
+        rating_publish_game_ids = [
+            str(row.get("id") or "")
+            for row in draw_games
+            if row.get("id") and _is_rating_publish_eligible(row)
+        ]
+        rating_publish_game_id_set = set(rating_publish_game_ids)
         draw_matches = [
             row
             for row in matches
@@ -1162,7 +1339,7 @@ def build_admin_tournament_lifecycle(
         immutable_plan_errors = list(immutable_plan.get("errors") or [])
         if bool(immutable_plan.get("available")) and set(
             str(value) for value in immutable_plan.get("game_ids") or []
-        ) != draw_game_id_set:
+        ) != rating_publish_game_id_set:
             immutable_plan_errors.append("PUBLISH_PLAN_CURRENT_GAME_SET_MISMATCH")
         immutable_plan_available = bool(immutable_plan.get("available")) and not immutable_plan_errors
         immutable_projections = (
@@ -1229,9 +1406,11 @@ def build_admin_tournament_lifecycle(
             publication_state = "mismatch"
         elif draw_matches and missing_publication_evidence:
             publication_state = "evidence_unavailable"
+        elif not linked_ids and not rating_publish_game_id_set:
+            publication_state = "complete"
         elif not linked_ids:
             publication_state = "not_published"
-        elif bool(draw_game_ids) and published_ids == draw_game_id_set:
+        elif published_ids == rating_publish_game_id_set:
             publication_state = "complete"
         else:
             publication_state = "partial"
@@ -1310,8 +1489,9 @@ def build_admin_tournament_lifecycle(
                 "counts": {
                     "teams": len(draw_teams),
                     **draw_counts,
+                    "rating_publish_eligible_games": len(rating_publish_game_ids),
                     "published_games": len(published_ids),
-                    "unpublished_games": max(0, len(draw_game_ids) - len(published_ids)),
+                    "unpublished_games": max(0, len(rating_publish_game_ids) - len(published_ids)),
                     "official_matches": sum(publication_counts.values()),
                     "duplicate_publications": len(duplicate_ids),
                     "duplicate_official_links": len(duplicate_ids),
@@ -1436,7 +1616,7 @@ def build_admin_tournament_lifecycle(
             blockers.append(
                 _blocker(
                     "DRAW_ALREADY_PUBLISHED",
-                    f"{model['name']} already has exactly one official Match Log link per game.",
+                    f"{model['name']} already has exactly one official Match Log link per played game.",
                     scope="draw",
                     draw_id=draw_id,
                 )
@@ -1472,34 +1652,56 @@ def build_admin_tournament_lifecycle(
             )
         official_publish_readiness = _readiness(selector_blockers)
 
-    archive_blockers = list(global_publish_base)
+    completion_blockers = list(global_publish_base)
     for model in draw_models:
         if publication_state_by_draw.get(str(model["draw_id"])) != "complete":
             remaining = max(
                 0,
-                int(model["counts"]["games"]) - int(model["counts"]["published_games"]),
+                int(model["counts"].get("rating_publish_eligible_games") or 0)
+                - int(model["counts"]["published_games"]),
             )
-            archive_blockers.append(
+            completion_blockers.append(
                 _blocker(
                     "OFFICIAL_LINKS_INCOMPLETE",
-                    f"{model['name']} needs exactly one official Match Log link for every game.",
+                    f"{model['name']} needs exactly one official Match Log link for every played game.",
                     scope="draw",
                     draw_id=str(model["draw_id"]),
                     count=remaining,
                 )
             )
     if not draw_models:
-        archive_blockers.append(
-            _blocker("NO_ACTIVE_DRAWS", "A tournament with no participating draws cannot be archived as complete.")
+        completion_blockers.append(
+            _blocker("NO_ACTIVE_DRAWS", "A tournament with no participating draws cannot be completed.")
         )
-    archive_complete = (
-        str(tournament.get("status") or "").upper() == "ARCHIVED" and not archive_blockers
+    tournament_status = str(tournament.get("status") or "").upper()
+    completion_complete = (
+        tournament_status in {"COMPLETED", "ARCHIVED"} and not completion_blockers
     )
+    completion_readiness = _readiness(
+        completion_blockers,
+        complete=completion_complete,
+    )
+    archive_blockers = list(completion_blockers)
+    if tournament_status not in {"COMPLETED", "ARCHIVED"}:
+        archive_blockers.append(
+            _blocker(
+                "TOURNAMENT_NOT_COMPLETED",
+                "Complete the tournament before moving it to the hidden archive.",
+                entity_type="tournament",
+                entity_id=clean_tournament_id,
+            )
+        )
+    archive_complete = tournament_status == "ARCHIVED" and not completion_blockers
     archive_readiness = _readiness(archive_blockers, complete=archive_complete)
     for model in draw_models:
+        model["readiness"]["completion"] = completion_readiness
         model["readiness"]["archive"] = archive_readiness
 
     total_games = sum(int(model["counts"]["games"]) for model in draw_models)
+    total_rating_publish_games = sum(
+        int(model["counts"].get("rating_publish_eligible_games") or 0)
+        for model in draw_models
+    )
     published_game_ids = set(verified_published_game_ids)
     duplicate_link_games = {
         game_id
@@ -1508,18 +1710,22 @@ def build_admin_tournament_lifecycle(
     }
     runtime = dict(runtime_capability or build_admin_tournament_ops_runtime_status())
     runtime.setdefault("official_publish_available", bool(runtime.get("official_publish_enabled")))
-    # A tournament.updated_at CAS cannot protect the draw/game/podium/award/
-    # Match Log evidence read by closeout. Keep domain readiness observable,
-    # but never advertise archive as actionable until the atomic evidence RPC
-    # lands.
-    runtime["archive_atomic_commit_enabled"] = False
-    runtime["archive_writes_enabled"] = False
-    runtime["archive_available"] = False
-    runtime["archive_blocker"] = _blocker(
-        ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE_CODE,
-        ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE_MESSAGE,
-        entity_type="tournament",
-        entity_id=clean_tournament_id,
+    terminal_writes_enabled = bool(runtime.get("tournament_mutations_enabled"))
+    # Completion and the immutable closeout receipt are committed by the same
+    # service-role-only database RPC.  Archive is a distinct visibility action
+    # available only after the public terminal COMPLETED state exists.
+    runtime["completion_atomic_commit_enabled"] = True
+    runtime["completion_writes_enabled"] = terminal_writes_enabled
+    runtime["completion_available"] = bool(
+        terminal_writes_enabled and tournament_status not in {"COMPLETED", "ARCHIVED"}
+    )
+    runtime["archive_atomic_commit_enabled"] = True
+    runtime["archive_writes_enabled"] = terminal_writes_enabled
+    runtime["archive_available"] = bool(
+        terminal_writes_enabled and tournament_status == "COMPLETED"
+    )
+    runtime["unarchive_available"] = bool(
+        terminal_writes_enabled and tournament_status == "ARCHIVED"
     )
 
     if total_open_games:
@@ -1536,14 +1742,19 @@ def build_admin_tournament_lifecycle(
         next_action = {"key": "complete_awards", "label": "Complete awards", "draw_id": None}
     elif official_publish_readiness.get("ready"):
         next_action = {"key": "publish_official_matches", "label": "Publish official matches", "draw_id": clean_selected_draw_id}
-    elif archive_readiness.get("ready") and runtime.get("archive_available"):
-        next_action = {"key": "archive_tournament", "label": "Archive tournament", "draw_id": None}
+    elif completion_readiness.get("ready") and runtime.get("completion_available"):
+        next_action = {"key": "complete_tournament", "label": "Complete tournament", "draw_id": None}
+    elif tournament_status == "COMPLETED" and runtime.get("archive_available"):
+        next_action = {"key": "archive_tournament", "label": "Move to archive", "draw_id": None}
+    elif tournament_status == "ARCHIVED" and runtime.get("unarchive_available"):
+        next_action = {"key": "unarchive_tournament", "label": "Restore completed tournament", "draw_id": None}
     else:
         next_action = {"key": "resolve_blockers", "label": "Resolve closeout blockers", "draw_id": None}
 
-    tournament_status = str(tournament.get("status") or "").upper()
     if tournament_status == "ARCHIVED":
         phase = "archived"
+    elif tournament_status == "COMPLETED":
+        phase = "completed"
     elif not draw_models:
         phase = "setup"
     elif total_open_games:
@@ -1554,10 +1765,10 @@ def build_admin_tournament_lifecycle(
         for field in ("podium_complete", "podium_reviewed", "awards_complete")
     ):
         phase = "closeout_in_progress"
-    elif archive_readiness.get("ready") and runtime.get("archive_available"):
-        phase = "archive_ready"
-    elif archive_readiness.get("ready"):
-        phase = "archive_blocked"
+    elif completion_readiness.get("ready") and runtime.get("completion_available"):
+        phase = "completion_ready"
+    elif completion_readiness.get("ready"):
+        phase = "completion_read_only"
     elif official_publish_readiness.get("ready"):
         phase = "publish_ready"
     else:
@@ -1594,7 +1805,8 @@ def build_admin_tournament_lifecycle(
             "verified_awards": total_verified_awards,
             "unexpected_awards": total_unexpected_awards,
             "published_games": len(published_game_ids),
-            "unpublished_games": max(0, total_games - len(published_game_ids)),
+            "rating_publish_eligible_games": total_rating_publish_games,
+            "unpublished_games": max(0, total_rating_publish_games - len(published_game_ids)),
             "official_matches": len(matches),
             "soft_deleted_official_matches": len(soft_deleted_matches),
             "mismatched_official_matches": len(official_match_payload_mismatches),
@@ -1608,6 +1820,7 @@ def build_admin_tournament_lifecycle(
             "recovery_required_operations": len(recovery_operations),
             "unsettled_match_exclusions": len(unsettled_match_exclusions),
             "unsettled_replay_jobs": len(unsettled_replay_jobs),
+            "active_day_live_runs": len(active_day_live_runs),
         },
         "states": {
             "live_operations": (
@@ -1618,11 +1831,13 @@ def build_admin_tournament_lifecycle(
                 else "not_started"
             ),
             "official_publish": str(official_publish_readiness.get("state") or "blocked"),
+            "completion": str(completion_readiness.get("state") or "blocked"),
             "archive": str(archive_readiness.get("state") or "blocked"),
         },
         "draws": draw_models,
         "domain_readiness": {
             "official_publish": official_publish_readiness,
+            "completion": completion_readiness,
             "archive": archive_readiness,
         },
         "runtime_capability": runtime,
@@ -1632,7 +1847,9 @@ def build_admin_tournament_lifecycle(
             "operations_available": operations_available,
             "match_exclusions_available": match_exclusions_available,
             "replay_jobs_available": replay_jobs_available,
+            "day_live_runs_available": day_live_runs_available,
             "players_available": players_available,
+            "event_options_available": event_options_available,
             "active_team_parent_draw_ids": sorted(
                 str(row.get("id") or "")
                 for row in active_team_parent_draws
@@ -1691,6 +1908,14 @@ def build_admin_tournament_lifecycle(
                     "updated_at": row.get("updated_at"),
                 }
                 for row in unsettled_replay_jobs
+            ],
+            "active_day_live_runs": [
+                {
+                    "id": str(row.get("id") or ""),
+                    "state": str(row.get("state") or ""),
+                    "updated_at": row.get("updated_at"),
+                }
+                for row in active_day_live_runs
             ],
             "active_operations": [
                 {
@@ -1760,14 +1985,14 @@ def require_admin_tournament_official_publish_readiness(
         ignore_operation_keys={str(ignore_operation_key)} if ignore_operation_key else None,
     )
     readiness = lifecycle["domain_readiness"]["official_publish"]
-    archive_readiness = lifecycle["domain_readiness"]["archive"]
+    completion_readiness = lifecycle["domain_readiness"]["completion"]
     ready = bool(readiness.get("ready")) or (
-        protected_target and bool(archive_readiness.get("ready"))
+        protected_target and bool(completion_readiness.get("ready"))
     )
     if not ready:
         blocker_rows = list(readiness.get("blockers") or [])
         if protected_target:
-            blocker_rows.extend(list(archive_readiness.get("blockers") or []))
+            blocker_rows.extend(list(completion_readiness.get("blockers") or []))
         messages = [
             str(row.get("message") or "")
             for row in _dedupe_blockers(blocker_rows)
@@ -1785,7 +2010,7 @@ def require_admin_tournament_official_publish_readiness(
     return lifecycle
 
 
-def require_admin_tournament_archive_readiness(
+def require_admin_tournament_completion_readiness(
     supabase: Any,
     *,
     club_id: str,
@@ -1798,20 +2023,41 @@ def require_admin_tournament_archive_readiness(
         tournament_id=str(tournament_id),
         ignore_operation_keys={str(ignore_operation_key)} if ignore_operation_key else None,
     )
-    readiness = lifecycle["domain_readiness"]["archive"]
+    readiness = lifecycle["domain_readiness"]["completion"]
     if not bool(readiness.get("ready")):
         messages = [str(row.get("message") or "") for row in readiness.get("blockers") or []]
         raise ValueError(
-            "Tournament archiving is blocked: "
+            "Tournament completion is blocked: "
             + " ".join(message for message in messages if message)
         )
     return lifecycle
 
 
+def require_admin_tournament_archive_readiness(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    ignore_operation_key: str | None = None,
+) -> dict[str, Any]:
+    """Compatibility alias for callers that still mean closeout readiness.
+
+    The public terminal transition is now COMPLETED.  Moving an already
+    completed tournament to ARCHIVED is a separate visibility action and is
+    guarded by the terminal-status RPC.
+    """
+
+    return require_admin_tournament_completion_readiness(
+        supabase,
+        club_id=club_id,
+        tournament_id=tournament_id,
+        ignore_operation_key=ignore_operation_key,
+    )
+
+
 __all__ = [
-    "ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE_CODE",
-    "ARCHIVE_ATOMIC_COMMIT_UNAVAILABLE_MESSAGE",
     "build_admin_tournament_lifecycle",
     "require_admin_tournament_archive_readiness",
+    "require_admin_tournament_completion_readiness",
     "require_admin_tournament_official_publish_readiness",
 ]

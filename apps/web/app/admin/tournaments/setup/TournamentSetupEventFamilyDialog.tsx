@@ -186,8 +186,8 @@ export default function TournamentSetupEventFamilyDialog({
       validationError("Choose at least one tournament day for this event.", "Tournament days", daysRef.current);
     }
     const capacity = Number(draft.default_capacity_teams);
-    if (!Number.isInteger(capacity) || capacity < 1) {
-      validationError("Default capacity must be a whole number of at least 1.", "Default capacity", capacityRef.current);
+    if (!Number.isInteger(capacity) || capacity < 4 || capacity > 16) {
+      validationError("Default capacity must be a whole number from 4 through 16.", "Default capacity", capacityRef.current);
     }
     const price = Number(draft.default_price_usd);
     if (!Number.isFinite(price) || price < 0) {
@@ -329,7 +329,8 @@ export default function TournamentSetupEventFamilyDialog({
             <input
               ref={capacityRef}
               type="number"
-              min="1"
+              min="4"
+              max="16"
               step="1"
               value={numberInputValue(draft.default_capacity_teams)}
               style={inputStyle}
@@ -382,13 +383,16 @@ export default function TournamentSetupEventFamilyDialog({
                     <option value="TOP_4_SEMIFINALS_WITH_BRONZE">Top 4 with bronze match</option>
                   </select>
                 </label>
-                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1.65rem" }}>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", marginTop: "1.65rem" }}>
                   <input
                     type="checkbox"
                     checked={recordBoolean(draft.team_allow_substitutes, false)}
                     onChange={(event) => setDraft((current) => ({ ...current, team_allow_substitutes: event.target.checked }))}
                   />
-                  Allow substitutes
+                  <span>
+                    <strong>Allow roster replacement between matches</strong><br />
+                    <small>Use the authoritative Team competition roster action. Check-in never changes a roster, and pre-play corrections remain available without enabling this option.</small>
+                  </span>
                 </label>
               </div>
             </fieldset>

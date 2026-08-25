@@ -29,6 +29,13 @@ export type ValidationIssue = {
   message: string;
 };
 
+export function expectedGenderFromDivisionName(value: unknown): "MEN" | "WOMEN" | null {
+  const normalized = cleanString(value).toLowerCase().replaceAll("’", "'");
+  if (/^(women|womens|women's|ladies|female)\b/.test(normalized)) return "WOMEN";
+  if (/^(men|mens|men's|male)\b/.test(normalized)) return "MEN";
+  return null;
+}
+
 export const COMPETITION_FORMATS = [
   "ROUND_ROBIN",
   "SINGLE_ELIM",
@@ -107,8 +114,20 @@ function canonicalDayPayload(row: SetupRecord): SetupRecord {
   return next;
 }
 
-function canonicalEventFamilyPayload(row: SetupRecord): SetupRecord {
+function canonicalSubstitutePolicy(row: SetupRecord): SetupRecord {
   const next = { ...row };
+  const competitionFormat = cleanString(row.competition_format).toUpperCase() || "STANDARD";
+  if (
+    competitionFormat !== "FOUR_PLAYER_TEAM"
+    && Object.prototype.hasOwnProperty.call(row, "team_allow_substitutes")
+  ) {
+    next.team_allow_substitutes = false;
+  }
+  return next;
+}
+
+function canonicalEventFamilyPayload(row: SetupRecord): SetupRecord {
+  const next = canonicalSubstitutePolicy(row);
   for (const key of ["event_family", "event_family_label"] as const) {
     if (Object.prototype.hasOwnProperty.call(row, key)) {
       next[key] = cleanString(row[key]);
@@ -118,7 +137,7 @@ function canonicalEventFamilyPayload(row: SetupRecord): SetupRecord {
 }
 
 function canonicalEventOptionPayload(row: SetupRecord): SetupRecord {
-  const next = { ...row };
+  const next = canonicalSubstitutePolicy(row);
   for (const key of ["division_name", "label", "skill_label", "age_label"] as const) {
     if (Object.prototype.hasOwnProperty.call(row, key)) {
       next[key] = cleanString(row[key]);
@@ -948,7 +967,11 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
       const primary = scheduledDayIds[0] || cleanString(projected.registration_day_id);
       const next: SetupRecord = {
         ...projected,
-        registration_day_id: primary
+        registration_day_id: primary,
+        team_allow_substitutes:
+          cleanString(projected.competition_format).toUpperCase() === "FOUR_PLAYER_TEAM"
+            ? recordBoolean(projected.team_allow_substitutes, false)
+            : false
       };
       if (
         Object.prototype.hasOwnProperty.call(projected, "scheduled_day_ids") ||
@@ -1178,7 +1201,9 @@ function comparablePublishedEvent(event: SetupRecord, index: number): SetupRecor
       || (fourPlayerTeam ? "TWO_MEN_TWO_WOMEN" : "NONE"),
     team_tiebreak_mode: cleanString(event.team_tiebreak_mode).toUpperCase() || "SINGLES",
     team_playoff_format: cleanString(event.team_playoff_format).toUpperCase() || "NONE",
-    team_allow_substitutes: recordBoolean(event.team_allow_substitutes, false),
+    team_allow_substitutes: fourPlayerTeam
+      ? recordBoolean(event.team_allow_substitutes, false)
+      : false,
     waitlist_enabled: recordBoolean(event.waitlist_enabled, true),
     partner_board_enabled: partnerBoardEnabled,
     enabled: recordBoolean(event.enabled, true)
@@ -1292,8 +1317,8 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
       });
     }
     const capacity = finiteNumber(row.default_capacity_teams);
-    if (capacity != null && (!Number.isInteger(capacity) || capacity < 1)) {
-      issues.push({ path: `families.${index}.default_capacity_teams`, message: "Default capacity must be a whole number of at least 1." });
+    if (capacity != null && (!Number.isInteger(capacity) || capacity < 4 || capacity > 16)) {
+      issues.push({ path: `families.${index}.default_capacity_teams`, message: "Default capacity must be a whole number from 4 through 16." });
     }
     const price = finiteNumber(row.default_price_usd);
     if (price != null && price < 0) {
@@ -1332,6 +1357,12 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
       }
     }
     const competitionFormat = cleanString(row.competition_format).toUpperCase() || "STANDARD";
+    if (competitionFormat !== "FOUR_PLAYER_TEAM" && recordBoolean(row.team_allow_substitutes, false)) {
+      issues.push({
+        path: `families.${index}.team_allow_substitutes`,
+        message: "Standard tournament events cannot enable substitutes. Correct the authoritative roster before play."
+      });
+    }
     if (competitionFormat === "FOUR_PLAYER_TEAM") {
       if (participantType !== "MIXED_DOUBLES" || gender !== "MIXED") {
         issues.push({ path: `families.${index}.competition_format`, message: "Four-player team events use Mixed participant and gender rules." });
@@ -1382,8 +1413,27 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
     }
 
     const capacity = finiteNumber(row.capacity_teams);
-    if (capacity == null || !Number.isInteger(capacity) || capacity < 1) {
-      issues.push({ path: `events.${index}.capacity_teams`, message: "Capacity must be a whole number of at least 1." });
+    if (capacity == null || !Number.isInteger(capacity) || capacity < 4 || capacity > 16) {
+      issues.push({ path: `events.${index}.capacity_teams`, message: "Capacity must be a whole number from 4 through 16." });
+    }
+    const eventType = cleanString(row.event_type ?? row.participant_type).toUpperCase();
+    const gender = cleanString(row.gender_restriction || "ANY").toUpperCase();
+    if (eventType === "MIXED_DOUBLES" && gender !== "MIXED") {
+      issues.push({ path: `events.${index}.gender_restriction`, message: "Mixed Doubles automatically uses Mixed gender." });
+    }
+    const expectedGender = expectedGenderFromDivisionName(name);
+    if (expectedGender && gender !== expectedGender) {
+      issues.push({
+        path: `events.${index}.gender_restriction`,
+        message: `${expectedGender === "WOMEN" ? "Women's" : "Men's"} divisions must use the matching gender category.`
+      });
+    }
+    const competitionFormat = cleanString(row.competition_format).toUpperCase() || "STANDARD";
+    if (competitionFormat !== "FOUR_PLAYER_TEAM" && recordBoolean(row.team_allow_substitutes, false)) {
+      issues.push({
+        path: `events.${index}.team_allow_substitutes`,
+        message: "Standard tournament divisions cannot enable substitutes. Correct the authoritative roster before play."
+      });
     }
     const price = finiteNumber(row.price_usd);
     if (price == null || price < 0) {

@@ -9,6 +9,11 @@ from typing import Any
 
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
 from jupr_app.domain.tournament_public_references import build_public_tournament_reference
+from jupr_app.domain.tournament_public_visibility import (
+    CURRENT_TOURNAMENT_VIEW,
+    normalize_public_tournament_view,
+    public_tournament_view,
+)
 
 from .tournament_registration_compiler import (
     canonical_gender_restriction,
@@ -59,6 +64,9 @@ ADMIN_SELECTION_DELETE_RPC = "admin_delete_tournament_registration_selection"
 PUBLIC_REGISTRATION_EDIT_RPC = "server_update_public_tournament_registration_edit"
 PUBLIC_REGISTRATION_CANONICAL_CREATE_RPC = (
     "create_tournament_registration_canonical_v1"
+)
+ADMIN_REGISTRATION_CANONICAL_CREATE_RPC = (
+    "create_admin_tournament_registration_canonical_v1"
 )
 PUBLIC_REGISTRATION_COMMERCE_CREATE_RPC = (
     "server_create_public_tournament_registration_with_commerce"
@@ -2568,7 +2576,12 @@ def update_registration_admin_fields(
 
 
 def create_admin_registration(supabase, *, tournament_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return save_registration(supabase, tournament_id=str(tournament_id), payload=payload)
+    return save_registration(
+        supabase,
+        tournament_id=str(tournament_id),
+        payload=payload,
+        trusted_admin_create=True,
+    )
 
 
 def update_admin_registration(
@@ -3093,6 +3106,7 @@ def save_registration(
     expected_selection_versions: list[dict[str, Any]] | None = None,
     atomic_edit: bool = False,
     commerce_transaction: dict[str, Any] | None = None,
+    trusted_admin_create: bool = False,
 ) -> dict[str, Any]:
     email = _normalize_email(payload.get("email"))
     if not email:
@@ -3455,14 +3469,25 @@ def save_registration(
         }
 
     try:
+        canonical_create_rpc = (
+            ADMIN_REGISTRATION_CANONICAL_CREATE_RPC
+            if trusted_admin_create
+            else PUBLIC_REGISTRATION_CANONICAL_CREATE_RPC
+        )
         response = rpc(
-            PUBLIC_REGISTRATION_CANONICAL_CREATE_RPC,
+            canonical_create_rpc,
             {"p_registration": reg_row, "p_selections": rows},
         ).execute()
     except Exception as exc:
         manual_partner_message = _manual_partner_error_message(exc)
         if manual_partner_message:
             raise ValueError(manual_partner_message) from exc
+        if _database_error_contains(
+            exc, "JUPR_ADMIN_REGISTRATION_PLAYER_MISMATCH"
+        ):
+            raise ValueError(
+                "The selected player does not belong to this tournament's club."
+            ) from exc
         if _database_error_contains(
             exc, "JUPR_TOURNAMENT_REGISTRATION_DUPLICATE"
         ):
@@ -3512,7 +3537,11 @@ def get_public_tournament_bundle(
     tournament = get_tournament_record(supabase, str(tournament_id))
     if not tournament or str(tournament.get("club_id")) != str(club_id):
         return None, None, [], []
-    if str(tournament.get("status") or "").upper() == "ARCHIVED":
+    if not classify_public_tournament(
+        supabase,
+        tournament=tournament,
+        settings=settings,
+    ):
         return None, None, [], []
 
     days = list_registration_days(supabase, str(tournament_id))
@@ -3520,9 +3549,53 @@ def get_public_tournament_bundle(
     return tournament, settings, days, event_options
 
 
-def list_open_public_tournaments(supabase, club_id: str) -> list[dict[str, Any]]:
+def _has_tournament_completion_receipt(supabase, tournament_id: str) -> bool:
+    """Return the durable closeout receipt without leaking on schema failure."""
+
+    try:
+        rows = _safe_data(
+            supabase.table("tournament_lifecycle_receipts")
+            .select("id")
+            .eq("tournament_id", str(tournament_id))
+            .eq("action", "complete")
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        return False
+    return bool(rows)
+
+
+def classify_public_tournament(
+    supabase,
+    *,
+    tournament: dict[str, Any] | None,
+    settings: dict[str, Any] | None,
+) -> str | None:
+    status = str((tournament or {}).get("status") or "").strip().upper()
+    return public_tournament_view(
+        tournament,
+        settings,
+        completion_receipt=(
+            _has_tournament_completion_receipt(
+                supabase,
+                str((tournament or {}).get("id") or ""),
+            )
+            if status == "COMPLETED"
+            else False
+        ),
+    )
+
+
+def list_public_tournaments(
+    supabase,
+    club_id: str,
+    *,
+    view: str = CURRENT_TOURNAMENT_VIEW,
+) -> list[dict[str, Any]]:
+    selected_view = normalize_public_tournament_view(view)
     settings_rows = _safe_data(
-        supabase.table("tournament_registration_settings").select("*").eq("registration_status", "open").execute()
+        supabase.table("tournament_registration_settings").select("*").execute()
     )
     out: list[dict[str, Any]] = []
     for settings in settings_rows:
@@ -3531,11 +3604,39 @@ def list_open_public_tournaments(supabase, club_id: str) -> list[dict[str, Any]]
             continue
         if str(tournament.get("club_id")) != str(club_id):
             continue
-        if str(tournament.get("status") or "").upper() == "ARCHIVED":
+        if classify_public_tournament(
+            supabase,
+            tournament=tournament,
+            settings=settings,
+        ) != selected_view:
             continue
         out.append({"tournament": tournament, "settings": settings})
-    out.sort(key=lambda row: str(row.get("tournament", {}).get("created_at") or ""), reverse=True)
+    if selected_view == CURRENT_TOURNAMENT_VIEW:
+        out.sort(
+            key=lambda row: (
+                str(row.get("tournament", {}).get("start_date") or "9999-12-31"),
+                str(row.get("tournament", {}).get("name") or ""),
+            )
+        )
+    else:
+        out.sort(
+            key=lambda row: (
+                str(row.get("tournament", {}).get("end_date") or ""),
+                str(row.get("tournament", {}).get("name") or ""),
+            ),
+            reverse=True,
+        )
     return out
+
+
+def list_open_public_tournaments(supabase, club_id: str) -> list[dict[str, Any]]:
+    """Backward-compatible name for the current public tournament collection."""
+
+    return list_public_tournaments(
+        supabase,
+        str(club_id),
+        view=CURRENT_TOURNAMENT_VIEW,
+    )
 
 
 def build_registration_state(supabase, tournament: dict[str, Any], settings: dict[str, Any], days: list[dict[str, Any]], event_options: list[dict[str, Any]]) -> dict[str, Any]:

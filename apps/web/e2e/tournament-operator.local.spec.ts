@@ -93,7 +93,11 @@ function liveSnapshot(selectedDrawId = drawId) {
         { draw_id: drawId, name: "Manual Acceptance Draw", status: "DRAFT", protected: false, counts: { games: 21, finalized_games: 1, open_games: 20, published_games: 0, duplicate_publications: 0 }, standings: [], podium: [], states: { live_operations: "in_progress", official_publish: "blocked" }, operations, review_evidence: null, readiness: { official_publish: { ready: false, blockers: publishBlockers }, archive: { ready: false, blockers: publishBlockers } } },
         { draw_id: secondDrawId, name: "Open Division Draw", status: "DRAFT", protected: false, counts: { games: 21, finalized_games: 1, open_games: 20, published_games: 0, duplicate_publications: 0 }, standings: [], podium: [], states: { live_operations: "in_progress", official_publish: "blocked" }, operations, review_evidence: null, readiness: { official_publish: { ready: false, blockers: publishBlockers }, archive: { ready: false, blockers: publishBlockers } } }
       ],
-      domain_readiness: { official_publish: { ready: false, blockers: publishBlockers }, archive: { ready: false, blockers: [...publishBlockers, blocker("ARCHIVE_OFFICIAL_LINKS", "All tournament games require exactly one official Match Log link before archive.")] } },
+      domain_readiness: {
+        official_publish: { ready: false, blockers: publishBlockers },
+        completion: { ready: false, blockers: publishBlockers },
+        archive: { ready: false, blockers: [...publishBlockers, blocker("ARCHIVE_OFFICIAL_LINKS", "All tournament games require exactly one official Match Log link before archive.")] }
+      },
       runtime_capability: { writes_enabled: true, official_publish_enabled: true },
       evidence: { operations }
     }
@@ -695,14 +699,14 @@ test("Corrections & recovery submits an exact versioned day correction with befo
   await expect(page.getByText("Technical operation evidence").first()).toBeVisible();
 });
 
-test("Publish and archive remain blocked even when runtime writes are available", async ({ page }) => {
+test("Publish and completion remain blocked even when runtime writes are available", async ({ page }) => {
   await page.goto(`/admin/tournaments/ops/publish?${selectedQuery}`);
   await expect(page.getByRole("heading", { name: "Tournament readiness" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Runtime capability" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Publish official matches" })).toBeDisabled();
   await page.goto(`/admin/tournaments/publish/closeout?${selectedQuery}`);
-  await expect(page.getByRole("heading", { name: "Archive unavailable" })).toBeVisible();
-  await expect(page.getByText("No archive write is available.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Complete tournament" })).toBeVisible();
+  await expect(page.getByText("20 tournament games still need a finalized, non-tied score.")).toBeVisible();
   await expect(page.getByText("Payments, extras, and fulfillment")).toBeVisible();
 });
 

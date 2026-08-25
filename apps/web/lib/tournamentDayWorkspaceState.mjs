@@ -6,6 +6,7 @@ const DAY_ACTION_CONFIRMATIONS = Object.freeze({
   auto_fill_courts: "AUTO FILL COURTS",
   score_and_release: "SAVE SCORE AND RELEASE COURT",
   correct_completed_score: "CORRECT COMPLETED SCORE",
+  record_non_played_result: "RECORD NON-PLAYED RESULT",
   generate_playoffs: "GENERATE PLAYOFFS",
   close_day: "CLOSE TOURNAMENT DAY"
 });
@@ -63,7 +64,7 @@ export function advanceCountSelection(allowedCounts, defaultCount, currentSelect
   return "";
 }
 
-export function validateDayScoreDraft(scoreA, scoreB) {
+export function validateDayScoreDraft(scoreA, scoreB, scoring = null, unusualScoreAcknowledged = false) {
   const textA = String(scoreA ?? "").trim();
   const textB = String(scoreB ?? "").trim();
   if (!textA || !textB) {
@@ -77,14 +78,68 @@ export function validateDayScoreDraft(scoreA, scoreB) {
   if (a === b) {
     return { ok: false, message: "Tournament games cannot be saved with a tied score." };
   }
-  return { ok: true, scoreA: a, scoreB: b };
+  const legacyScoringSnapshot = scoring == null;
+  const format = String(legacyScoringSnapshot ? "GAME_TO_11" : scoring?.format || "").trim().toUpperCase();
+  const winner = Math.max(a, b);
+  const loser = Math.min(a, b);
+  const impossibleReasons = [];
+  const unusualReasons = [];
+  if (!legacyScoringSnapshot && !["GAME_TO_11", "GAME_TO_15", "GAME_TO_21", "BEST_2_OF_3"].includes(format)) {
+    impossibleReasons.push("Configured scoring format is unavailable.");
+  } else if (format === "BEST_2_OF_3") {
+    if (!((winner === 2 && loser === 0) || (winner === 2 && loser === 1))) {
+      impossibleReasons.push("BEST_2_OF_3 stores games won; the final must be 2–0 or 2–1.");
+    }
+  } else {
+    const target = Number(scoring?.target ?? ({ GAME_TO_11: 11, GAME_TO_15: 15, GAME_TO_21: 21 })[format]);
+    if (![11, 15, 21].includes(target)) {
+      impossibleReasons.push("Configured scoring target is unavailable.");
+    } else if (winner < target) {
+      impossibleReasons.push(`The winner must reach at least ${target} points.`);
+    } else if (winner - loser < 2) {
+      impossibleReasons.push("This format requires a two-point winning margin.");
+    } else {
+      if (winner > target && winner - loser !== 2) {
+        unusualReasons.push(`The winning score is above ${target} without a two-point deuce finish.`);
+      }
+      if (winner > target + 20) {
+        unusualReasons.push(`The winning score is more than 20 points above the target of ${target}.`);
+      }
+    }
+  }
+  if (impossibleReasons.length) {
+    return { ok: false, message: `Impossible tournament score: ${impossibleReasons.join(" ")}`, impossible: true, reasons: impossibleReasons };
+  }
+  const unusual = unusualReasons.length > 0;
+  return {
+    ok: true,
+    scoreA: a,
+    scoreB: b,
+    unusual,
+    reasons: unusualReasons,
+    acknowledgementRequired: unusual && !unusualScoreAcknowledged,
+    scoringFormat: format
+  };
 }
 
-export function validateDayCorrectionDraft(scoreA, scoreB, currentScoreA, currentScoreB) {
-  const result = validateDayScoreDraft(scoreA, scoreB);
+export function validateDayCorrectionDraft(scoreA, scoreB, currentScoreA, currentScoreB, scoring = null, unusualScoreAcknowledged = false) {
+  const result = validateDayScoreDraft(scoreA, scoreB, scoring, unusualScoreAcknowledged);
   if (!result.ok) return result;
   if (result.scoreA === Number(currentScoreA) && result.scoreB === Number(currentScoreB)) {
     return { ok: false, message: "Enter a changed final score before review." };
   }
   return result;
+}
+
+export function validateNonPlayedOutcomeDraft(resultType, winnerTeamId, resultNote) {
+  const type = String(resultType || "").trim().toUpperCase();
+  if (!["FORFEIT", "NO_SHOW", "RETIREMENT"].includes(type)) {
+    return { ok: false, message: "Choose forfeit, no-show, or retirement." };
+  }
+  const winner = String(winnerTeamId || "").trim();
+  if (!winner) return { ok: false, message: "Choose the winning team." };
+  const note = String(resultNote || "").trim();
+  if (!note) return { ok: false, message: "Add an operator note explaining the outcome." };
+  if (note.length > 500) return { ok: false, message: "The operator note is limited to 500 characters." };
+  return { ok: true, resultType: type, winnerTeamId: winner, resultNote: note };
 }
