@@ -108,6 +108,20 @@ type MatchLogRow = {
   is_active: boolean;
 };
 
+type MatchExclusionOperation = {
+  id: string;
+  status: string;
+  source?: string | null;
+  result_json?: {
+    excluded_count?: number;
+  } | null;
+};
+
+type MatchLogPayload = {
+  matches?: MatchLogRow[];
+  recent_exclusion_operations?: MatchExclusionOperation[];
+};
+
 test.describe.configure({ mode: "serial", retries: 0 });
 test.skip(
   !allowMutation,
@@ -132,10 +146,38 @@ async function requestJson<T>(
     failOnStatusCode: false,
     timeout
   });
-  expect(response.status(), `${method} ${pathname} failed`).toBe(200);
+  const status = response.status();
   const payload = await response.json() as T;
   await response.dispose();
+  expect(
+    status,
+    `${method} ${pathname} failed: ${JSON.stringify(payload)}`
+  ).toBe(200);
   return payload;
+}
+
+async function recoverLegacyCleanup(
+  request: APIRequestContext,
+  operation: MatchExclusionOperation
+): Promise<number> {
+  const recovered = await requestJson<{
+    excluded_count?: number;
+    replay_status?: string;
+    operation_status?: string;
+  }>(
+    request,
+    "POST",
+    `/admin/clubs/${clubId}/match-log/exclusions/${encodeURIComponent(operation.id)}/recover`,
+    {
+      confirmation_text: "RECOVER",
+      source: `${fixtureSource}_legacy_cleanup_recovery`
+    },
+    240_000
+  );
+  expect(recovered.excluded_count).toBe(30);
+  expect(recovered.operation_status).toBe("succeeded");
+  expect(recovered.replay_status).toBe("succeeded");
+  return Number(recovered.excluded_count || 0);
 }
 
 async function excludeLegacyAcceptanceMatches(
@@ -145,7 +187,7 @@ async function excludeLegacyAcceptanceMatches(
     league: legacyAcceptanceLeagueName,
     limit: "500"
   });
-  const matchLog = await requestJson<{ matches?: MatchLogRow[] }>(
+  const matchLog = await requestJson<MatchLogPayload>(
     request,
     "GET",
     `/admin/clubs/${clubId}/match-log?${query.toString()}`
@@ -153,7 +195,15 @@ async function excludeLegacyAcceptanceMatches(
   const matches = (matchLog.matches || []).filter((row) =>
     legacyAcceptanceWeekTags.has(String(row.week_tag || ""))
   );
-  if (matches.length === 0) return 0;
+  const legacyOperation = (matchLog.recent_exclusion_operations || []).find(
+    (operation) => operation.source === `${fixtureSource}_legacy_cleanup`
+      && Number(operation.result_json?.excluded_count || 0) === 30
+  );
+  if (matches.length === 0) {
+    if (!legacyOperation) return 0;
+    if (legacyOperation.status === "succeeded") return 30;
+    return recoverLegacyCleanup(request, legacyOperation);
+  }
 
   expect(matches).toHaveLength(30);
   expect(new Set(matches.map((row) => row.id)).size).toBe(30);
@@ -186,7 +236,7 @@ async function excludeLegacyAcceptanceMatches(
   expect(excluded.operation_status).toBe("succeeded");
   expect(excluded.replay_status).toBe("succeeded");
 
-  const verified = await requestJson<{ matches?: MatchLogRow[] }>(
+  const verified = await requestJson<MatchLogPayload>(
     request,
     "GET",
     `/admin/clubs/${clubId}/match-log?${query.toString()}`
