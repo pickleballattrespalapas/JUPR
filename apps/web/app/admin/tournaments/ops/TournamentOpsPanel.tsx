@@ -44,6 +44,7 @@ const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 const registrationImportReconcileConfirmation = "RECONCILE REGISTRATION IMPORT";
 const NON_PLAYED_RESULT_TYPES: ReadonlySet<string> = new Set(["FORFEIT", "NO_SHOW", "RETIREMENT"]);
+const DISABLED_EVENT_STATUSES: ReadonlySet<string> = new Set(["disabled", "cancelled", "canceled", "inactive", "archived", "deleted", "void", "voided"]);
 
 class TournamentOpsRequestError extends Error {
   readonly status: number;
@@ -98,6 +99,15 @@ function eventOptionLabel(row: Record<string, unknown>): string {
   const division = String(row.division_name || row.label || "").trim();
   if (family && division && family !== division) return `${family} / ${division}`;
   return division || family || String(row.id || "Event");
+}
+
+function eventOptionEnabled(row: Record<string, unknown>): boolean {
+  const enabledValue = row.enabled;
+  const enabled = typeof enabledValue === "boolean"
+    ? enabledValue
+    : !["0", "false", "no", "off", "disabled", "cancelled", "canceled"].includes(String(enabledValue ?? "true").trim().toLowerCase());
+  const status = String(row.status || "").trim().toLowerCase();
+  return enabled && !DISABLED_EVENT_STATUSES.has(status);
 }
 
 function playerLabel(players: AdminTournamentOpsPlayer[], playerId: number | null | undefined): string {
@@ -334,12 +344,13 @@ export default function TournamentOpsPanel({
       const payload = await requestJson<AdminTournamentOpsSnapshotResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/ops${suffix}`);
       if (!snapshotRequest.isCurrent(generation)) return null;
       setSnapshot(payload);
-      setDrawEventOptionId((current) => payload.event_options?.some((row) => String(row.id || "") === current)
+      const eligibleEventOptions = (payload.event_options || []).filter(eventOptionEnabled);
+      setDrawEventOptionId((current) => eligibleEventOptions.some((row) => String(row.id || "") === current)
         ? current
-        : String(payload.event_options?.[0]?.id || ""));
-      setEmptyEventOptionId((current) => payload.event_options?.some((row) => String(row.id || "") === current)
+        : String(eligibleEventOptions[0]?.id || ""));
+      setEmptyEventOptionId((current) => eligibleEventOptions.some((row) => String(row.id || "") === current)
         ? current
-        : String(payload.event_options?.find((row) => row.enabled !== false)?.id || payload.event_options?.[0]?.id || ""));
+        : String(eligibleEventOptions[0]?.id || ""));
       resetTeamEditor(payload, drawId);
       resetScoreEditor(payload);
       setResultsPreview(null);
@@ -1072,7 +1083,7 @@ export default function TournamentOpsPanel({
           <h2 style={{ marginTop: 0 }}>Create empty division draw</h2>
           <p style={{ color: "#475569" }}>This creates a DRAFT draw shell scoped to the selected registration division.</p>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) minmax(180px, 1fr)", gap: "0.75rem", alignItems: "end" }}>
-            <label><strong>Registration division</strong><br /><select value={drawEventOptionId} onChange={(event) => setDrawEventOptionId(event.target.value)} style={inputStyle}><option value="">Legacy / tournament-wide draw</option>{(snapshot.event_options || []).map((row) => <option key={String(row.id)} value={String(row.id)}>{eventOptionLabel(row)}</option>)}</select></label>
+            <label><strong>Registration division</strong><br /><select value={drawEventOptionId} onChange={(event) => setDrawEventOptionId(event.target.value)} style={inputStyle}><option value="">Legacy / tournament-wide draw</option>{(snapshot.event_options || []).filter(eventOptionEnabled).map((row) => <option key={String(row.id)} value={String(row.id)}>{eventOptionLabel(row)}</option>)}</select></label>
             <label><strong>Draw name</strong><br /><input value={drawName} onChange={(event) => setDrawName(event.target.value)} placeholder="optional" style={inputStyle} /></label>
           </div>
           <p><ConfirmAction triggerLabel="Create draw" title="Create this tournament draw?" description={`This creates a new draft draw${drawName.trim() ? ` named ${drawName.trim()}` : ""}${drawEventOptionId ? " for the selected registration division" : " for the tournament-wide legacy scope"}.`} confirmLabel="Yes, create draw" confirmationText="CREATE DRAW" disabled={!accessToken || !operationsWriteReady || !reviewedState || !registrationImportRecoveryLoaded || registrationImportBlocksWrites} busy={busy} onConfirm={createDraw} /></p>
@@ -1180,7 +1191,7 @@ export default function TournamentOpsPanel({
               <label><strong>Event</strong><br />
                 <select value={emptyEventOptionId} onChange={(event) => setEmptyEventOptionId(event.target.value)} style={inputStyle}>
                   <option value="">Choose an event…</option>
-                  {(snapshot.event_options || []).filter((row) => row.enabled !== false).map((row) => <option key={String(row.id)} value={String(row.id)}>{eventOptionLabel(row)}</option>)}
+                  {(snapshot.event_options || []).filter(eventOptionEnabled).map((row) => <option key={String(row.id)} value={String(row.id)}>{eventOptionLabel(row)}</option>)}
                 </select>
               </label>
               <ConfirmAction triggerLabel="Cancel selected empty event" title="Cancel this empty event?" description="This disables only the selected zero-entry event after the server verifies it has no registration or draw evidence." confirmLabel="Yes, cancel empty event" confirmationText="CANCEL EMPTY EVENT" tone="danger" disabled={guardedWriteDisabled || !emptyEventOptionId} busy={busy} onConfirm={cancelEmptyEvent} />
