@@ -21,7 +21,9 @@ def test_league_live_mutation_e2e_is_explicit_staging_only_and_non_retrying() ->
     assert "GITHUB_RUN_ID" in text
     assert "GITHUB_RUN_ATTEMPT" in text
     assert 'test("creates and completes a disposable five-round League Live session"' in text
-    assert 'trigger: "Publish reviewed round"' in text
+    assert 'trigger: "Publish reviewed scores"' in text
+    assert 'trigger: "Apply movement and continue"' in text
+    assert "Unusual score — verify before publish" in text
     assert 'name: "Start next round", exact: true' in text
     assert 'name: "4. Score Entry with Review", exact: true' in text
     assert "retainedOperationId" not in text

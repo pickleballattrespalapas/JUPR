@@ -28,7 +28,7 @@ This document tracks the League Manager migration from Streamlit to Next.js and 
 - Top Active Players matches the Streamlit export policy: active players only, at least 10 scored games in the previous UTC calendar month, ranked by current JUPR with games/wins as deterministic tie-breakers.
 - Stored Supabase admin session for the closed-club staging pilot.
 - Python-authoritative League Live roster/bench suggestion, round planning, deterministic movement, reviewed overrides, and resumable next-round state at `/admin/league-manager/live`.
-- Staging-only League Live all-match publish with durable intent, deterministic official-match contexts, response-loss reconciliation, rating readback, real-player guests, CSV exports, and verified compensation.
+- Staging-only League Live score-first all-match publish with durable intent, deterministic official-match contexts, response-loss reconciliation, rating readback, unusual-score review acknowledgements, separately approved post-publish movement, real-player guests, CSV exports, and verified compensation.
 
 ## Runtime flag
 
@@ -78,9 +78,9 @@ Core League Manager mutations additionally require `SUPABASE_SERVICE_ROLE_KEY` o
 - Settings, roster, and lifecycle writes reject inconsistent `status`/`is_active` pairs; lifecycle compare-and-set also matches both values before updating, so stale or corrupt state cannot silently mutate.
 - Staging requires successful API audit logging. Lifecycle and settings mutations are rolled back if their required audit write fails; Streamlit remains the production fallback.
 - Rating, match, movement, and award calculations remain in Python services.
-- League Live snapshots use `expected_updated_at`; round saves recompute the Python plan and require its `expected_operation_key`. Manual movement and bench overrides require server validation and a reason.
+- League Live snapshots use `expected_updated_at`. Official scores publish before movement; the later movement apply recomputes the Python plan from persisted official scores and requires its `expected_operation_key`. Manual movement and bench overrides require server validation and a reason.
 - The canonical League Live table contract is `supabase/migrations/20260719182921_league_live_domain_contract.sql`. Apply it to staging before enabling the Live domain flag.
-- The publish path refuses partial rounds, stale sessions, changed Python plans, and reused idempotency keys with different fingerprints before its first mutation. Direct round submission is disabled while the submit gate is on.
+- The score-publish path refuses partial rounds, stale sessions, changed score contexts, unusual scores without explicit review, and reused idempotency keys with different fingerprints before its first mutation. Direct round submission is disabled while the submit gate is on.
 - Every publish receives deterministic UUIDv5 match contexts. A retry first verifies those contexts: all rows reconcile without republish, some rows stop in `recovery_required`, and zero rows may retry under the same key.
 - Intent and completion audits carry the durable operation ID, request fingerprint, and recognizable audit marker. A completion-audit failure reports that the operation may already have completed and instructs the operator to reload/reconcile rather than blindly publish.
 - Guest creation persists an idempotency record and a real club player. Existing names are rejected; abandoned guests are recovered through Player Editor.

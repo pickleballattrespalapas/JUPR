@@ -28,6 +28,7 @@ export type AdminLeagueLiveStatusResponse = {
   round_plan_endpoint?: string | null;
   submit_enabled?: boolean;
   round_submit_endpoint?: string | null;
+  round_movement_endpoint?: string | null;
   round_retry_endpoint?: string | null;
   round_reconcile_endpoint?: string | null;
   round_compensate_endpoint?: string | null;

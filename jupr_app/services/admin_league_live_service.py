@@ -551,6 +551,7 @@ def build_admin_league_live_status(supabase: Any | None, *, club_id: str) -> dic
             "round_plan_endpoint": None,
             "submit_enabled": False,
             "round_submit_endpoint": None,
+            "round_movement_endpoint": None,
             "round_retry_endpoint": None,
             "round_reconcile_endpoint": None,
             "round_compensate_endpoint": None,
@@ -568,6 +569,7 @@ def build_admin_league_live_status(supabase: Any | None, *, club_id: str) -> dic
             "round_plan_endpoint": None,
             "submit_enabled": False,
             "round_submit_endpoint": None,
+            "round_movement_endpoint": None,
             "round_retry_endpoint": None,
             "round_reconcile_endpoint": None,
             "round_compensate_endpoint": None,
@@ -588,6 +590,11 @@ def build_admin_league_live_status(supabase: Any | None, *, club_id: str) -> dic
         "submit_enabled": submit_enabled,
         "round_submit_endpoint": (
             "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/submit"
+            if submit_enabled
+            else None
+        ),
+        "round_movement_endpoint": (
+            "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/movement"
             if submit_enabled
             else None
         ),
@@ -1444,5 +1451,303 @@ def save_admin_league_live_round(
             "submitted_match_ids": _as_list(submitted_match_ids),
             "streamlit_fallback": "league_manager",
         },
+        "warnings": warnings,
+    }
+
+
+def save_admin_league_live_published_scores(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_id: str,
+    round_number: int,
+    round_label: str | None,
+    match_date: str | None,
+    preview: dict[str, Any] | None,
+    matches: list[dict[str, Any]],
+    expected_updated_at: str,
+    submitted_match_ids: list[Any],
+    courts: list[dict[str, Any]] | None,
+    actor_email: str,
+    actor_role: str,
+    source: str = "next_league_live_round_publish",
+) -> dict[str, Any]:
+    """Persist official scores without calculating or applying next-round movement."""
+    _ensure_live_domain_enabled()
+    session_row = _fetch_session_row(supabase, club_id=str(club_id), session_id=str(session_id))
+    if session_row is None:
+        raise ValueError("league live session not found")
+    safe_round = max(1, _safe_int(round_number, 1) or 1)
+    existing = _first_row(
+        supabase.table("league_live_rounds")
+        .select("*")
+        .eq("club_id", str(club_id))
+        .eq("session_id", str(session_id))
+        .eq("round_number", safe_round)
+        .limit(1)
+        .execute()
+    )
+    matches_list = _as_list(matches)
+    match_ids = _as_list(submitted_match_ids)
+    if existing and str(existing.get("status") or "") == "submitted":
+        same_scores = canonical_fingerprint(_as_list(existing.get("matches_json"))) == canonical_fingerprint(matches_list)
+        same_matches = canonical_fingerprint(_as_list(existing.get("submitted_match_ids"))) == canonical_fingerprint(match_ids)
+        if same_scores and same_matches:
+            return {
+                "ok": True,
+                "mode": "league_live_scores_publish",
+                "idempotent_replay": True,
+                "session": _session_payload(session_row),
+                "round": _round_payload(existing),
+                "courts": _court_rows_for_round(
+                    supabase,
+                    club_id=str(club_id),
+                    session_id=str(session_id),
+                    round_number=safe_round,
+                ),
+                "warnings": [],
+            }
+        raise LeagueLiveConflictError("This round already contains a different set of official scores.")
+    if safe_round != (_safe_int(session_row.get("current_round"), 1) or 1):
+        raise LeagueLiveConflictError("This round is no longer current. Reload before publishing scores.")
+    if str(session_row.get("status") or "").lower() not in {"active", "setup"}:
+        raise LeagueLiveConflictError("Scores can be published only for an active League Live session.")
+    expected_version = _expected_session_version(session_row, expected_updated_at)
+    now = _now_iso()
+    payload = {
+        "club_id": str(club_id),
+        "session_id": str(session_id),
+        "round_number": safe_round,
+        "round_label": _clean_text(round_label, limit=80) or f"Round {safe_round}",
+        "status": "submitted",
+        "match_date": _clean_text(match_date, limit=20) or None,
+        "preview_json": _as_dict(preview),
+        "matches_json": matches_list,
+        "movement_json": {},
+        "operation_key": None,
+        "submitted_match_count": len(matches_list),
+        "submitted_match_ids": match_ids,
+        "submitted_at": now,
+        "updated_at": now,
+    }
+    before_courts = _court_rows_for_round(
+        supabase,
+        club_id=str(club_id),
+        session_id=str(session_id),
+        round_number=safe_round,
+    )
+    session_patch = {
+        "status": "active",
+        "updated_by": str(actor_email or ""),
+        "updated_at": now,
+    }
+    updated_session = _first_row(
+        supabase.table("league_live_sessions")
+        .update(session_patch)
+        .eq("club_id", str(club_id))
+        .eq("id", str(session_id))
+        .eq("updated_at", expected_version)
+        .execute()
+    )
+    if updated_session is None:
+        raise LeagueLiveConflictError("League Live session changed while scores were publishing. Reload before retrying.")
+    saved: dict[str, Any] | None = None
+    court_rows: list[dict[str, Any]] = []
+    try:
+        if existing:
+            saved = _first_row(supabase.table("league_live_rounds").update(payload).eq("id", str(existing.get("id"))).execute())
+        else:
+            saved = _first_row(
+                supabase.table("league_live_rounds").insert({"id": str(uuid4()), "created_at": now, **payload}).execute()
+            )
+        if saved is None:
+            raise LeagueLivePersistenceError("Official League Live score state did not persist.")
+        snapshot_courts = _as_list(session_row.get("current_court_state_json")) or list(courts or [])
+        court_rows = _replace_court_snapshots(
+            supabase,
+            club_id=str(club_id),
+            session_id=str(session_id),
+            round_number=safe_round,
+            courts=snapshot_courts,
+        )
+        warnings = _audit(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="publish_league_live_scores_admin",
+            entity_id=str(session_id),
+            before_json={"session": _session_payload(session_row), "round": _round_payload(existing or {}) if existing else None},
+            after_json={
+                "session": _session_payload(updated_session),
+                "round": _round_payload(saved),
+                "published_match_ids": match_ids,
+                "movement_status": "pending_operator_review",
+            },
+            source=source,
+        )
+    except Exception:
+        try:
+            supabase.table("league_live_sessions").update(_session_restore_payload(session_row)).eq("club_id", str(club_id)).eq("id", str(session_id)).execute()
+            if existing:
+                supabase.table("league_live_rounds").update(_round_restore_payload(existing)).eq("id", str(existing.get("id"))).execute()
+            elif saved:
+                supabase.table("league_live_rounds").delete().eq("id", str(saved.get("id"))).execute()
+            _restore_court_snapshots(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                round_number=safe_round,
+                courts=before_courts,
+            )
+        except Exception:
+            pass
+        raise
+    return {
+        "ok": True,
+        "mode": "league_live_scores_publish",
+        "idempotent_replay": False,
+        "session": _session_payload(updated_session),
+        "round": _round_payload(saved),
+        "courts": court_rows,
+        "warnings": warnings,
+    }
+
+
+def apply_admin_league_live_round_movement(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_id: str,
+    round_number: int,
+    expected_updated_at: str,
+    expected_operation_key: str,
+    courts: list[dict[str, Any]] | None = None,
+    movement_overrides: list[dict[str, Any]] | None = None,
+    override_reason: str | None = None,
+    roster_change: dict[str, Any] | None = None,
+    bench_player_ids: list[Any] | None = None,
+    bench_override_reason: str | None = None,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_league_live_round_movement",
+) -> dict[str, Any]:
+    """Apply an operator-reviewed movement plan after official scores exist."""
+    ensure_admin_league_live_submit_enabled()
+    if _clean_text(confirmation_text, limit=80).upper() != "APPLY LEAGUE MOVEMENT":
+        raise ValueError("Type APPLY LEAGUE MOVEMENT to apply the reviewed next-round courts.")
+    safe_round = max(1, _safe_int(round_number, 1) or 1)
+    existing = _first_row(
+        supabase.table("league_live_rounds")
+        .select("*")
+        .eq("club_id", str(club_id))
+        .eq("session_id", str(session_id))
+        .eq("round_number", safe_round)
+        .limit(1)
+        .execute()
+    )
+    if existing is None or str(existing.get("status") or "") != "submitted":
+        raise LeagueLiveConflictError("Publish the official round scores before applying movement.")
+    existing_key = str(existing.get("operation_key") or _as_dict(existing.get("movement_json")).get("operation_key") or "")
+    session_row = _fetch_session_row(supabase, club_id=str(club_id), session_id=str(session_id))
+    if session_row is None:
+        raise ValueError("league live session not found")
+    if existing_key:
+        if existing_key != str(expected_operation_key):
+            raise LeagueLiveConflictError("This round already has a different applied movement plan.")
+        return {
+            "ok": True,
+            "mode": "league_live_movement_apply",
+            "idempotent_replay": True,
+            "operation_key": existing_key,
+            "session": _session_payload(session_row),
+            "round": _round_payload(existing),
+            "movement": _as_dict(existing.get("movement_json")),
+            "courts": _fetch_courts(supabase, club_id=str(club_id), session_id=str(session_id)),
+            "warnings": [],
+        }
+    expected_version = _expected_session_version(session_row, expected_updated_at)
+    plan = build_admin_league_live_round_plan(
+        supabase,
+        club_id=str(club_id),
+        session_id=str(session_id),
+        round_number=safe_round,
+        expected_updated_at=expected_version,
+        matches=_as_list(existing.get("matches_json")),
+        courts=list(courts or []),
+        movement_overrides=movement_overrides,
+        override_reason=override_reason,
+        roster_change=roster_change,
+        bench_player_ids=bench_player_ids,
+        bench_override_reason=bench_override_reason,
+    )
+    operation_key = str(plan.get("operation_key") or "")
+    if len(str(expected_operation_key or "")) != 64 or str(expected_operation_key) != operation_key:
+        raise LeagueLiveConflictError("League Live movement changed. Preview it again before applying.")
+    now = _now_iso()
+    next_round = int(plan["next_round"])
+    session_patch: dict[str, Any] = {
+        "current_court_state_json": list(plan["next_courts"]),
+        "roster_json": list(plan["next_roster"]),
+        "status": "active",
+        "updated_by": str(actor_email or ""),
+        "updated_at": now,
+    }
+    if next_round > safe_round:
+        session_patch["current_round"] = next_round
+    updated_session = _first_row(
+        supabase.table("league_live_sessions")
+        .update(session_patch)
+        .eq("club_id", str(club_id))
+        .eq("id", str(session_id))
+        .eq("updated_at", expected_version)
+        .execute()
+    )
+    if updated_session is None:
+        raise LeagueLiveConflictError("League Live session changed while movement was applying. Preview it again.")
+    saved: dict[str, Any] | None = None
+    try:
+        saved = _first_row(
+            supabase.table("league_live_rounds")
+            .update({"movement_json": plan["movement"], "operation_key": operation_key, "updated_at": now})
+            .eq("id", str(existing.get("id")))
+            .execute()
+        )
+        if saved is None:
+            raise LeagueLivePersistenceError("League Live movement did not persist.")
+        warnings = _audit(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="apply_league_live_movement_admin",
+            entity_id=str(session_id),
+            before_json={"session": _session_payload(session_row), "round": _round_payload(existing)},
+            after_json={
+                "session": _session_payload(updated_session),
+                "round": _round_payload(saved),
+                "operation_key": operation_key,
+                "movement_authority": "python_fastapi",
+            },
+            source=source,
+        )
+    except Exception:
+        try:
+            supabase.table("league_live_sessions").update(_session_restore_payload(session_row)).eq("club_id", str(club_id)).eq("id", str(session_id)).execute()
+            supabase.table("league_live_rounds").update(_round_restore_payload(existing)).eq("id", str(existing.get("id"))).execute()
+        except Exception:
+            pass
+        raise
+    return {
+        "ok": True,
+        "mode": "league_live_movement_apply",
+        "idempotent_replay": False,
+        "operation_key": operation_key,
+        "session": _session_payload(updated_session),
+        "round": _round_payload(saved),
+        "movement": plan["movement"],
+        "bench": plan["bench"],
+        "courts": _fetch_courts(supabase, club_id=str(club_id), session_id=str(session_id)),
         "warnings": warnings,
     }

@@ -29,7 +29,7 @@ from jupr_app.services.admin_league_live_service import (
     build_admin_league_live_round_plan,
     ensure_admin_league_live_submit_enabled,
     get_admin_league_live_session,
-    save_admin_league_live_round,
+    save_admin_league_live_published_scores,
 )
 from jupr_app.services.admin_match_uploader_service import submit_admin_match_uploader_batch
 from jupr_app.services.direct_match_entry_service import DirectMatchConflictError
@@ -408,7 +408,7 @@ def _finish_round_state(
         },
     )
     try:
-        saved = save_admin_league_live_round(
+        saved = save_admin_league_live_published_scores(
             supabase,
             club_id=str(club_id),
             session_id=str(session_id),
@@ -417,20 +417,11 @@ def _finish_round_state(
             match_date=request.get("match_date"),
             preview=_as_dict(request.get("preview")),
             matches=_as_list(request.get("matches")),
-            movement_overrides=_as_list(request.get("movement_overrides")),
-            override_reason=request.get("override_reason"),
-            roster_change=_as_dict(request.get("roster_change")) or None,
-            bench_player_ids=_as_list(request.get("bench_player_ids")),
-            bench_override_reason=request.get("bench_override_reason"),
             expected_updated_at=str(request.get("expected_updated_at") or ""),
-            expected_operation_key=str(request.get("expected_operation_key") or ""),
-            submitted_match_count=len(published),
             submitted_match_ids=[row.get("id") for row in published],
             courts=_as_list(request.get("courts")),
-            advance_after_save=True,
             actor_email=actor_email,
             actor_role=actor_role,
-            confirmation_text="SAVE ROUND",
             source="next_league_live_round_reconcile" if reconciliation else "next_league_live_round_publish",
         )
     except Exception as exc:
@@ -518,6 +509,7 @@ def submit_admin_league_live_round_publish(
     roster_change: dict[str, Any] | None = None,
     bench_player_ids: list[Any] | None = None,
     bench_override_reason: str | None = None,
+    unusual_score_acknowledgement: bool = False,
     source: str = "next_league_live_round_submit",
 ) -> dict[str, Any]:
     ensure_admin_league_live_submit_enabled()
@@ -549,6 +541,29 @@ def submit_admin_league_live_round_publish(
         club_id=str(club_id),
         league_name=str(session.get("league_name") or ""),
     )
+    resolved_operation_key = str(expected_operation_key or "")
+    if not resolved_operation_key and operation:
+        resolved_operation_key = str(
+            _as_dict(operation.get("request_json")).get("expected_operation_key")
+            or operation.get("plan_operation_key")
+            or ""
+        )
+    if not resolved_operation_key:
+        score_plan = build_admin_league_live_round_plan(
+            supabase,
+            club_id=str(club_id),
+            session_id=str(session_id),
+            round_number=safe_round,
+            expected_updated_at=str(expected_updated_at),
+            matches=list(matches or []),
+            courts=list(courts or []),
+            movement_overrides=list(movement_overrides or []),
+            override_reason=override_reason,
+            roster_change=roster_change,
+            bench_player_ids=list(bench_player_ids or []),
+            bench_override_reason=bench_override_reason,
+        )
+        resolved_operation_key = str(score_plan.get("operation_key") or "")
     request = build_league_live_publish_request(
         session_id=str(session_id),
         round_number=safe_round,
@@ -558,7 +573,8 @@ def submit_admin_league_live_round_publish(
         matches=list(matches or []),
         expected_match_count=int(expected_match_count),
         expected_updated_at=str(expected_updated_at),
-        expected_operation_key=str(expected_operation_key),
+        expected_operation_key=resolved_operation_key,
+        unusual_score_acknowledgement=bool(unusual_score_acknowledgement),
         round_label=round_label,
         preview=preview,
         courts=courts,
@@ -620,7 +636,7 @@ def submit_admin_league_live_round_publish(
             )
     effective_request = _effective_publish_request(operation) if operation else request
     if str(session.get("updated_at") or "") != str(effective_request["expected_updated_at"]):
-        raise LeagueLiveConflictError("League Live session changed. Reload and preview Python movement before publishing.")
+        raise LeagueLiveConflictError("League Live session changed. Reload and review the scores before publishing.")
     verified_plan = build_admin_league_live_round_plan(
         supabase,
         club_id=str(club_id),
@@ -636,7 +652,7 @@ def submit_admin_league_live_round_publish(
         bench_override_reason=effective_request.get("bench_override_reason"),
     )
     if str(verified_plan.get("operation_key") or "") != str(effective_request["expected_operation_key"]):
-        raise LeagueLiveConflictError("League Live plan changed. Preview Python movement again before publishing.")
+        raise LeagueLiveConflictError("League Live score context changed. Reload and review the scores before publishing.")
 
     if operation is None:
         operation_id = str(uuid4())
@@ -1016,7 +1032,7 @@ def retry_admin_league_live_round_publish(
         )
         if str(plan.get("comparison_operation_key") or "") != retained_operation_key:
             raise LeagueLiveConflictError(
-                "The retained publish no longer matches the current League Live roster, courts, scores, or movement plan. Nothing was published; restore the reviewed state or use audited recovery."
+            "The retained publish no longer matches the current League Live roster, courts, or scores. Nothing was published; restore the reviewed score state or use audited recovery."
             )
         effective_operation_key = str(plan.get("operation_key") or "")
         if len(effective_operation_key) != 64:
@@ -1088,6 +1104,7 @@ def retry_admin_league_live_round_publish(
         roster_change=_as_dict(request.get("roster_change")) or None,
         bench_player_ids=_as_list(request.get("bench_player_ids")),
         bench_override_reason=request.get("bench_override_reason"),
+        unusual_score_acknowledgement=bool(request.get("unusual_score_acknowledgement")),
         source=source,
     )
 

@@ -24,6 +24,7 @@ from jupr_app.services.admin_league_awards_service import (
 from jupr_app.services.admin_league_live_service import (
     LeagueLiveConflictError,
     LeagueLivePersistenceError,
+    apply_admin_league_live_round_movement,
     build_admin_league_live_round_plan,
     build_admin_league_live_status,
     create_admin_league_live_session,
@@ -269,11 +270,25 @@ class AdminLeagueLiveRoundPublishRequest(BaseModel):
     bench_player_ids: list[int] = Field(default_factory=list)
     bench_override_reason: str | None = Field(default=None, max_length=500)
     expected_updated_at: str = Field(min_length=1, max_length=120)
-    expected_operation_key: str = Field(min_length=64, max_length=64)
+    expected_operation_key: str | None = Field(default=None, min_length=64, max_length=64)
     idempotency_key: str = Field(min_length=8, max_length=160)
+    unusual_score_acknowledgement: bool = False
     courts: list[dict[str, Any]] = Field(default_factory=list)
     confirmation_text: str = Field(default="", max_length=80)
     source: str = Field(default="next_league_live_round_submit", max_length=120)
+
+
+class AdminLeagueLiveRoundMovementApplyRequest(BaseModel):
+    expected_updated_at: str = Field(min_length=1, max_length=120)
+    expected_operation_key: str = Field(min_length=64, max_length=64)
+    courts: list[dict[str, Any]] = Field(default_factory=list)
+    movement_overrides: list[dict[str, Any]] = Field(default_factory=list)
+    override_reason: str | None = Field(default=None, max_length=500)
+    roster_change: dict[str, Any] | None = None
+    bench_player_ids: list[int] = Field(default_factory=list)
+    bench_override_reason: str | None = Field(default=None, max_length=500)
+    confirmation_text: str = Field(default="", max_length=80)
+    source: str = Field(default="next_league_live_round_movement", max_length=120)
 
 
 class AdminLeagueLiveRoundReconcileRequest(BaseModel):
@@ -406,6 +421,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                     "round_plan_endpoint": None,
                     "submit_enabled": False,
                     "round_submit_endpoint": None,
+                    "round_movement_endpoint": None,
                     "round_retry_endpoint": None,
                     "round_reconcile_endpoint": None,
                     "round_compensate_endpoint": None,
@@ -837,9 +853,48 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 bench_player_ids=payload.bench_player_ids,
                 bench_override_reason=payload.bench_override_reason,
                 expected_updated_at=payload.expected_updated_at,
-                expected_operation_key=payload.expected_operation_key,
+                expected_operation_key=payload.expected_operation_key or "",
                 idempotency_key=payload.idempotency_key,
+                unusual_score_acknowledgement=payload.unusual_score_acknowledgement,
                 courts=payload.courts,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/movement")
+    def post_admin_league_live_round_movement(
+        club_id: str,
+        session_id: str,
+        round_number: int,
+        payload: AdminLeagueLiveRoundMovementApplyRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_service_role_or_503()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return apply_admin_league_live_round_movement(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                round_number=int(round_number),
+                expected_updated_at=payload.expected_updated_at,
+                expected_operation_key=payload.expected_operation_key,
+                courts=payload.courts,
+                movement_overrides=payload.movement_overrides,
+                override_reason=payload.override_reason,
+                roster_change=payload.roster_change,
+                bench_player_ids=payload.bench_player_ids,
+                bench_override_reason=payload.bench_override_reason,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,

@@ -68,6 +68,8 @@ type LeagueLiveDetail = {
     match_date?: string | null;
     submitted_match_count?: number;
     submitted_match_ids?: string[];
+    operation_key?: string;
+    movement_json?: { operation_key?: string };
   }>;
   publish_operations?: PublishOperation[];
 };
@@ -150,25 +152,42 @@ async function publishRound(page: Page, roundNumber: number): Promise<void> {
     await teamOneScores.nth(index).fill(scores[index][0]);
     await teamTwoScores.nth(index).fill(scores[index][1]);
   }
+  if (roundNumber === 1) {
+    await teamTwoScores.nth(0).fill("76");
+    await expect(page.getByText(/Unusual score — verify before publish/i)).toBeVisible();
+    await page.getByRole("button", { name: "Review scores", exact: true }).click();
+    await expect(page.getByText(/Unusual score requires review/i)).toBeVisible();
+    const publishScores = page.getByRole("button", { name: "Publish reviewed scores", exact: true });
+    await expect(publishScores).toBeDisabled();
+    await page.getByRole("checkbox", { name: /I verified/i }).check();
+    await expect(publishScores).toBeEnabled();
+    await page.getByRole("button", { name: "Edit scores", exact: true }).click();
+    await teamTwoScores.nth(0).fill("7");
+    await expect(page.getByText(/Unusual score — verify before publish/i)).toHaveCount(0);
+  }
   const reviewScores = page.getByRole("button", { name: "Review scores", exact: true });
   await expect(reviewScores).toBeEnabled();
   await reviewScores.click();
   await expect(page.getByRole("heading", { name: "Review entered scores", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Confirm scores and continue", exact: true }).click();
-
-  await expect(page.getByRole("heading", { name: "5. Movement", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Preview movement", exact: true }).click();
-  await expect(page.getByText(/Verified operation key/i)).toBeVisible();
-  await page.getByRole("button", { name: "Continue to Repeat or Finish", exact: true }).click();
-
-  await expect(page.getByRole("heading", { name: "6. Repeat or Finish", exact: true })).toBeVisible();
   await runConfirmedAction(page, {
-    trigger: "Publish reviewed round",
-    confirm: "Yes, publish the round",
+    trigger: "Publish reviewed scores",
+    confirm: "Yes, publish scores",
     method: "POST",
     pathname: `/admin/clubs/${clubId}/league-manager/live-sessions/${sessionId}/rounds/${roundNumber}/submit`
   });
-  await expect(page.getByRole("heading", { name: `Round ${roundNumber} published`, exact: true })).toBeVisible();
+
+  await expect(page.getByRole("heading", { name: "5. Movement", exact: true })).toBeVisible();
+  await expect(page.getByText(/The round scores are official/i)).toBeVisible();
+  await page.getByRole("button", { name: "Preview movement", exact: true }).click();
+  await expect(page.getByText(/Verified operation key/i)).toBeVisible();
+  await runConfirmedAction(page, {
+    trigger: "Apply movement and continue",
+    confirm: "Yes, apply movement",
+    method: "POST",
+    pathname: `/admin/clubs/${clubId}/league-manager/live-sessions/${sessionId}/rounds/${roundNumber}/movement`
+  });
+  await expect(page.getByRole("heading", { name: "6. Repeat or Finish", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: `Round ${roundNumber} complete`, exact: true })).toBeVisible();
 }
 
 test("creates and completes a disposable five-round League Live session", async ({ page, context }) => {
@@ -321,6 +340,7 @@ test("creates and completes a disposable five-round League Live session", async 
     [5, "submitted"]
   ]);
   expect(after.rounds.every((round) => round.match_date === matchDate)).toBe(true);
+  expect(after.rounds.every((round) => Boolean(round.operation_key || round.movement_json?.operation_key))).toBe(true);
   expect(after.rounds.reduce((total, round) => total + Number(round.submitted_match_count || 0), 0)).toBe(15);
   expect(after.publish_operations).toHaveLength(5);
   expect(after.publish_operations?.every((operation) => operation.status === "completed")).toBe(true);
