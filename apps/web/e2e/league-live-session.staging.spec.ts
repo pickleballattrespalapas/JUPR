@@ -19,11 +19,8 @@ const mutationConfirmation = String(
 const expectedWebOrigin = String(
   process.env.JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN || ""
 ).trim().replace(/\/$/, "");
-const sessionId = String(
+const fixtureSessionId = String(
   process.env.JUPR_LEAGUE_LIVE_E2E_SESSION_ID || ""
-).trim();
-const retainedOperationId = String(
-  process.env.JUPR_LEAGUE_LIVE_E2E_OPERATION_ID || ""
 ).trim();
 const expectedLeagueName = String(
   process.env.JUPR_LEAGUE_LIVE_E2E_LEAGUE_NAME || ""
@@ -40,6 +37,10 @@ const matchDate = String(
 const reportPath = String(
   process.env.JUPR_LEAGUE_LIVE_E2E_REPORT_PATH || ""
 ).trim();
+const candidateSha = String(process.env.GITHUB_SHA || "").trim();
+const workflowRunId = String(process.env.GITHUB_RUN_ID || "").trim();
+const workflowRunAttempt = String(process.env.GITHUB_RUN_ATTEMPT || "").trim();
+let sessionId = "";
 
 type PublishOperation = {
   id: string;
@@ -57,6 +58,9 @@ type LeagueLiveDetail = {
     status: string;
     current_round: number;
     total_rounds: number;
+    week_tag?: string;
+    roster_json?: Array<Record<string, unknown>>;
+    current_court_state_json?: Array<Record<string, unknown>>;
   };
   rounds: Array<{
     round_number: number;
@@ -74,9 +78,9 @@ test.skip(
   "Set JUPR_LEAGUE_LIVE_ALLOW_MUTATION_E2E=1 only for an explicitly authorized staging session."
 );
 
-async function fetchDetail(page: Page): Promise<LeagueLiveDetail> {
+async function fetchDetail(page: Page, targetSessionId = sessionId): Promise<LeagueLiveDetail> {
   const response = await page.request.get(
-    `${expectedApiOrigin}/admin/clubs/${clubId}/league-manager/live-sessions/${sessionId}`,
+    `${expectedApiOrigin}/admin/clubs/${clubId}/league-manager/live-sessions/${targetSessionId}`,
     { headers: { Authorization: `Bearer ${adminToken}` } }
   );
   expect(response.status(), "League Live detail read failed").toBe(200);
@@ -115,6 +119,26 @@ async function runConfirmedAction(
   await expect(page.getByRole("dialog")).toHaveCount(0);
 }
 
+async function prepareFirstRound(page: Page): Promise<void> {
+  await expect(page.getByRole("heading", { name: "1. Setup", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Round #", { exact: true })).toHaveValue("1");
+  await page.getByLabel("Date *", { exact: true }).fill(matchDate);
+  await page.getByRole("button", { name: "Continue to Players", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "2. Players", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Continue with saved courts", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "3. Courts and Preview", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Validate courts and generate preview", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /Match preview · 3 slots/i })).toBeVisible();
+  await runConfirmedAction(page, {
+    trigger: "Save preview and continue",
+    confirm: "Yes, save and continue",
+    method: "PATCH",
+    pathname: `/admin/clubs/${clubId}/league-manager/live-sessions/${sessionId}/snapshot`
+  });
+}
+
 async function publishRound(page: Page, roundNumber: number): Promise<void> {
   await expect(page.getByRole("heading", { name: "4. Score Entry with Review", exact: true })).toBeVisible();
   const teamOneScores = page.locator('input[aria-label$="Team 1 score"]:enabled');
@@ -147,7 +171,7 @@ async function publishRound(page: Page, roundNumber: number): Promise<void> {
   await expect(page.getByRole("heading", { name: `Round ${roundNumber} published`, exact: true })).toBeVisible();
 }
 
-test("recovers retained Round 1 and completes the five-round League Live session", async ({ page, context }) => {
+test("creates and completes a disposable five-round League Live session", async ({ page, context }) => {
   test.setTimeout(360_000);
 
   expect(mutationConfirmation).toBe("RUN DISPOSABLE STAGING WRITES");
@@ -157,13 +181,52 @@ test("recovers retained Round 1 and completes the five-round League Live session
   );
   expect(adminEmail).not.toBe("");
   expect(adminToken).not.toBe("");
-  expect(sessionId).toMatch(/^[0-9a-f-]{36}$/);
-  expect(retainedOperationId).toMatch(/^[0-9a-f-]{36}$/);
+  expect(fixtureSessionId).toMatch(/^[0-9a-f-]{36}$/);
   expect(expectedLeagueId).toBe("9");
   expect(expectedLeagueName).not.toBe("");
   expect(expectedLeagueType).toBe("Individual");
   expect(matchDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   expect(reportPath).not.toBe("");
+  expect(candidateSha).toMatch(/^[0-9a-f]{40}$/);
+  expect(workflowRunId).toMatch(/^[1-9]\d*$/);
+  expect(workflowRunAttempt).toMatch(/^[1-9]\d*$/);
+
+  const fixture = await fetchDetail(page, fixtureSessionId);
+  expect(fixture.session.league_name).toBe(expectedLeagueName);
+  const fixtureRoster = fixture.session.roster_json || [];
+  const fixtureCourts = fixture.session.current_court_state_json || [];
+  expect(fixtureRoster.length).toBeGreaterThanOrEqual(4);
+  expect(fixtureCourts).toHaveLength(1);
+
+  const createResponse = await page.request.post(
+    `${expectedApiOrigin}/admin/clubs/${clubId}/league-manager/live-sessions`,
+    {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      data: {
+        league_name: expectedLeagueName,
+        week_tag: `E2E ${candidateSha.slice(0, 8)}-${workflowRunId}-${workflowRunAttempt}`,
+        total_rounds: 5,
+        current_round: 1,
+        roster: fixtureRoster,
+        courts: fixtureCourts.map((court, index) => ({
+          ...court,
+          round_number: 1,
+          court_number: Number(court.court_number || court.court || index + 1),
+        })),
+        bench_player_ids: fixtureRoster
+          .filter((player) => String(player.status || "") === "bench")
+          .map((player) => Number(player.player_id)),
+        notes: "Disposable staging League Live browser acceptance session.",
+        idempotency_key: `league-live-e2e:${candidateSha}:${workflowRunId}:${workflowRunAttempt}`,
+        confirmation_text: "CREATE LIVE SESSION",
+        source: "staging_league_live_browser_acceptance",
+      }
+    }
+  );
+  expect(createResponse.status(), "Disposable League Live session creation failed").toBe(200);
+  const created = await createResponse.json() as { session?: { id?: string } };
+  sessionId = String(created.session?.id || "");
+  expect(sessionId).toMatch(/^[0-9a-f-]{36}$/);
 
   const before = await fetchDetail(page);
   expect(before.session).toMatchObject({
@@ -174,14 +237,7 @@ test("recovers retained Round 1 and completes the five-round League Live session
     total_rounds: 5
   });
   expect(before.rounds).toEqual([]);
-  expect(before.publish_operations).toHaveLength(1);
-  expect(before.publish_operations?.[0]).toMatchObject({
-    id: retainedOperationId,
-    round_number: 1,
-    status: "retryable",
-    published_match_ids: []
-  });
-  expect(before.publish_operations?.[0].match_context_ids).toHaveLength(3);
+  expect(before.publish_operations).toEqual([]);
 
   await bootstrapStagingContext(context);
   await context.addInitScript(
@@ -222,15 +278,8 @@ test("recovers retained Round 1 and completes the five-round League Live session
   await expect(sessionSelect).toBeEnabled({ timeout: 30_000 });
   await expect(sessionSelect.locator(`option[value="${sessionId}"]`)).toHaveCount(1);
   await sessionSelect.selectOption(sessionId);
-  await expect(page.getByRole("button", { name: "Retry R1", exact: true })).toBeEnabled({ timeout: 30_000 });
-
-  await runConfirmedAction(page, {
-    trigger: "Retry R1",
-    confirm: "Yes, retry original publish",
-    method: "POST",
-    pathname: `/admin/clubs/${clubId}/league-manager/live-sessions/${sessionId}/rounds/1/retry`
-  });
-  await expect(page.getByRole("heading", { name: "Round 1 published", exact: true })).toBeVisible();
+  await prepareFirstRound(page);
+  await publishRound(page, 1);
 
   for (let roundNumber = 2; roundNumber <= 5; roundNumber += 1) {
     const previewResponsePromise = page.waitForResponse((response) => {
