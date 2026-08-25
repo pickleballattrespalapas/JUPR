@@ -51,6 +51,29 @@ def test_league_live_binds_session_to_selected_league_and_pauses_edits_while_bus
     assert "disabled={busy}" in panel
 
 
+def test_resume_loader_only_lists_unfinished_sessions_for_the_route_league() -> None:
+    panel = PANEL.read_text(encoding="utf-8")
+    page = PAGE.read_text(encoding="utf-8")
+    routes = ROUTES.read_text(encoding="utf-8")
+    service = SERVICE.read_text(encoding="utf-8")
+
+    assert "selectedLeagueName={leagueName}" in page
+    assert "key={leagueName}" in page
+    assert "const [leagueName, setLeagueName] = useState(selectedLeagueName);" in panel
+    assert 'league_name: targetLeague' in panel
+    assert 'resumable_only: "true"' in panel
+    assert "resumableSessionsForLeague(payload.sessions || [], targetLeague)" in panel
+    assert 'session.league_name === leagueName' in panel
+    assert 'new Set(["setup", "active", "paused"])' in panel
+    assert "Resume an unfinished session" in panel
+    assert "Unfinished sessions for this league" in panel
+    assert "league_name: str | None = Query(default=None)" in routes
+    assert "resumable_only: bool = Query(default=False)" in routes
+    assert 'query.eq("league_name", clean_league)' in service
+    assert 'query.in_("status", RESUMABLE_SESSION_STATUSES)' in service
+    assert 'if resumable_only and not clean_league:' in service
+
+
 def test_league_live_court_and_bench_controls_are_phone_responsive() -> None:
     panel = PANEL.read_text(encoding="utf-8")
     assert "data-responsive-court-grid" in panel

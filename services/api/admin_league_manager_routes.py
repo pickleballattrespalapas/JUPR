@@ -447,7 +447,9 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
     @app.get("/admin/clubs/{club_id}/league-manager/live-sessions")
     def get_admin_league_live_sessions(
         club_id: str,
+        league_name: str | None = Query(default=None),
         status: str | None = Query(default=None),
+        resumable_only: bool = Query(default=False),
         limit: int = Query(default=50, ge=1, le=200),
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
@@ -455,7 +457,14 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         supabase = get_supabase_client()
         _resolve_league_manager_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_league_live_sessions_list")
         try:
-            return list_admin_league_live_sessions(supabase, club_id=str(club_id), status=status, limit=limit)
+            return list_admin_league_live_sessions(
+                supabase,
+                club_id=str(club_id),
+                league_name=league_name,
+                status=status,
+                resumable_only=resumable_only,
+                limit=limit,
+            )
         except Exception as exc:
             _handle_common(exc)
 
