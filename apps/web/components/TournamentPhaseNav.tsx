@@ -87,12 +87,16 @@ function phaseItems(
   if (phase === "live") {
     return [
       {
+        label: "Draw setup & recovery",
+        href: tournamentRouteHref("/admin/tournaments/ops/draws", context),
+        match: (pathname) => pathname === "/admin/tournaments/ops/draws"
+      },
+      {
         label: "Day workspace",
         href: tournamentRouteHref("/admin/tournaments/live-operations", context),
         match: (pathname) =>
           pathname === "/admin/tournaments/live-operations" ||
           pathname === "/admin/tournaments/live-operations/draws" ||
-          pathname === "/admin/tournaments/ops/draws" ||
           pathname === "/admin/tournament-live"
       },
       {

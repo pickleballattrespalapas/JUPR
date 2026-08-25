@@ -108,6 +108,23 @@ def test_tournament_ops_workflow_header_preserves_phase_and_tournament_context()
     assert "operationsWriteReady" not in page
 
 
+def test_draw_setup_and_recovery_is_reachable_from_live_operations() -> None:
+    route = _read("apps/web/app/admin/tournaments/ops/draws/page.tsx")
+    phase_nav = _read("apps/web/components/TournamentPhaseNav.tsx")
+    panel = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
+
+    assert 'workflow="draws"' in route
+    assert 'title="draw setup & recovery"' in route
+    assert 'redirect("/admin/tournaments")' in route
+    assert '"/admin/tournaments/live-operations"' not in route
+    assert 'label: "Draw setup & recovery"' in phase_nav
+    assert 'href: tournamentRouteHref("/admin/tournaments/ops/draws", context)' in phase_nav
+    assert 'pathname === "/admin/tournaments/ops/draws"' in phase_nav
+    assert "Cancel empty setup" in panel
+    assert "Cancel selected empty event" in panel
+    assert "Reconcile missing games" in panel
+
+
 def test_registration_import_surfaces_excluded_needs_partner_warning_in_success_result() -> None:
     panel = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
 
