@@ -504,9 +504,9 @@ jobs:
           export JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN="$deployment_origin"
           export JUPR_PARITY_MUTATION_CONFIRMATION="RUN DISPOSABLE STAGING WRITES"
           acceptance_spec="${{ steps.league-live-e2e.outputs.spec }}"
+          candidate_suffix="${GITHUB_SHA:0:7}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           case "$acceptance_spec" in
             e2e/league-four-week.staging.spec.ts)
-              candidate_suffix="${GITHUB_SHA:0:7}-${GITHUB_RUN_ATTEMPT}"
               export JUPR_FOUR_WEEK_ALLOW_MUTATION_E2E=1
               export JUPR_FOUR_WEEK_E2E_LEAGUE_NAME="Acceptance Four Week Flex ${candidate_suffix}"
               export JUPR_FOUR_WEEK_E2E_ASPEN_NAME="E2E Created Aspen ${candidate_suffix}"
@@ -516,10 +516,7 @@ jobs:
               ;;
             e2e/league-live-session.staging.spec.ts)
               export JUPR_LEAGUE_LIVE_ALLOW_MUTATION_E2E=1
-              export JUPR_LEAGUE_LIVE_E2E_SESSION_ID=d7221db1-db24-52d2-90fc-b667c16e0193
-              export JUPR_LEAGUE_LIVE_E2E_LEAGUE_ID=9
-              export JUPR_LEAGUE_LIVE_E2E_LEAGUE_NAME="Acceptance Flex 0822A"
-              export JUPR_LEAGUE_LIVE_E2E_LEAGUE_TYPE=Individual
+              export JUPR_LEAGUE_LIVE_E2E_LEAGUE_NAME="League Live E2E ${candidate_suffix}"
               export JUPR_LEAGUE_LIVE_E2E_MATCH_DATE=2026-08-24
               export JUPR_LEAGUE_LIVE_E2E_REPORT_PATH="$RUNNER_TEMP/staging-handoff/league-live-e2e.json"
               ;;

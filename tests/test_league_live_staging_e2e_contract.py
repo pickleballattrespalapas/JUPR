@@ -17,7 +17,15 @@ def test_league_live_mutation_e2e_is_explicit_staging_only_and_non_retrying() ->
     assert 'test.describe.configure({ mode: "serial", retries: 0 })' in text
     assert 'confirmation_text: "CREATE LIVE SESSION"' in text
     assert 'source: "staging_league_live_browser_acceptance"' in text
-    assert "fixtureSessionId" in text
+    assert "createDisposableFixtures" in text
+    assert "/players/editor/players" in text
+    assert "cleanupDisposableFixtures" in text
+    assert 'leagueStatus).toBe("archived")' in text
+    assert "inactivePlayerCount).toBe(4)" in text
+    assert 'const legacyAcceptanceLeagueName = "Acceptance Flex 0822A"' in text
+    assert "/match-log/exclude" in text
+    assert 'excluded.replay_status).toBe("succeeded")' in text
+    assert "legacy_acceptance_matches_excluded" in text
     assert "GITHUB_RUN_ID" in text
     assert "GITHUB_RUN_ATTEMPT" in text
     assert 'test("creates and completes a disposable five-round League Live session"' in text
@@ -29,13 +37,14 @@ def test_league_live_mutation_e2e_is_explicit_staging_only_and_non_retrying() ->
     assert "retainedOperationId" not in text
     assert 'trigger: "Retry R1"' not in text
     assert 'trigger: "Finish session"' in text
-    assert 'liveRoute.searchParams.set("league_id", expectedLeagueId)' in text
+    assert 'liveRoute.searchParams.set("league_id", leagueId)' in text
     assert 'liveRoute.searchParams.set("league_name", expectedLeagueName)' in text
-    assert 'liveRoute.searchParams.set("mode", expectedLeagueType)' in text
+    assert 'liveRoute.searchParams.set("mode", "Individual")' in text
     assert 'article[aria-labelledby="league-live-setup-heading"]' in text
     assert 'name: "Unfinished sessions for this league"' in text
     assert 'hasText: /^Existing sessions/' not in text
     assert "unique_published_matches: new Set(publishedMatchIds).size" in text
+    assert 'expect(expectedLeagueName).toMatch(/^League Live E2E /)' in text
     assert "pickleballclubsandwich.com" not in text
     assert "dnoockbwfenunhcibwfn" not in text
 
@@ -60,15 +69,16 @@ def test_fly_workflow_runs_league_live_e2e_once_for_an_explicit_spec_change() ->
     assert "if: always() && steps.league-live-e2e.outputs.run == 'true'" in text
     assert "prepare_parity_staging_session.py" in text
     assert "            cleanup \\" in text
-    assert "JUPR_LEAGUE_LIVE_E2E_SESSION_ID=d7221db1-db24-52d2-90fc-b667c16e0193" in text
+    assert "JUPR_LEAGUE_LIVE_E2E_SESSION_ID" not in text
     assert "JUPR_LEAGUE_LIVE_E2E_OPERATION_ID" not in text
-    assert "JUPR_LEAGUE_LIVE_E2E_LEAGUE_ID=9" in text
-    assert 'JUPR_LEAGUE_LIVE_E2E_LEAGUE_NAME="Acceptance Flex 0822A"' in text
-    assert "JUPR_LEAGUE_LIVE_E2E_LEAGUE_TYPE=Individual" in text
+    assert "JUPR_LEAGUE_LIVE_E2E_LEAGUE_ID" not in text
+    assert 'JUPR_LEAGUE_LIVE_E2E_LEAGUE_NAME="League Live E2E ${candidate_suffix}"' in text
+    assert "JUPR_LEAGUE_LIVE_E2E_LEAGUE_TYPE" not in text
+    assert 'candidate_suffix="${GITHUB_SHA:0:7}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in text
+    assert "Acceptance Flex 0822A" not in text
     assert "apps/web/e2e/league-four-week.staging.spec.ts" in text
     assert "spec=e2e/league-four-week.staging.spec.ts" in text
     assert "JUPR_FOUR_WEEK_ALLOW_MUTATION_E2E=1" in text
-    assert 'candidate_suffix="${GITHUB_SHA:0:7}-${GITHUB_RUN_ATTEMPT}"' in text
     assert 'JUPR_FOUR_WEEK_E2E_LEAGUE_NAME="Acceptance Four Week Flex ${candidate_suffix}"' in text
     assert 'JUPR_FOUR_WEEK_E2E_ASPEN_NAME="E2E Created Aspen ${candidate_suffix}"' in text
     assert 'JUPR_FOUR_WEEK_E2E_BIRCH_NAME="E2E Created Birch ${candidate_suffix}"' in text

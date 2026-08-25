@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from jupr_app.services.admin_league_awards_service import (
+    _award_minimum,
     freeze_admin_league_awards,
     get_public_league_award_progress,
     persist_admin_league_awards_preview,
@@ -85,6 +86,16 @@ def _storage() -> dict[str, list[dict]]:
         "badges": [],
         "player_badges": [],
     }
+
+
+def test_award_minimum_falls_back_without_erasing_explicit_zero() -> None:
+    meta = {"min_games": 6}
+
+    assert _award_minimum({}, meta) == 6
+    assert _award_minimum({"minimum": None}, meta) == 6
+    assert _award_minimum({}, meta, {"default_min_games": 4}) == 4
+    assert _award_minimum({"minimum": 2}, meta, {"default_min_games": 4}) == 2
+    assert _award_minimum({"minimum": 0}, meta, {"default_min_games": 4}) == 0
 
 
 def _enable(monkeypatch) -> None:
@@ -310,6 +321,7 @@ def test_public_awards_default_to_qualified_top_performers_when_categories_are_u
     storage["leagues_metadata"][0].update(
         league_type="Individual",
         match_format="singles",
+        min_games=6,
         awards_config={},
     )
     storage["league_ratings"] = [
@@ -319,9 +331,9 @@ def test_public_awards_default_to_qualified_top_performers_when_categories_are_u
             "player_id": 1,
             "rating": 1640,
             "starting_rating": 1600,
-            "wins": 2,
+            "wins": 6,
             "losses": 0,
-            "matches_played": 2,
+            "matches_played": 6,
             "is_active": True,
         },
         {
@@ -331,14 +343,14 @@ def test_public_awards_default_to_qualified_top_performers_when_categories_are_u
             "rating": 1600,
             "starting_rating": 1600,
             "wins": 0,
-            "losses": 2,
-            "matches_played": 2,
+            "losses": 6,
+            "matches_played": 6,
             "is_active": True,
         },
     ]
     storage["matches"] = [
         {
-            "id": 101,
+            "id": match_id,
             "club_id": "club",
             "league": "Open",
             "match_format": "singles",
@@ -347,6 +359,7 @@ def test_public_awards_default_to_qualified_top_performers_when_categories_are_u
             "score_t1": 11,
             "score_t2": 8,
         }
+        for match_id in range(101, 107)
     ]
     supabase = CountingSupabase(storage)
 
@@ -362,6 +375,12 @@ def test_public_awards_default_to_qualified_top_performers_when_categories_are_u
         "most_wins",
     }
     assert {row["recipient_name"] for row in public["awards"]} == {"Alex"}
+    assert {race["min_games"] for race in public["races"]} == {6}
+    assert all(
+        entry["min_games"] == 6
+        for race in public["races"]
+        for entry in race["entries"]
+    )
     assert supabase.table_calls == [
         "leagues_metadata",
         "league_ratings",

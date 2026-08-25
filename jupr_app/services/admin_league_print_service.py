@@ -228,7 +228,11 @@ def build_admin_top_players_printable(
 
 
 def _parse_week_num(value: Any) -> int | None:
-    match = re.search(r"(\d+)", str(value or ""))
+    match = re.search(
+        r"\bweek\s*#?\s*(\d+)\b",
+        str(value or ""),
+        flags=re.IGNORECASE,
+    )
     return int(match.group(1)) if match else None
 
 

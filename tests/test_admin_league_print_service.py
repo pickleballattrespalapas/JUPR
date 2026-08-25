@@ -4,11 +4,17 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from jupr_app.services.admin_league_print_service import (
+    _parse_week_num,
     build_admin_league_printout,
     build_admin_top_players_printable,
 )
 from tests.conftest import require_api_dependency
 from tests.test_admin_match_log_service import FakeSupabase
+
+
+def test_print_week_number_ignores_non_week_identifiers() -> None:
+    assert _parse_week_num("Week 3") == 3
+    assert _parse_week_num("E2E 9b956dfc-32802308745-1") is None
 
 
 def _match(match_id: int, *, date: str, week: int = 1, with_snapshots: bool = True) -> dict:

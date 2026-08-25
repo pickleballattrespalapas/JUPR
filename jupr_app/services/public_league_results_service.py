@@ -69,7 +69,7 @@ def _win_pct(wins: int, losses: int, games: int | None = None) -> float | None:
 def _parse_week_num(value: Any) -> int | None:
     if value is None:
         return None
-    match = re.search(r"(\d+)", str(value))
+    match = re.search(r"\bweek\s*#?\s*(\d+)\b", str(value), flags=re.IGNORECASE)
     if not match:
         return None
     try:
