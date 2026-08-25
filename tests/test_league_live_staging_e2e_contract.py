@@ -31,7 +31,8 @@ def test_league_live_mutation_e2e_is_explicit_staging_only_and_non_retrying() ->
     assert 'liveRoute.searchParams.set("league_name", expectedLeagueName)' in text
     assert 'liveRoute.searchParams.set("mode", expectedLeagueType)' in text
     assert 'article[aria-labelledby="league-live-setup-heading"]' in text
-    assert 'hasText: /^Existing sessions/' in text
+    assert 'name: "Unfinished sessions for this league"' in text
+    assert 'hasText: /^Existing sessions/' not in text
     assert "unique_published_matches: new Set(publishedMatchIds).size" in text
     assert "pickleballclubsandwich.com" not in text
     assert "dnoockbwfenunhcibwfn" not in text

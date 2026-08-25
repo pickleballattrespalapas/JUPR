@@ -272,9 +272,10 @@ test("creates and completes a disposable five-round League Live session", async 
 
   const setupPanel = page.locator('article[aria-labelledby="league-live-setup-heading"]');
   await expect(setupPanel).toBeVisible();
-  const sessionSelect = setupPanel
-    .locator("label", { hasText: /^Existing sessions/ })
-    .locator("select");
+  const sessionSelect = setupPanel.getByRole("combobox", {
+    name: "Unfinished sessions for this league",
+    exact: true
+  });
   await expect(sessionSelect).toBeEnabled({ timeout: 30_000 });
   await expect(sessionSelect.locator(`option[value="${sessionId}"]`)).toHaveCount(1);
   await sessionSelect.selectOption(sessionId);
