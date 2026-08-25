@@ -61,6 +61,7 @@ type LeagueLiveDetail = {
   rounds: Array<{
     round_number: number;
     status: string;
+    match_date?: string | null;
     submitted_match_count?: number;
     submitted_match_ids?: string[];
   }>;
@@ -115,24 +116,6 @@ async function runConfirmedAction(
 }
 
 async function publishRound(page: Page, roundNumber: number): Promise<void> {
-  await expect(page.getByRole("heading", { name: "1. Setup", exact: true })).toBeVisible();
-  await expect(page.getByLabel("Round #", { exact: true })).toHaveValue(String(roundNumber));
-  await page.getByLabel("Date *", { exact: true }).fill(matchDate);
-  await page.getByRole("button", { name: "Continue to Players", exact: true }).click();
-
-  await expect(page.getByRole("heading", { name: "2. Players", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Continue with saved courts", exact: true }).click();
-
-  await expect(page.getByRole("heading", { name: "3. Courts and Preview", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Validate courts and generate preview", exact: true }).click();
-  await expect(page.getByRole("heading", { name: /Match preview · 3 slots/i })).toBeVisible();
-  await runConfirmedAction(page, {
-    trigger: "Save preview and continue",
-    confirm: "Yes, save and continue",
-    method: "PATCH",
-    pathname: `/admin/clubs/${clubId}/league-manager/live-sessions/${sessionId}/snapshot`
-  });
-
   await expect(page.getByRole("heading", { name: "4. Score Entry with Review", exact: true })).toBeVisible();
   const teamOneScores = page.locator('input[aria-label$="Team 1 score"]:enabled');
   const teamTwoScores = page.locator('input[aria-label$="Team 2 score"]:enabled');
@@ -250,7 +233,17 @@ test("recovers retained Round 1 and completes the five-round League Live session
   await expect(page.getByRole("heading", { name: "Round 1 published", exact: true })).toBeVisible();
 
   for (let roundNumber = 2; roundNumber <= 5; roundNumber += 1) {
+    const previewResponsePromise = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.origin === expectedApiOrigin
+        && url.pathname === `/admin/clubs/${clubId}/match-uploader/round-robin/preview`
+        && response.request().method() === "POST";
+    });
     await page.getByRole("button", { name: "Start next round", exact: true }).click();
+    const previewResponse = await previewResponsePromise;
+    expect(previewResponse.status(), `Round ${roundNumber} automatic preview failed`).toBe(200);
+    await expect(page.getByRole("heading", { name: "4. Score Entry with Review", exact: true })).toBeVisible();
+    await expect(page.getByText(new RegExp(`Round ${roundNumber} is ready with the approved movement`))).toBeVisible();
     await publishRound(page, roundNumber);
   }
 
@@ -277,6 +270,7 @@ test("recovers retained Round 1 and completes the five-round League Live session
     [4, "submitted"],
     [5, "submitted"]
   ]);
+  expect(after.rounds.every((round) => round.match_date === matchDate)).toBe(true);
   expect(after.rounds.reduce((total, round) => total + Number(round.submitted_match_count || 0), 0)).toBe(15);
   expect(after.publish_operations).toHaveLength(5);
   expect(after.publish_operations?.every((operation) => operation.status === "completed")).toBe(true);

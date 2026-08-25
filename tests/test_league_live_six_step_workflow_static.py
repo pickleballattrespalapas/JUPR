@@ -163,6 +163,34 @@ def test_movement_then_repeat_or_finish_are_explicit_steps() -> None:
     )
 
 
+def test_next_round_reuses_published_context_and_opens_score_entry() -> None:
+    source = _source()
+    start_next_round = re.search(
+        r"async function startNextRound\(\)\s*\{(?P<body>.*?)\n  \}\n\n  function updateCourt",
+        source,
+        re.S,
+    )
+    assert start_next_round, "Start next round needs a dedicated guarded transition"
+    body = start_next_round.group("body")
+
+    assert "nextRoundMatchDate(roundHistory, lastPublishedRound, matchDate)" in body, (
+        "The next round must inherit the already confirmed league-night date"
+    )
+    assert "await requestRoundPreview(nextRound)" in body, (
+        "The saved moved courts must be turned into the next scoring preview automatically"
+    )
+    assert "setScores(emptyScoresForPreview(payload, matchStructure))" in body
+    assert "setWorkflowStep(4)" in body, (
+        "Starting the next round must open Score Entry instead of restarting Setup"
+    )
+    assert "Enter scores when play begins" in body
+    assert "previousRoundWasPublished" in source
+    assert "await requestRoundPreview(sessionCurrentRound, savedNextCourts)" in source, (
+        "Reloading an already advanced session must also recover directly into score entry"
+    )
+    assert "Round ${sessionCurrentRound} resumed with the approved movement" in source
+
+
 def test_uncertain_writes_do_not_advance_the_workflow_as_if_they_succeeded() -> None:
     source = _source()
 

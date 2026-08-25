@@ -359,6 +359,26 @@ function courtsFromPersisted(courts: LeagueLiveCourt[], currentRound: number, fa
     .map((row) => ({ court: String(row.court_number), formatType: String(row.format_type || "4-player"), playerNames: (row.player_names || []).join("\n") }));
 }
 
+function normalizedMatchDate(value: unknown): string {
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(String(value || "").trim());
+  return match?.[1] || "";
+}
+
+function nextRoundMatchDate(rounds: LeagueLiveRound[], publishedRoundNumber: number, fallback: string): string {
+  const publishedRound = rounds.find((round) => Number(round.round_number) === Number(publishedRoundNumber));
+  return normalizedMatchDate(publishedRound?.match_date) || normalizedMatchDate(fallback);
+}
+
+function emptyScoresForPreview(preview: AdminMatchUploaderRoundRobinPreview, matchStructure: MatchStructure): Record<string, ScoreDraft> {
+  const nextScores: Record<string, ScoreDraft> = {};
+  for (const match of (preview.courts || []).flatMap((court) => court.matches || [])) {
+    for (let gameNumber = 1; gameNumber <= matchStructure.games; gameNumber += 1) {
+      nextScores[scoreKey(match.row_id, gameNumber)] = { scoreT1: "", scoreT2: "" };
+    }
+  }
+  return nextScores;
+}
+
 function activeRosterPayload(detail: AdminLeagueManagerDetailResponse | null, attendeeIds?: Set<number>) {
   return (detail?.roster || []).filter((row) => row.in_league && (!attendeeIds || attendeeIds.has(Number(row.player_id)))).map((row) => ({
     player_id: row.player_id,
@@ -1639,7 +1659,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     }
   }
 
-  async function loadSessionDetail(selectedSessionId = sessionId) {
+  async function loadSessionDetail(selectedSessionId = sessionId, prepareAdvancedRound = true) {
     const generation = sessionDetailRequest.begin();
     leagueDetailRequest.invalidate();
     clearPersistedSessionBinding(selectedSessionId);
@@ -1654,8 +1674,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       if (!sessionDetailRequest.isCurrent(generation)) return;
       const leagueDetail = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(payload.session.league_name)}`);
       if (!sessionDetailRequest.isCurrent(generation)) return;
+      const loadedMatchStructure = matchStructureFromDetail(leagueDetail);
       const publishedRoundNumber = applySession(payload.session, payload.courts || [], payload.rounds || [], payload.publish_operations || [], leagueDetail);
       const restoredDraftStep = publishedRoundNumber == null ? restoreStoredRoundDraft(payload.session, payload.courts || []) : null;
+      const sessionCurrentRound = Number(payload.session.current_round || 1);
+      const previousRoundWasPublished = sessionCurrentRound > 1 && (payload.rounds || []).some((round) => (
+        Number(round.round_number) === sessionCurrentRound - 1 && round.status === "submitted"
+      ));
       if (publishedRoundNumber != null) {
         setMatchDate("");
         setWorkflowStep(6);
@@ -1669,6 +1694,34 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
             ? `Recovered the saved browser draft for Round ${payload.session.current_round}. Confirm its date before continuing.`
             : `Recovered the saved browser draft for Round ${payload.session.current_round}. Review it before continuing.`
           : `Recovered the saved browser draft for Round ${payload.session.current_round}. Resume this ${payload.session.status} session before editing or publishing it.`);
+      } else if (prepareAdvancedRound && payload.session.status === "active" && previousRoundWasPublished) {
+        const inheritedMatchDate = nextRoundMatchDate(payload.rounds || [], sessionCurrentRound - 1, "");
+        const savedNextCourts = courtsFromPersisted(payload.courts || [], sessionCurrentRound, payload.session.current_court_state_json || []);
+        if (!inheritedMatchDate) {
+          setMatchDate("");
+          setWorkflowStep(1);
+          setMessage(`Round ${sessionCurrentRound} is ready with its saved movement, but the prior round date is unavailable. Confirm the date before continuing.`);
+        } else {
+          try {
+            const preparedPreview = await requestRoundPreview(sessionCurrentRound, savedNextCourts);
+            if (!sessionDetailRequest.isCurrent(generation)) return;
+            setMatchDate(inheritedMatchDate);
+            if (preparedPreview.missing_players?.length) {
+              setWorkflowStep(3);
+              setMessage(`Round ${sessionCurrentRound} retained its approved movement, but its saved courts include missing players: ${preparedPreview.missing_players.join(", ")}. Review the courts before scoring.`);
+            } else {
+              setPreview(preparedPreview);
+              setScores(emptyScoresForPreview(preparedPreview, loadedMatchStructure));
+              setWorkflowStep(4);
+              setMessage(`Round ${sessionCurrentRound} resumed with the approved movement, saved roster, courts, and date. Enter scores when play begins.`);
+            }
+          } catch (error) {
+            if (!sessionDetailRequest.isCurrent(generation)) return;
+            setMatchDate(inheritedMatchDate);
+            setWorkflowStep(3);
+            setMessage(error instanceof Error ? `${error.message} Review the saved courts and generate the Round ${sessionCurrentRound} preview again.` : `Unable to prepare Round ${sessionCurrentRound} score entry. Review the saved courts and try again.`);
+          }
+        }
       } else {
         setMatchDate("");
         setWorkflowStep(1);
@@ -1850,7 +1903,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setMessage("Score review cleared. Edit the scores, then review them again.");
   }
 
-  function startNextRound() {
+  async function startNextRound() {
     if (!roundPublished || lastPublishedRound == null) {
       setMessage("Publish the current round before starting the next round workflow.");
       return;
@@ -1865,24 +1918,50 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setMessage(`Round ${lastPublishedRound} is the configured final round. Increase Total rounds to a whole number through 50, or finish the session.`);
       return;
     }
-    setRoundPublished(false);
-    setLastPublishedRound(null);
-    setRoundNumber(String(nextRound));
-    setRoundLabel(`Round ${nextRound}`);
-    setMatchDate("");
-    setScoreReviewMode(false);
-    setScoresReviewed(false);
-    setPreview(null);
-    setScores({});
-    setMovementPlan(null);
-    setMovementPlanStale(false);
-    setMovementOverrides({});
-    setOverrideReason("");
-    setRosterAction("none");
-    setIncomingPlayerId("");
-    setReplacedPlayerId("");
-    setWorkflowStep(1);
-    setMessage(`Round ${nextRound} is ready with the saved movement and roster order. Confirm its date before continuing.`);
+    const inheritedMatchDate = nextRoundMatchDate(roundHistory, lastPublishedRound, matchDate);
+    if (!inheritedMatchDate) {
+      setMessage(`Round ${nextRound} could not inherit the published round date. Reload this session before continuing.`);
+      return;
+    }
+    const validationErrors = courtValidationErrors();
+    if (validationErrors.length) {
+      setMessage(`The saved next-round courts could not be opened for scoring. ${validationErrors.join(" ")}`);
+      return;
+    }
+    const generation = actionRequest.begin();
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestRoundPreview(nextRound);
+      if (!actionRequest.isCurrent(generation)) return;
+      if (payload.missing_players?.length) {
+        setMessage(`The saved next-round courts include missing players: ${payload.missing_players.join(", ")}. Reload this session before continuing.`);
+        return;
+      }
+      setRoundPublished(false);
+      setLastPublishedRound(null);
+      setRoundNumber(String(nextRound));
+      setRoundLabel(`Round ${nextRound}`);
+      setMatchDate(inheritedMatchDate);
+      setScoreReviewMode(false);
+      setScoresReviewed(false);
+      setPreview(payload);
+      setScores(emptyScoresForPreview(payload, matchStructure));
+      setMovementPlan(null);
+      setMovementPlanStale(false);
+      setMovementOverrides({});
+      setOverrideReason("");
+      setRosterAction("none");
+      setIncomingPlayerId("");
+      setReplacedPlayerId("");
+      setRatingReview(null);
+      setWorkflowStep(4);
+      setMessage(`Round ${nextRound} is ready with the approved movement, saved roster, courts, and date. Enter scores when play begins.`);
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : `Unable to prepare Round ${nextRound} score entry.`);
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   function updateCourt(index: number, patch: Partial<CourtDraft>) {
@@ -1964,6 +2043,14 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     return [...new Set(errors)];
   }
 
+  async function requestRoundPreview(roundForPreview: number, courtDrafts = courts): Promise<AdminMatchUploaderRoundRobinPreview> {
+    const courtPayload = courtsToPayload(courtDrafts, roundForPreview).map((court) => ({ court: court.court, format_type: court.format_type, player_names: court.player_names }));
+    return requestJson<AdminMatchUploaderRoundRobinPreview>(`/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/round-robin/preview`, {
+      method: "POST",
+      body: JSON.stringify({ courts: courtPayload, schedule_mode: "full", source: "next_league_manager_live_preview" })
+    });
+  }
+
   async function generatePreview() {
     const setupError = setupContextError();
     if (setupError) {
@@ -1981,11 +2068,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setBusy(true);
     setMessage(null);
     try {
-      const courtPayload = courtsToPayload(courts, currentRound).map((court) => ({ court: court.court, format_type: court.format_type, player_names: court.player_names }));
-      const payload = await requestJson<AdminMatchUploaderRoundRobinPreview>(`/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/round-robin/preview`, {
-        method: "POST",
-        body: JSON.stringify({ courts: courtPayload, schedule_mode: "full", source: "next_league_manager_live_preview" })
-      });
+      const payload = await requestRoundPreview(currentRound);
       if (!actionRequest.isCurrent(generation)) return;
       if (payload.missing_players?.length) {
         setPreview(null);
@@ -1993,13 +2076,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         return;
       }
       setPreview(payload);
-      const nextScores: Record<string, ScoreDraft> = {};
-      for (const match of (payload.courts || []).flatMap((court) => court.matches || [])) {
-        for (let gameNumber = 1; gameNumber <= matchStructure.games; gameNumber += 1) {
-          nextScores[scoreKey(match.row_id, gameNumber)] = { scoreT1: "", scoreT2: "" };
-        }
-      }
-      setScores(nextScores);
+      setScores(emptyScoresForPreview(payload, matchStructure));
       setMovementPlan(null);
       setMovementPlanStale(false);
       setMovementOverrides({});
@@ -2173,7 +2250,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setPreview(null);
       setScores({});
       if (requestedSessionId) {
-        await loadSessionDetail(requestedSessionId);
+        await loadSessionDetail(requestedSessionId, false);
         if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the published round could be refreshed.");
       }
       setRatingReview(payload.rating_review || null);
@@ -2277,9 +2354,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         body: JSON.stringify({ confirmation_text: confirmationText, source: "next_league_live_round_reconcile" })
       });
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the round reconciliation response was applied.");
-      await loadSessionDetail(requestedSessionId);
+      await loadSessionDetail(requestedSessionId, false);
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the reconciled round could be refreshed.");
       setRatingReview(payload.rating_review || null);
+      setLastPublishedRound(round);
+      setRoundPublished(true);
+      setWorkflowStep(6);
       setMessage(`Round ${round} publish and League Live snapshot are reconciled. No match was republished.`);
       return actionSuccess("League round reconciled", `Round ${round} and its League Live snapshot were reconciled without republishing a match.`);
     } catch (error) {
@@ -2303,7 +2383,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         body: JSON.stringify({ confirmation_text: confirmationText, source: "next_league_live_round_retry" })
       });
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the retained round retry response was applied.");
-      await loadSessionDetail(requestedSessionId);
+      await loadSessionDetail(requestedSessionId, false);
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the recovered round could be refreshed.");
       setRatingReview(payload.rating_review || null);
       clearStoredRoundDraft(requestedSessionId, round);
@@ -2837,7 +2917,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
                 <>
                   <p>Choose the next explicit operator action. Starting the next round uses the saved moved courts and roster; finishing marks this persisted session complete.</p>
                   <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                    <button type="button" onClick={startNextRound} disabled={busy || sessionStatus !== "active" || lastPublishedRound == null || !Number.isInteger(parsedTotalRounds) || lastPublishedRound + 1 > safeTotalRounds} style={buttonStyle}>Start next round</button>
+                    <button type="button" onClick={() => void startNextRound()} disabled={busy || sessionStatus !== "active" || lastPublishedRound == null || !Number.isInteger(parsedTotalRounds) || lastPublishedRound + 1 > safeTotalRounds} style={buttonStyle}>Start next round</button>
                     <ConfirmAction triggerLabel="Finish session" title="Complete this League Live session?" description="This marks the persisted session complete. Published rounds and ratings remain unchanged." confirmLabel="Yes, complete session" confirmationText="SAVE SESSION" disabled={busy || !sessionIsCurrentLeague || sessionStatus !== "active" || !roundContextValid} busy={busy} onConfirm={finishSession} />
                   </div>
                   {lastPublishedRound != null && lastPublishedRound >= safeTotalRounds ? <p style={{ color: "#475569" }}>All {safeTotalRounds} configured rounds are complete. Finish the session, or return to Setup and deliberately extend the round count before publishing another round.</p> : null}
