@@ -17,6 +17,10 @@ class LeagueLivePublishError(ValueError):
     """A League Live publish request violates the durable submit contract."""
 
 
+UNUSUAL_SCORE_POINT_THRESHOLD = 30
+UNUSUAL_SCORE_MARGIN_THRESHOLD = 20
+
+
 def _safe_int(value: Any, default: int | None = None) -> int | None:
     if value in (None, ""):
         return default
@@ -38,6 +42,20 @@ def stable_payload_fingerprint(payload: Any) -> str:
 def league_live_match_context_id(*, session_id: str, round_number: int, match_index: int) -> str:
     seed = f"jupr:league-live:{str(session_id)}:round:{int(round_number)}:match:{int(match_index)}"
     return str(uuid5(NAMESPACE_URL, seed))
+
+
+def league_live_unusual_score_reason(score_t1: Any, score_t2: Any) -> str | None:
+    """Return an operator-review reason without rejecting legitimate long games."""
+    left = _safe_int(score_t1)
+    right = _safe_int(score_t2)
+    if left is None or right is None or left < 0 or right < 0:
+        return None
+    if max(left, right) >= UNUSUAL_SCORE_POINT_THRESHOLD:
+        return f"one side has {max(left, right)} points (usual review threshold: {UNUSUAL_SCORE_POINT_THRESHOLD})"
+    margin = abs(left - right)
+    if margin >= UNUSUAL_SCORE_MARGIN_THRESHOLD:
+        return f"the winning margin is {margin} points (usual review threshold: {UNUSUAL_SCORE_MARGIN_THRESHOLD})"
+    return None
 
 
 def normalize_league_live_publish_matches(
@@ -134,6 +152,7 @@ def build_league_live_publish_request(
     expected_match_count: int,
     expected_updated_at: str,
     expected_operation_key: str,
+    unusual_score_acknowledgement: bool = False,
     round_label: str | None = None,
     preview: dict[str, Any] | None = None,
     courts: list[dict[str, Any]] | None = None,
@@ -177,6 +196,26 @@ def build_league_live_publish_request(
         raise LeagueLivePublishError("expected_updated_at is required; reload the session before publish.")
     if len(str(request["expected_operation_key"])) != 64:
         raise LeagueLivePublishError("A verified 64-character Python plan operation key is required.")
+    unusual_scores = [
+        {
+            "match_index": index,
+            "court": row["court"],
+            "score_t1": row["score_t1"],
+            "score_t2": row["score_t2"],
+            "reason": reason,
+        }
+        for index, row in enumerate(normalized_matches, start=1)
+        if (reason := league_live_unusual_score_reason(row["score_t1"], row["score_t2"])) is not None
+    ]
+    if unusual_scores and not unusual_score_acknowledgement:
+        first = unusual_scores[0]
+        raise LeagueLivePublishError(
+            f"Court {first['court']} has an unusual score {first['score_t1']}-{first['score_t2']}; "
+            "review it and explicitly acknowledge unusual scores before publishing."
+        )
+    if unusual_scores or unusual_score_acknowledgement:
+        request["unusual_score_acknowledgement"] = bool(unusual_score_acknowledgement)
+        request["unusual_score_findings"] = unusual_scores
     request["match_context_ids"] = [row["context_id"] for row in normalized_matches]
     request["request_fingerprint"] = stable_payload_fingerprint(request)
     return request

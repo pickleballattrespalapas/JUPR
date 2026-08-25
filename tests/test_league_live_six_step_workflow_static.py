@@ -127,7 +127,7 @@ def test_score_entry_requires_an_explicit_team_and_score_review_before_submit() 
     )
     _assert_any(
         source,
-        ("Confirm scores", "Scores reviewed"),
+        ("Publish reviewed scores", "Confirm scores", "Scores reviewed"),
         "The review must require an explicit confirmation",
     )
     assert re.search(r"(?:scoreReview|scoresReviewed|scoresConfirmed)", source), (

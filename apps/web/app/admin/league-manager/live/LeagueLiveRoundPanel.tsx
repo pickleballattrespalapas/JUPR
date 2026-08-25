@@ -58,7 +58,7 @@ type LeagueLiveCourt = { round_number: number; court_number: number; format_type
 type LeagueLiveRosterRow = { player_id: number; player_name: string; rating?: number | null; status: "active" | "bench"; court_number?: number | null; slot?: number | null; bench_reason?: string | null };
 type LeagueMovementRow = { player_id: number; player_name: string; from_court: number; suggested_court: number; to_court: number; wins: number; differential: number; points: number; direction: "up" | "down" | "stay"; overridden: boolean };
 type LeagueMovementPayload = { strategy: string; authority: "python_fastapi"; applied: boolean; override_applied: boolean; override_reason?: string | null; next_round: number; rows: LeagueMovementRow[]; next_courts: LeagueLiveCourt[]; operation_key: string };
-type LeagueLiveRound = { round_number: number; round_label?: string | null; status: string; submitted_match_count?: number | null; match_date?: string | null; updated_at?: string | null; movement_json?: LeagueMovementPayload | Record<string, unknown> | null };
+type LeagueLiveRound = { round_number: number; round_label?: string | null; status: string; submitted_match_count?: number | null; match_date?: string | null; updated_at?: string | null; preview_json?: AdminMatchUploaderRoundRobinPreview | Record<string, unknown> | null; matches_json?: Array<Record<string, unknown>> | null; movement_json?: LeagueMovementPayload | Record<string, unknown> | null; operation_key?: string | null };
 type LeagueLivePublishOperation = { id: string; round_number: number; status: string; attempt_count: number; published_match_ids?: unknown[]; error_text?: string | null; request_fingerprint?: string; completed_at?: string | null };
 type LeagueLiveRatingRow = { player_id: number; player_name: string; rating_before?: number | null; rating_after?: number | null; rating_delta?: number | null; matches_played_before?: number | null; matches_played_after?: number | null };
 type LeagueLiveRatingReview = { status: string; requires_replay_review: boolean; published_match_count: number; rows: LeagueLiveRatingRow[]; warnings: string[] };
@@ -89,6 +89,7 @@ type StoredLeagueLiveRoundDraft = {
   scores: Record<string, ScoreDraft>;
   scoreReviewMode: boolean;
   scoresReviewed: boolean;
+  unusualScoresAcknowledged: boolean;
   movementPlan: LeagueLiveRoundPlan | null;
   movementPlanStale: boolean;
   movementOverrides: Record<number, string>;
@@ -219,6 +220,16 @@ function scoreIsValid(score: ScoreDraft): boolean {
   const a = Number(left);
   const b = Number(right);
   return Number.isInteger(a) && Number.isInteger(b) && a >= 0 && b >= 0 && a !== b && a + b > 0;
+}
+
+function unusualScoreReason(score: ScoreDraft): string | null {
+  if (!scoreIsValid(score)) return null;
+  const left = Number(score.scoreT1);
+  const right = Number(score.scoreT2);
+  if (Math.max(left, right) >= 30) return `One side has ${Math.max(left, right)} points.`;
+  const margin = Math.abs(left - right);
+  if (margin >= 20) return `The winning margin is ${margin} points.`;
+  return null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -450,6 +461,11 @@ function movementSummary(movement?: LeagueMovementPayload | Record<string, unkno
   return moved ? `${moved} move(s)` : "No movement";
 }
 
+function roundHasAppliedMovement(round: LeagueLiveRound): boolean {
+  const movement = asRecord(round.movement_json);
+  return Boolean(String(round.operation_key || movement.operation_key || "").trim());
+}
+
 function resumableSessionsForLeague(sessions: LeagueLiveSession[], leagueName: string): LeagueLiveSession[] {
   return sessions.filter((session) => (
     session.league_name === leagueName
@@ -463,7 +479,7 @@ function persistedPublishedRoundNumber(
   operations: LeagueLivePublishOperation[]
 ): number | null {
   const submittedRounds = rounds
-    .filter((round) => round.status === "submitted")
+    .filter((round) => round.status === "submitted" && roundHasAppliedMovement(round))
     .map((round) => Number(round.round_number))
     .filter((roundNumber) => Number.isFinite(roundNumber));
   if (session.status === "complete") {
@@ -473,6 +489,19 @@ function persistedPublishedRoundNumber(
   if (!submittedRounds.includes(currentRoundNumber)) return null;
   const currentRoundOperations = operations.filter((operation) => Number(operation.round_number) === currentRoundNumber);
   if (currentRoundOperations.length && !currentRoundOperations.some((operation) => operation.status === "completed")) return null;
+  return currentRoundNumber;
+}
+
+function persistedScorePublishedRoundNumber(
+  session: LeagueLiveSession,
+  rounds: LeagueLiveRound[],
+  operations: LeagueLivePublishOperation[]
+): number | null {
+  const currentRoundNumber = Number(session.current_round || 1);
+  const currentRound = rounds.find((round) => Number(round.round_number) === currentRoundNumber && round.status === "submitted");
+  if (!currentRound) return null;
+  const currentOperations = operations.filter((operation) => Number(operation.round_number) === currentRoundNumber);
+  if (currentOperations.length && !currentOperations.some((operation) => operation.status === "completed")) return null;
   return currentRoundNumber;
 }
 
@@ -516,6 +545,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const [scores, setScores] = useState<Record<string, ScoreDraft>>({});
   const [scoreReviewMode, setScoreReviewMode] = useState(false);
   const [scoresReviewed, setScoresReviewed] = useState(false);
+  const [unusualScoresAcknowledged, setUnusualScoresAcknowledged] = useState(false);
+  const [scoresPublished, setScoresPublished] = useState(false);
+  const [officialRoundMatches, setOfficialRoundMatches] = useState<Array<Record<string, unknown>>>([]);
   const [rosterSuggestion, setRosterSuggestion] = useState<LeagueLiveRosterSuggestion | null>(null);
   const [movementPlan, setMovementPlan] = useState<LeagueLiveRoundPlan | null>(null);
   const [movementPlanStale, setMovementPlanStale] = useState(false);
@@ -665,6 +697,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setScores(stored.scores as Record<string, ScoreDraft>);
       setScoreReviewMode(stored.scoreReviewMode === true);
       setScoresReviewed(stored.scoresReviewed === true);
+      setUnusualScoresAcknowledged(stored.unusualScoresAcknowledged === true);
       setMovementPlan((stored.movementPlan as LeagueLiveRoundPlan | null | undefined) || null);
       setMovementPlanStale(stored.movementPlanStale === true);
       setMovementOverrides((stored.movementOverrides as Record<number, string> | undefined) || {});
@@ -680,7 +713,6 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setRoundLabel(String(stored.roundLabel || `Round ${targetRound}`));
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(stored.matchDate || ""))) return 1;
       const requestedStep = Number(stored.workflowStep);
-      if (requestedStep === 6 && stored.scoresReviewed && stored.movementPlan && !stored.movementPlanStale) return 6;
       if (requestedStep >= 5 && stored.scoresReviewed) return 5;
       return 4;
     } catch {
@@ -741,10 +773,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         game: gameNumber,
         teamOne: match.t1.map((player) => player.name).join(" / "),
         score: `${score.scoreT1}-${score.scoreT2}`,
-        teamTwo: match.t2.map((player) => player.name).join(" / ")
+        teamTwo: match.t2.map((player) => player.name).join(" / "),
+        unusualReason: unusualScoreReason(score)
       };
     });
   });
+  const unusualScoreRows = scoreReviewRows.filter((row) => row.unusualReason);
   const sessionIsCurrentLeague = Boolean(
     loadedSessionId
     && loadedSessionId === sessionId
@@ -757,13 +791,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     (operation) => Number(operation.round_number) === currentRound && operation.status !== "completed"
   ) || null;
   const hasEnteredRoundScores = Object.values(scores).some(scoreHasValue);
-  const hasUnsubmittedRoundWork = Boolean(sessionIsCurrentLeague && preview && (hasEnteredRoundScores || scoresReviewed || movementPlan));
+  const hasUnsubmittedRoundWork = Boolean(!scoresPublished && sessionIsCurrentLeague && preview && (hasEnteredRoundScores || scoresReviewed || movementPlan));
 
   useEffect(() => {
     if (!sessionIsCurrentLeague || !loadedSessionId || !sessionUpdatedAt) return;
     const key = `jupr-league-live-round-draft:${clubId}:${loadedSessionId}:${currentRound}`;
     try {
-      if (roundPublished) {
+      if (roundPublished || scoresPublished) {
         globalThis.sessionStorage?.removeItem(key);
         return;
       }
@@ -785,6 +819,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         scores,
         scoreReviewMode,
         scoresReviewed,
+        unusualScoresAcknowledged,
         movementPlan,
         movementPlanStale,
         movementOverrides,
@@ -800,7 +835,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     } catch {
       // The in-memory workflow remains usable when browser storage is unavailable.
     }
-  }, [benchOverrideIds, benchOverrideReason, clubId, courts, currentRound, guestPlayers, incomingPlayerId, loadedSessionId, matchDate, movementOverrides, movementPlan, movementPlanStale, overrideReason, preview, replacedPlayerId, rosterAction, roundLabel, roundPublished, scoreReviewMode, scores, scoresReviewed, sessionIsCurrentLeague, sessionUpdatedAt, weekTag, workflowStep]);
+  }, [benchOverrideIds, benchOverrideReason, clubId, courts, currentRound, guestPlayers, incomingPlayerId, loadedSessionId, matchDate, movementOverrides, movementPlan, movementPlanStale, overrideReason, preview, replacedPlayerId, rosterAction, roundLabel, roundPublished, scoreReviewMode, scores, scoresPublished, scoresReviewed, sessionIsCurrentLeague, sessionUpdatedAt, unusualScoresAcknowledged, weekTag, workflowStep]);
 
   useEffect(() => {
     if (!hasUnsubmittedRoundWork) return;
@@ -845,8 +880,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     rounds: LeagueLiveRound[] = [],
     operations: LeagueLivePublishOperation[] = [],
     leagueDetail: AdminLeagueManagerDetailResponse | null = null
-  ): number | null {
-    const publishedRoundNumber = persistedPublishedRoundNumber(sessionRow, rounds, operations);
+  ): { movementAppliedRoundNumber: number | null; scorePublishedRoundNumber: number | null } {
+    const movementAppliedRoundNumber = persistedPublishedRoundNumber(sessionRow, rounds, operations);
+    const scorePublishedRoundNumber = persistedScorePublishedRoundNumber(sessionRow, rounds, operations);
+    const currentSubmittedRound = rounds.find((round) => (
+      Number(round.round_number) === Number(sessionRow.current_round || 1) && round.status === "submitted"
+    ));
     setSessionId(sessionRow.id);
     setLoadedSessionId(sessionRow.id);
     setSessionLeagueName(sessionRow.league_name);
@@ -877,14 +916,17 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setScores({});
     setScoreReviewMode(false);
     setScoresReviewed(false);
+    setUnusualScoresAcknowledged(false);
+    setScoresPublished(scorePublishedRoundNumber != null);
+    setOfficialRoundMatches(scorePublishedRoundNumber != null ? (currentSubmittedRound?.matches_json || []) : []);
     setMovementPlan(null);
     setMovementPlanStale(false);
     setMovementOverrides({});
     setRatingReview(null);
     setBenchOverrideIds(((sessionRow.roster_json || []) as LeagueLiveRosterRow[]).filter((row) => row.status === "bench").map((row) => Number(row.player_id)));
-    setRoundPublished(publishedRoundNumber != null);
-    setLastPublishedRound(publishedRoundNumber);
-    return publishedRoundNumber;
+    setRoundPublished(movementAppliedRoundNumber != null);
+    setLastPublishedRound(movementAppliedRoundNumber);
+    return { movementAppliedRoundNumber, scorePublishedRoundNumber };
   }
 
   function clearRoundDerivedState() {
@@ -905,6 +947,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setScores({});
     setScoreReviewMode(false);
     setScoresReviewed(false);
+    setUnusualScoresAcknowledged(false);
+    setScoresPublished(false);
+    setOfficialRoundMatches([]);
     setMovementPlan(null);
     setMovementPlanStale(false);
     setMovementOverrides({});
@@ -973,9 +1018,21 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   function invalidateScoreReview() {
     setScoreReviewMode(false);
     setScoresReviewed(false);
+    setUnusualScoresAcknowledged(false);
     setMovementPlan(null);
     setMovementPlanStale(false);
     setMovementOverrides({});
+  }
+
+  function updateScore(key: string, side: keyof ScoreDraft, value: string) {
+    setScores((current) => ({
+      ...current,
+      [key]: { ...(current[key] || { scoreT1: "", scoreT2: "" }), [side]: value }
+    }));
+    setUnusualScoresAcknowledged(false);
+    setScoresReviewed(false);
+    setScoreReviewMode(false);
+    setMovementPlan(null);
   }
 
   function invalidateRoundDraft(message: string) {
@@ -983,6 +1040,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setScores({});
     invalidateScoreReview();
     setRoundPublished(false);
+    setScoresPublished(false);
+    setOfficialRoundMatches([]);
     setLastPublishedRound(null);
     createSessionOperationRef.current = null;
     setWorkflowStep(1);
@@ -1006,6 +1065,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setScores({});
     setScoreReviewMode(false);
     setScoresReviewed(false);
+    setUnusualScoresAcknowledged(false);
     setMovementPlan(null);
     setMovementPlanStale(false);
     setMovementOverrides({});
@@ -1675,18 +1735,31 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       const leagueDetail = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(payload.session.league_name)}`);
       if (!sessionDetailRequest.isCurrent(generation)) return;
       const loadedMatchStructure = matchStructureFromDetail(leagueDetail);
-      const publishedRoundNumber = applySession(payload.session, payload.courts || [], payload.rounds || [], payload.publish_operations || [], leagueDetail);
-      const restoredDraftStep = publishedRoundNumber == null ? restoreStoredRoundDraft(payload.session, payload.courts || []) : null;
+      const { movementAppliedRoundNumber, scorePublishedRoundNumber } = applySession(payload.session, payload.courts || [], payload.rounds || [], payload.publish_operations || [], leagueDetail);
+      const restoredDraftStep = scorePublishedRoundNumber == null ? restoreStoredRoundDraft(payload.session, payload.courts || []) : null;
       const sessionCurrentRound = Number(payload.session.current_round || 1);
+      const currentSubmittedRound = (payload.rounds || []).find((round) => (
+        Number(round.round_number) === sessionCurrentRound && round.status === "submitted"
+      ));
       const previousRoundWasPublished = sessionCurrentRound > 1 && (payload.rounds || []).some((round) => (
         Number(round.round_number) === sessionCurrentRound - 1 && round.status === "submitted"
       ));
-      if (publishedRoundNumber != null) {
+      if (movementAppliedRoundNumber != null) {
         setMatchDate("");
         setWorkflowStep(6);
         setMessage(payload.session.status === "complete"
           ? "Completed League Live session loaded."
-          : `Round ${publishedRoundNumber} is already published. Start the next round or finish this session.`);
+          : `Round ${movementAppliedRoundNumber} scores and movement are complete. Start the next round or finish this session.`);
+      } else if (scorePublishedRoundNumber != null && currentSubmittedRound) {
+        const storedPreview = asRecord(currentSubmittedRound.preview_json);
+        setPreview(Object.keys(storedPreview).length ? storedPreview as AdminMatchUploaderRoundRobinPreview : null);
+        setOfficialRoundMatches(currentSubmittedRound.matches_json || []);
+        setMatchDate(normalizedMatchDate(currentSubmittedRound.match_date));
+        setRoundLabel(String(currentSubmittedRound.round_label || `Round ${scorePublishedRoundNumber}`));
+        setScoresReviewed(true);
+        setScoreReviewMode(false);
+        setWorkflowStep(5);
+        setMessage(`Round ${scorePublishedRoundNumber} scores are official. Preview and approve movement for the next round.`);
       } else if (restoredDraftStep != null) {
         setWorkflowStep(payload.session.status === "active" ? restoredDraftStep : 1);
         setMessage(payload.session.status === "active"
@@ -1881,31 +1954,39 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       return;
     }
     setScoresReviewed(false);
+    setUnusualScoresAcknowledged(false);
     setScoreReviewMode(true);
     setMessage("Nothing is official yet. Verify every team and score below.");
   }
 
-  function confirmScoresAndContinue() {
+  async function publishScoresAndContinue(confirmationText: string): Promise<ActionCompletion> {
     if (!allSeriesComplete || !scoreReviewMode) {
       setMessage("Open the score review and verify every matchup before continuing.");
-      return;
+      throw new Error("Open the score review and verify every matchup before continuing.");
+    }
+    if (unusualScoreRows.length && !unusualScoresAcknowledged) {
+      setMessage("Review and acknowledge every unusual score before publishing.");
+      throw new Error("Review and acknowledge every unusual score before publishing.");
     }
     setScoresReviewed(true);
-    setScoreReviewMode(false);
-    setWorkflowStep(5);
-    setMessage("Scores reviewed. Preview the authoritative movement plan; any score edit will require another review.");
+    return submitRound(confirmationText);
   }
 
   function editReviewedScores() {
+    if (scoresPublished) {
+      setMessage("These scores are already official. Use Match Log recovery instead of editing the completed publish.");
+      return;
+    }
     setScoreReviewMode(false);
     setScoresReviewed(false);
+    setUnusualScoresAcknowledged(false);
     setWorkflowStep(4);
     setMessage("Score review cleared. Edit the scores, then review them again.");
   }
 
   async function startNextRound() {
     if (!roundPublished || lastPublishedRound == null) {
-      setMessage("Publish the current round before starting the next round workflow.");
+      setMessage("Complete the current round scores and movement before starting the next round workflow.");
       return;
     }
     if (!sessionIsCurrentLeague || sessionStatus !== "active") {
@@ -1939,12 +2020,15 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         return;
       }
       setRoundPublished(false);
+      setScoresPublished(false);
+      setOfficialRoundMatches([]);
       setLastPublishedRound(null);
       setRoundNumber(String(nextRound));
       setRoundLabel(`Round ${nextRound}`);
       setMatchDate(inheritedMatchDate);
       setScoreReviewMode(false);
       setScoresReviewed(false);
+      setUnusualScoresAcknowledged(false);
       setPreview(payload);
       setScores(emptyScoresForPreview(payload, matchStructure));
       setMovementPlan(null);
@@ -2144,13 +2228,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       return;
     }
     if (!requireCurrentSession("previewing next-round movement")) return;
-    if (!scoresReviewed) {
-      setMessage("Review and confirm the entered scores before previewing movement.");
+    if (!scoresPublished) {
+      setMessage("Publish the reviewed scores before previewing movement.");
       return;
     }
-    const matches = buildScoredMatches();
-    if (!allSeriesComplete || !matches.length) {
-      setMessage(`Complete every ${matchStructureLabel(matchStructure)} matchup before previewing next-round movement (${completeSeriesCount} of ${allPreviewMatches.length} complete).`);
+    const matches = officialRoundMatches;
+    if (!matches.length) {
+      setMessage("Reload the official round scores before previewing next-round movement.");
       return;
     }
     const generation = actionRequest.begin();
@@ -2196,8 +2280,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setMessage(error.message);
       throw error;
     }
-    if (!scoresReviewed) {
-      const error = new Error("Review and confirm every entered score before publishing the round.");
+    if (!scoreReviewMode) {
+      const error = new Error("Open the score review before publishing the round.");
       setMessage(error.message);
       throw error;
     }
@@ -2207,19 +2291,18 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setMessage(error.message);
       throw error;
     }
-    if (!movementPlan || movementPlanStale) {
-      const error = new Error("Preview the current movement plan before submitting. Any score, roster, bench, or override change makes the previous plan stale.");
+    if (unusualScoreRows.length && !unusualScoresAcknowledged) {
+      const error = new Error("Review and acknowledge every unusual score before publishing.");
       setMessage(error.message);
       throw error;
     }
     const publishedRoundNumber = currentRound;
     const generation = actionRequest.begin();
     const requestedSessionId = loadedSessionId;
-    const roundOperationKey = movementPlan.operation_key;
+    const idempotencyKey = `league-live-score:${requestedSessionId}:${publishedRoundNumber}`;
     setBusy(true);
     setMessage(null);
     try {
-      const plannedMovement = movementPlan.movement;
       const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/rounds/${encodeURIComponent(String(currentRound))}/submit`, {
         method: "POST",
         body: JSON.stringify({
@@ -2228,46 +2311,35 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
           preview: preview || {},
           matches,
           expected_match_count: matches.length,
-          movement_overrides: movementOverridePayload(),
-          override_reason: overrideReason || null,
-          roster_change: rosterChangePayload(),
-          bench_player_ids: benchOverrideIds,
-          bench_override_reason: benchOverrideReason || null,
           expected_updated_at: sessionUpdatedAt,
-          expected_operation_key: roundOperationKey,
-          idempotency_key: roundOperationKey,
+          idempotency_key: idempotencyKey,
+          unusual_score_acknowledgement: unusualScoresAcknowledged,
           courts: courtsToPayload(courts, currentRound),
           confirmation_text: confirmationText,
           source: "next_league_live_round_submit"
         })
       });
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the submitted round response was applied.");
-      if (payload.session) {
-        applySession(payload.session, payload.courts || [], payload.rounds || [...roundHistory, ...(payload.round ? [payload.round] : [])], publishOperations, detail);
-        setRoundNumber(String(payload.session.current_round || currentRound));
-        setRoundLabel(`Round ${payload.session.current_round || currentRound}`);
-      }
-      setPreview(null);
-      setScores({});
       if (requestedSessionId) {
         await loadSessionDetail(requestedSessionId, false);
         if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the published round could be refreshed.");
       }
       setRatingReview(payload.rating_review || null);
-      const movementText = plannedMovement?.applied ? ` Applied ${plannedMovement.rows.filter((row) => row.direction !== "stay").length} court movement(s) for the next round.` : " No court movement was required.";
-      const successMessage = `${payload.idempotent_replay ? "Reconciled" : "Published"} ${payload.published_match_ids?.length ?? matches.length} league match(es) through one durable publish operation.${movementText}`;
+      const successMessage = `${payload.idempotent_replay ? "Reconciled" : "Published"} ${payload.published_match_ids?.length ?? matches.length} official league match(es). Preview and approve movement next.`;
       clearStoredRoundDraft(requestedSessionId, publishedRoundNumber);
-      setLastPublishedRound(publishedRoundNumber);
-      setRoundPublished(true);
-      setWorkflowStep(6);
+      setScoresPublished(true);
+      setScoresReviewed(true);
+      setScoreReviewMode(false);
+      setRoundPublished(false);
+      setWorkflowStep(5);
       setMessage(successMessage);
-      return actionSuccess(payload.idempotent_replay ? "League round reconciled" : "League round published", successMessage);
+      return actionSuccess(payload.idempotent_replay ? "Round scores reconciled" : "Round scores published", successMessage);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to submit league round.");
       if (leagueLiveWriteIsUncertain(error)) {
         const operationReference = error instanceof LeagueLiveRequestError && error.operationKey
           ? error.operationKey
-          : roundOperationKey;
+          : idempotencyKey;
         const failureDetail = error instanceof Error
           ? error.message
           : "The first request did not finish cleanly.";
@@ -2285,14 +2357,63 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     }
   }
 
-  async function publishRoundAndStay(confirmationText: string): Promise<ActionCompletion> {
-    const publishedRoundNumber = currentRound;
-    const completion = await submitRound(confirmationText);
-    if (completion.status !== "success") return completion;
-    setLastPublishedRound(publishedRoundNumber);
-    setRoundPublished(true);
-    setWorkflowStep(6);
-    return completion;
+  async function applyMovement(confirmationText: string): Promise<ActionCompletion> {
+    if (!requireCurrentSession("applying next-round movement")) throw new Error("Resume the current persisted session before applying movement.");
+    if (!scoresPublished || !movementPlan || movementPlanStale) {
+      throw new Error("Preview the current movement plan before applying it.");
+    }
+    const appliedRoundNumber = currentRound;
+    const generation = actionRequest.begin();
+    const requestedSessionId = loadedSessionId;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/rounds/${encodeURIComponent(String(appliedRoundNumber))}/movement`, {
+        method: "POST",
+        body: JSON.stringify({
+          expected_updated_at: sessionUpdatedAt,
+          expected_operation_key: movementPlan.operation_key,
+          courts: courtsToPayload(courts, appliedRoundNumber),
+          movement_overrides: movementOverridePayload(),
+          override_reason: overrideReason || null,
+          roster_change: rosterChangePayload(),
+          bench_player_ids: benchOverrideIds,
+          bench_override_reason: benchOverrideReason || null,
+          confirmation_text: confirmationText,
+          source: "next_league_live_round_movement"
+        })
+      });
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before movement was applied.");
+      const updatedRounds = [
+        ...roundHistory.filter((round) => Number(round.round_number) !== appliedRoundNumber),
+        ...(payload.round ? [payload.round] : [])
+      ].sort((a, b) => Number(a.round_number) - Number(b.round_number));
+      applySession(payload.session, payload.courts || [], updatedRounds, publishOperations, detail);
+      setScoresPublished(true);
+      setRoundPublished(true);
+      setLastPublishedRound(appliedRoundNumber);
+      setMovementPlan(payload.movement ? { ...movementPlan, movement: payload.movement } : movementPlan);
+      setMovementPlanStale(false);
+      setWorkflowStep(6);
+      const moved = (payload.movement?.rows || movementPlan.movement.rows).filter((row) => row.direction !== "stay").length;
+      const successMessage = `Applied the reviewed movement for Round ${appliedRoundNumber}${moved ? ` (${moved} player move${moved === 1 ? "" : "s"})` : ""}.`;
+      setMessage(successMessage);
+      return actionSuccess("Movement applied", successMessage);
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to apply movement.");
+      if (leagueLiveWriteIsUncertain(error)) {
+        return actionUncertain(
+          "Movement outcome needs verification",
+          "Reload or retry this exact movement plan. The plan key prevents a different movement from being applied to the round.",
+          movementPlan.operation_key,
+          "Retry exact movement",
+          () => applyMovement(confirmationText)
+        );
+      }
+      throw error;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
   }
 
   async function createGuest(confirmationText: string): Promise<ActionCompletion> {
@@ -2357,11 +2478,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       await loadSessionDetail(requestedSessionId, false);
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the reconciled round could be refreshed.");
       setRatingReview(payload.rating_review || null);
-      setLastPublishedRound(round);
-      setRoundPublished(true);
-      setWorkflowStep(6);
-      setMessage(`Round ${round} publish and League Live snapshot are reconciled. No match was republished.`);
-      return actionSuccess("League round reconciled", `Round ${round} and its League Live snapshot were reconciled without republishing a match.`);
+      setMessage(`Round ${round} official scores and League Live snapshot are reconciled. Complete movement if it is still pending; no match was republished.`);
+      return actionSuccess("League round reconciled", `Round ${round} official scores and its League Live snapshot were reconciled without republishing a match.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to reconcile League Live round.");
       throw error;
@@ -2387,11 +2505,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the recovered round could be refreshed.");
       setRatingReview(payload.rating_review || null);
       clearStoredRoundDraft(requestedSessionId, round);
-      setLastPublishedRound(round);
-      setRoundPublished(true);
-      setWorkflowStep(6);
       const matchCount = payload.published_match_ids?.length || 0;
-      const successMessage = `Retried the retained Round ${round} publish with its original key and verified ${matchCount} official match${matchCount === 1 ? "" : "es"}.`;
+      const successMessage = `Retried the retained Round ${round} score publish with its original key and verified ${matchCount} official match${matchCount === 1 ? "" : "es"}. Complete movement if it is still pending.`;
       setMessage(successMessage);
       return actionSuccess("League round publish recovered", successMessage);
     } catch (error) {
@@ -2475,26 +2590,26 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const setupReady = Boolean(detail && loadedLeagueName === leagueName && roundContextValid && matchDateValid && persistedSessionPlayable);
   const playersReady = setupReady && attendeePlayerIds.length >= 4 && pasteResolutionCurrent && !pasteDuplicateNames.length && !unresolvedPastedPlayers && !playerCreateRecovery && Boolean(rosterSuggestion || (sessionIsCurrentLeague && sessionRoster.length >= 4));
   const courtsReady = playersReady && Boolean(preview?.courts?.length) && sessionIsCurrentLeague;
-  const scoreEntryReady = courtsReady && scoresReviewed;
-  const movementReady = scoreEntryReady && Boolean(movementPlan) && !movementPlanStale;
   const maxReachableStep: WorkflowStep = roundPublished
     ? 6
-    : movementReady
-      ? 6
-      : scoreEntryReady
-        ? 5
-        : courtsReady
-          ? 4
-          : playersReady
-            ? 3
-            : setupReady
-              ? 2
-              : 1;
+    : scoresPublished
+      ? 5
+      : courtsReady
+        ? 4
+        : playersReady
+          ? 3
+          : setupReady
+            ? 2
+            : 1;
 
   function navigateWorkflow(step: WorkflowStep) {
+    if (scoresPublished && !roundPublished && step >= 2 && step <= 4) {
+      setMessage("These scores are already official. Complete Movement before opening the next round.");
+      return;
+    }
     if (step >= 2 && step <= 5 && sessionIsCurrentLeague && (sessionStatus !== "active" || roundPublished)) {
       setMessage(roundPublished
-        ? "This round is already published. Use Repeat or Finish to start the next round or close the session."
+        ? "This round is complete. Use Repeat or Finish to start the next round or close the session."
         : `This session is ${sessionStatus.replace(/_/g, " ")}. Resume it from Setup before editing players, courts, or scores.`);
       return;
     }
@@ -2541,7 +2656,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       <nav aria-label="League Live workflow" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 150px), 1fr))", gap: "0.5rem" }}>
         {WORKFLOW_STEPS.map((step) => {
           const active = workflowStep === step.id;
-          const sessionLocksEditing = step.id >= 2 && step.id <= 5 && sessionIsCurrentLeague && (sessionStatus !== "active" || roundPublished);
+          const sessionLocksEditing = sessionIsCurrentLeague && (
+            (step.id >= 2 && step.id <= 5 && (sessionStatus !== "active" || roundPublished))
+            || (scoresPublished && !roundPublished && step.id >= 2 && step.id <= 4)
+          );
           const available = step.id <= maxReachableStep && !sessionLocksEditing;
           return (
             <button
@@ -2769,7 +2887,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       {workflowStep === 4 ? (
         <article style={cardStyle} aria-labelledby="league-live-scores-heading">
           <h2 id="league-live-scores-heading" style={{ marginTop: 0 }}>4. Score Entry with Review</h2>
-          <p style={{ color: "#475569" }}><strong>Configured format: {matchStructureLabel(matchStructure)}.</strong> League Live publishes the whole round only after every matchup is complete, the exact teams and scores are reviewed, and movement is approved.</p>
+          <p style={{ color: "#475569" }}><strong>Configured format: {matchStructureLabel(matchStructure)}.</strong> Review and publish every score first. Movement is previewed and approved afterward.</p>
           {!scoreReviewMode ? (
             <>
               <div style={{ display: "grid", gap: "0.75rem" }}>
@@ -2786,14 +2904,15 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
                               const gameNumber = gameIndex + 1;
                               const key = scoreKey(match.row_id, gameNumber);
                               const score = scores[key] || { scoreT1: "", scoreT2: "" };
+                              const unusualReason = unusualScoreReason(score);
                               const afterClinch = state.clinchedAt != null && gameNumber > state.clinchedAt;
                               const canClearUnexpectedScore = afterClinch && scoreHasValue(score);
                               return (
                                 <div key={key} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 140px), 1fr))", gap: "0.6rem", alignItems: "center" }}>
                                   <strong>Game {gameNumber}</strong>
-                                  <input aria-label={`${match.label} Game ${gameNumber} Team 1 score`} value={score.scoreT1} onChange={(event) => { setScores((current) => ({ ...current, [key]: { ...(current[key] || { scoreT1: "", scoreT2: "" }), scoreT1: event.target.value } })); setScoresReviewed(false); setScoreReviewMode(false); setMovementPlan(null); }} disabled={busy || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 1" style={inputStyle} />
-                                  <input aria-label={`${match.label} Game ${gameNumber} Team 2 score`} value={score.scoreT2} onChange={(event) => { setScores((current) => ({ ...current, [key]: { ...(current[key] || { scoreT1: "", scoreT2: "" }), scoreT2: event.target.value } })); setScoresReviewed(false); setScoreReviewMode(false); setMovementPlan(null); }} disabled={busy || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 2" style={inputStyle} />
-                                  <small style={{ color: afterClinch ? "#64748b" : scoreIsValid(score) ? "#166534" : "#64748b" }}>{afterClinch && !canClearUnexpectedScore ? "Not played — series already clinched" : scoreIsValid(score) ? "Complete" : "Enter a non-tied final score"}</small>
+                                  <input aria-label={`${match.label} Game ${gameNumber} Team 1 score`} value={score.scoreT1} onChange={(event) => updateScore(key, "scoreT1", event.target.value)} disabled={busy || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 1" style={{ ...inputStyle, borderColor: unusualReason ? "#f59e0b" : "#cbd5e1" }} />
+                                  <input aria-label={`${match.label} Game ${gameNumber} Team 2 score`} value={score.scoreT2} onChange={(event) => updateScore(key, "scoreT2", event.target.value)} disabled={busy || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 2" style={{ ...inputStyle, borderColor: unusualReason ? "#f59e0b" : "#cbd5e1" }} />
+                                  <small role={unusualReason ? "alert" : undefined} style={{ color: unusualReason ? "#b45309" : afterClinch ? "#64748b" : scoreIsValid(score) ? "#166534" : "#64748b", fontWeight: unusualReason ? 700 : 400 }}>{afterClinch && !canClearUnexpectedScore ? "Not played — series already clinched" : unusualReason ? `Unusual score — verify before publish. ${unusualReason}` : scoreIsValid(score) ? "Complete" : "Enter a non-tied final score"}</small>
                                 </div>
                               );
                             })}
@@ -2816,11 +2935,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               <h3 style={{ marginTop: 0 }}>Review entered scores</h3>
               <p style={{ color: "#92400e" }}><strong>Nothing has been submitted.</strong> Verify court, teams, and score for every game.</p>
               <p><strong>{roundLabel || `Round ${currentRound}`}</strong> · {weekTag || "No week label"} · {matchDate}</p>
-              <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Court</th><th align="left">Team 1</th><th align="center">Score</th><th align="left">Team 2</th></tr></thead><tbody>{scoreReviewRows.map((row) => <tr key={row.key}><td>{row.court}</td><td>{row.teamOne}</td><td align="center"><strong>{row.score}</strong></td><td>{row.teamTwo}</td></tr>)}</tbody></table></div>
-              <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between" }}>
+              <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Court</th><th align="left">Team 1</th><th align="center">Score</th><th align="left">Team 2</th></tr></thead><tbody>{scoreReviewRows.map((row) => <tr key={row.key} style={{ background: row.unusualReason ? "#fef3c7" : undefined }}><td>{row.court}</td><td>{row.teamOne}</td><td align="center"><strong>{row.score}{row.unusualReason ? " ⚠" : ""}</strong></td><td>{row.teamTwo}</td></tr>)}</tbody></table></div>
+              {unusualScoreRows.length ? <section role="alert" style={{ marginTop: "0.75rem", padding: "0.75rem", border: "1px solid #f59e0b", borderRadius: "10px", background: "#fff7ed", color: "#9a3412" }}><strong>Unusual score{unusualScoreRows.length === 1 ? " requires" : "s require"} review.</strong><ul>{unusualScoreRows.map((row) => <li key={`unusual-${row.key}`}>Court {row.court}: {row.score}. {row.unusualReason}</li>)}</ul><label><input type="checkbox" checked={unusualScoresAcknowledged} onChange={(event) => setUnusualScoresAcknowledged(event.target.checked)} disabled={busy} /> I verified {unusualScoreRows.length === 1 ? "this score is" : "these scores are"} correct.</label></section> : null}
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between", marginTop: "0.75rem" }}>
                 <button type="button" onClick={editReviewedScores} disabled={busy} style={ghostButtonStyle}>Edit scores</button>
-                <button type="button" onClick={confirmScoresAndContinue} disabled={busy || !allSeriesComplete || !scoreReviewMode} style={buttonStyle}>Confirm scores and continue</button>
-              </p>
+                <ConfirmAction triggerLabel="Publish reviewed scores" title={`Publish Round ${currentRound} scores?`} description="This makes every reviewed result official. You will preview and approve movement next." confirmLabel="Yes, publish scores" confirmationText="SUBMIT LEAGUE ROUND" tone="danger" disabled={busy || !allSeriesComplete || !scoreReviewMode || (unusualScoreRows.length > 0 && !unusualScoresAcknowledged) || !liveDomainStatus.submit_enabled || !sessionIsCurrentLeague || sessionStatus !== "active"} busy={busy} onConfirm={publishScoresAndContinue} />
+              </div>
             </section>
           )}
         </article>
@@ -2829,7 +2949,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       {workflowStep === 5 ? (
         <article style={cardStyle} aria-labelledby="league-live-movement-heading">
           <h2 id="league-live-movement-heading" style={{ marginTop: 0 }}>5. Movement</h2>
-          <p style={{ color: "#475569" }}>Scores are reviewed but not official. Configure any between-round roster change, then preview the server-authoritative movement plan. League Live calculates the plan; this page only displays it.</p>
+          <p style={{ color: "#166534" }}><strong>The round scores are official.</strong> Configure any between-round roster change, then preview and apply the server-authoritative movement plan. Applying movement never republishes scores.</p>
           <section style={{ padding: "0.75rem", border: "1px solid #e2e8f0", borderRadius: "12px", marginBottom: "0.75rem" }}>
             <h3 style={{ marginTop: 0 }}>Next-round player change</h3>
             <p style={{ color: "#475569" }}>A late arrival appends to the live order. A substitution replaces the selected ordered player. Completed rounds never change.</p>
@@ -2875,13 +2995,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               <label style={{ display: "block", marginTop: "0.75rem" }}>Manual movement override reason<br /><input value={overrideReason} onChange={(event) => { setOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="At least 10 characters when changing a planned target" style={inputStyle} /></label>
             </section>
           ) : null}
-          <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between" }}>
-            <button type="button" onClick={editReviewedScores} disabled={busy} style={ghostButtonStyle}>Back to score entry</button>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "flex-end", marginTop: "0.75rem" }}>
             <span style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              <button type="button" onClick={() => void previewPythonMovement()} disabled={busy || !scoresReviewed || !allSeriesComplete || !sessionIsCurrentLeague || !roundContextValid || !matchDateValid || sessionStatus !== "active"} style={ghostButtonStyle}>{busy ? "Planning…" : "Preview movement"}</button>
-              <button type="button" onClick={() => setWorkflowStep(6)} disabled={busy || !scoresReviewed || !movementPlan || movementPlanStale} style={buttonStyle}>Continue to Repeat or Finish</button>
+              <button type="button" onClick={() => void previewPythonMovement()} disabled={busy || !scoresPublished || !sessionIsCurrentLeague || !roundContextValid || !matchDateValid || sessionStatus !== "active"} style={ghostButtonStyle}>{busy ? "Planning…" : "Preview movement"}</button>
+              <ConfirmAction triggerLabel="Apply movement and continue" title={`Apply Round ${currentRound} movement?`} description="This saves the reviewed next-round roster and courts. Official scores are not republished." confirmLabel="Yes, apply movement" confirmationText="APPLY LEAGUE MOVEMENT" disabled={busy || !scoresPublished || !movementPlan || movementPlanStale || !sessionIsCurrentLeague || sessionStatus !== "active"} busy={busy} onConfirm={applyMovement} />
             </span>
-          </p>
+          </div>
         </article>
       ) : null}
 
@@ -2890,27 +3009,20 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
           <h2 id="league-live-finish-heading" style={{ marginTop: 0 }}>6. Repeat or Finish</h2>
           {!roundPublished ? (
             <>
-              <p style={{ color: "#475569" }}>Final check for {roundLabel || `Round ${currentRound}`} · {weekTag || "No week label"} · {matchDate}: {scoreReviewRows.length} reviewed official game result{scoreReviewRows.length === 1 ? "" : "s"}; {movementPlan?.movement.rows.filter((row) => row.direction !== "stay").length || 0} planned court movement{(movementPlan?.movement.rows.filter((row) => row.direction !== "stay").length || 0) === 1 ? "" : "s"}.</p>
+              <p style={{ color: "#92400e" }}><strong>Movement is not applied yet.</strong> Return to Movement, preview the current authoritative plan, and apply it before repeating or finishing.</p>
               <section style={{ padding: "0.75rem", border: "1px solid #e2e8f0", borderRadius: "12px" }}>
                 <h3 style={{ marginTop: 0 }}>Reviewed round</h3>
                 <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Court</th><th align="left">Team 1</th><th align="center">Score</th><th align="left">Team 2</th></tr></thead><tbody>{scoreReviewRows.map((row) => <tr key={row.key}><td>{row.court}</td><td>{row.teamOne}</td><td align="center"><strong>{row.score}</strong></td><td>{row.teamTwo}</td></tr>)}</tbody></table></div>
               </section>
               {movementPlan ? <section style={{ marginTop: "0.75rem", padding: "0.75rem", border: "1px solid #86efac", borderRadius: "12px", background: "#f0fdf4" }}><h3 style={{ marginTop: 0 }}>Approved next-round roster and courts</h3><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "0.75rem" }}>{movementPlan.next_courts.map((court) => <div key={court.court_number}><strong>Court {court.court_number}</strong><ol>{court.player_names.map((playerName, index) => <li key={`${court.court_number}-${index}-${playerName}`}>{playerName}</li>)}</ol></div>)}</div><p><strong>Bench:</strong> {movementPlan.bench.length ? movementPlan.bench.map((player) => player.player_name).join(", ") : "None"}.</p></section> : null}
-              <p style={{ color: "#92400e" }}>Publishing writes every reviewed score as official, recalculates ratings, saves movement and the next roster/courts, and advances the persisted session in one durable operation.</p>
+              <p style={{ color: "#166534" }}>The scores shown above are already official. This step never republishes them.</p>
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between" }}>
                 <button type="button" onClick={() => setWorkflowStep(5)} disabled={busy} style={ghostButtonStyle}>Back to Movement</button>
-                {blockingCurrentRoundPublishOperation ? (
-                  <p role="alert" style={{ margin: 0, maxWidth: "44rem", color: "#9a3412", fontWeight: 700 }}>
-                    Round {currentRound} already has a durable {blockingCurrentRoundPublishOperation.status.replace(/_/g, " ")} publish. Use its Retry or Reconcile action in Publish recovery below; a new publish is intentionally blocked.
-                  </p>
-                ) : (
-                  <ConfirmAction triggerLabel="Publish reviewed round" title={`Publish Round ${currentRound}?`} description="This makes every reviewed result official and applies the approved next-round movement." confirmLabel="Yes, publish the round" confirmationText="SUBMIT LEAGUE ROUND" tone="danger" disabled={busy || !scoresReviewed || !liveDomainStatus.submit_enabled || !allSeriesComplete || !sessionIsCurrentLeague || !movementPlan || movementPlanStale || !roundContextValid || !matchDateValid || sessionStatus !== "active"} busy={busy} onConfirm={publishRoundAndStay} />
-                )}
               </div>
             </>
           ) : (
             <section style={{ padding: "1rem", border: "1px solid #86efac", borderRadius: "12px", background: "#f0fdf4" }}>
-              <h3 style={{ marginTop: 0 }}>{sessionStatus === "complete" ? "Session complete" : `Round ${lastPublishedRound ?? currentRound} published`}</h3>
+              <h3 style={{ marginTop: 0 }}>{sessionStatus === "complete" ? "Session complete" : `Round ${lastPublishedRound ?? currentRound} complete`}</h3>
               {sessionStatus === "complete" ? (
                 <p>The session is closed. Round history, rating readback, recovery controls, and exports remain available below.</p>
               ) : (

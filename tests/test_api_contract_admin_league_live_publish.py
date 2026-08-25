@@ -176,6 +176,115 @@ def test_all_match_publish_is_one_idempotent_python_operation(monkeypatch) -> No
     assert "league_live_session" in exported.json()["csv_text"]
 
 
+def test_scores_publish_before_operator_previews_and_applies_movement(monkeypatch) -> None:
+    tables = _tables()
+    supabase = FakeSupabase(tables)
+    _install_submit_env(monkeypatch, supabase)
+    calls: list[int] = []
+    monkeypatch.setattr(
+        "jupr_app.services.admin_league_live_submit_service.submit_admin_match_uploader_batch",
+        _publisher(tables, calls=calls),
+    )
+    client = TestClient(app)
+    session = _create(client).json()["session"]
+    request = _request(session, "a" * 64)
+    request.pop("expected_operation_key")
+
+    published = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/submit",
+        headers={"Authorization": "Bearer local"},
+        json=request,
+    )
+
+    assert published.status_code == 200, published.text
+    published_payload = published.json()
+    assert published_payload["session"]["current_round"] == 1
+    assert published_payload["round"]["status"] == "submitted"
+    assert published_payload["round"]["movement_json"] == {}
+    assert published_payload["round"]["operation_key"] == ""
+    assert calls == [1]
+
+    movement_plan = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/plan",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "expected_updated_at": published_payload["session"]["updated_at"],
+            "matches": published_payload["round"]["matches_json"],
+            "courts": COURTS,
+        },
+    )
+    assert movement_plan.status_code == 200, movement_plan.text
+
+    movement_request = {
+        "expected_updated_at": published_payload["session"]["updated_at"],
+        "expected_operation_key": movement_plan.json()["operation_key"],
+        "courts": COURTS,
+        "confirmation_text": "APPLY LEAGUE MOVEMENT",
+    }
+    applied = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/movement",
+        headers={"Authorization": "Bearer local"},
+        json=movement_request,
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["session"]["current_round"] == 2
+    assert applied.json()["round"]["operation_key"] == movement_plan.json()["operation_key"]
+    assert applied.json()["round"]["movement_json"]["operation_key"] == movement_plan.json()["operation_key"]
+    assert len(tables["matches"]) == 1
+    assert calls == [1]
+
+    replayed = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/movement",
+        headers={"Authorization": "Bearer local"},
+        json=movement_request,
+    )
+    assert replayed.status_code == 200, replayed.text
+    assert replayed.json()["idempotent_replay"] is True
+    assert len(tables["matches"]) == 1
+    assert calls == [1]
+
+    changed_plan = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/movement",
+        headers={"Authorization": "Bearer local"},
+        json={**movement_request, "expected_operation_key": "f" * 64},
+    )
+    assert changed_plan.status_code == 409
+    assert "different applied movement plan" in changed_plan.json()["detail"]
+    assert len(tables["matches"]) == 1
+
+
+def test_unusual_score_publish_requires_explicit_review_acknowledgement(monkeypatch) -> None:
+    tables = _tables()
+    supabase = FakeSupabase(tables)
+    _install_submit_env(monkeypatch, supabase)
+    monkeypatch.setattr(
+        "jupr_app.services.admin_league_live_submit_service.submit_admin_match_uploader_batch",
+        _publisher(tables),
+    )
+    client = TestClient(app)
+    session = _create(client).json()["session"]
+    unusual_matches = [{**MATCHES[0], "score_t1": 11, "score_t2": 76}]
+    request = _request(session, "a" * 64, matches=unusual_matches)
+    request.pop("expected_operation_key")
+
+    blocked = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/submit",
+        headers={"Authorization": "Bearer local"},
+        json=request,
+    )
+    assert blocked.status_code == 400
+    assert "unusual score 11-76" in blocked.json()["detail"]
+    assert not tables["matches"]
+
+    accepted = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/submit",
+        headers={"Authorization": "Bearer local"},
+        json={**request, "unusual_score_acknowledgement": True},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert len(tables["matches"]) == 1
+
+
 def test_fixed_series_publishes_each_played_game_as_an_official_match(monkeypatch) -> None:
     tables = _tables()
     tables["leagues_metadata"] = [
@@ -473,7 +582,8 @@ def test_retained_retry_rebases_metadata_only_session_timestamp_drift(monkeypatc
     assert rebase["original_operation_key"] == original_operation_key
     assert rebase["request_fingerprint"] == original_fingerprint
     assert rebase["effective_operation_key"] == recovered.json()["operation_key"]
-    assert tables["league_live_rounds"][0]["operation_key"] == rebase["effective_operation_key"]
+    assert tables["league_live_rounds"][0]["operation_key"] is None
+    assert tables["league_live_rounds"][0]["movement_json"] == {}
     assert any(
         row["action_type"] == "rebase_league_live_round_publish_retry_admin"
         for row in tables["admin_activity_log"]
@@ -710,10 +820,10 @@ def test_published_matches_reconcile_without_republishing(monkeypatch) -> None:
     )
     import jupr_app.services.admin_league_live_submit_service as submit_service
 
-    original_save = submit_service.save_admin_league_live_round
+    original_save = submit_service.save_admin_league_live_published_scores
     monkeypatch.setattr(
         submit_service,
-        "save_admin_league_live_round",
+        "save_admin_league_live_published_scores",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("snapshot unavailable")),
     )
     client = TestClient(app)
@@ -729,7 +839,7 @@ def test_published_matches_reconcile_without_republishing(monkeypatch) -> None:
     assert tables["league_live_publish_operations"][0]["status"] == "published"
     assert len(tables["matches"]) == 1
 
-    monkeypatch.setattr(submit_service, "save_admin_league_live_round", original_save)
+    monkeypatch.setattr(submit_service, "save_admin_league_live_published_scores", original_save)
     reconciled = client.post(
         f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/reconcile",
         headers={"Authorization": "Bearer local"},

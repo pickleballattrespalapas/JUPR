@@ -396,19 +396,22 @@ async function runWeek(
   }
   await page.getByRole("button", { name: "Review scores", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Review entered scores", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Confirm scores and continue", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "5. Movement", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Preview movement", exact: true }).click();
-  await expect(page.getByText(/Verified operation key/i)).toBeVisible();
-  await page.getByRole("button", { name: "Continue to Repeat or Finish", exact: true }).click();
-
   await confirmedAction(page, {
-    trigger: "Publish reviewed round",
-    confirm: "Yes, publish the round",
+    trigger: "Publish reviewed scores",
+    confirm: "Yes, publish scores",
     method: "POST",
     pathname: `${createPath}/${sessionId}/rounds/1/submit`
   });
-  await expect(page.getByRole("heading", { name: "Round 1 published", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "5. Movement", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Preview movement", exact: true }).click();
+  await expect(page.getByText(/Verified operation key/i)).toBeVisible();
+  await confirmedAction(page, {
+    trigger: "Apply movement and continue",
+    confirm: "Yes, apply movement",
+    method: "POST",
+    pathname: `${createPath}/${sessionId}/rounds/1/movement`
+  });
+  await expect(page.getByRole("heading", { name: "Round 1 complete", exact: true })).toBeVisible();
   await confirmedAction(page, {
     trigger: "Finish session",
     confirm: "Yes, complete session",
