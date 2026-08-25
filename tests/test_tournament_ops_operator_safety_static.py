@@ -123,6 +123,11 @@ def test_draw_setup_and_recovery_is_reachable_from_live_operations() -> None:
     assert "Cancel empty setup" in panel
     assert "Cancel selected empty event" in panel
     assert "Reconcile missing games" in panel
+    assert "function eventOptionEnabled" in panel
+    assert "(snapshot.event_options || []).filter(eventOptionEnabled).map" in panel
+    assert "const eligibleEventOptions = (payload.event_options || []).filter(eventOptionEnabled);" in panel
+    assert "setDrawEventOptionId((current) => eligibleEventOptions.some" in panel
+    assert "setEmptyEventOptionId((current) => eligibleEventOptions.some" in panel
 
 
 def test_draw_setup_and_recovery_hides_retired_day_runtime_controls() -> None:
