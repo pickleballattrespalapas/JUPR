@@ -176,6 +176,12 @@ async function publishRound(page: Page, roundNumber: number): Promise<void> {
     pathname: `/admin/clubs/${clubId}/league-manager/live-sessions/${sessionId}/rounds/${roundNumber}/submit`
   });
 
+  const scoresOnly = await fetchDetail(page);
+  expect(scoresOnly.session.current_round).toBe(roundNumber);
+  const publishedRound = scoresOnly.rounds.find((round) => round.round_number === roundNumber);
+  expect(publishedRound?.status).toBe("submitted");
+  expect(publishedRound?.operation_key || publishedRound?.movement_json?.operation_key || "").toBe("");
+
   await expect(page.getByRole("heading", { name: "5. Movement", exact: true })).toBeVisible();
   await expect(page.getByText(/The round scores are official/i)).toBeVisible();
   await page.getByRole("button", { name: "Preview movement", exact: true }).click();
