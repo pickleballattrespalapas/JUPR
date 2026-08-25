@@ -99,9 +99,13 @@ def test_round_plan_is_python_authoritative_and_deterministic() -> None:
     assert first["movement"]["next_round"] == 2
     assert sum(len(court["players_json"]) for court in first["next_courts"]) == 8
     assert all(len(court["players_json"]) == 4 for court in first["next_courts"])
+    assert [
+        [int(player["player_id"]) for player in court["players_json"]]
+        for court in first["next_courts"]
+    ] == [[1, 2, 3, 7], [4, 8, 5, 6]]
 
 
-def test_manual_movement_override_requires_reason_and_balanced_courts() -> None:
+def test_manual_movement_override_needs_no_reason_and_keeps_balanced_courts() -> None:
     suggestion = build_league_live_roster_suggestion(_roster())
     base = build_league_live_round_plan(
         session_id="session-1",
@@ -115,18 +119,6 @@ def test_manual_movement_override_requires_reason_and_balanced_courts() -> None:
     moved = [row for row in base["movement"]["rows"] if row["direction"] != "stay"]
     overrides = [{"player_id": row["player_id"], "to_court": row["from_court"]} for row in moved]
 
-    with pytest.raises(LeagueLiveDomainError, match="Explain a manual movement override"):
-        build_league_live_round_plan(
-            session_id="session-1",
-            round_number=1,
-            total_rounds=3,
-            session_updated_at="v1",
-            roster=suggestion["roster"],
-            courts=suggestion["courts"],
-            matches=_matches(),
-            movement_overrides=overrides,
-        )
-
     overridden = build_league_live_round_plan(
         session_id="session-1",
         round_number=1,
@@ -136,7 +128,6 @@ def test_manual_movement_override_requires_reason_and_balanced_courts() -> None:
         courts=suggestion["courts"],
         matches=_matches(),
         movement_overrides=overrides,
-        override_reason="Keep the same courts for an accessibility accommodation.",
     )
 
     assert overridden["movement"]["override_applied"] is True
@@ -152,7 +143,6 @@ def test_manual_movement_override_requires_reason_and_balanced_courts() -> None:
             courts=suggestion["courts"],
             matches=_matches(),
             movement_overrides=overrides[:1],
-            override_reason="Keep one player down for a reviewed accommodation.",
         )
 
 
@@ -179,13 +169,9 @@ def test_ordered_court_board_override_preserves_exact_cards_and_slots() -> None:
         for slot, player_id in enumerate(player_ids, start=1)
     ]
 
-    with pytest.raises(LeagueLiveDomainError, match="Explain a manual movement override"):
-        build_league_live_round_plan(**common, movement_overrides=overrides)
-
     planned = build_league_live_round_plan(
         **common,
         movement_overrides=overrides,
-        override_reason="Operator reviewed the exact cross-court card exchange.",
     )
 
     assert planned["movement"]["override_applied"] is True
@@ -264,9 +250,7 @@ def test_ordered_court_board_can_exchange_a_reviewed_bench_player() -> None:
     planned = build_league_live_round_plan(
         **common,
         movement_overrides=overrides,
-        override_reason="Operator reviewed the exact bench and court exchange.",
         bench_player_ids=[outgoing_player_id],
-        bench_override_reason="Scheduled sit-out rotation for this next round.",
     )
 
     assert planned["bench_player_ids"] == [outgoing_player_id]

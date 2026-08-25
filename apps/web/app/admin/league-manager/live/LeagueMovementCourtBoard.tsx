@@ -195,7 +195,7 @@ export function LeagueMovementCourtBoard({ rows, courts, bench, disabled = false
     destinationColumn.players.splice(destination.index, 0, player);
     setColumns(next);
     onAssignmentsChange(assignmentsFor(next));
-    setAnnouncement(`${player.name} moved to ${destinationColumn.title}, position ${destination.index + 1}. Preview movement again to validate the board.`);
+    setAnnouncement(`${player.name} moved to ${destinationColumn.title}, position ${destination.index + 1}. Validate the board before continuing.`);
   }
 
   return (
@@ -271,7 +271,7 @@ export function LeagueMovementCourtBoard({ rows, courts, bench, disabled = false
                     </div>
                   )}
                 </Droppable>
-                {!countIsValid ? <p className={styles.capacityWarning} role="alert">Court requires 4 or 5 players before preview.</p> : null}
+                {!countIsValid ? <p className={styles.capacityWarning} role="alert">Court requires 4 or 5 players before validation.</p> : null}
               </section>
             );
           })}

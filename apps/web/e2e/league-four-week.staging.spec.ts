@@ -411,11 +411,14 @@ async function runWeek(
     pathname: `${createPath}/${sessionId}/rounds/1/submit`
   });
   await expect(page.getByRole("heading", { name: "5. Movement", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Preview movement", exact: true }).click();
   await expect(page.getByText(/Verified operation key/i)).toBeVisible();
   if (plan.week === 1) {
     const courtOne = page.getByTestId("movement-column-court-1");
     const courtTwo = page.getByTestId("movement-column-court-2");
+    const courtOneCards = courtOne.locator('[data-testid^="movement-player-"]');
+    const courtTwoCards = courtTwo.locator('[data-testid^="movement-player-"]');
+    await expect(courtOneCards.last()).toHaveAttribute("data-movement-direction", "up");
+    await expect(courtTwoCards.first()).toHaveAttribute("data-movement-direction", "down");
     const downMover = courtOne.locator('[data-movement-direction="stay"]').first();
     const upMover = courtTwo.locator('[data-movement-direction="stay"]').first();
     await expect(downMover).toHaveCount(1);
@@ -430,9 +433,9 @@ async function runWeek(
     await keyboardMoveCard(page, page.locator(`[data-testid="${upMoverId}"]`), "ArrowLeft");
     await expect(page.locator(`[data-testid="${downMoverId}"]`)).toHaveAttribute("data-movement-direction", "down");
     await expect(page.locator(`[data-testid="${upMoverId}"]`)).toHaveAttribute("data-movement-direction", "up");
-    await expect(page.getByText(/This plan is stale/i)).toBeVisible();
-    await page.getByLabel("Manual movement override reason", { exact: true }).fill("Staging E2E verified this cross-court card exchange.");
-    await page.getByRole("button", { name: "Preview movement", exact: true }).click();
+    await expect(page.getByText(/The board changed\. Validate it before continuing/i)).toBeVisible();
+    await expect(page.getByLabel("Manual movement override reason", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Validate board changes", exact: true }).click();
     await expect(page.getByText(/Verified operation key/i)).toBeVisible();
     await expect(page.locator(`[data-testid="${downMoverId}"]`)).toHaveAttribute("data-movement-direction", "down");
     await expect(page.locator(`[data-testid="${upMoverId}"]`)).toHaveAttribute("data-movement-direction", "up");

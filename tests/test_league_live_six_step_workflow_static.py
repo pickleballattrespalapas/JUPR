@@ -146,7 +146,8 @@ def test_movement_then_repeat_or_finish_are_explicit_steps() -> None:
     source = _source()
 
     assert "Movement" in source
-    assert "Preview movement" in source
+    assert "The server-generated court board opens automatically" in source
+    assert "Validate board changes" in source
     assert "Next-round movement plan" in source
     assert "Repeat or Finish" in source
     _assert_any(

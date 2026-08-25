@@ -74,6 +74,16 @@ type LeagueLiveDetailResponse = { ok: boolean; session: LeagueLiveSession; round
 type LeagueLiveWriteResponse = { ok: boolean; idempotent_replay?: boolean; operation_key?: string; session: LeagueLiveSession; round?: LeagueLiveRound; rounds?: LeagueLiveRound[]; courts?: LeagueLiveCourt[]; movement?: LeagueMovementPayload; bench?: LeagueLiveRosterRow[]; publish_operation?: LeagueLivePublishOperation; rating_review?: LeagueLiveRatingReview; published_match_ids?: unknown[]; warnings?: string[] };
 type LeagueLiveRosterSuggestion = { ok: boolean; roster: LeagueLiveRosterRow[]; active_roster: LeagueLiveRosterRow[]; bench: LeagueLiveRosterRow[]; bench_player_ids: number[]; default_bench_player_ids: number[]; bench_override_applied: boolean; court_sizes: number[]; courts: LeagueLiveCourt[]; suggestion_note?: string | null; fingerprint: string };
 type LeagueLiveRoundPlan = { ok: boolean; operation_key: string; session_updated_at: string; round_number: number; next_round: number; ready_to_save: boolean; scored_match_count: number; warnings: string[]; movement: LeagueMovementPayload; next_roster: LeagueLiveRosterRow[]; next_courts: LeagueLiveCourt[]; bench: LeagueLiveRosterRow[]; bench_player_ids: number[]; match_structure?: MatchStructure };
+type LeagueMovementPlanRequest = {
+  targetSessionId: string;
+  targetRound: number;
+  expectedUpdatedAt: string;
+  matches: Array<Record<string, unknown>>;
+  courtDrafts: CourtDraft[];
+  assignments?: Array<{ player_id: number; to_court: number; to_slot?: number }>;
+  rosterChange?: Record<string, unknown> | null;
+  benchPlayerIds?: number[];
+};
 type LeagueLiveGuestResponse = { ok: boolean; idempotent_replay: boolean; player: { id: number; name: string; rating?: number | null; rating_jupr?: number | null }; guest_operation_id: string };
 type LeagueLiveExportResponse = { ok: boolean; kind: string; filename: string; content_type: string; row_count: number; csv_text: string };
 type LeagueLiveCreateRecovery = { operationKey: string; status: string; message: string };
@@ -1771,14 +1781,41 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
           : `Round ${movementAppliedRoundNumber} scores and movement are complete. Start the next round or finish this session.`);
       } else if (scorePublishedRoundNumber != null && currentSubmittedRound) {
         const storedPreview = asRecord(currentSubmittedRound.preview_json);
+        const officialMatches = currentSubmittedRound.matches_json || [];
+        const currentCourtDrafts = courtsFromPersisted(payload.courts || [], sessionCurrentRound, payload.session.current_court_state_json || []);
+        const currentBenchIds = ((payload.session.roster_json || []) as LeagueLiveRosterRow[])
+          .filter((row) => row.status === "bench")
+          .map((row) => Number(row.player_id));
         setPreview(Object.keys(storedPreview).length ? storedPreview as AdminMatchUploaderRoundRobinPreview : null);
-        setOfficialRoundMatches(currentSubmittedRound.matches_json || []);
+        setOfficialRoundMatches(officialMatches);
         setMatchDate(normalizedMatchDate(currentSubmittedRound.match_date));
         setRoundLabel(String(currentSubmittedRound.round_label || `Round ${scorePublishedRoundNumber}`));
         setScoresReviewed(true);
         setScoreReviewMode(false);
         setWorkflowStep(5);
-        setMessage(`Round ${scorePublishedRoundNumber} scores are official. Preview and approve movement for the next round.`);
+        if (!officialMatches.length) {
+          setMessage(`Round ${scorePublishedRoundNumber} scores are official, but the court board cannot be generated until the official matches are reloaded.`);
+        } else {
+          try {
+            const automaticPlan = await requestMovementPlan({
+              targetSessionId: payload.session.id,
+              targetRound: scorePublishedRoundNumber,
+              expectedUpdatedAt: String(payload.session.updated_at || ""),
+              matches: officialMatches,
+              courtDrafts: currentCourtDrafts,
+              benchPlayerIds: currentBenchIds,
+            });
+            if (!sessionDetailRequest.isCurrent(generation)) return;
+            setMovementPlan(automaticPlan);
+            setMovementPlanStale(false);
+            setMessage(`Round ${scorePublishedRoundNumber} scores are official. The Round ${automaticPlan.next_round} court board is ready.`);
+          } catch (error) {
+            if (!sessionDetailRequest.isCurrent(generation)) return;
+            setMovementPlan(null);
+            setMovementPlanStale(false);
+            setMessage(`${error instanceof Error ? error.message : "The court board could not be generated automatically."} Use Load court board to try again; the published scores remain official.`);
+          }
+        }
       } else if (restoredDraftStep != null) {
         setWorkflowStep(payload.session.status === "active" ? restoredDraftStep : 1);
         setMessage(payload.session.status === "active"
@@ -2155,6 +2192,31 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     });
   }
 
+  async function requestMovementPlan({
+    targetSessionId,
+    targetRound,
+    expectedUpdatedAt,
+    matches,
+    courtDrafts,
+    assignments = [],
+    rosterChange = null,
+    benchPlayerIds = [],
+  }: LeagueMovementPlanRequest): Promise<LeagueLiveRoundPlan> {
+    return requestJson<LeagueLiveRoundPlan>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(targetSessionId)}/rounds/${encodeURIComponent(String(targetRound))}/plan`, {
+      method: "POST",
+      body: JSON.stringify({
+        expected_updated_at: expectedUpdatedAt,
+        matches,
+        courts: courtsToPayload(courtDrafts, targetRound),
+        movement_overrides: assignments,
+        override_reason: null,
+        roster_change: rosterChange,
+        bench_player_ids: benchPlayerIds,
+        bench_override_reason: null,
+      }),
+    });
+  }
+
   async function generatePreview() {
     const setupError = setupContextError();
     if (setupError) {
@@ -2257,8 +2319,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   function rosterChangePayload(): Record<string, unknown> | null {
     if (rosterAction === "none") return null;
     const player = incomingPlayerOptions.find((row) => Number(row.id) === Number(incomingPlayerId));
-    if (!player) throw new Error("Select a valid incoming player before previewing movement.");
-    if (rosterAction === "substitute" && !replacedPlayerId) throw new Error("Select the player being replaced before previewing movement.");
+    if (!player) throw new Error("Select a valid incoming player before refreshing the court board.");
+    if (rosterAction === "substitute" && !replacedPlayerId) throw new Error("Select the player being replaced before refreshing the court board.");
     return {
       action: rosterAction,
       replaced_player_id: rosterAction === "substitute" ? Number(replacedPlayerId) : null,
@@ -2273,14 +2335,14 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setMessage(setupError);
       return;
     }
-    if (!requireCurrentSession("previewing next-round movement")) return;
+    if (!requireCurrentSession("refreshing the next-round court board")) return;
     if (!scoresPublished) {
-      setMessage("Publish the reviewed scores before previewing movement.");
+      setMessage("Publish the reviewed scores before loading the next-round court board.");
       return;
     }
     const matches = officialRoundMatches;
     if (!matches.length) {
-      setMessage("Reload the official round scores before previewing next-round movement.");
+      setMessage("Reload the official round scores before loading the next-round court board.");
       return;
     }
     const generation = actionRequest.begin();
@@ -2288,27 +2350,24 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<LeagueLiveRoundPlan>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(requestedSessionId)}/rounds/${encodeURIComponent(String(currentRound))}/plan`, {
-        method: "POST",
-        body: JSON.stringify({
-          expected_updated_at: sessionUpdatedAt,
-          matches,
-          courts: courtsToPayload(courts, currentRound),
-          movement_overrides: movementOverridePayload(),
-          override_reason: overrideReason || null,
-          roster_change: rosterChangePayload(),
-          bench_player_ids: benchOverrideIds,
-          bench_override_reason: benchOverrideReason || null
-        })
+      const payload = await requestMovementPlan({
+        targetSessionId: requestedSessionId,
+        targetRound: currentRound,
+        expectedUpdatedAt: sessionUpdatedAt,
+        matches,
+        courtDrafts: courts,
+        assignments: movementOverridePayload(),
+        rosterChange: rosterChangePayload(),
+        benchPlayerIds: benchOverrideIds,
       });
       if (!actionRequest.isCurrent(generation)) return;
       setMovementPlan(payload);
       setMovementPlanStale(false);
-      setMessage(`Next-round plan ${payload.operation_key.slice(0, 12)}… is ready for Round ${payload.next_round}.`);
+      setMessage(`The refreshed court board is ready for Round ${payload.next_round}.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
         setMovementPlanStale(true);
-        setMessage(error instanceof Error ? error.message : "Unable to preview court movement.");
+        setMessage(error instanceof Error ? error.message : "Unable to refresh the court board.");
       }
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
@@ -2371,7 +2430,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the published round could be refreshed.");
       }
       setRatingReview(payload.rating_review || null);
-      const successMessage = `${payload.idempotent_replay ? "Reconciled" : "Published"} ${payload.published_match_ids?.length ?? matches.length} official league match(es). Preview and approve movement next.`;
+      const successMessage = `${payload.idempotent_replay ? "Reconciled" : "Published"} ${payload.published_match_ids?.length ?? matches.length} official league match(es). The next-round court board opens automatically.`;
       clearStoredRoundDraft(requestedSessionId, publishedRoundNumber);
       setScoresPublished(true);
       setScoresReviewed(true);
@@ -2406,7 +2465,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   async function applyMovement(confirmationText: string): Promise<ActionCompletion> {
     if (!requireCurrentSession("applying next-round movement")) throw new Error("Resume the current persisted session before applying movement.");
     if (!scoresPublished || !movementPlan || movementPlanStale) {
-      throw new Error("Preview the current movement plan before applying it.");
+      throw new Error("Refresh and validate the current court board before applying it.");
     }
     const appliedRoundNumber = currentRound;
     const generation = actionRequest.begin();
@@ -2421,10 +2480,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
           expected_operation_key: movementPlan.operation_key,
           courts: courtsToPayload(courts, appliedRoundNumber),
           movement_overrides: movementOverridePayload(),
-          override_reason: overrideReason || null,
+          override_reason: null,
           roster_change: rosterChangePayload(),
           bench_player_ids: benchOverrideIds,
-          bench_override_reason: benchOverrideReason || null,
+          bench_override_reason: null,
           confirmation_text: confirmationText,
           source: "next_league_live_round_movement"
         })
@@ -2489,7 +2548,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setGuestName("");
       setGuestReason("");
       markPlanStale();
-      const successMessage = `${payload.idempotent_replay ? "Recovered" : "Created"} guest ${guest.name}. Select add or substitute, then preview movement again.`;
+      const successMessage = `${payload.idempotent_replay ? "Recovered" : "Created"} guest ${guest.name}. Select add or substitute, then refresh the court board.`;
       setMessage(successMessage);
       return actionSuccess(payload.idempotent_replay ? "Guest recovered" : "Guest created", successMessage);
     } catch (error) {
@@ -2933,7 +2992,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       {workflowStep === 4 ? (
         <article style={cardStyle} aria-labelledby="league-live-scores-heading">
           <h2 id="league-live-scores-heading" style={{ marginTop: 0 }}>4. Score Entry with Review</h2>
-          <p style={{ color: "#475569" }}><strong>Configured format: {matchStructureLabel(matchStructure)}.</strong> Review and publish every score first. Movement is previewed and approved afterward.</p>
+          <p style={{ color: "#475569" }}><strong>Configured format: {matchStructureLabel(matchStructure)}.</strong> Review and publish every score first. The next-round court board opens automatically afterward.</p>
           {!scoreReviewMode ? (
             <>
               <div style={{ display: "grid", gap: "0.75rem" }}>
@@ -2985,7 +3044,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               {unusualScoreRows.length ? <section role="alert" style={{ marginTop: "0.75rem", padding: "0.75rem", border: "1px solid #f59e0b", borderRadius: "10px", background: "#fff7ed", color: "#9a3412" }}><strong>Unusual score{unusualScoreRows.length === 1 ? " requires" : "s require"} review.</strong><ul>{unusualScoreRows.map((row) => <li key={`unusual-${row.key}`}>Court {row.court}: {row.score}. {row.unusualReason}</li>)}</ul><label><input type="checkbox" checked={unusualScoresAcknowledged} onChange={(event) => setUnusualScoresAcknowledged(event.target.checked)} disabled={busy} /> I verified {unusualScoreRows.length === 1 ? "this score is" : "these scores are"} correct.</label></section> : null}
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between", marginTop: "0.75rem" }}>
                 <button type="button" onClick={editReviewedScores} disabled={busy} style={ghostButtonStyle}>Edit scores</button>
-                <ConfirmAction triggerLabel="Publish reviewed scores" title={`Publish Round ${currentRound} scores?`} description="This makes every reviewed result official. You will preview and approve movement next." confirmLabel="Yes, publish scores" confirmationText="SUBMIT LEAGUE ROUND" tone="danger" disabled={busy || !allSeriesComplete || !scoreReviewMode || (unusualScoreRows.length > 0 && !unusualScoresAcknowledged) || !liveDomainStatus.submit_enabled || !sessionIsCurrentLeague || sessionStatus !== "active"} busy={busy} onConfirm={publishScoresAndContinue} />
+                <ConfirmAction triggerLabel="Publish reviewed scores" title={`Publish Round ${currentRound} scores?`} description="This makes every reviewed result official, then opens the generated next-round court board." confirmLabel="Yes, publish scores" confirmationText="SUBMIT LEAGUE ROUND" tone="danger" disabled={busy || !allSeriesComplete || !scoreReviewMode || (unusualScoreRows.length > 0 && !unusualScoresAcknowledged) || !liveDomainStatus.submit_enabled || !sessionIsCurrentLeague || sessionStatus !== "active"} busy={busy} onConfirm={publishScoresAndContinue} />
               </div>
             </section>
           )}
@@ -2995,7 +3054,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       {workflowStep === 5 ? (
         <article style={cardStyle} aria-labelledby="league-live-movement-heading">
           <h2 id="league-live-movement-heading" style={{ marginTop: 0 }}>5. Movement</h2>
-          <p style={{ color: "#166534" }}><strong>The round scores are official.</strong> Configure any between-round roster change, then preview and apply the server-authoritative movement plan. Applying movement never republishes scores.</p>
+          <p style={{ color: "#166534" }}><strong>The round scores are official.</strong> The server-generated court board opens automatically. Drag any changes, validate the board, then apply it. Applying movement never republishes scores.</p>
           <section style={{ padding: "0.75rem", border: "1px solid #e2e8f0", borderRadius: "12px", marginBottom: "0.75rem" }}>
             <h3 style={{ marginTop: 0 }}>Next-round player change</h3>
             <p style={{ color: "#475569" }}>A late arrival appends to the live order. A substitution replaces the selected ordered player. Completed rounds never change.</p>
@@ -3018,12 +3077,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
             ) : null}
             {sessionRoster.length && !movementPlan ? (
               <details style={{ marginTop: "0.75rem" }}>
-                <summary>Choose Bench before the first preview</summary>
-                <p style={{ color: "#475569" }}>After preview, exchange players with Bench directly on the court board.</p>
+                <summary>Choose Bench while the court board is unavailable</summary>
+                <p style={{ color: "#475569" }}>Once the board loads, exchange players with Bench directly on the cards.</p>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.35rem", marginTop: "0.5rem" }}>
                   {sessionRoster.map((row) => <label key={row.player_id}><input type="checkbox" checked={benchOverrideIds.includes(Number(row.player_id))} onChange={(event) => { setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id))); markPlanStale(); }} disabled={busy} /> Bench {row.player_name}</label>)}
                 </div>
-                <label style={{ display: "block", marginTop: "0.5rem" }}>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="Required for a non-default bench" style={inputStyle} /></label>
               </details>
             ) : null}
           </section>
@@ -3032,7 +3090,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
             <section style={{ padding: "0.75rem", border: `1px solid ${movementPlanStale ? "#fca5a5" : "#86efac"}`, borderRadius: "12px", background: movementPlanStale ? "#fef2f2" : "#f0fdf4" }}>
               <h3 style={{ marginTop: 0 }}>Next-round movement plan</h3>
               <p>{movementPlan.movement.applied ? `${movementPlan.movement.rows.filter((row) => row.direction !== "stay").length} player movement(s)` : "No court movement required"} for Round {movementPlan.movement.next_round}.</p>
-              <p style={{ color: movementPlanStale ? "#b91c1c" : "#166534" }}>{movementPlanStale ? "This plan is stale. Preview movement again before continuing." : `Verified operation key ${movementPlan.operation_key.slice(0, 16)}…`}</p>
+              <p style={{ color: movementPlanStale ? "#b91c1c" : "#166534" }}>{movementPlanStale ? "The board changed. Validate it before continuing." : `Verified operation key ${movementPlan.operation_key.slice(0, 16)}…`}</p>
               <LeagueMovementCourtBoard
                 key={movementPlan.operation_key}
                 rows={movementPlan.movement.rows}
@@ -3041,13 +3099,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
                 disabled={busy}
                 onAssignmentsChange={changeMovementBoard}
               />
-              <label style={{ display: "block", marginTop: "0.75rem" }}>Manual movement override reason<br /><input value={overrideReason} onChange={(event) => { setOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="At least 10 characters when changing a planned target" style={inputStyle} /></label>
-              {!sameNumberSet(benchOverrideIds, movementPlan.bench_player_ids || []) ? <label style={{ display: "block", marginTop: "0.75rem" }}>Bench change reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); markPlanStale(); }} disabled={busy} placeholder="At least 10 characters when exchanging a bench player" style={inputStyle} /></label> : null}
             </section>
           ) : null}
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "flex-end", marginTop: "0.75rem" }}>
             <span style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              <button type="button" onClick={() => void previewPythonMovement()} disabled={busy || !scoresPublished || !sessionIsCurrentLeague || !roundContextValid || !matchDateValid || sessionStatus !== "active"} style={ghostButtonStyle}>{busy ? "Planning…" : "Preview movement"}</button>
+              <button type="button" onClick={() => void previewPythonMovement()} disabled={busy || !scoresPublished || !sessionIsCurrentLeague || !roundContextValid || !matchDateValid || sessionStatus !== "active"} style={ghostButtonStyle}>{busy ? "Loading court board…" : !movementPlan ? "Load court board" : movementPlanStale ? "Validate board changes" : "Refresh court board"}</button>
               <ConfirmAction triggerLabel="Apply movement and continue" title={`Apply Round ${currentRound} movement?`} description="This saves the reviewed next-round roster and courts. Official scores are not republished." confirmLabel="Yes, apply movement" confirmationText="APPLY LEAGUE MOVEMENT" disabled={busy || !scoresPublished || !movementPlan || movementPlanStale || !sessionIsCurrentLeague || sessionStatus !== "active"} busy={busy} onConfirm={applyMovement} />
             </span>
           </div>
