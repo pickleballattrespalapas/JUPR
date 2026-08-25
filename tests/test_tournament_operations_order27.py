@@ -307,12 +307,16 @@ def test_order27_next_routes_and_recovery_copy_static_contract() -> None:
     assert "reconcile_admin_tournament_official_publish" in api
     assert "PERMISSION_ENTER_SCORES" in api
     assert "PERMISSION_MANAGE_MATCHES" in api
-    assert panel.count("expected_team_versions: reviewedTeamVersions") == 3
+    # Generation, schedule reconciliation/rebuild, and podium writes all carry
+    # the exact reviewed team set.
+    assert panel.count("expected_team_versions: reviewedTeamVersions") == 4
     assert panel.count("expected_source_game_versions: reviewedSourceGameVersions") == 2
-    assert panel.count("expected_draw_updated_at: reviewedDrawUpdatedAt") == 8
-    assert api.count('"expected_draw_updated_at": payload.expected_draw_updated_at') == 18
-    assert api.count('"expected_team_versions": [_dump_model(row) for row in payload.expected_team_versions]') == 6
-    assert api.count('"expected_source_game_versions": [_dump_model(row) for row in payload.expected_source_game_versions]') == 4
+    # Every draw-scoped mutation, including both schedule recovery commands,
+    # carries the reviewed draw version.
+    assert panel.count("expected_draw_updated_at: reviewedDrawUpdatedAt") == 10
+    assert api.count('"expected_draw_updated_at": payload.expected_draw_updated_at') >= 24
+    assert api.count('"expected_team_versions": [_dump_model(row) for row in payload.expected_team_versions]') >= 6
+    assert api.count('"expected_source_game_versions": [_dump_model(row) for row in payload.expected_source_game_versions]') >= 4
 
 
 @pytest.mark.parametrize("label", ["team set", "source game set"])

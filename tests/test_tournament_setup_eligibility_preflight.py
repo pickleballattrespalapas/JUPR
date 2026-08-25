@@ -140,6 +140,127 @@ def _install_valid_read_stubs(
     monkeypatch.setattr(setup_service, "analyze_registration_publish_impact", analyze)
 
 
+def test_standard_event_cannot_enable_check_in_substitutes_before_database_access() -> None:
+    supabase = FakeSupabase()
+
+    with pytest.raises(ValueError, match="standard tournament events cannot enable substitutes"):
+        setup_service.review_admin_tournament_setup_impact(
+            supabase,
+            club_id="club-1",
+            tournament_id="tournament-1",
+            days=[],
+            event_options=[
+                _event("STANDARD", team_allow_substitutes=True)
+            ],
+            expected_state_fingerprint="state-1",
+        )
+
+    assert supabase.table_calls == []
+
+
+def test_four_player_between_match_roster_replacement_remains_configurable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supabase = FakeSupabase()
+    analyze_calls: list[dict[str, Any]] = []
+    _install_valid_read_stubs(monkeypatch, analyze_calls)
+    event = _event(
+        "STANDARD",
+        competition_format="FOUR_PLAYER_TEAM",
+        team_allow_substitutes=True,
+    )
+
+    setup_service.review_admin_tournament_setup_impact(
+        supabase,
+        club_id="club-1",
+        tournament_id="tournament-1",
+        days=[],
+        event_options=[event],
+        expected_state_fingerprint="state-1",
+    )
+
+    assert analyze_calls[0]["event_options"][0]["team_allow_substitutes"] is True
+
+
+@pytest.mark.parametrize("capacity", [4, 9, 16])
+def test_setup_accepts_every_executable_capacity_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    capacity: int,
+) -> None:
+    supabase = FakeSupabase()
+    analyze_calls: list[dict[str, Any]] = []
+    _install_valid_read_stubs(monkeypatch, analyze_calls)
+    event = _event("OPEN", capacity_teams=capacity)
+
+    setup_service.review_admin_tournament_setup_impact(
+        supabase,
+        club_id="club-1",
+        tournament_id="tournament-1",
+        days=[],
+        event_options=[event],
+        expected_state_fingerprint="state-1",
+    )
+
+    assert analyze_calls[0]["event_options"][0]["capacity_teams"] == capacity
+
+
+@pytest.mark.parametrize("capacity", [3, 17, 4.5, True])
+def test_setup_rejects_capacity_outside_executable_round_robin_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    capacity: object,
+) -> None:
+    supabase = FakeSupabase()
+    analyze_calls: list[dict[str, Any]] = []
+    _install_valid_read_stubs(monkeypatch, analyze_calls)
+
+    with pytest.raises(ValueError, match="capacity_teams"):
+        setup_service.review_admin_tournament_setup_impact(
+            supabase,
+            club_id="club-1",
+            tournament_id="tournament-1",
+            days=[],
+            event_options=[_event("OPEN", capacity_teams=capacity)],
+            expected_state_fingerprint="state-1",
+        )
+    assert analyze_calls == []
+
+
+@pytest.mark.parametrize(
+    ("division_name", "gender_restriction", "expected"),
+    [
+        ("Women's 3.0", "MEN", "WOMEN"),
+        ("Women’s 3.5", "OPEN", "WOMEN"),
+        ("Men's 4.0", "WOMEN", "MEN"),
+    ],
+)
+def test_setup_rejects_gender_restriction_that_contradicts_division_label(
+    monkeypatch: pytest.MonkeyPatch,
+    division_name: str,
+    gender_restriction: str,
+    expected: str,
+) -> None:
+    supabase = FakeSupabase()
+    analyze_calls: list[dict[str, Any]] = []
+    _install_valid_read_stubs(monkeypatch, analyze_calls)
+
+    with pytest.raises(ValueError, match=expected):
+        setup_service.review_admin_tournament_setup_impact(
+            supabase,
+            club_id="club-1",
+            tournament_id="tournament-1",
+            days=[],
+            event_options=[
+                _event(
+                    "OPEN",
+                    division_name=division_name,
+                    gender_restriction=gender_restriction,
+                )
+            ],
+            expected_state_fingerprint="state-1",
+        )
+    assert analyze_calls == []
+
+
 @pytest.mark.parametrize("legacy_mode", [None, "STANDARD"], ids=["missing-mode", "standard-mode"])
 @pytest.mark.parametrize(
     ("skill_label", "expected_minimum"),

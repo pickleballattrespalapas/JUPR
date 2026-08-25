@@ -23,7 +23,7 @@ IMMUTABLE_IMAGE_REF = (
     f"registry.fly.io/{verifier.PRODUCTION_FLY_APP}@{IMAGE_DIGEST}"
 )
 FLY_CONFIG_SHA = "4" * 64
-MIGRATION_PROFILE = "next-fastapi-tournament-acceptance-2026-08-03"
+MIGRATION_PROFILE = "next-fastapi-tournament-acceptance-2026-08-25"
 MIGRATION_CONTRACT = verifier.load_migration_contract(
     ROOT / "config/production_migration_contract.json",
     ROOT / "supabase/migrations",
@@ -215,8 +215,8 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 73
-    assert versions[-13:] == (
+    assert len(versions) == 80
+    assert versions[-20:] == (
         "20261025000000",
         "20261026000000",
         "20261027000000",
@@ -230,10 +230,17 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261105000000",
         "20261106000000",
         "20261107000000",
+        "20261108000000",
+        "20261108003000",
+        "20261108010000",
+        "20261108013000",
+        "20261108014000",
+        "20261108015000",
+        "20261108016000",
     )
-    assert len(names) == 73
+    assert len(names) == 80
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 73
+    assert len(contract["required_ledger_names"]) == 80
     assert "tournament_complete_registration_editor" in contract[
         "required_ledger_names"
     ]
@@ -360,7 +367,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261107000000"
+    assert migrations[-1] == "20261108016000"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(

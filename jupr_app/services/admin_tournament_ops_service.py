@@ -269,6 +269,7 @@ def build_admin_tournament_ops_runtime_status() -> dict[str, Any]:
     environment = os.getenv("JUPR_ENV", "").strip().lower() or "local"
     return {
         "environment": environment,
+        "tournament_mutations_enabled": tournament_admin_guarded_runtime_enabled("tournament"),
         "operations_mutations_enabled": tournament_admin_guarded_runtime_enabled("operations"),
         "official_publish_enabled": environment == "staging" and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH"),
         "email_handoff_enabled": environment == "staging" and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF"),

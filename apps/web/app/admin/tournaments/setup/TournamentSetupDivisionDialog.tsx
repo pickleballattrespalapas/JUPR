@@ -8,6 +8,7 @@ import {
   type ActionCompletion
 } from "@/components/interaction";
 import {
+  GENDER_RESTRICTIONS,
   SKILL_LABEL_OPTIONS,
   cleanString,
   dayLabel,
@@ -15,6 +16,7 @@ import {
   editableString,
   eventDayReferences,
   eventFamilyName,
+  expectedGenderFromDivisionName,
   numberInputValue,
   setEventDayReferences,
   setCanonicalRecordString,
@@ -39,6 +41,20 @@ import {
   validateTournamentSkillEligibility,
   type SkillEligibilityMode
 } from "@/lib/tournamentSkillEligibility";
+
+function genderOptionLabel(value: string): string {
+  return value
+    .toLowerCase()
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function genderOptionsWithCurrent(current: string): string[] {
+  return current && !GENDER_RESTRICTIONS.includes(current as (typeof GENDER_RESTRICTIONS)[number])
+    ? [current, ...GENDER_RESTRICTIONS]
+    : [...GENDER_RESTRICTIONS];
+}
 
 type Props = {
   open: boolean;
@@ -178,6 +194,7 @@ export default function TournamentSetupDivisionDialog({
   const nameRef = useRef<HTMLInputElement>(null);
   const skillRef = useRef<HTMLInputElement>(null);
   const eligibilityRef = useRef<HTMLSelectElement>(null);
+  const genderRef = useRef<HTMLSelectElement>(null);
   const capacityRef = useRef<HTMLInputElement>(null);
   const priceRef = useRef<HTMLInputElement>(null);
   const agePolicyRef = useRef<HTMLFieldSetElement>(null);
@@ -214,6 +231,17 @@ export default function TournamentSetupDivisionDialog({
     : "INHERIT_EVENT";
   const inheritedAgePolicy = readAgePolicy(family || {}, EVENT_AGE_POLICY_FIELDS);
   const divisionAgePolicy = readAgePolicy(draft, DIVISION_AGE_POLICY_FIELDS);
+  const participantType = cleanString(
+    family?.participant_type || family?.event_type || draft.participant_type || draft.event_type
+  ).toUpperCase();
+  const competitionFormat = cleanString(
+    family?.competition_format || draft.competition_format
+  ).toUpperCase();
+  const mixedGenderRequired =
+    participantType === "MIXED_DOUBLES" || competitionFormat === "FOUR_PLAYER_TEAM";
+  const divisionGender = mixedGenderRequired
+    ? "MIXED"
+    : cleanString(draft.gender_restriction || family?.gender_restriction || "ANY").toUpperCase();
   const dayById = new Map(
     days.map((day) => [dayReference(day.value), dayLabel(day.value) || dayReference(day.value)])
   );
@@ -238,9 +266,17 @@ export default function TournamentSetupDivisionDialog({
     if (!selectedDayIds.length) {
       validationError("Choose at least one tournament day for this division.", "Tournament days", scheduleRef.current);
     }
+    const expectedGender = expectedGenderFromDivisionName(draft.division_name ?? draft.label);
+    if (expectedGender && divisionGender !== expectedGender) {
+      validationError(
+        `${expectedGender === "WOMEN" ? "Women's" : "Men's"} divisions must use the matching gender category.`,
+        "Division gender category",
+        genderRef.current
+      );
+    }
     const capacity = Number(draft.capacity_teams);
-    if (!Number.isInteger(capacity) || capacity < 1) {
-      validationError("Capacity must be a whole number of at least 1.", "Capacity", capacityRef.current);
+    if (!Number.isInteger(capacity) || capacity < 4 || capacity > 16) {
+      validationError("Capacity must be a whole number from 4 through 16.", "Capacity", capacityRef.current);
     }
     const price = Number(draft.price_usd);
     if (!Number.isFinite(price) || price < 0) {
@@ -264,11 +300,15 @@ export default function TournamentSetupDivisionDialog({
         validationError(ageIssues[0], "Age policy", agePolicyRef.current);
       }
     }
-    return onConfirm(setCanonicalRecordString(
+    const canonicalDraft = setCanonicalRecordString(
       draft,
       ["division_name", "label"],
       draft.division_name ?? draft.label
-    ));
+    );
+    return onConfirm({
+      ...canonicalDraft,
+      gender_restriction: divisionGender
+    });
   }
 
   return (
@@ -369,6 +409,29 @@ export default function TournamentSetupDivisionDialog({
             </select>
             <small>{skillEligibilitySummary(draft)}</small>
           </label>
+          <label>
+            <strong>Division gender category</strong><br />
+            <select
+              ref={genderRef}
+              value={divisionGender}
+              style={inputStyle}
+              disabled={mixedGenderRequired}
+              onChange={(event) =>
+                setDraft((current) =>
+                  setRecordString(current, ["gender_restriction"], event.target.value)
+                )
+              }
+            >
+              {genderOptionsWithCurrent(divisionGender).map((option) => (
+                <option key={option} value={option}>{genderOptionLabel(option)}</option>
+              ))}
+            </select>
+            <small>
+              {mixedGenderRequired
+                ? "This event format always uses Mixed gender."
+                : "Set this explicitly when one parent event contains men's and women's divisions."}
+            </small>
+          </label>
           {skillEligibilityMode(draft) === "MINIMUM" ? (
             <label>
               <strong>Minimum rating</strong><br />
@@ -428,7 +491,8 @@ export default function TournamentSetupDivisionDialog({
             <input
               ref={capacityRef}
               type="number"
-              min="1"
+              min="4"
+              max="16"
               step="1"
               value={numberInputValue(draft.capacity_teams)}
               style={inputStyle}

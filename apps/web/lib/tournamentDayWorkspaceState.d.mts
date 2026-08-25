@@ -8,6 +8,7 @@ export type TournamentDayCommandAction =
   | "auto_fill_courts"
   | "score_and_release"
   | "correct_completed_score"
+  | "record_non_played_result"
   | "generate_playoffs"
   | "close_day";
 
@@ -41,15 +42,24 @@ export function advanceCountSelection(
 ): string;
 export function validateDayScoreDraft(
   scoreA: string | number,
-  scoreB: string | number
+  scoreB: string | number,
+  scoring?: Record<string, unknown> | null,
+  unusualScoreAcknowledged?: boolean
 ):
-  | { ok: true; scoreA: number; scoreB: number }
-  | { ok: false; message: string };
+  | { ok: true; scoreA: number; scoreB: number; unusual: boolean; reasons: string[]; acknowledgementRequired: boolean; scoringFormat: string }
+  | { ok: false; message: string; impossible?: boolean; reasons?: string[] };
 export function validateDayCorrectionDraft(
   scoreA: string | number,
   scoreB: string | number,
   currentScoreA: number | null | undefined,
-  currentScoreB: number | null | undefined
+  currentScoreB: number | null | undefined,
+  scoring?: Record<string, unknown> | null,
+  unusualScoreAcknowledged?: boolean
+): ReturnType<typeof validateDayScoreDraft>;
+export function validateNonPlayedOutcomeDraft(
+  resultType: unknown,
+  winnerTeamId: unknown,
+  resultNote: unknown
 ):
-  | { ok: true; scoreA: number; scoreB: number }
+  | { ok: true; resultType: "FORFEIT" | "NO_SHOW" | "RETIREMENT"; winnerTeamId: string; resultNote: string }
   | { ok: false; message: string };

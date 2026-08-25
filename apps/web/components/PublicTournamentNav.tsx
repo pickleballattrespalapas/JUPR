@@ -5,7 +5,8 @@ export type PublicTournamentModule =
   | "overview"
   | "registration"
   | "roster"
-  | "partner-board";
+  | "partner-board"
+  | "results";
 
 type Props = {
   clubSlug: string;
@@ -30,7 +31,8 @@ function normalizedModule(value: string): PublicTournamentModule {
   if (
     value === "registration" ||
     value === "roster" ||
-    value === "partner-board"
+    value === "partner-board" ||
+    value === "results"
   ) {
     return value;
   }
@@ -48,9 +50,13 @@ export function publicTournamentHref(
     overview: `${base}/tournaments`,
     registration: `${base}/tournament-registration`,
     roster: `${base}/tournament-roster`,
-    "partner-board": `${base}/tournament-partner-board`
+    "partner-board": `${base}/tournament-partner-board`,
+    results: `${base}/tournament-results`
   };
   const selectedModule = normalizedModule(module);
+  if (selectedModule === "results" && tournamentId) {
+    return `${paths.results}?tournament_id=${encodeURIComponent(tournamentId)}`;
+  }
   return `${paths[selectedModule]}${tournamentQuery(
     tournamentId,
     registrationSlug
@@ -68,7 +74,8 @@ export default function PublicTournamentNav({
     ["overview", "Tournament Home"],
     ["registration", "Register"],
     ["roster", "Roster"],
-    ["partner-board", "Partner Board"]
+    ["partner-board", "Partner Board"],
+    ["results", "Live & Results"]
   ];
 
   return (

@@ -13,6 +13,9 @@ from jupr_app.domain.tournament_four_player_team import build_team_standings
 from jupr_app.domain.tournament_registration_confirmation_tokens import (
     verify_registration_confirmation_token,
 )
+from jupr_app.domain.tournament_registration_repo import (
+    get_public_tournament_bundle,
+)
 from jupr_app.domain.tournament_team_invitation_tokens import (
     tournament_team_invitation_token_hash,
     verify_tournament_team_invitation_token,
@@ -173,7 +176,15 @@ def build_public_team_tournament_index(
     tournament_filters: tuple[tuple[str, Any], ...] = (("club_id", str(club_id)),)
     if tournament_id:
         tournament_filters = (*tournament_filters, ("id", str(tournament_id)))
-    tournaments = _rows(supabase, "tournaments", filters=tournament_filters)
+    tournaments = [
+        tournament
+        for tournament in _rows(supabase, "tournaments", filters=tournament_filters)
+        if get_public_tournament_bundle(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=str(tournament.get("id") or ""),
+        )[0]
+    ]
     tournament_by_id = {str(row.get("id") or ""): row for row in tournaments}
     draws: list[dict[str, Any]] = []
     for current_id, tournament in tournament_by_id.items():
@@ -246,10 +257,10 @@ def build_public_team_tournament_results(
     tournament_id: str,
     draw_id: str,
 ) -> dict[str, Any]:
-    tournament = _one(
+    tournament, _settings, _days, _events = get_public_tournament_bundle(
         supabase,
-        "tournaments",
-        filters=(("id", str(tournament_id)), ("club_id", str(club_id))),
+        club_id=str(club_id),
+        tournament_id=str(tournament_id),
     )
     if not tournament:
         raise ValueError("tournament results not found")

@@ -153,6 +153,22 @@ function eventMeta(event: PublicRegistrationEvent): string {
   return pieces.join(" • ");
 }
 
+function scheduledDaysLabel(
+  event: PublicRegistrationEvent,
+  daysById: Map<string, PublicRegistrationDay>
+): string {
+  const scheduledIds = event.scheduled_day_ids?.length
+    ? event.scheduled_day_ids
+    : [event.registration_day_id];
+  return scheduledIds
+    .map((dayId) => daysById.get(dayId))
+    .filter(Boolean)
+    .map((day) =>
+      day?.event_date ? `${day.label} · ${day.event_date}` : day?.label
+    )
+    .join(" · ");
+}
+
 function candidateLabel(candidate: PublicRegistrationPlayer): string {
   const rating = candidate.doubles_skill ?? candidate.singles_skill;
   return rating == null ? candidate.display_name : `${candidate.display_name} · Rating ${Number(rating).toFixed(2)}`;
@@ -775,7 +791,7 @@ export default function TournamentRegistrationForm({
                     <article key={eventOption.id} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: selected ? "#f8fafc" : "white" }}>
                       <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
                         <input type="checkbox" aria-label={`${eventOption.event_family_label} ${eventOption.division_name}`} checked={selected} disabled={Boolean(eligibilityReason)} onChange={(event) => toggleEvent(eventOption.id, event.target.checked)} />
-                        <span><strong>{eventOption.event_family_label} — {eventOption.division_name}</strong><br /><span style={{ color: "#64748b" }}>{eventMeta(eventOption)}</span></span>
+                        <span><strong>{eventOption.event_family_label} — {eventOption.division_name}</strong><br /><span style={{ color: "#64748b" }}>{scheduledDaysLabel(eventOption, daysById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</span></span>
                       </label>
                       {eligibilityReason ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{eligibilityReason}</p> : null}
                       {selected &&
@@ -869,7 +885,7 @@ export default function TournamentRegistrationForm({
                   : event.partner_required
                 ? partner.mode === "HAS_PARTNER" ? `Partner: ${partner.name}` : "Needs partner"
                 : isDoublesEvent(event) ? "Individual doubles entry" : "Singles";
-              return <li key={id}>{daysById.get(event.registration_day_id)?.label || "Day"} · {event.event_family_label} — {event.division_name} · {entryLabel}</li>;
+              return <li key={id}>{scheduledDaysLabel(event, daysById) || "Schedule TBD"} · {event.event_family_label} — {event.division_name} · {entryLabel}</li>;
             })}
           </ul>
           <p>

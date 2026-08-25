@@ -160,10 +160,12 @@ def _substitution_policy(
     return {
         "allowed": False,
         "event_policy_allows": True,
+        "assignment_supported": False,
+        "next_action": "UPDATE_DRAW_ROSTER_BEFORE_DAY_ACTIVATION",
         "blocker": _blocker(
             "SUBSTITUTE_ASSIGNMENT_ATOMICITY_UNAVAILABLE",
-            "Substitute assignment unavailable",
-            "Selected events allow substitutes, but atomic eligibility and uniqueness cannot be proven by the current registration schema. New substitute assignment is disabled.",
+            "Update the draw roster before day activation",
+            "Selected events allow substitutes, but atomic eligibility and uniqueness cannot be proven while replacing draw teams, live court claims, and official-rating identities. This screen will not save a partial substitution. Update the authoritative draw roster before activating the day; if play already started, keep the matchup blocked and use tournament recovery.",
         ),
     }
 

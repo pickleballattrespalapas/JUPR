@@ -117,7 +117,7 @@ def test_live_draw_selector_uses_authoritative_progress_instead_of_stale_draft_s
     assert "disabled={inactive || !lifecycleDraw}" in panel
     assert "`${selectedFinalizedGames} of ${selectedTotalGames} games scored; ${selectedOpenGames} open.`" in panel
     assert "{selectedFinalizedGames} of {selectedTotalGames} games finalized" in panel
-    assert "{selectedDrawCounts?.published_games || 0} official matches" in panel
+    assert "{selectedDrawCounts?.published_games || 0} of {selectedRatingPublishEligibleGames} played games published" in panel
 
 
 def test_live_runner_is_human_readable_and_validates_before_confirmation() -> None:
@@ -166,7 +166,7 @@ def test_authoritative_lifecycle_drives_home_results_publish_closeout_and_recove
         "Import results",
         "Runtime capability",
         "Tournament readiness",
-        "Archive readiness",
+        "Completion readiness",
         "Communications",
         "Payments, extras, and fulfillment",
     ):
@@ -174,8 +174,9 @@ def test_authoritative_lifecycle_drives_home_results_publish_closeout_and_recove
     assert "status.official_publish_writes_enabled" in panel
     assert "status.official_publish_write_flag?.enabled" in panel
     assert "dedicated official-publish permission" in panel
-    assert "Archive unavailable" in panel
-    assert "No archive write is available" in panel
+    assert "Complete tournament" in panel
+    assert "Move to hidden archive" in panel
+    assert "Restore completed tournament" in panel
     assert "archiveTournament" not in panel
     assert "Archive tournament" not in status
 
@@ -190,7 +191,7 @@ def test_local_browser_fixture_covers_operator_safety_story_at_desktop_widths() 
     assert "Confirm & save" in spec
     assert "Corrections & recovery" in spec
     assert "Publish official matches" in spec
-    assert "Archive unavailable" in spec
+    assert "Complete tournament" in spec
     assert "1280" in spec
     assert "1440" in spec
     assert "forbidOnly: true" in config

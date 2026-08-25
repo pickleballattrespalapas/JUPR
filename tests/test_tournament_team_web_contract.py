@@ -44,6 +44,8 @@ def test_admin_team_tournament_workspace_is_reachable_and_complete():
     assert "useAdminSession" in panel
     assert "useAuthenticatedAutoLoad" in panel
     assert "operationKeys" in panel
+    assert "I reviewed and acknowledge this unusual score" in panel
+    assert "unusual_score_acknowledged" in panel
     ops_panel = _read(
         "apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx"
     )

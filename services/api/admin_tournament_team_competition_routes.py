@@ -113,6 +113,7 @@ class LineupRequest(MutationBase):
 class ScoreRequest(MutationBase):
     score_a: int = Field(ge=0)
     score_b: int = Field(ge=0)
+    unusual_score_acknowledged: bool = False
     expected_game_version: int = Field(ge=1)
     expected_matchup_version: int = Field(ge=1)
 
@@ -574,6 +575,7 @@ def install_admin_tournament_team_competition_routes(
                 match_game_id=match_game_id,
                 score_a=payload.score_a,
                 score_b=payload.score_b,
+                unusual_score_acknowledged=payload.unusual_score_acknowledged,
                 expected_game_version=payload.expected_game_version,
                 expected_matchup_version=payload.expected_matchup_version,
                 actor_email=actor,

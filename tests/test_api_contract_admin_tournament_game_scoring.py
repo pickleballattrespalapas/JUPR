@@ -29,11 +29,19 @@ def tournament_scoring_tables():
                 "id": "game_1",
                 "tournament_id": "tour_1",
                 "draw_id": "draw_1",
+                "event_option_id": "event_1",
                 "stage": "ROUND_ROBIN",
                 "rr_round_number": 1,
                 "rr_slot_number": 1,
                 "team_a_id": "team_1",
                 "team_b_id": "team_2",
+            }
+        ],
+        "tournament_event_options": [
+            {
+                "id": "event_1",
+                "tournament_id": "tour_1",
+                "scoring_default": "GAME_TO_11",
             }
         ],
         "admin_activity_log": [],
@@ -48,6 +56,7 @@ def tournament_playoff_scoring_tables():
                 "id": "p1",
                 "tournament_id": "tour_1",
                 "draw_id": "draw_1",
+                "event_option_id": "event_1",
                 "stage": "PLAYOFF",
                 "playoff_game_code": "P1",
                 "playoff_round": "SF",
@@ -60,6 +69,7 @@ def tournament_playoff_scoring_tables():
                 "id": "p3",
                 "tournament_id": "tour_1",
                 "draw_id": "draw_1",
+                "event_option_id": "event_1",
                 "stage": "PLAYOFF",
                 "playoff_game_code": "P3",
                 "playoff_round": "Final",
@@ -68,6 +78,13 @@ def tournament_playoff_scoring_tables():
                 "team_a_source": {"winnerOf": "P1"},
                 "team_b_source": {"winnerOf": "P2"},
             },
+        ],
+        "tournament_event_options": [
+            {
+                "id": "event_1",
+                "tournament_id": "tour_1",
+                "scoring_default": "GAME_TO_11",
+            }
         ],
         "admin_activity_log": [],
     }
@@ -172,3 +189,35 @@ def test_admin_tournament_round_robin_score_requires_confirmation(monkeypatch):
 
     assert response.status_code == 400
     assert "SAVE SCORE" in response.json()["detail"]
+
+
+def test_admin_tournament_ordinary_score_cannot_convert_non_played_outcome(monkeypatch):
+    tables = tournament_scoring_tables()
+    tables["tournament_games"][0].update(
+        {
+            "score_a": 11,
+            "score_b": 0,
+            "winner_team_id": "team_1",
+            "loser_team_id": "team_2",
+            "finalized_at": "2026-03-02T00:00:00Z",
+            "result_type": "FORFEIT",
+            "result_note": "Player did not arrive.",
+        }
+    )
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/games/game_1/score",
+        headers={"Authorization": "Bearer local"},
+        json={"score_a": 11, "score_b": 7, "confirmation_text": "SAVE SCORE"},
+    )
+
+    assert response.status_code == 400
+    assert "non-played tournament outcome" in response.json()["detail"]
+    assert tables["tournament_games"][0]["result_type"] == "FORFEIT"
+    assert tables["tournament_games"][0]["score_b"] == 0

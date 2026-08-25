@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 from types import SimpleNamespace
 
 import pytest
@@ -149,8 +150,82 @@ class FakeRegistrationEditRpc:
                 for row in self.storage.get("tournament_registrations", [])
             ):
                 raise RuntimeError("JUPR_TOURNAMENT_REGISTRATION_DUPLICATE")
+            tournament = next(
+                (
+                    row
+                    for row in self.storage.get("tournaments", [])
+                    if str(row.get("id") or "") == tournament_id
+                ),
+                {},
+            )
+            club_id = str(tournament.get("club_id") or "")
+            prior_identity = next(
+                (
+                    row
+                    for row in self.storage.get("tournament_registrations", [])
+                    if str(row.get("id") or "") != str(registration.get("id") or "")
+                    and str(row.get("email") or "").strip().lower() == email
+                    and any(
+                        str(candidate.get("id") or "")
+                        == str(row.get("tournament_id") or "")
+                        and str(candidate.get("club_id") or "") == club_id
+                        for candidate in self.storage.get("tournaments", [])
+                    )
+                ),
+                None,
+            )
+            # The submitted player_id is never accepted. An unverified identity
+            # collision is saved without a player link for staff reconciliation.
+            registration["player_id"] = None
+            state = "STAFF_RECONCILIATION_REQUIRED"
+            reason = "EMAIL_COLLISION"
+            if not prior_identity:
+                current_ids = [
+                    int(row.get("id"))
+                    for row in self.storage.get("players", [])
+                    if str(row.get("id") or "").isdigit()
+                ]
+                player_id = max(current_ids or [0]) + 1
+                skill = registration.get("doubles_skill") or registration.get(
+                    "singles_skill"
+                )
+                try:
+                    skill = float(skill)
+                except (TypeError, ValueError):
+                    skill = 3.0
+                state = "CREATED" if registration.get("doubles_skill") or registration.get("singles_skill") else "CREATED_UNRATED"
+                reason = None if state == "CREATED" else "TEMPORARY_3_0_BASELINE"
+                self.storage.setdefault("players", []).append(
+                    {
+                        "id": player_id,
+                        "club_id": club_id,
+                        "name": registration.get("display_name"),
+                        "rating": skill * 400,
+                        "starting_rating": skill * 400,
+                        "wins": 0,
+                        "losses": 0,
+                        "matches_played": 0,
+                        "active": True,
+                    }
+                )
+                registration["player_id"] = player_id
             self.storage.setdefault("tournament_registrations", []).append(registration)
             self.storage.setdefault("tournament_registration_selections", []).extend(selections)
+            self.storage.setdefault(
+                "tournament_primary_player_reconciliation", []
+            ).append(
+                {
+                    "registration_id": registration.get("id"),
+                    "tournament_id": tournament_id,
+                    "club_id": club_id,
+                    "identity_hash": hashlib.sha256(
+                        f"{club_id}:{email}".encode("utf-8")
+                    ).hexdigest(),
+                    "state": state,
+                    "reason_code": reason,
+                    "created_player_id": registration.get("player_id"),
+                }
+            )
             return SimpleNamespace(
                 data={
                     "ok": True,
@@ -252,7 +327,7 @@ def fake_storage():
                 "id": "t1",
                 "club_id": "club-1",
                 "name": "Tres Palapas Open",
-                "status": "DRAFT",
+                "status": "ACTIVE",
                 "start_date": "2026-09-01",
                 "created_at": "2026-01-01T00:00:00Z",
                 "admin_notes": "private",
@@ -270,7 +345,10 @@ def fake_storage():
                 "refund_policy_markdown": "No refunds after draw publication.",
                 "weather_policy_markdown": "Unsafe conditions may delay or reschedule play.",
                 "sponsor_markdown": "Presented by Rally House.",
-                "builder_draft_json": {"private": True},
+                "builder_draft_json": {
+                    "private": True,
+                    "published_at": "2026-08-01T00:00:00Z",
+                },
                 "builder_draft_updated_at": "2026-01-01T00:00:00Z",
             }
         ],
@@ -434,6 +512,16 @@ def test_public_tournament_registration_submit_and_confirmation(monkeypatch) -> 
     monkeypatch.setenv("JUPR_ENV", "staging")
     monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
     storage = fake_storage()
+    storage["tournament_registration_days"].append(
+        {
+            "id": "day2",
+            "tournament_id": "t1",
+            "sort_order": 2,
+            "label": "Sunday",
+            "event_date": "2026-09-02",
+            "enabled": True,
+        }
+    )
     supabase = FakeSupabase(storage)
 
     result = submit_public_tournament_registration(
@@ -466,6 +554,9 @@ def test_public_tournament_registration_submit_and_confirmation(monkeypatch) -> 
     assert confirmation["registration"]["display_name"] == "Alex Rivera"
     assert confirmation["selections"][0]["event_label"] == "Open"
     assert confirmation["selections"][0]["price_usd"] == 50
+    assert [
+        day["label"] for day in confirmation["selections"][0]["scheduled_days"]
+    ] == ["Saturday", "Sunday"]
     assert "phone" not in confirmation["registration"]
     assert "email" not in confirmation["registration"]
     assert "id" not in confirmation["registration"]
@@ -829,7 +920,7 @@ def test_public_registration_hides_players_and_initial_player_link_is_not_truste
         },
     )
     registration = next(row for row in storage["tournament_registrations"] if row["id"] == result["registration_id"])
-    assert registration["player_id"] is None
+    assert registration["player_id"] not in {None, 10, 11, 12}
     assert registration["dupr_id"] is None
     assert registration["doubles_skill"] == 1.0
     assert registration["singles_skill"] == 1.0
@@ -849,7 +940,114 @@ def test_public_registration_hides_players_and_initial_player_link_is_not_truste
     untrusted_registration = next(
         row for row in storage["tournament_registrations"] if row["id"] == untrusted["registration_id"]
     )
-    assert untrusted_registration["player_id"] is None
+    assert untrusted_registration["player_id"] not in {None, 10, 11, 12}
+    assert untrusted_registration["player_id"] != registration["player_id"]
+
+
+def test_public_primary_identity_collision_is_unlinked_and_non_enumerating() -> None:
+    storage = fake_storage()
+    storage["tournaments"].append(
+        {
+            "id": "prior-tournament",
+            "club_id": "club-1",
+            "name": "Prior Tournament",
+            "status": "COMPLETED",
+        }
+    )
+    storage["players"] = [
+        {
+            "id": 10,
+            "club_id": "club-1",
+            "name": "Existing Canonical Player",
+            "rating": 1600,
+            "active": True,
+        }
+    ]
+    storage["tournament_registrations"] = [
+        {
+            "id": "prior-private-registration",
+            "tournament_id": "prior-tournament",
+            "display_name": "Existing Canonical Player",
+            "email": "collision@example.com",
+            "player_id": 10,
+        }
+    ]
+    supabase = FakeSupabase(storage)
+
+    result = submit_public_tournament_registration(
+        supabase,
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Public",
+            "last_name": "Registrant",
+            "email": "collision@example.com",
+            "player_id": 10,
+            "doubles_skill": 4.0,
+            "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+
+    created = next(
+        row
+        for row in storage["tournament_registrations"]
+        if row["id"] == result["registration_id"]
+    )
+    assert created["player_id"] is None
+    assert len(storage["players"]) == 1
+    reconciliation = storage["tournament_primary_player_reconciliation"][0]
+    assert reconciliation["state"] == "STAFF_RECONCILIATION_REQUIRED"
+    assert reconciliation["reason_code"] == "EMAIL_COLLISION"
+    assert "collision@example.com" not in str(reconciliation)
+    assert "collision" not in str(result).lower()
+    assert "prior-private-registration" not in str(result)
+
+
+def test_same_email_in_another_club_never_authorizes_or_blocks_linkage() -> None:
+    storage = fake_storage()
+    storage["tournaments"].append(
+        {
+            "id": "other-club-tournament",
+            "club_id": "other-club",
+            "name": "Other Club Tournament",
+            "status": "ACTIVE",
+        }
+    )
+    storage["tournament_registrations"] = [
+        {
+            "id": "other-club-private-registration",
+            "tournament_id": "other-club-tournament",
+            "email": "shared@example.com",
+            "player_id": 99,
+        }
+    ]
+
+    result = submit_public_tournament_registration(
+        FakeSupabase(storage),
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Club One",
+            "email": "shared@example.com",
+            "player_id": 99,
+            "doubles_skill": 3.5,
+            "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+
+    created = next(
+        row
+        for row in storage["tournament_registrations"]
+        if row["id"] == result["registration_id"]
+    )
+    assert created["player_id"] != 99
+    assert next(
+        row
+        for row in storage["players"]
+        if row["id"] == created["player_id"]
+    )["club_id"] == "club-1"
 
 
 def test_public_registration_rejects_multiple_divisions_in_same_day_family() -> None:

@@ -17,6 +17,7 @@ const {
   effectiveGenderRestriction,
   effectiveParticipantType,
   editableString,
+  expectedGenderFromDivisionName,
   moveBuilderRow,
   newDayRow,
   newEventOptionRow,
@@ -194,7 +195,8 @@ test("guided rows preserve the API payload exactly until an operator edits them"
       eligibility_mode: "OPEN",
       skill_min_rating: null,
       skill_max_rating: null,
-      combined_rating_cap: null
+      combined_rating_cap: null,
+      team_allow_substitutes: false
     }]
   });
 });
@@ -690,8 +692,36 @@ test("validation reports bad references and typed numeric errors", () => {
 
   const messages = validateSetupConfiguration(configuration).map((issue) => issue.message);
   assert.ok(messages.includes("Choose an enabled tournament day."));
-  assert.ok(messages.includes("Capacity must be a whole number of at least 1."));
+  assert.ok(messages.includes("Capacity must be a whole number from 4 through 16."));
   assert.ok(messages.includes("Price must be zero or greater."));
+});
+
+test("division gender labels and executable capacity limits fail closed", () => {
+  assert.equal(expectedGenderFromDivisionName("Women's 3.0"), "WOMEN");
+  assert.equal(expectedGenderFromDivisionName("Men’s 4.0+"), "MEN");
+  assert.equal(expectedGenderFromDivisionName("Open 4.0+"), null);
+
+  const wrongGender = validConfiguration();
+  wrongGender.eventOptions[0].value = {
+    ...wrongGender.eventOptions[0].value,
+    division_name: "Women's 3.0",
+    label: "Women's 3.0",
+    event_type: "GENDER_DOUBLES",
+    gender_restriction: "MEN"
+  };
+  assert.ok(
+    validateSetupConfiguration(wrongGender)
+      .map((issue) => issue.message)
+      .includes("Women's divisions must use the matching gender category.")
+  );
+
+  const tooLarge = validConfiguration();
+  tooLarge.eventOptions[0].value.capacity_teams = 17;
+  assert.ok(
+    validateSetupConfiguration(tooLarge)
+      .map((issue) => issue.message)
+      .includes("Capacity must be a whole number from 4 through 16.")
+  );
 });
 
 test("legacy divisions require matching defaults while canonical rows do not", () => {
@@ -868,5 +898,31 @@ test("published comparison ignores representation noise but detects semantic cha
   assert.notEqual(
     stableSetupJsonStringify(legacyComparable),
     stableSetupJsonStringify(comparablePublishedConfigurationPayload(canonical))
+  );
+});
+
+test("standard substitute flags are forced off while four-player roster policy survives", () => {
+  const payload = configurationPayload({
+    days: [],
+    eventFamilies: wrapBuilderRows([{
+      competition_format: "STANDARD",
+      team_allow_substitutes: true
+    }], "family"),
+    eventOptions: wrapBuilderRows([{
+      competition_format: "FOUR_PLAYER_TEAM",
+      team_allow_substitutes: true
+    }], "event")
+  });
+
+  assert.equal(payload.event_families[0].team_allow_substitutes, false);
+  assert.equal(payload.event_options[0].team_allow_substitutes, true);
+
+  const configuration = validConfiguration();
+  configuration.eventOptions[0].value.competition_format = "STANDARD";
+  configuration.eventOptions[0].value.team_allow_substitutes = true;
+  assert.ok(
+    validateSetupConfiguration(configuration).some(
+      (issue) => issue.path.endsWith("team_allow_substitutes")
+    )
   );
 });

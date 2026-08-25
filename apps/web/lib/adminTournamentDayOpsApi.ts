@@ -6,6 +6,7 @@ export type AdminTournamentDayCommandAction =
   | "auto_fill_courts"
   | "score_and_release"
   | "correct_completed_score"
+  | "record_non_played_result"
   | "generate_playoffs"
   | "close_day";
 
@@ -54,10 +55,23 @@ export type AdminTournamentDayGame = {
   team_b: AdminTournamentDaySide;
   score_a?: number | null;
   score_b?: number | null;
+  scoring: {
+    format?: "GAME_TO_11" | "GAME_TO_15" | "GAME_TO_21" | "BEST_2_OF_3" | null;
+    target?: number | null;
+    win_by_two?: boolean | null;
+    best_of_three_score_semantics?: string | null;
+    blocker?: string | null;
+  };
+  result_type?: "PLAYED" | "FORFEIT" | "NO_SHOW" | "RETIREMENT";
+  result_note?: string | null;
+  result_recorded_by?: string | null;
+  score_review?: Record<string, unknown>;
   winner_name?: string | null;
   finalized_at?: string | null;
   updated_at?: string | null;
   version: string;
+  queue_entry_version?: string;
+  court_id?: string | null;
   blockers: AdminTournamentDayBlockerValue[];
   correction_readiness: AdminTournamentDayReadiness;
 };
@@ -205,6 +219,7 @@ export type AdminTournamentDayCommandExpected = {
   game_version?: string;
   court_version?: string;
   queue_version?: string;
+  queue_entry_version?: string;
 };
 
 export type AdminTournamentDayCommandPayload = {
@@ -213,6 +228,10 @@ export type AdminTournamentDayCommandPayload = {
   game_id?: string;
   score_a?: number;
   score_b?: number;
+  unusual_score_acknowledgement?: boolean;
+  result_type?: "FORFEIT" | "NO_SHOW" | "RETIREMENT";
+  winner_team_id?: string;
+  result_note?: string;
 };
 
 export type AdminTournamentDayCommandRequest = {

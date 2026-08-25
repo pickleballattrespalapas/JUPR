@@ -38,6 +38,7 @@ class AdminTournamentLiveCommandRequest(BaseModel):
     game_id: str | None = Field(default=None, max_length=160)
     score_a: int | None = None
     score_b: int | None = None
+    unusual_score_acknowledged: bool = False
     advance_count: int | None = None
     playoff_winner_bonus_elo: float | None = None
 

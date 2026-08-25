@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 
 
-SUPPORTED_TEAM_COUNTS = [4, 5, 6, 7, 8]
+# Tournament setup permits divisions as large as 16 teams.  Keep one shared
+# executable contract so setup, the operator readiness model, and game
+# generation cannot disagree about a valid draw size.  Preserve the existing
+# four-team product minimum while extending the executable upper bound.
+SUPPORTED_TEAM_COUNTS = list(range(4, 17))
 
 
 ROUND_ROBIN_TEMPLATES: dict[int, dict[str, Any]] = {
@@ -119,7 +123,54 @@ def _load_rr6_template() -> dict[str, Any]:
 def _round_robin_template(team_count: int) -> dict[str, Any] | None:
     if team_count == 6:
         return _load_rr6_template()
-    return ROUND_ROBIN_TEMPLATES.get(team_count)
+    configured = ROUND_ROBIN_TEMPLATES.get(team_count)
+    if configured is not None:
+        return configured
+    if team_count not in SUPPORTED_TEAM_COUNTS:
+        return None
+
+    # Circle-method schedule for the larger setup-supported divisions.  A
+    # ``None`` participant is the single rotating bye in odd-sized draws.
+    # Every unordered pair appears exactly once and no team appears twice in
+    # a round.  Existing 4-8 team templates remain unchanged for historical
+    # schedule continuity.
+    participants: list[int | None] = list(range(1, team_count + 1))
+    if team_count % 2:
+        participants.append(None)
+    round_count = len(participants) - 1
+    rounds: list[dict[str, Any]] = []
+    rotation = list(participants)
+    for round_index in range(round_count):
+        games: list[dict[str, int]] = []
+        byes: list[int] = []
+        for pair_index in range(len(rotation) // 2):
+            team_a = rotation[pair_index]
+            team_b = rotation[-(pair_index + 1)]
+            if team_a is None or team_b is None:
+                bye = team_b if team_a is None else team_a
+                if bye is not None:
+                    byes.append(int(bye))
+                continue
+            # Alternate the fixed participant's side to avoid giving one team
+            # the same orientation for an entire large round robin.
+            if pair_index == 0 and round_index % 2:
+                team_a, team_b = team_b, team_a
+            games.append(
+                {
+                    "slot": len(games) + 1,
+                    "teamA": int(team_a),
+                    "teamB": int(team_b),
+                }
+            )
+        rounds.append(
+            {
+                "round": round_index + 1,
+                "games": games,
+                "byes": sorted(byes),
+            }
+        )
+        rotation = [rotation[0], rotation[-1], *rotation[1:-1]]
+    return {"teamCount": team_count, "rounds": rounds}
 
 
 def build_round_robin_games(*, tournament_id: str, team_ids_by_number: dict[int, str]) -> list[dict[str, Any]]:

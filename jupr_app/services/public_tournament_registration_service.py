@@ -1470,12 +1470,27 @@ def build_public_tournament_registration_confirmation(
     for selection in bundle.get("selections") or []:
         event = event_lookup.get(str(selection.get("event_option_id") or "")) or {}
         day = day_lookup.get(str(selection.get("registration_day_id") or "")) or {}
+        scheduled_day_ids = event.get("scheduled_day_ids") or [
+            selection.get("registration_day_id")
+        ]
         selections.append(
             {
                 "event_label": _clean_text(event.get("division_name") or event.get("label") or "Division"),
                 "event_family_label": _clean_text(event.get("event_family_label") or event.get("label") or "Event"),
                 "day_label": _clean_text(day.get("label") or "Day"),
                 "event_date": _json_safe(day.get("event_date")),
+                "scheduled_days": [
+                    {
+                        "label": _clean_text(
+                            day_lookup.get(str(day_id), {}).get("label") or "Day"
+                        ),
+                        "event_date": _json_safe(
+                            day_lookup.get(str(day_id), {}).get("event_date")
+                        ),
+                    }
+                    for day_id in scheduled_day_ids
+                    if str(day_id) in day_lookup
+                ],
                 "skill_label": _clean_text(event.get("skill_label"), limit=80),
                 "age_label": _clean_text(event.get("age_label"), limit=80),
                 "price_usd": _safe_float(event.get("price_usd")) or 0,

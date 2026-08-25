@@ -1493,7 +1493,9 @@ def test_public_registration_uses_directional_skill_and_age_boundaries() -> None
     assert "hardMinimumAge" in eligibility
     assert "age < minimumAge" in eligibility
     assert "age: numericValue(contact.age)" in form
-    assert "age: registration.age == null ? null : Number(registration.age)" in edit_form
+    assert "age: numericState(ageDraft)" in edit_form
+    assert 'const submittedAge = numberOrNull(formData.get("age"))' in edit_form
+    assert "age: submittedAge" in edit_form
     assert '"age_rules": row.get("age_rules")' in service
     assert "_validate_age_eligibility" in service
     assert "evaluate_selection_gender_eligibility" in service

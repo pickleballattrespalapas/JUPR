@@ -52,6 +52,10 @@ SKILL_LABEL_PATTERN = re.compile(
     r"^(?:skill\s*)?([0-9](?:\.[0-9]{1,2})?)\s*(\+)?$",
     re.IGNORECASE,
 )
+MIN_EXECUTABLE_EVENT_CAPACITY = 4
+MAX_EXECUTABLE_EVENT_CAPACITY = 16
+WOMENS_LABEL_PATTERN = re.compile(r"\bwomen(?:['’]s)?\b", re.IGNORECASE)
+MENS_LABEL_PATTERN = re.compile(r"(?<!wo)\bmen(?:['’]s)?\b", re.IGNORECASE)
 
 
 def _truthy_env(name: str) -> bool:
@@ -654,11 +658,102 @@ def _validate_event_option_eligibility(
         )
 
 
+def _validate_event_option_operability(
+    event: dict[str, Any],
+    *,
+    index: int,
+    payload_name: str,
+) -> None:
+    label = _clean(
+        event.get("division_name")
+        or event.get("label")
+        or event.get("event_family_label"),
+        limit=180,
+    ) or f"{payload_name} row {index}"
+    event_label = f"Division {label}"
+    raw_capacity = event.get("capacity_teams")
+    if raw_capacity not in (None, ""):
+        if isinstance(raw_capacity, bool):
+            raise ValueError(f"{event_label}: capacity_teams must be a whole number.")
+        try:
+            numeric_capacity = float(raw_capacity)
+            capacity = int(numeric_capacity)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                f"{event_label}: capacity_teams must be a whole number."
+            ) from exc
+        if not math.isfinite(numeric_capacity) or numeric_capacity != capacity:
+            raise ValueError(f"{event_label}: capacity_teams must be a whole number.")
+        if not MIN_EXECUTABLE_EVENT_CAPACITY <= capacity <= MAX_EXECUTABLE_EVENT_CAPACITY:
+            raise ValueError(
+                f"{event_label}: capacity_teams must be between {MIN_EXECUTABLE_EVENT_CAPACITY} and {MAX_EXECUTABLE_EVENT_CAPACITY}, matching the executable round-robin engine."
+            )
+
+    combined_label = " / ".join(
+        value
+        for value in (
+            _clean(event.get("event_family_label"), limit=180),
+            _clean(event.get("division_name"), limit=180),
+            _clean(event.get("label"), limit=180),
+        )
+        if value
+    )
+    gender = _clean(event.get("gender_restriction"), limit=40).upper()
+    if WOMENS_LABEL_PATTERN.search(combined_label) and gender not in {
+        "WOMEN",
+        "WOMENS",
+        "FEMALE",
+    }:
+        raise ValueError(
+            f"{event_label}: a Women's division must use the WOMEN gender restriction."
+        )
+    if MENS_LABEL_PATTERN.search(combined_label) and not WOMENS_LABEL_PATTERN.search(
+        combined_label
+    ) and gender not in {"MEN", "MENS", "MALE"}:
+        raise ValueError(
+            f"{event_label}: a Men's division must use the MEN gender restriction."
+        )
+
+
+def _validate_substitution_configuration(
+    *,
+    event_options: list[dict[str, Any]],
+    event_families: list[dict[str, Any]] | None = None,
+    builder_event_options: list[dict[str, Any]] | None = None,
+) -> None:
+    for payload_name, rows in (
+        ("event_families", event_families or []),
+        ("event_options", event_options),
+        ("builder_event_options", builder_event_options or []),
+    ):
+        for index, event in enumerate(rows, start=1):
+            if not isinstance(event, dict):
+                raise ValueError(f"{payload_name} row {index} must be an object.")
+            competition_format = _clean(
+                event.get("competition_format") or "STANDARD", limit=60
+            ).upper()
+            if (
+                competition_format != "FOUR_PLAYER_TEAM"
+                and _bool(event.get("team_allow_substitutes"), default=False)
+            ):
+                raise ValueError(
+                    f"{payload_name} row {index}: standard tournament events cannot enable substitutes. "
+                    "Correct the authoritative roster before play; tournament check-in never changes a draw roster."
+                )
+
+
 def _validate_tournament_setup_eligibility(
     *,
     event_options: list[dict[str, Any]],
-    builder_event_options: list[dict[str, Any]] | None,
+    event_families: list[dict[str, Any]] | None = None,
+    builder_event_options: list[dict[str, Any]] | None = None,
 ) -> None:
+    _validate_substitution_configuration(
+        event_options=event_options,
+        event_families=event_families,
+        builder_event_options=builder_event_options,
+    )
+
     for payload_name, rows in (
         ("event_options", event_options),
         ("builder_event_options", builder_event_options or []),
@@ -666,6 +761,11 @@ def _validate_tournament_setup_eligibility(
         for index, event in enumerate(rows, start=1):
             if not isinstance(event, dict):
                 raise ValueError(f"{payload_name} row {index} must be an object.")
+            _validate_event_option_operability(
+                event,
+                index=index,
+                payload_name=payload_name,
+            )
             _canonicalize_legacy_event_option_eligibility(event)
             _validate_event_option_eligibility(
                 event,
@@ -966,6 +1066,7 @@ def review_admin_tournament_setup_impact(
     _assert_enabled()
     _validate_tournament_setup_eligibility(
         event_options=event_options,
+        event_families=event_families,
         builder_event_options=builder_event_options,
     )
     detail = get_admin_tournament_setup_detail(
@@ -1099,6 +1200,11 @@ def save_admin_tournament_setup_draft(
     _assert_enabled()
     if _clean(confirmation_text, limit=80).upper() != CONFIRM_DRAFT:
         raise ValueError(f"Type {CONFIRM_DRAFT} to save tournament setup draft.")
+    _validate_substitution_configuration(
+        event_options=list(event_options or []),
+        event_families=list(event_families or []),
+        builder_event_options=None,
+    )
     _get_tournament_for_club(supabase, club_id=str(club_id), tournament_id=str(tournament_id))
     before = get_builder_draft(supabase, str(tournament_id))
     if dry_run:
@@ -1162,6 +1268,7 @@ def publish_admin_tournament_setup(
         raise ValueError(f"Type {CONFIRM_PUBLISH} to publish tournament setup.")
     _validate_tournament_setup_eligibility(
         event_options=event_options,
+        event_families=event_families,
         builder_event_options=builder_event_options,
     )
     _get_tournament_for_club(supabase, club_id=str(club_id), tournament_id=str(tournament_id))

@@ -69,7 +69,7 @@ class _FakeRpc:
         )
 
     def execute(self):
-        if self.name == "admin_score_tournament_game_cas":
+        if self.name == "admin_score_tournament_game_result_cas":
             game = next(row for row in self.tables["tournament_games"] if row["id"] == self.params["p_game_id"])
             draw = next(row for row in self.tables["tournament_event_draws"] if row["id"] == game["draw_id"])
             if str(game.get("updated_at") or "") != str(self.params["p_expected_updated_at"]):
@@ -178,6 +178,15 @@ def live_tables() -> dict[str, list[dict]]:
                 "name": "Open Draw",
                 "status": "ACTIVE",
                 "created_at": "2026-07-19T10:00:00Z",
+                "updated_at": "2026-07-19T10:00:00Z",
+            }
+        ],
+        "tournament_event_options": [
+            {
+                "id": "event-1",
+                "tournament_id": "tour-1",
+                "registration_day_id": "day-1",
+                "scoring_default": "GAME_TO_11",
                 "updated_at": "2026-07-19T10:00:00Z",
             }
         ],
@@ -511,7 +520,11 @@ def test_score_command_is_stale_safe_audited_and_exactly_idempotent(monkeypatch)
     assert replay["operation_key"] == first["operation_key"]
     assert replay["client_idempotency_key"] == request["idempotency_key"]
     assert tables["tournament_games"][0]["winner_team_id"] == "team-1"
-    assert supabase.rpc_calls[0][0] == "admin_score_tournament_game_cas"
+    assert tables["tournament_games"][0]["result_type"] == "PLAYED"
+    assert tables["tournament_games"][0]["result_note"] is None
+    assert tables["tournament_games"][0]["result_recorded_by"] == "admin@example.com"
+    assert tables["tournament_games"][0]["score_review_json"]["accepted"] is True
+    assert supabase.rpc_calls[0][0] == "admin_score_tournament_game_result_cas"
     assert supabase.rpc_calls[0][1]["p_expected_updated_at"] == "2026-07-19T10:00:00Z"
     assert supabase.rpc_calls[0][1]["p_expected_draw_updated_at"] == "2026-07-19T10:00:00Z"
     assert len(tables["tournament_admin_operations"]) == 1

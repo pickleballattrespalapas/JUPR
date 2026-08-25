@@ -26,6 +26,10 @@ from jupr_app.domain.tournaments import (
     finalize_game,
     resolve_playoff_dependencies,
 )
+from jupr_app.domain.tournaments.score_policy import (
+    require_tournament_score,
+    resolve_tournament_scoring_format,
+)
 from jupr_app.services.admin_tournament_award_service import award_admin_tournament_draw_podium
 from jupr_app.services.admin_tournament_game_service import generate_admin_tournament_round_robin_games
 from jupr_app.services.admin_tournament_guarded_operation import (
@@ -134,6 +138,13 @@ def _is_scored(game: dict[str, Any]) -> bool:
     score_a = _safe_int(game.get("score_a"))
     score_b = _safe_int(game.get("score_b"))
     return score_a is not None and score_b is not None and score_a != score_b and bool(game.get("winner_team_id"))
+
+
+def _is_rating_publish_eligible(game: dict[str, Any]) -> bool:
+    """Only genuinely played results may become official rated matches."""
+
+    result_type = str(game.get("result_type") or "PLAYED").strip().upper()
+    return result_type == "PLAYED" and game.get("rating_publish_eligible") is not False
 
 
 def _project(row: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
@@ -302,6 +313,24 @@ def _score_plan(*, games: list[dict[str, Any]], game_id: str, score_a: int, scor
     return {"game": _score_game_projection(after_target), "downstream_games": dependencies}
 
 
+def _snapshot_scoring_format(snapshot: dict[str, Any], draw_id: str) -> str:
+    draw = next(
+        (row for row in snapshot.get("draws") or [] if str(row.get("id") or "") == str(draw_id)),
+        None,
+    )
+    if not draw:
+        raise ValueError("The reviewed draw scoring authority is unavailable.")
+    event = next(
+        (
+            row
+            for row in snapshot.get("event_options") or []
+            if str(row.get("id") or "") == str(draw.get("event_option_id") or "")
+        ),
+        None,
+    )
+    return resolve_tournament_scoring_format(event)
+
+
 def _active_award_projection(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         [
@@ -319,6 +348,7 @@ def _active_award_projection(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 DERIVED_EVIDENCE_KEYS = {
     "score_plan",
+    "score_review",
     "round_robin_plan",
     "playoff_plan",
     "podium_plan",
@@ -606,6 +636,21 @@ def _state_fingerprint(
             snapshot.get("draws") or [],
             ("id", "tournament_id", "registration_day_id", "event_option_id", "name", "status", "updated_at"),
         ),
+        # Score validation authority is event-scoped. Bind the reviewed scoring
+        # configuration into the draw fingerprint so an operator can never save
+        # against a format that changed after the board was loaded.
+        "event_options": _sorted_projection(
+            snapshot.get("event_options") or [],
+            (
+                "id",
+                "tournament_id",
+                "registration_day_id",
+                "scoring_default",
+                "scoring_override",
+                "division_scoring",
+                "updated_at",
+            ),
+        ),
         "teams": _sorted_projection(
             snapshot.get("teams") or [],
             ("id", "draw_id", "team_number", "player1_id", "player2_id", "seed", "source", "updated_at"),
@@ -744,8 +789,17 @@ def _readiness(
     if awards_complete:
         blockers["award_podium"].append("Every expected podium award is already present.")
 
+    rating_eligible_game_ids = {
+        str(row.get("id") or "")
+        for row in games
+        if row.get("id") and _is_rating_publish_eligible(row)
+    }
     if not games or not all(_is_scored(row) for row in games):
         blockers["publish_official_matches"].append("Every tournament game must have a finalized non-tied score.")
+    if games and not rating_eligible_game_ids:
+        blockers["publish_official_matches"].append(
+            "This draw has no played result eligible for official rating publication."
+        )
     if placements != {1, 2, 3}:
         blockers["publish_official_matches"].append("Generate and review the draw podium first.")
     if not awards_complete:
@@ -757,8 +811,8 @@ def _readiness(
     if published_ids:
         if duplicate_published_ids:
             blockers["publish_official_matches"].append("Duplicate official links exist for this draw; reconcile in Match Log before any retry.")
-        elif published_ids == {str(row.get("id") or "") for row in games}:
-            blockers["publish_official_matches"].append("Every game is already published as an official match.")
+        elif published_ids == rating_eligible_game_ids:
+            blockers["publish_official_matches"].append("Every played game is already published as an official match.")
         else:
             blockers["publish_official_matches"].append("Only part of this draw is published; reconcile before any retry.")
 
@@ -882,7 +936,16 @@ def build_admin_tournament_live_snapshot(
         game_id for game_id, count in publication_counts.items() if count > 1
     )
     published_game_ids = sorted(publication_counts)
-    publication_complete = bool(game_ids) and not duplicate_published_game_ids and set(published_game_ids) == set(game_ids)
+    rating_eligible_game_ids = sorted(
+        str(row.get("id") or "")
+        for row in games
+        if row.get("id") and _is_rating_publish_eligible(row)
+    )
+    publication_complete = (
+        bool(game_ids)
+        and not duplicate_published_game_ids
+        and set(published_game_ids) == set(rating_eligible_game_ids)
+    )
     fingerprint = _state_fingerprint(
         base,
         published_matches=published_matches,
@@ -1019,6 +1082,9 @@ def _normalize_command_request(request: dict[str, Any]) -> tuple[str, str, str, 
                 "score_a": score_a,
                 "score_b": score_b,
                 "expected_game_updated_at": expected_game_updated_at,
+                "unusual_score_acknowledged": bool(
+                    request.get("unusual_score_acknowledged", False)
+                ),
             }
         )
     elif command == "generate_round_robin":
@@ -1106,13 +1172,22 @@ def _build_command_evidence(
     games = list(snapshot.get("games") or [])
     podium = list(snapshot.get("podium") or [])
     if command == "save_score":
+        score_review = require_tournament_score(
+            int(payload.get("score_a") or 0),
+            int(payload.get("score_b") or 0),
+            scoring_format=_snapshot_scoring_format(snapshot, draw_id),
+            unusual_score_acknowledged=bool(
+                payload.get("unusual_score_acknowledged")
+            ),
+        )
         return {
             "score_plan": _score_plan(
                 games=games,
                 game_id=str(payload.get("game_id") or ""),
                 score_a=int(payload.get("score_a") or 0),
                 score_b=int(payload.get("score_b") or 0),
-            )
+            ),
+            "score_review": score_review,
         }
     if command == "generate_round_robin":
         return {"round_robin_plan": _round_robin_plan(tournament_id=str(tournament_id), teams=teams)}
@@ -1148,7 +1223,11 @@ def _build_command_evidence(
             draw_id=str(draw_id),
             playoff_winner_bonus_elo=float(payload.get("playoff_winner_bonus_elo") or 0.0),
         )
-        reviewed_game_ids = sorted(str(row.get("id") or "") for row in games if row.get("id"))
+        reviewed_game_ids = sorted(
+            str(row.get("id") or "")
+            for row in games
+            if row.get("id") and _is_rating_publish_eligible(row)
+        )
         planned_game_ids = sorted(str(value) for value in (publish_plan.get("tournament_game_ids") or []))
         if (
             not reviewed_game_ids
@@ -1178,13 +1257,21 @@ def _validate_command_evidence(
     games = list(snapshot.get("games") or [])
     podium = list(snapshot.get("podium") or [])
     if command == "save_score":
+        expected_review = require_tournament_score(
+            int(payload.get("score_a") or 0),
+            int(payload.get("score_b") or 0),
+            scoring_format=_snapshot_scoring_format(snapshot, draw_id),
+            unusual_score_acknowledged=bool(
+                payload.get("unusual_score_acknowledged")
+            ),
+        )
         expected = _score_plan(
             games=games,
             game_id=str(payload.get("game_id") or ""),
             score_a=int(payload.get("score_a") or 0),
             score_b=int(payload.get("score_b") or 0),
         )
-        if payload.get("score_plan") != expected:
+        if payload.get("score_plan") != expected or payload.get("score_review") != expected_review:
             raise StaleTournamentAdminStateError("The score/dependency plan changed after review. Reload the live board.")
     elif command == "generate_round_robin":
         if payload.get("round_robin_plan") != _round_robin_plan(tournament_id=str(tournament_id), teams=teams):
@@ -1220,7 +1307,11 @@ def _validate_command_evidence(
             raise StaleTournamentAdminStateError("The podium award recipient set changed after review. Reload the live board.")
     elif command == "publish_official_matches":
         publish_plan = payload.get("publish_plan") if isinstance(payload.get("publish_plan"), dict) else {}
-        reviewed_ids = sorted(str(row.get("id") or "") for row in games if row.get("id"))
+        reviewed_ids = sorted(
+            str(row.get("id") or "")
+            for row in games
+            if row.get("id") and _is_rating_publish_eligible(row)
+        )
         planned_ids = sorted(str(value) for value in (publish_plan.get("tournament_game_ids") or []))
         if (
             not planned_ids
@@ -1310,6 +1401,9 @@ def _mutate_command(
             game_id=str(payload["game_id"]),
             score_a=int(payload["score_a"]),
             score_b=int(payload["score_b"]),
+            unusual_score_acknowledged=bool(
+                payload.get("unusual_score_acknowledged")
+            ),
             expected_updated_at=str(reviewed_game.get("updated_at") or ""),
             expected_draw_updated_at=reviewed_draw_updated_at,
             expected_source_game_versions=reviewed_source_game_versions,

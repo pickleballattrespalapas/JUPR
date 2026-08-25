@@ -65,7 +65,7 @@ def test_check_in_web_contract_has_real_controls_and_no_client_only_truth() -> N
     assert "Absent" in panel
     assert "Unresolved" in panel
     assert "Waiver" in panel
-    assert "Approved substitute" in panel
+    assert "Approved substitute" not in panel
     assert "Search players" in panel
     assert "NEEDS_REVIEW" in panel
     assert "overflowX: \"auto\"" not in page
@@ -78,9 +78,11 @@ def test_check_in_web_contract_has_real_controls_and_no_client_only_truth() -> N
     assert "approved_substitute_name" not in update_input
     assert "identity_current" in api
     assert "requires_reconfirmation" in api
-    assert "Saved attendee is unavailable" in panel
+    assert "Legacy saved substitute" in panel
+    assert "Restore original registrant" in panel
+    assert "Roster changes do not happen at check-in" in panel
+    assert "authoritative draw or four-player team roster" in panel
     assert "SUBSTITUTE_ASSIGNMENT_ATOMICITY_UNAVAILABLE" in api
-    assert "Substitute assignment unavailable" in panel
 
 
 def test_check_in_api_rejects_name_only_substitutes_before_service_update() -> None:
