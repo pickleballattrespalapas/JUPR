@@ -275,6 +275,14 @@ async function addExistingPlayers(page: Page, playerIds: readonly number[]): Pro
   return selected;
 }
 
+async function keyboardMoveCard(page: Page, card: Locator, direction: "ArrowLeft" | "ArrowRight"): Promise<void> {
+  await expect(card).toBeVisible();
+  await card.focus();
+  await page.keyboard.press("Space");
+  await page.keyboard.press(direction);
+  await page.keyboard.press("Space");
+}
+
 async function runWeek(
   page: Page,
   leagueId: string,
@@ -405,6 +413,31 @@ async function runWeek(
   await expect(page.getByRole("heading", { name: "5. Movement", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Preview movement", exact: true }).click();
   await expect(page.getByText(/Verified operation key/i)).toBeVisible();
+  if (plan.week === 1) {
+    const courtOne = page.getByTestId("movement-column-court-1");
+    const courtTwo = page.getByTestId("movement-column-court-2");
+    const downMover = courtOne.locator('[data-movement-direction="stay"]').first();
+    const upMover = courtTwo.locator('[data-movement-direction="stay"]').first();
+    await expect(downMover).toHaveCount(1);
+    await expect(upMover).toHaveCount(1);
+    const downMoverId = String(await downMover.getAttribute("data-testid"));
+    const upMoverId = String(await upMover.getAttribute("data-testid"));
+    expect(downMoverId).toMatch(/^movement-player-\d+$/);
+    expect(upMoverId).toMatch(/^movement-player-\d+$/);
+
+    await keyboardMoveCard(page, downMover, "ArrowRight");
+    await expect(courtTwo.locator(`[data-testid="${downMoverId}"]`)).toHaveAttribute("data-movement-direction", "down");
+    await keyboardMoveCard(page, page.locator(`[data-testid="${upMoverId}"]`), "ArrowLeft");
+    await expect(page.locator(`[data-testid="${downMoverId}"]`)).toHaveAttribute("data-movement-direction", "down");
+    await expect(page.locator(`[data-testid="${upMoverId}"]`)).toHaveAttribute("data-movement-direction", "up");
+    await expect(page.getByText(/This plan is stale/i)).toBeVisible();
+    await page.getByLabel("Manual movement override reason", { exact: true }).fill("Staging E2E verified this cross-court card exchange.");
+    await page.getByRole("button", { name: "Preview movement", exact: true }).click();
+    await expect(page.getByText(/Verified operation key/i)).toBeVisible();
+    await expect(page.locator(`[data-testid="${downMoverId}"]`)).toHaveAttribute("data-movement-direction", "down");
+    await expect(page.locator(`[data-testid="${upMoverId}"]`)).toHaveAttribute("data-movement-direction", "up");
+    expect(await page.getByText("Manual board change", { exact: true }).count()).toBeGreaterThanOrEqual(2);
+  }
   await confirmedAction(page, {
     trigger: "Apply movement and continue",
     confirm: "Yes, apply movement",

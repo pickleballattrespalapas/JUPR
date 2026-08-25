@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 PANEL = Path("apps/web/app/admin/league-manager/live/LeagueLiveRoundPanel.tsx")
+MOVEMENT_BOARD = Path("apps/web/app/admin/league-manager/live/LeagueMovementCourtBoard.tsx")
 
 
 def _source() -> str:
@@ -241,8 +242,12 @@ def test_persisted_sessions_support_pause_resume_final_round_and_local_draft_rec
 
 def test_movement_review_shows_authoritative_post_change_courts_and_bench() -> None:
     source = _source()
+    board = MOVEMENT_BOARD.read_text(encoding="utf-8")
 
-    assert "Authoritative next-round courts" in source
+    assert "Next-round court board" in board
+    assert "DragDropContext" in board
+    assert "Moved up from Court" in board
+    assert "Moved down from Court" in board
     assert "Approved next-round roster and courts" in source
     assert "movementPlan.next_courts" in source
     assert "movementPlan.bench" in source

@@ -1,0 +1,230 @@
+.boardSection {
+  margin-top: 1rem;
+}
+
+.boardHeadingRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.boardHeading {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.instructions {
+  margin: 0.35rem 0 0;
+  color: #475569;
+}
+
+.legend {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.legend span {
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid currentColor;
+  background: #fff;
+}
+
+.legendUp { color: #15803d; }
+.legendDown { color: #b91c1c; }
+.legendStay { color: #475569; }
+
+.board {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(230px, 1fr);
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  overflow-x: auto;
+  padding: 0.2rem 0.1rem 0.75rem;
+  scroll-snap-type: x proximity;
+}
+
+.column {
+  display: flex;
+  min-height: 260px;
+  flex-direction: column;
+  border: 1px solid #bbf7d0;
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+  scroll-snap-align: start;
+}
+
+.benchColumn {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.columnHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.7rem 0.75rem;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.columnHeader > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.columnHeader small,
+.playerCount {
+  color: #64748b;
+  font-size: 0.75rem;
+}
+
+.invalidCount {
+  color: #b91c1c;
+  font-weight: 800;
+}
+
+.dropZone {
+  flex: 1;
+  min-height: 190px;
+  padding: 0.55rem;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.draggingOver {
+  background: #eff6ff;
+  box-shadow: inset 0 0 0 2px #60a5fa;
+}
+
+.playerCard {
+  position: relative;
+  margin-bottom: 0.5rem;
+  padding: 0.65rem 0.7rem;
+  border: 1px solid #cbd5e1;
+  border-left-width: 5px;
+  border-radius: 10px;
+  background: #fff;
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 8%);
+  cursor: grab;
+  user-select: none;
+}
+
+.playerCard:focus-visible {
+  outline: 3px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.playerCard:active { cursor: grabbing; }
+.playerCard.up { border-left-color: #16a34a; background: #f0fdf4; }
+.playerCard.down { border-left-color: #dc2626; background: #fef2f2; }
+.playerCard.stay { border-left-color: #94a3b8; }
+.playerCard.bench { border-left-color: #d97706; background: #fffbeb; }
+.playerCard.new { border-left-color: #2563eb; background: #eff6ff; }
+
+.dragging {
+  box-shadow: 0 12px 24px rgb(15 23 42 / 20%);
+}
+
+.playerTopLine {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.dragHandle {
+  color: #64748b;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.movementLine {
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.up .movementLine { color: #15803d; }
+.down .movementLine { color: #b91c1c; }
+.bench .movementLine { color: #a16207; }
+.new .movementLine { color: #1d4ed8; }
+.stay .movementLine { color: #475569; }
+
+.metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.55rem;
+  margin-top: 0.45rem;
+  color: #475569;
+  font-size: 0.72rem;
+}
+
+.metrics b { color: #0f172a; }
+
+.overrideBadge {
+  display: inline-flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 0.08rem;
+  margin-top: 0.45rem;
+  padding: 0.18rem 0.4rem;
+  border-radius: 999px;
+  background: #ede9fe;
+  color: #6d28d9;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.overrideBadge small {
+  color: #5b21b6;
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+
+.emptyColumn {
+  margin: 0.5rem;
+  padding: 1rem 0.5rem;
+  border: 1px dashed #94a3b8;
+  border-radius: 8px;
+  color: #64748b;
+  text-align: center;
+  font-size: 0.8rem;
+}
+
+.capacityWarning {
+  margin: 0;
+  padding: 0.45rem 0.65rem;
+  border-top: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 700px) {
+  .board {
+    grid-auto-columns: minmax(82vw, 1fr);
+  }
+}
