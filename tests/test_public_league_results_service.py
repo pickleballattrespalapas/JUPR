@@ -215,6 +215,7 @@ def test_public_league_results_overview_excludes_inactive_leagues() -> None:
             "num_weeks": None,
         }
     ]
+    assert overview["past_leagues"] == []
 
 
 def test_public_league_results_maps_configured_schedule_weeks() -> None:
@@ -249,6 +250,7 @@ def test_public_league_results_maps_configured_schedule_weeks() -> None:
             "num_weeks": 6,
         }
     ]
+    assert overview["past_leagues"] == []
 
 
 def test_public_league_results_filters_matches_before_the_fetch_limit() -> None:
@@ -361,8 +363,8 @@ def test_public_league_results_builds_standings_weekly_and_highlights() -> None:
     assert "admin_flag" not in payload["weekly_results"][0]
     assert supabase.table_calls.count("leagues_metadata") == 1
     assert supabase.table_calls.count("players") == 1
-    assert supabase.table_calls.count("league_ratings") == 2
-    assert supabase.table_calls.count("matches") == 2
+    assert supabase.table_calls.count("league_ratings") == 1
+    assert supabase.table_calls.count("matches") == 1
     assert "team_league_teams" not in supabase.table_calls
     assert "team_league_fixtures" not in supabase.table_calls
 
@@ -427,7 +429,7 @@ def test_public_league_results_does_not_resolve_exact_archived_deep_link() -> No
 
 
 def test_public_exact_links_reject_every_historical_lifecycle_status() -> None:
-    for status in ("paused", "ended", "archived"):
+    for status in ("draft", "paused", "archived"):
         league_name = f"Historical {status}"
         payload = build_public_league_results(
             FakeSupabase(
@@ -467,6 +469,55 @@ def test_public_exact_links_reject_every_historical_lifecycle_status() -> None:
         assert payload["standings"] == []
 
 
+def test_ended_league_is_available_only_in_the_past_collection() -> None:
+    league_name = "Finished League"
+    payload = build_public_league_results(
+        FakeSupabase(
+            {
+                "leagues_metadata": [
+                    {
+                        "club_id": "club",
+                        "league_name": league_name,
+                        "is_active": False,
+                        "status": "ended",
+                    }
+                ],
+                "league_ratings": [
+                    {
+                        "club_id": "club",
+                        "league_name": league_name,
+                        "player_id": 9,
+                        "rating": 1520,
+                        "starting_rating": 1480,
+                        "wins": 4,
+                        "losses": 2,
+                        "matches_played": 6,
+                        "is_active": False,
+                    }
+                ],
+                "matches": [],
+                "players": [
+                    {
+                        "id": 9,
+                        "club_id": "club",
+                        "name": "Former Player",
+                        "rating": 1520,
+                        "active": False,
+                        "inactive_at": "2026-08-01",
+                    }
+                ],
+            }
+        ),
+        club_id="club",
+        league_name=league_name,
+    )
+
+    assert payload["selected_league"] == league_name
+    assert payload["leagues"] == []
+    assert [row["name"] for row in payload["past_leagues"]] == [league_name]
+    assert [row["player_name"] for row in payload["standings"]] == ["Former Player"]
+
+
 def test_inactive_metadata_blocks_match_and_rating_fallback_from_public_overview() -> None:
     supabase = FakeSupabase(
         {
@@ -499,5 +550,6 @@ def test_inactive_metadata_blocks_match_and_rating_fallback_from_public_overview
     )
 
     assert get_public_league_results_overview(supabase, club_id="club") == {
-        "leagues": []
+        "leagues": [],
+        "past_leagues": [],
     }

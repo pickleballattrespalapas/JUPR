@@ -101,6 +101,9 @@ def test_leagues_hub_lists_active_leagues_and_opens_league_home() -> None:
     assert "getClubLeagueResults" in leagues
     assert "Choose a league" in leagues
     assert "data?.leagues || []" in leagues
+    assert "data?.past_leagues || []" in leagues
+    assert 'data-testid="public-league-view-toggle"' in leagues
+    assert '"Past leagues"' in leagues
     assert "publicLeagueHomeHref" in leagues
     assert "Open League Home" in leagues
     assert "PublicLeagueNav" in league_home

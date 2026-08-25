@@ -27,6 +27,7 @@ def client(monkeypatch):
         *,
         club_id,
         league_name=None,
+        league_view="active",
         status="active",
         search=None,
         sort="rank",
@@ -35,6 +36,7 @@ def client(monkeypatch):
         offset=0,
     ):
         assert club_id == "club-1"
+        assert league_view == "active"
         assert status == "all"
         assert search == "Alex"
         assert sort == "gain"
@@ -82,7 +84,7 @@ def client(monkeypatch):
             "scopes": [{"name": "OVERALL", "label": "Overall", "min_games": 0}, {"name": league_name or "Open", "label": league_name or "Open", "min_games": 6}],
             "selected_scope": league_name or "Open",
             "scope": {"name": league_name or "Open", "label": league_name or "Open", "min_games": 6},
-            "filters": {"status": status, "search": search or "", "sort": sort},
+            "filters": {"league_view": league_view, "status": status, "search": search or "", "sort": sort},
             "summary": {"ranked_players": 2, "active_players": 2, "inactive_players": 0, "leaderboard_scopes": 2, "filtered_players": 2},
             "leaderboard": rows,
             "snapshot": rows[0],
@@ -125,7 +127,12 @@ def test_public_leaderboards_contract_shape(client):
         assert private_value not in serialized
 
     assert payload["selected_scope"] == "Pro"
-    assert payload["filters"] == {"status": "all", "search": "Alex", "sort": "gain"}
+    assert payload["filters"] == {
+        "league_view": "active",
+        "status": "all",
+        "search": "Alex",
+        "sort": "gain",
+    }
     assert payload["pagination"] == {"total": 2, "offset": 10, "limit": 10, "has_more": False}
 
 
@@ -133,6 +140,7 @@ def test_public_leaderboards_validate_pagination_bounds(client):
     assert client.get("/clubs/tres-palapas/leaderboards?limit=0").status_code == 422
     assert client.get("/clubs/tres-palapas/leaderboards?limit=101").status_code == 422
     assert client.get("/clubs/tres-palapas/leaderboards?offset=-1").status_code == 422
+    assert client.get("/clubs/tres-palapas/leaderboards?league_view=archived").status_code == 422
 
 
 def test_public_leaderboards_report_server_projection_failure_without_backend_detail(client, monkeypatch):

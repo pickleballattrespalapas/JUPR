@@ -62,7 +62,12 @@ class FakeSupabase:
                 {"id": 5, "club_id": "club-1", "name": "Inactive Izzy", "rating": 1450, "wins": 0, "losses": 1, "matches_played": 1, "active": False, "inactive_at": "2026-06-01"},
             ],
             "league_ratings": [
-                {"id": 11, "club_id": "club-1", "player_id": 1, "league_name": "Open", "rating": 1600, "wins": 3, "losses": 1, "matches_played": 4, "is_active": True}
+                {"id": 11, "club_id": "club-1", "player_id": 1, "league_name": "Open", "rating": 1600, "wins": 3, "losses": 1, "matches_played": 4, "is_active": True},
+                {"id": 12, "club_id": "club-1", "player_id": 1, "league_name": "Archived Test", "rating": 1800, "wins": 10, "losses": 0, "matches_played": 10, "is_active": True}
+            ],
+            "leagues_metadata": [
+                {"club_id": "club-1", "league_name": "Open", "status": "active", "is_active": True},
+                {"club_id": "club-1", "league_name": "Archived Test", "status": "archived", "is_active": False}
             ],
             "matches": [
                 {
@@ -170,6 +175,7 @@ def test_public_player_profile_includes_leagues_and_recent_matches():
     assert profile is not None
     assert profile["player"]["name"] == "Alex"
     assert profile["league_ratings"][0]["league_name"] == "Open"
+    assert [row["league_name"] for row in profile["league_ratings"]] == ["Open"]
     assert profile["recent_matches"][0]["team_1"][0]["name"] == "Alex"
     assert profile["recent_matches"][0]["score_t1"] == 11
     assert profile["recent_matches"][0]["match_format_label"] == "Singles"

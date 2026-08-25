@@ -32,6 +32,9 @@ export default async function PublicLeagueHomePage({ params }: Props) {
     leagueName
   );
   const found = data?.selected_league === leagueName;
+  const leagueView = data?.past_leagues.some((league) => league.name === leagueName)
+    ? "past"
+    : "active";
   const standings = found ? data?.standings || [] : [];
   const weeks = found ? data?.weeks || [] : [];
   const recentWeek = weeks.length ? weeks[weeks.length - 1] : null;
@@ -61,7 +64,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
         >
           <h2 style={{ marginTop: 0 }}>League unavailable</h2>
           <p style={{ color: "#7f1d1d" }}>
-            {error || "This league is not currently available as an active public league."}
+            {error || "This league is not available as an active or finished public league."}
           </p>
           <Link href={`/clubs/${params.clubSlug}/leagues`}>
             Return to all leagues
@@ -128,6 +131,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
         clubSlug={params.clubSlug}
         leagueName={leagueName}
         active="home"
+        leagueView={leagueView}
       />
 
       <article
@@ -150,20 +154,20 @@ export default async function PublicLeagueHomePage({ params }: Props) {
           <div>
             <h2 style={{ marginTop: 0 }}>{leagueName}</h2>
             <p style={{ marginBottom: 0, color: "#475569" }}>
-              Active public league
+              {leagueView === "past" ? "Finished public league" : "Active public league"}
             </p>
           </div>
           <span
             style={{
-              border: "1px solid #86efac",
+              border: `1px solid ${leagueView === "past" ? "#cbd5e1" : "#86efac"}`,
               borderRadius: "999px",
               padding: "0.25rem 0.6rem",
-              background: "#dcfce7",
-              color: "#166534",
+              background: leagueView === "past" ? "#f1f5f9" : "#dcfce7",
+              color: leagueView === "past" ? "#334155" : "#166534",
               fontWeight: 800
             }}
           >
-            Active
+            {leagueView === "past" ? "Finished" : "Active"}
           </span>
         </div>
         <div

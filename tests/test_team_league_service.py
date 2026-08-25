@@ -301,7 +301,12 @@ def test_draft_manager_league_is_hidden_and_rejects_direct_registration(
 
     public_list = list_public_team_leagues(supabase, club_id="club")
 
-    assert public_list == {"ok": True, "leagues": [], "league_count": 0}
+    assert public_list == {
+        "ok": True,
+        "league_view": "active",
+        "leagues": [],
+        "league_count": 0,
+    }
     with pytest.raises(ValueError, match="Registration is not open"):
         _register_solo(supabase, idempotency_key="register:draft-direct")
     with pytest.raises(ValueError, match="not found"):
@@ -321,6 +326,40 @@ def test_active_manager_league_is_listed_for_public_registration() -> None:
     assert public_list["league_count"] == 1
     assert public_list["leagues"][0]["league_name"] == "Open"
     assert public_list["leagues"][0]["registration_open"] is True
+
+
+def test_ended_team_league_is_past_and_read_only() -> None:
+    supabase = _RegistrationRecoverySupabase(manager_status="ended")
+
+    active = list_public_team_leagues(supabase, club_id="club")
+    past = list_public_team_leagues(
+        supabase,
+        club_id="club",
+        league_view="past",
+    )
+    detail = get_public_team_league(
+        supabase,
+        club_id="club",
+        league_name="Open",
+    )
+
+    assert active["leagues"] == []
+    assert [row["league_name"] for row in past["leagues"]] == ["Open"]
+    assert detail["registration"]["open"] is False
+
+
+@pytest.mark.parametrize("manager_status", ["draft", "paused", "archived"])
+def test_nonpublic_manager_states_never_enter_team_league_collections(
+    manager_status: str,
+) -> None:
+    supabase = _RegistrationRecoverySupabase(manager_status=manager_status)
+
+    assert list_public_team_leagues(supabase, club_id="club")["leagues"] == []
+    assert list_public_team_leagues(
+        supabase,
+        club_id="club",
+        league_view="past",
+    )["leagues"] == []
 
 
 def test_registration_refresh_with_new_key_recovers_exact_prior_success(

@@ -5,6 +5,12 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any, Mapping
 
+from jupr_app.services.public_league_visibility import (
+    ACTIVE_LEAGUE_VIEW,
+    PAST_LEAGUE_VIEW,
+    public_league_view,
+)
+
 LEAGUE_META_SELECT = (
     "club_id,league_name,league_type,match_format,is_active,status,min_games,k_factor,"
     "schedule_config,awards_config"
@@ -80,18 +86,6 @@ def _parse_week_num(value: Any) -> int | None:
 
 def _week_label(week_num: int | None) -> str:
     return f"Week {int(week_num)}" if week_num is not None else "Unspecified"
-
-
-def _active_league_name(row: dict[str, Any]) -> str | None:
-    league_name = str(row.get("league_name") or row.get("league") or "").strip()
-    if not league_name or league_name.upper() == "OVERALL" or league_name.upper() == "POPUP":
-        return None
-    if row.get("is_active") is False:
-        return None
-    status = str(row.get("status") or "").strip().lower()
-    if status and status not in {"active", "published", "live"}:
-        return None
-    return league_name
 
 
 def _is_active_player(row: dict[str, Any]) -> bool:
@@ -193,53 +187,30 @@ def _get_public_league_results_overview_data(
     """Return the public overview plus private metadata for request-local reuse."""
 
     cid = str(club_id).strip()
-    names: set[str] = set()
     meta_rows = _fetch_table(supabase, "leagues_metadata", LEAGUE_META_SELECT, club_id=cid)
     meta_by_name: dict[str, dict[str, Any]] = {}
-    known_meta_names: set[str] = set()
+    names_by_view: dict[str, set[str]] = {
+        ACTIVE_LEAGUE_VIEW: set(),
+        PAST_LEAGUE_VIEW: set(),
+    }
     for row in meta_rows:
-        raw_name = str(row.get("league_name") or "").strip()
-        if raw_name:
-            known_meta_names.add(raw_name)
-        league_name = _active_league_name(row)
-        if league_name:
-            names.add(league_name)
-            meta_by_name[league_name] = row
-
-    rating_rows = _fetch_table(supabase, "league_ratings", "league_name,is_active", club_id=cid, limit=5000)
-    for row in rating_rows:
-        league_name = _active_league_name(row)
-        if league_name and league_name not in known_meta_names:
-            names.add(league_name)
-
-    match_rows = _fetch_table(
-        supabase,
-        "matches",
-        "league,match_type,score_t1,score_t2,deleted_at",
-        club_id=cid,
-        null_filters=("deleted_at",),
-        limit=5000,
-    )
-    for row in match_rows:
-        if row.get("deleted_at") not in (None, ""):
+        league_name = str(row.get("league_name") or "").strip()
+        view = public_league_view(row)
+        if not league_name or view is None:
             continue
-        league_name = _active_league_name(row)
-        match_type = str(row.get("match_type") or "").strip()
-        score_t1 = _safe_int(row.get("score_t1"), 0) or 0
-        score_t2 = _safe_int(row.get("score_t2"), 0) or 0
-        if (
-            league_name
-            and league_name not in known_meta_names
-            and match_type != "PopUp"
-            and (score_t1 + score_t2) > 0
-        ):
-            names.add(league_name)
+        names_by_view[view].add(league_name)
+        meta_by_name[league_name] = row
 
-    leagues = []
-    for name in sorted(names, key=_league_sort_key):
-        meta = meta_by_name.get(name, {})
-        leagues.append(_public_league_meta(name, meta))
-    return {"leagues": leagues}, meta_by_name
+    def collection(view: str) -> list[dict[str, Any]]:
+        return [
+            _public_league_meta(name, meta_by_name[name])
+            for name in sorted(names_by_view[view], key=_league_sort_key)
+        ]
+
+    return {
+        "leagues": collection(ACTIVE_LEAGUE_VIEW),
+        "past_leagues": collection(PAST_LEAGUE_VIEW),
+    }, meta_by_name
 
 
 def get_public_league_results_overview(supabase: Any, *, club_id: str) -> dict[str, Any]:
@@ -252,22 +223,35 @@ def get_public_league_results_overview(supabase: Any, *, club_id: str) -> dict[s
 
 
 def _selected_league(overview: dict[str, Any], league_name: str | None) -> str | None:
-    names = [str(item.get("name")) for item in overview.get("leagues", []) if item.get("name")]
+    active_names = [
+        str(item.get("name"))
+        for item in overview.get("leagues", [])
+        if item.get("name")
+    ]
+    public_names = {
+        *active_names,
+        *[
+            str(item.get("name"))
+            for item in overview.get("past_leagues", [])
+            if item.get("name")
+        ],
+    }
     requested = str(league_name or "").strip()
     if requested:
         # An explicit deep link must never silently substitute a different
         # league.  Admin League Manager relies on this contract to preserve
         # the selected league while moving between its tools.
-        return requested if requested in names else None
-    return names[0] if names else None
+        return requested if requested in public_names else None
+    return active_names[0] if active_names else None
 
 
 def _league_meta(overview: dict[str, Any], league_name: str | None) -> dict[str, Any] | None:
     if not league_name:
         return None
-    for item in overview.get("leagues", []):
-        if str(item.get("name")) == str(league_name):
-            return dict(item)
+    for collection in ("leagues", "past_leagues"):
+        for item in overview.get(collection, []):
+            if str(item.get("name")) == str(league_name):
+                return dict(item)
     return {
         "name": str(league_name),
         "min_games": 0,
@@ -1026,13 +1010,15 @@ def build_public_league_results(
     player_id: int | None = None,
     weekly_min_games: int = DEFAULT_WEEKLY_HIGHLIGHT_MIN_GAMES,
 ) -> dict[str, Any]:
-    """Build active-only public League Results for one club/league."""
+    """Build public results for an active or explicitly selected past league."""
 
     cid = str(club_id).strip()
     overview, metadata_by_name = _get_public_league_results_overview_data(
         supabase, club_id=cid
     )
     selected = _selected_league(overview, league_name)
+    selected_metadata = metadata_by_name.get(str(selected or ""))
+    is_past_league = public_league_view(selected_metadata) == PAST_LEAGUE_VIEW
     return _build_resolved_league_results(
         supabase,
         club_id=cid,
@@ -1041,5 +1027,7 @@ def build_public_league_results(
         week_num=week_num,
         player_id=player_id,
         weekly_min_games=weekly_min_games,
-        league_metadata=metadata_by_name.get(str(selected or "")),
+        include_inactive_players=is_past_league,
+        include_inactive_ratings=is_past_league,
+        league_metadata=selected_metadata,
     )

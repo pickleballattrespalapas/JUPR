@@ -3,6 +3,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from jupr_app.services.public_league_visibility import (
+    ACTIVE_LEAGUE_VIEW,
+    normalize_public_league_view,
+    public_league_view,
+)
+
 
 OVERALL_SCOPE = "OVERALL"
 DEFAULT_PAGE_SIZE = 50
@@ -126,16 +132,6 @@ def _player_is_active(row: dict[str, Any]) -> bool:
     return True
 
 
-def _league_is_public(row: dict[str, Any]) -> bool:
-    name = str(row.get("league_name") or "").strip()
-    if not name or name.upper() in {OVERALL_SCOPE, "POPUP"}:
-        return False
-    if row.get("is_active") is False:
-        return False
-    status = str(row.get("status") or "").strip().lower()
-    return not status or status in {"active", "draft", "live", "published"}
-
-
 def _fetch_players(supabase: Any, club_id: str) -> list[dict[str, Any]]:
     return _query_rows(
         supabase,
@@ -160,7 +156,7 @@ def _scope_options(
     supabase: Any,
     *,
     club_id: str,
-    rating_rows: list[dict[str, Any]],
+    league_view: str,
 ) -> list[dict[str, Any]]:
     meta_rows = _query_rows(
         supabase,
@@ -170,7 +166,7 @@ def _scope_options(
     )
     metadata: dict[str, dict[str, Any]] = {}
     for row in meta_rows:
-        if not _league_is_public(row):
+        if public_league_view(row) != league_view:
             continue
         name = str(row.get("league_name") or "").strip()
         metadata[name] = {
@@ -179,18 +175,13 @@ def _scope_options(
             "min_games": max(0, _safe_int(row.get("min_games"), 0) or 0),
         }
 
-    # Older clubs may not have metadata yet. Preserve their live league tabs
-    # from active league-rating rows without exposing any additional columns.
-    for row in rating_rows:
-        if not _league_is_public(row):
-            continue
-        name = str(row.get("league_name") or "").strip()
-        metadata.setdefault(name, {"name": name, "label": name, "min_games": 0})
-
-    return [
-        {"name": OVERALL_SCOPE, "label": "Overall", "min_games": 0},
-        *[metadata[name] for name in sorted(metadata, key=str.casefold)],
-    ]
+    league_scopes = [metadata[name] for name in sorted(metadata, key=str.casefold)]
+    if league_view == ACTIVE_LEAGUE_VIEW:
+        return [
+            {"name": OVERALL_SCOPE, "label": "Overall", "min_games": 0},
+            *league_scopes,
+        ]
+    return league_scopes
 
 
 def _badge_map(supabase: Any, *, club_id: str) -> dict[str, list[dict[str, Any]]]:
@@ -413,6 +404,7 @@ def build_public_leaderboard(
     *,
     club_id: str,
     league_name: str | None = None,
+    league_view: str = ACTIVE_LEAGUE_VIEW,
     status: str = "active",
     search: str | None = None,
     sort: str = "rank",
@@ -436,23 +428,56 @@ def build_public_leaderboard(
     if clean_sort not in {"rank", "rating", "matches", "win_pct", "gain", "name"}:
         clean_sort = "rank"
     clean_search = str(search or "").strip()
+    clean_league_view = normalize_public_league_view(league_view)
 
     players = _fetch_players(supabase, cid) if cid else []
     rating_rows = _fetch_league_ratings(supabase, cid) if cid else []
-    scopes = _scope_options(supabase, club_id=cid, rating_rows=rating_rows) if cid else [{"name": OVERALL_SCOPE, "label": "Overall", "min_games": 0}]
+    scopes = (
+        _scope_options(
+            supabase,
+            club_id=cid,
+            league_view=clean_league_view,
+        )
+        if cid
+        else (
+            [{"name": OVERALL_SCOPE, "label": "Overall", "min_games": 0}]
+            if clean_league_view == ACTIVE_LEAGUE_VIEW
+            else []
+        )
+    )
     names = [str(scope.get("name") or "") for scope in scopes]
-    requested = str(league_name or OVERALL_SCOPE).strip()
-    if requested.upper() == OVERALL_SCOPE:
+    requested = str(
+        league_name
+        or (OVERALL_SCOPE if clean_league_view == ACTIVE_LEAGUE_VIEW else "")
+    ).strip()
+    if clean_league_view == ACTIVE_LEAGUE_VIEW and requested.upper() == OVERALL_SCOPE:
         selected = OVERALL_SCOPE
     else:
-        selected = next((name for name in names if name.casefold() == requested.casefold()), OVERALL_SCOPE)
-    selected_meta = next((dict(scope) for scope in scopes if scope.get("name") == selected), {"name": selected, "label": selected, "min_games": 0})
+        default_selected = (
+            OVERALL_SCOPE
+            if clean_league_view == ACTIVE_LEAGUE_VIEW
+            else (names[0] if names else "")
+        )
+        selected = next(
+            (name for name in names if name.casefold() == requested.casefold()),
+            default_selected,
+        )
+    selected_meta = next(
+        (dict(scope) for scope in scopes if scope.get("name") == selected),
+        {
+            "name": selected,
+            "label": selected or "Past leagues",
+            "min_games": 0,
+        },
+    )
     min_games = max(0, _safe_int(selected_meta.get("min_games"), 0) or 0)
 
     if selected == OVERALL_SCOPE:
         base_rows = _overall_rows(players, club_id=cid)
-    else:
+    elif selected:
         base_rows = _league_rows(rating_rows, players, club_id=cid, league_name=selected)
+    else:
+        base_rows = []
 
     badges = _badge_map(supabase, club_id=cid) if cid and base_rows else {}
     all_ranked = _decorate_rows(
@@ -496,7 +521,12 @@ def build_public_leaderboard(
         "scopes": scopes,
         "selected_scope": selected,
         "scope": selected_meta,
-        "filters": {"status": clean_status, "search": clean_search, "sort": clean_sort},
+        "filters": {
+            "league_view": clean_league_view,
+            "status": clean_status,
+            "search": clean_search,
+            "sort": clean_sort,
+        },
         "summary": {
             "ranked_players": len(base_rows),
             "active_players": active_count,

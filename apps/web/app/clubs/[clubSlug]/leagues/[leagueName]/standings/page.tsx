@@ -40,6 +40,9 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
     leagueName
   );
   const found = data?.selected_league === leagueName;
+  const leagueView = data?.past_leagues.some((league) => league.name === leagueName)
+    ? "past"
+    : "active";
 
   if (error || !data || !found) {
     return (
@@ -51,7 +54,7 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
         <article style={{ ...cardStyle, borderColor: "#fecaca", background: "#fef2f2" }}>
           <h2 style={{ marginTop: 0 }}>Standings unavailable</h2>
           <p style={{ color: "#7f1d1d" }}>
-            {error || "This league is not currently available as an active public league."}
+            {error || "This league is not available as an active or finished public league."}
           </p>
           <Link href={`/clubs/${params.clubSlug}/leagues`}>Return to all leagues</Link>
         </article>
@@ -85,7 +88,7 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
         Awards-race placement and qualification come first. An unranked player roster remains available below as a reference.
       </p>
 
-      <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="overall" />
+      <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="overall" leagueView={leagueView} />
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
         <article style={cardStyle}><strong>Players with a league rating</strong><br />{ratedPlayers}</article>

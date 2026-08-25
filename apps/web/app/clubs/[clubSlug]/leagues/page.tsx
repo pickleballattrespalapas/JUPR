@@ -4,7 +4,10 @@ import { getClubLeagueResults } from "@/lib/api";
 
 type Props = {
   params: { clubSlug: string };
+  searchParams?: Record<string, string | string[] | undefined>;
 };
+
+type LeagueView = "active" | "past";
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -14,9 +17,23 @@ const cardStyle = {
   minWidth: 0
 };
 
-export default async function PublicLeaguesPage({ params }: Props) {
+function selectedView(searchParams: Props["searchParams"]): LeagueView {
+  const raw = searchParams?.view;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value === "past" ? "past" : "active";
+}
+
+function viewHref(clubSlug: string, view: LeagueView): string {
+  const base = `/clubs/${encodeURIComponent(clubSlug)}/leagues`;
+  return view === "past" ? `${base}?view=past` : base;
+}
+
+export default async function PublicLeaguesPage({ params, searchParams }: Props) {
   const { data, error } = await getClubLeagueResults(params.clubSlug);
-  const leagues = data?.leagues || [];
+  const view = selectedView(searchParams);
+  const activeLeagues = data?.leagues || [];
+  const pastLeagues = data?.past_leagues || [];
+  const leagues = view === "past" ? pastLeagues : activeLeagues;
 
   return (
     <section>
@@ -32,11 +49,42 @@ export default async function PublicLeaguesPage({ params }: Props) {
       >
         Leagues
       </p>
-      <h1 style={{ marginTop: 0 }}>Choose a league</h1>
+      <h1 style={{ marginTop: 0 }}>
+        {view === "past" ? "Past leagues" : "Choose a league"}
+      </h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Open an active league to enter its League Home, standings, weekly
-        history, and player summaries.
+        {view === "past"
+          ? "Open a finished public league to review its final standings, weekly history, and player summaries."
+          : "Open an active league to enter its League Home, standings, weekly history, and player summaries."}
       </p>
+
+      <nav
+        aria-label="League collections"
+        data-testid="public-league-view-toggle"
+        style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}
+      >
+        {(["active", "past"] as LeagueView[]).map((option) => {
+          const current = option === view;
+          return (
+            <Link
+              key={option}
+              href={viewHref(params.clubSlug, option)}
+              aria-current={current ? "page" : undefined}
+              style={{
+                border: `1px solid ${current ? "#2563eb" : "#cbd5e1"}`,
+                borderRadius: "999px",
+                padding: "0.5rem 0.85rem",
+                background: current ? "#dbeafe" : "white",
+                color: current ? "#1d4ed8" : "#0f172a",
+                textDecoration: "none",
+                fontWeight: current ? 800 : 650
+              }}
+            >
+              {option === "active" ? "Active leagues" : "Past leagues"}
+            </Link>
+          );
+        })}
+      </nav>
 
       {error ? (
         <article
@@ -83,16 +131,20 @@ export default async function PublicLeaguesPage({ params }: Props) {
                 Minimum games: {league.min_games ?? 0}
               </p>
               <p style={{ margin: "0.75rem 0 0", fontWeight: 800 }}>
-                Open League Home →
+                {view === "past" ? "View finished league" : "Open League Home"} →
               </p>
             </Link>
           ))}
         </div>
       ) : !error ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>No active leagues</h2>
+          <h2 style={{ marginTop: 0 }}>
+            {view === "past" ? "No past leagues" : "No active leagues"}
+          </h2>
           <p style={{ color: "#475569" }}>
-            There are no public active leagues available for this club right now.
+            {view === "past"
+              ? "No finished public leagues have been published yet."
+              : "There are no public active leagues available for this club right now."}
           </p>
         </article>
       ) : null}

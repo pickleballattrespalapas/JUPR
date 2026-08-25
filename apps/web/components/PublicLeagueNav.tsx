@@ -7,6 +7,7 @@ type Props = {
   clubSlug: string;
   leagueName: string;
   active: PublicLeagueModule;
+  leagueView?: "active" | "past";
 };
 
 function safeLeagueName(value: string): string {
@@ -39,7 +40,8 @@ export function publicLeagueResultsHref(
 export default function PublicLeagueNav({
   clubSlug,
   leagueName,
-  active
+  active,
+  leagueView = "active"
 }: Props) {
   const cleanName = safeLeagueName(leagueName);
   const items: Array<[PublicLeagueModule, string, string]> = [
@@ -53,8 +55,11 @@ export default function PublicLeagueNav({
     <div className={styles.shell}>
       <div className={styles.contextRow}>
         <p className={styles.context}>{cleanName} league pages</p>
-        <Link href={`/clubs/${clubSlug}/leagues`} className={styles.backLink}>
-          All leagues
+        <Link
+          href={`/clubs/${clubSlug}/leagues${leagueView === "past" ? "?view=past" : ""}`}
+          className={styles.backLink}
+        >
+          {leagueView === "past" ? "Past leagues" : "All leagues"}
         </Link>
       </div>
       <nav className={styles.nav} aria-label={`${cleanName} league navigation`}>
