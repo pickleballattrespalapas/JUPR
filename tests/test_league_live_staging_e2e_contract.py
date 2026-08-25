@@ -15,9 +15,17 @@ def test_league_live_mutation_e2e_is_explicit_staging_only_and_non_retrying() ->
     assert "https://juprleagues-api-staging.fly.dev" in text
     assert "production_targets_contacted: false" in text
     assert 'test.describe.configure({ mode: "serial", retries: 0 })' in text
-    assert 'status: "retryable"' in text
-    assert "published_match_ids: []" in text
-    assert 'trigger: "Retry R1"' in text
+    assert 'confirmation_text: "CREATE LIVE SESSION"' in text
+    assert 'source: "staging_league_live_browser_acceptance"' in text
+    assert "fixtureSessionId" in text
+    assert "GITHUB_RUN_ID" in text
+    assert "GITHUB_RUN_ATTEMPT" in text
+    assert 'test("creates and completes a disposable five-round League Live session"' in text
+    assert 'trigger: "Publish reviewed round"' in text
+    assert 'name: "Start next round", exact: true' in text
+    assert 'name: "4. Score Entry with Review", exact: true' in text
+    assert "retainedOperationId" not in text
+    assert 'trigger: "Retry R1"' not in text
     assert 'trigger: "Finish session"' in text
     assert 'liveRoute.searchParams.set("league_id", expectedLeagueId)' in text
     assert 'liveRoute.searchParams.set("league_name", expectedLeagueName)' in text
@@ -50,7 +58,7 @@ def test_fly_workflow_runs_league_live_e2e_once_for_an_explicit_spec_change() ->
     assert "prepare_parity_staging_session.py" in text
     assert "            cleanup \\" in text
     assert "JUPR_LEAGUE_LIVE_E2E_SESSION_ID=d7221db1-db24-52d2-90fc-b667c16e0193" in text
-    assert "JUPR_LEAGUE_LIVE_E2E_OPERATION_ID=87a15480-a0d4-4a1d-922f-f200d6e4f259" in text
+    assert "JUPR_LEAGUE_LIVE_E2E_OPERATION_ID" not in text
     assert "JUPR_LEAGUE_LIVE_E2E_LEAGUE_ID=9" in text
     assert 'JUPR_LEAGUE_LIVE_E2E_LEAGUE_NAME="Acceptance Flex 0822A"' in text
     assert "JUPR_LEAGUE_LIVE_E2E_LEAGUE_TYPE=Individual" in text
