@@ -1320,9 +1320,9 @@ def save_admin_league_live_round(
     )
     operation_key = str(plan["operation_key"])
     if not _clean_text(expected_operation_key, limit=128):
-        raise LeagueLiveConflictError("expected_operation_key is required; preview Python movement again.")
+        raise LeagueLiveConflictError("expected_operation_key is required; refresh the court board again.")
     if str(expected_operation_key) != operation_key:
-        raise LeagueLiveConflictError("League Live plan changed. Preview Python movement again before saving.")
+        raise LeagueLiveConflictError("League Live plan changed. Refresh the court board again before saving.")
     count = plan["scored_match_count"]
     if submitted_match_count is not None and int(submitted_match_count) != int(count):
         raise LeagueLiveConflictError("Submitted match count does not match the Python round plan.")
@@ -1684,7 +1684,7 @@ def apply_admin_league_live_round_movement(
     )
     operation_key = str(plan.get("operation_key") or "")
     if len(str(expected_operation_key or "")) != 64 or str(expected_operation_key) != operation_key:
-        raise LeagueLiveConflictError("League Live movement changed. Preview it again before applying.")
+        raise LeagueLiveConflictError("League Live movement changed. Refresh the court board again before applying.")
     now = _now_iso()
     next_round = int(plan["next_round"])
     session_patch: dict[str, Any] = {

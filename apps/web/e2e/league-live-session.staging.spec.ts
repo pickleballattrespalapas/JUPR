@@ -184,7 +184,6 @@ async function publishRound(page: Page, roundNumber: number): Promise<void> {
 
   await expect(page.getByRole("heading", { name: "5. Movement", exact: true })).toBeVisible();
   await expect(page.getByText(/The round scores are official/i)).toBeVisible();
-  await page.getByRole("button", { name: "Preview movement", exact: true }).click();
   await expect(page.getByText(/Verified operation key/i)).toBeVisible();
   await runConfirmedAction(page, {
     trigger: "Apply movement and continue",

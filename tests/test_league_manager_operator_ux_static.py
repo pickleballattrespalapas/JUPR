@@ -180,7 +180,8 @@ def test_league_live_uses_operator_language_instead_of_runtime_jargon() -> None:
 
     assert "Roster and bench suggestion" in source
     assert "Movement planning:" in source
-    assert "Preview movement" in source
+    assert "The server-generated court board opens automatically" in source
+    assert "Validate board changes" in source
     assert "Review and publish every score first" in source
     assert "function leagueLiveOperatorMessage" in source
     assert ".replace(/\\bPython\\b/gi, \"League Live\")" in source

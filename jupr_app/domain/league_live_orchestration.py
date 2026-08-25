@@ -107,6 +107,51 @@ def _validate_court_sizes(court_sizes: Iterable[Any] | None, *, roster_count: in
     return parsed
 
 
+def _assign_performance_slots(
+    rows: list[dict[str, Any]],
+    *,
+    current_rows_by_id: dict[int, dict[str, Any]],
+    round_stats: dict[int, dict[str, int]],
+) -> None:
+    """Order next-round courts by movement boundary, then last-round results.
+
+    A player arriving from a higher court anchors slot 1, a player promoted
+    from a lower court anchors the final slot, and players staying on the court
+    remain between them in wins/differential order. Ratings are deliberately
+    excluded from the card-order contract.
+    """
+
+    def sort_key(row: dict[str, Any]) -> tuple[int, int, int, int, int, int, int]:
+        player_id = int(row["player_id"])
+        destination_court = int(row["court_number"])
+        current_row = current_rows_by_id.get(player_id)
+        source_court = int(current_row["court_number"]) if current_row else None
+        if source_court is not None and destination_court > source_court:
+            boundary = 0  # Down-movers enter at the top of their new court.
+        elif source_court is not None and destination_court == source_court:
+            boundary = 1  # Stayers are ranked by the completed round.
+        elif source_court is None:
+            boundary = 2  # New/returning players sit above the up-mover.
+        else:
+            boundary = 3  # Up-movers enter at the bottom of their new court.
+        performance = round_stats.get(player_id, {})
+        return (
+            boundary,
+            -int(performance.get("w", 0)),
+            -int(performance.get("diff", 0)),
+            -int(performance.get("pts", 0)),
+            int(current_row.get("slot") or 10_000) if current_row else 10_000,
+            int(row.get("source_order") or 10_000),
+            player_id,
+        )
+
+    for court_number in sorted({int(row["court_number"]) for row in rows}):
+        scoped = [row for row in rows if int(row["court_number"]) == court_number]
+        scoped.sort(key=sort_key)
+        for slot, row in enumerate(scoped, start=1):
+            row["slot"] = slot
+
+
 def build_league_live_roster_suggestion(
     roster: Iterable[dict[str, Any]] | None,
     *,
@@ -116,6 +161,7 @@ def build_league_live_roster_suggestion(
     bench_override_reason: str | None = None,
     round_number: int = 1,
     preserve_assignment_order: bool = False,
+    require_bench_override_reason: bool = True,
 ) -> dict[str, Any]:
     normalized = normalize_league_live_roster(roster)
     if len(normalized) < 4:
@@ -151,7 +197,11 @@ def build_league_live_roster_suggestion(
             raise LeagueLiveDomainError("Bench override contains a player outside this roster.")
         if len(requested_bench_ids) != bench_count:
             raise LeagueLiveDomainError(f"Select exactly {bench_count} bench player(s) for this court setup.")
-        if set(requested_bench_ids) != set(default_bench_ids) and len(_clean_text(bench_override_reason, limit=500)) < 10:
+        if (
+            require_bench_override_reason
+            and set(requested_bench_ids) != set(default_bench_ids)
+            and len(_clean_text(bench_override_reason, limit=500)) < 10
+        ):
             raise LeagueLiveDomainError("Explain the bench override in at least 10 characters.")
         selected_bench_ids = requested_bench_ids
     else:
@@ -396,7 +446,7 @@ def build_league_live_round_plan(
         court_by_player_id=court_by_player_id,
     )
     if not valid_matches:
-        raise LeagueLiveDomainError("Enter at least one valid scored match before previewing court movement.")
+        raise LeagueLiveDomainError("Enter at least one valid scored match before building the court board.")
 
     roster_df = pd.DataFrame(
         [
@@ -413,7 +463,7 @@ def build_league_live_round_plan(
     stats = compute_round_stats(valid_matches, [int(row["player_id"]) for row in active_rows])
     preview = build_movement_preview(roster_df, stats, max_court=len(normalized_courts))
     if preview.empty:
-        raise LeagueLiveDomainError("Unable to build a court movement preview.")
+        raise LeagueLiveDomainError("Unable to build the next-round court board.")
 
     next_active: list[dict[str, Any]] = []
     for _, row in preview.iterrows():
@@ -429,15 +479,17 @@ def build_league_live_round_plan(
             }
         )
 
-    next_active.sort(key=lambda row: (int(row["court_number"]), -float(row.get("rating") or 1200.0), int(row["player_id"])))
+    _assign_performance_slots(
+        next_active,
+        current_rows_by_id=active_by_id,
+        round_stats=stats,
+    )
     for court_number in range(1, len(normalized_courts) + 1):
         scoped = [row for row in next_active if int(row["court_number"]) == court_number]
         if len(scoped) not in {4, 5}:
             raise LeagueLiveDomainError(
                 f"Manual movement leaves Court {court_number} with {len(scoped)} players; each court requires four or five."
             )
-        for slot, row in enumerate(scoped, start=1):
-            row["slot"] = slot
 
     existing_bench = [row for row in roster_pool if int(row["player_id"]) not in active_by_id]
     roster_change_payload: dict[str, Any] | None = None
@@ -473,6 +525,7 @@ def build_league_live_round_plan(
             bench_override_reason=bench_override_reason,
             round_number=next_round,
             preserve_assignment_order=True,
+            require_bench_override_reason=False,
         )
         next_active = list(suggested["active_roster"])
         existing_bench = list(suggested["bench"])
@@ -492,9 +545,16 @@ def build_league_live_round_plan(
                 bench_override_reason=bench_override_reason,
                 round_number=next_round,
                 preserve_assignment_order=True,
+                require_bench_override_reason=False,
             )
             next_active = list(suggested["active_roster"])
             existing_bench = list(suggested["bench"])
+
+    _assign_performance_slots(
+        next_active,
+        current_rows_by_id=active_by_id,
+        round_stats=stats,
+    )
 
     default_next_active = [dict(row) for row in next_active]
     default_bench = [dict(row) for row in existing_bench]
@@ -579,10 +639,12 @@ def build_league_live_round_plan(
             slots = sorted(int(row.get("slot") or 0) for row in scoped)
             if slots != list(range(1, len(scoped) + 1)):
                 raise LeagueLiveDomainError(f"Court {court_number} card order must use every slot from 1 to {len(scoped)} once.")
-        else:
-            scoped.sort(key=lambda row: (-float(row.get("rating") or 1200.0), int(row["player_id"])))
-            for slot, row in enumerate(scoped, start=1):
-                row["slot"] = slot
+    if not ordered_board_override:
+        _assign_performance_slots(
+            next_active,
+            current_rows_by_id=active_by_id,
+            round_stats=stats,
+        )
 
     next_active.sort(key=lambda row: (int(row["court_number"]), int(row.get("slot") or 0), int(row["player_id"])))
     final_location_by_id = {
@@ -595,8 +657,6 @@ def build_league_live_round_plan(
         for player_id in final_roster_ids
     )
     clean_override_reason = _clean_text(override_reason, limit=500)
-    if override_applied and len(clean_override_reason) < 10:
-        raise LeagueLiveDomainError("Explain a manual movement override in at least 10 characters.")
 
     movement_rows: list[dict[str, Any]] = []
     for _, row in preview.iterrows():
