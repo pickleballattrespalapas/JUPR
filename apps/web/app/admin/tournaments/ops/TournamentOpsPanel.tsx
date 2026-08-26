@@ -15,6 +15,10 @@ import type {
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
+import {
+  clearRoundRobinGenerationIdempotencyKey,
+  stableRoundRobinGenerationIdempotencyKey
+} from "@/lib/tournamentRoundRobinIdempotency.mjs";
 
 export type OpsWorkflow = "all" | "draws" | "import" | "results" | "publish";
 type Props = { apiBase: string | null; clubId: string; status: AdminTournamentStatusResponse; workflow?: OpsWorkflow; initialTournamentId: string; initialDrawId?: string | null };
@@ -273,7 +277,9 @@ export default function TournamentOpsPanel({
         && detailRecord?.recovery_required !== true;
       const operationReference = typeof detailRecord?.operation_reference === "string"
         ? detailRecord.operation_reference
-        : null;
+        : typeof detailRecord?.operation_key === "string"
+          ? detailRecord.operation_key
+          : null;
       const message = response.status === 409 && !recoveryRequired
         ? `${detailMessage} Reload the authoritative Ops snapshot before submitting a new request.`
         : detailMessage;
@@ -614,7 +620,7 @@ export default function TournamentOpsPanel({
     }
   }
 
-  async function generateGames(confirmationText: string) {
+  async function generateGames(confirmationText: string): Promise<ActionCompletion> {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before generating games.");
       throw new Error("Select a tournament and draw before generating games.");
@@ -622,22 +628,54 @@ export default function TournamentOpsPanel({
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
     const drawId = selectedDrawId;
+    const request = {
+      expected_state_fingerprint: reviewedState,
+      expected_draw_updated_at: reviewedDrawUpdatedAt,
+      expected_team_versions: [...reviewedTeamVersions].sort((left, right) => (
+        left.id.localeCompare(right.id) || left.updated_at.localeCompare(right.updated_at)
+      )),
+      confirmation_text: confirmationText,
+      source: "next_tournament_ops_generate_round_robin"
+    };
+    const operationScope = `${clubId}:${tournamentId}:${drawId}`;
+    const idempotencyKey = stableRoundRobinGenerationIdempotencyKey(operationScope, request);
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/games/round-robin`, {
         method: "POST",
-        body: JSON.stringify({ expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, confirmation_text: confirmationText, source: "next_tournament_ops_generate_round_robin" })
+        body: JSON.stringify({ ...request, idempotency_key: idempotencyKey })
       });
       const gameCount = payload.game_count ?? payload.games?.length ?? 0;
       const completion = actionSuccess("Round-robin games generated", `${gameCount} round-robin game${gameCount === 1 ? " was" : "s were"} generated.`);
-      if (!actionRequest.isCurrent(generation)) return completion;
+      if (!actionRequest.isCurrent(generation)) {
+        clearRoundRobinGenerationIdempotencyKey(operationScope, idempotencyKey);
+        return completion;
+      }
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return completion;
+      if (!actionRequest.isCurrent(generation)) {
+        clearRoundRobinGenerationIdempotencyKey(operationScope, idempotencyKey);
+        return completion;
+      }
+      clearRoundRobinGenerationIdempotencyKey(operationScope, idempotencyKey);
       setMessage(`Generated ${payload.game_count ?? payload.games?.length ?? 0} round-robin game(s).${operationSuffix(payload)}`);
       return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to generate games.");
+      if (error instanceof TournamentOpsRequestError && !error.uncertain) {
+        clearRoundRobinGenerationIdempotencyKey(operationScope, idempotencyKey);
+      }
+      if (!(error instanceof TournamentOpsRequestError) || error.uncertain) {
+        return actionUncertain(
+          "Round-robin generation needs verification",
+          "The exact reviewed request is retained on this tab. Retry it with the same operation key; a changed authoritative state will create a new request instead.",
+          error instanceof TournamentOpsRequestError && error.operationReference
+            ? error.operationReference
+            : idempotencyKey,
+          "Retry exact generation",
+          () => generateGames(confirmationText)
+        );
+      }
       throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);

@@ -40,6 +40,14 @@ class TournamentAdminRecoveryRequiredError(RuntimeError):
     """A mutation may have completed and must be reconciled, not repeated."""
 
 
+class TournamentAdminMutationNotAppliedError(RuntimeError):
+    """A server-returned atomic failure proves that no domain write committed."""
+
+    def __init__(self, message: str, *, operation_key: str | None = None) -> None:
+        super().__init__(message)
+        self.operation_key = str(operation_key or "").strip()
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -835,17 +843,6 @@ def run_tournament_admin_guarded_operation(
         result = dict(mutate() or {})
     except StaleTournamentAdminStateError as exc:
         error_text = f"{TOURNAMENT_ADMIN_STALE_CAS_NO_WRITE_PREFIX}{exc}"[:1000]
-        try:
-            _update_operation(
-                supabase,
-                club_id=str(club_id),
-                operation_key=operation_request["operation_key"],
-                patch={"status": "failed", "error_text": error_text},
-            )
-        except Exception as state_exc:
-            raise TournamentAdminRecoveryRequiredError(
-                "A SQL compare-and-swap rejected stale Tournament Admin state without a domain write, but the failed marker did not persist. Reconcile the operation before continuing."
-            ) from state_exc
         audit_error = _attempt_failure_audit(
             supabase,
             club_id=str(club_id),
@@ -860,8 +857,55 @@ def run_tournament_admin_guarded_operation(
         )
         if audit_error is not None:
             raise TournamentAdminRecoveryRequiredError(
-                "A SQL compare-and-swap rejected stale Tournament Admin state without a domain write, but its required failure audit did not persist."
+                "A SQL compare-and-swap rejected stale Tournament Admin state without a domain write, but its required failure audit did not persist. Its active operation lock remains in place."
             ) from audit_error
+        try:
+            _update_operation(
+                supabase,
+                club_id=str(club_id),
+                operation_key=operation_request["operation_key"],
+                patch={"status": "failed", "error_text": error_text},
+            )
+        except Exception as state_exc:
+            raise TournamentAdminRecoveryRequiredError(
+                "A SQL compare-and-swap rejected stale Tournament Admin state without a domain write and its failure audit persisted, but the failed marker did not. Reconcile the still-active operation before continuing."
+            ) from state_exc
+        raise
+    except TournamentAdminMutationNotAppliedError as exc:
+        # The domain RPC cannot know the durable operation identity owned by
+        # this guard. Attach it before the exception crosses the API boundary
+        # so the client can retain exact failure evidence without deriving a
+        # server key itself.
+        if not exc.operation_key:
+            exc.operation_key = str(operation_request["operation_key"])
+        error_text = str(exc)[:1000]
+        audit_error = _attempt_failure_audit(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            operation=operation_request,
+            source=source,
+            error_text=error_text,
+        )
+        if audit_error is not None:
+            raise TournamentAdminRecoveryRequiredError(
+                "The atomic Tournament Admin mutation was rejected without a domain write, but its required failure audit did not persist. Its active operation lock remains in place."
+            ) from audit_error
+        try:
+            _update_operation(
+                supabase,
+                club_id=str(club_id),
+                operation_key=operation_request["operation_key"],
+                patch={"status": "failed", "error_text": error_text},
+            )
+        except Exception as state_exc:
+            raise TournamentAdminRecoveryRequiredError(
+                "The atomic Tournament Admin mutation was rejected without a domain write and its failure audit persisted, but its failed marker did not. Reconcile the still-active operation before continuing."
+            ) from state_exc
         raise
     except Exception as exc:
         error_text = str(exc)[:1000]

@@ -13,6 +13,7 @@ from jupr_app.domain.admin_activity_log import ActivityLogWriteResult
 from jupr_app.domain.tournament_registration_repo import publish_registration_configuration
 from jupr_app.services.admin_tournament_guarded_operation import (
     StaleTournamentAdminStateError,
+    TournamentAdminMutationNotAppliedError,
     TournamentAdminRecoveryRequiredError,
     reconcile_tournament_admin_guarded_operation,
     require_tournament_admin_mutation_runtime,
@@ -39,7 +40,16 @@ def _enable_staging(monkeypatch, surface: str = "registration") -> None:
     monkeypatch.setenv(flag, "1")
 
 
-def _run(supabase, *, mutate, expected_state: str = "v1", preflight=None, current_state=None, reconcile=None):
+def _run(
+    supabase,
+    *,
+    mutate,
+    expected_state: str = "v1",
+    preflight=None,
+    current_state=None,
+    reconcile=None,
+    idempotency_key: str | None = None,
+):
     return run_tournament_admin_guarded_operation(
         supabase,
         club_id="club",
@@ -56,6 +66,7 @@ def _run(supabase, *, mutate, expected_state: str = "v1", preflight=None, curren
         preflight=preflight,
         reconcile=reconcile,
         mutate=mutate,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -407,6 +418,147 @@ def test_partial_mutation_exception_is_recovery_required_and_never_blindly_retri
     with pytest.raises(TournamentAdminRecoveryRequiredError, match="unresolved recovery state"):
         _run(supabase, mutate=response_lost_after_write)
     assert mutation_calls == 1
+
+
+def test_server_rejected_atomic_mutation_is_failed_not_recovery_required(
+    monkeypatch,
+) -> None:
+    _enable_staging(monkeypatch)
+    tables = {
+        "tournament_admin_operations": [],
+        "admin_activity_log": [],
+        "domain_rows": [],
+    }
+    supabase = FakeSupabase(tables)
+
+    def server_rejected_without_write():
+        raise TournamentAdminMutationNotAppliedError(
+            "The database rejected the atomic game schedule; no games were created."
+        )
+
+    with pytest.raises(
+        TournamentAdminMutationNotAppliedError,
+        match="no games were created",
+    ):
+        _run(supabase, mutate=server_rejected_without_write)
+
+    assert tables["domain_rows"] == []
+    assert tables["tournament_admin_operations"][0]["status"] == "failed"
+    assert [row["action_type"] for row in tables["admin_activity_log"]] == [
+        "tournament_registration_update_intent",
+        "tournament_registration_update_failure",
+    ]
+
+
+@pytest.mark.parametrize(
+    "mutation_error",
+    [
+        StaleTournamentAdminStateError("the reviewed snapshot changed"),
+        TournamentAdminMutationNotAppliedError(
+            "The database rejected the atomic game schedule; no games were created."
+        ),
+    ],
+)
+def test_definite_no_write_keeps_lock_when_failure_audit_is_missing(
+    monkeypatch,
+    mutation_error,
+) -> None:
+    _enable_staging(monkeypatch)
+    tables = {
+        "tournament_admin_operations": [],
+        "admin_activity_log": [],
+        "domain_rows": [],
+    }
+    supabase = FakeSupabase(tables)
+    audit_attempts = 0
+
+    def fail_only_failure_audit(_supabase, _payload):
+        nonlocal audit_attempts
+        audit_attempts += 1
+        return ActivityLogWriteResult(ok=audit_attempts == 1)
+
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tournament_guarded_operation.write_admin_activity_log",
+        fail_only_failure_audit,
+    )
+
+    def server_rejected_without_write():
+        raise mutation_error
+
+    with pytest.raises(
+        TournamentAdminRecoveryRequiredError,
+        match="active operation lock remains in place",
+    ):
+        _run(supabase, mutate=server_rejected_without_write)
+
+    assert tables["domain_rows"] == []
+    assert tables["tournament_admin_operations"][0]["status"] == "intent"
+    assert audit_attempts == 2
+
+
+def test_definite_failure_blocks_same_uuid_but_fresh_uuid_can_mutate_unchanged_state(
+    monkeypatch,
+) -> None:
+    _enable_staging(monkeypatch)
+    tables = {
+        "tournament_admin_operations": [],
+        "admin_activity_log": [],
+        "domain_rows": [],
+    }
+    supabase = FakeSupabase(tables)
+    first_key = "11111111-1111-4111-8111-111111111111"
+    fresh_key = "22222222-2222-4222-8222-222222222222"
+    mutation_calls = 0
+
+    def rejected_without_write():
+        nonlocal mutation_calls
+        mutation_calls += 1
+        raise TournamentAdminMutationNotAppliedError(
+            "The database rejected the atomic game schedule; no games were created."
+        )
+
+    with pytest.raises(TournamentAdminMutationNotAppliedError) as rejected:
+        _run(
+            supabase,
+            mutate=rejected_without_write,
+            idempotency_key=first_key,
+        )
+
+    failed_operation = tables["tournament_admin_operations"][0]
+    assert rejected.value.operation_key == failed_operation["operation_key"]
+    assert failed_operation["status"] == "failed"
+
+    with pytest.raises(
+        TournamentAdminRecoveryRequiredError,
+        match="unresolved recovery state",
+    ):
+        _run(
+            supabase,
+            mutate=lambda: tables["domain_rows"].append({"id": "unsafe"}),
+            idempotency_key=first_key,
+        )
+
+    def successful_fresh_attempt():
+        nonlocal mutation_calls
+        mutation_calls += 1
+        tables["domain_rows"].append({"id": "schedule-1"})
+        return {"ok": True, "game_count": 36}
+
+    result = _run(
+        supabase,
+        mutate=successful_fresh_attempt,
+        idempotency_key=fresh_key,
+    )
+
+    assert mutation_calls == 2
+    assert tables["domain_rows"] == [{"id": "schedule-1"}]
+    assert result["game_count"] == 36
+    assert result["client_idempotency_key"] == fresh_key
+    assert result["operation_key"] != failed_operation["operation_key"]
+    assert [row["status"] for row in tables["tournament_admin_operations"]] == [
+        "failed",
+        "completed",
+    ]
 
 
 def test_empty_recovery_result_reconciles_only_from_callback_without_second_mutation(monkeypatch) -> None:
