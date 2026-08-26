@@ -216,6 +216,34 @@ def _event_is_active(event: dict[str, Any]) -> bool:
     }
 
 
+def _draw_is_primary_for_day(
+    draw: dict[str, Any], event: dict[str, Any] | None, day_id: str
+) -> bool:
+    """Mirror the Tournament Day Live source-of-truth draw/day boundary."""
+
+    if event is None or not _event_is_active(event):
+        return False
+    if _upper(draw.get("status"), "DRAFT") in {
+        "CANCELLED",
+        "CANCELED",
+        "ARCHIVED",
+        "DISABLED",
+    }:
+        return False
+    if bool(draw.get("hidden_from_primary_ops")):
+        return False
+    if _upper(draw.get("draw_kind"), "STANDARD") != "STANDARD":
+        return False
+
+    draw_day_id = _clean(draw.get("registration_day_id"), limit=160)
+    scheduled_day_ids = _scheduled_day_ids(event)
+    if draw_day_id:
+        return draw_day_id == day_id and draw_day_id in scheduled_day_ids
+    # A draw with no explicit day may inherit a single-day event, but must not
+    # leak into every day of a multi-day event.
+    return len(scheduled_day_ids) == 1 and day_id in scheduled_day_ids
+
+
 def _day_summary(day: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": _clean(day.get("id"), limit=160),
@@ -291,17 +319,6 @@ def _schedule_readiness(
                     "Set a court count or named court list for this event day.",
                 )
             )
-        if not _clean(day.get("court_open_time"), limit=40) or not _clean(
-            day.get("court_close_time"), limit=40
-        ):
-            blockers.append(
-                _blocker(
-                    "COURT_TIME_MISSING",
-                    f"{label} court hours incomplete",
-                    "Set both court opening and closing times for this event day.",
-                )
-            )
-
     return {
         "status": "COMPLETE" if not blockers else "BLOCKED",
         "timezone": timezone_name or None,
@@ -326,6 +343,8 @@ def _draw_readiness(
     *,
     event_options: list[dict[str, Any]],
     draws: list[dict[str, Any]],
+    teams: list[dict[str, Any]],
+    integrity_blockers: list[dict[str, str]],
 ) -> dict[str, Any]:
     active_events = [row for row in event_options if _event_is_active(row)]
     draw_event_ids = {
@@ -342,6 +361,21 @@ def _draw_readiness(
         for event in active_events
         if _clean(event.get("id"), limit=160) not in draw_event_ids
     ]
+    team_draw_ids = {
+        _clean(row.get("draw_id"), limit=160)
+        for row in teams
+        if _clean(row.get("draw_id"), limit=160)
+    }
+    blockers.extend(
+        _blocker(
+            "DRAW_ROSTER_EMPTY",
+            f"{_clean(draw.get('name'), limit=160) or 'Division draw'} roster is empty",
+            "Import or save at least one valid draw team before event-day check-in.",
+        )
+        for draw in draws
+        if _clean(draw.get("id"), limit=160) not in team_draw_ids
+    )
+    blockers.extend(integrity_blockers)
     return {
         "status": "COMPLETE" if not blockers else "BLOCKED",
         "active_division_count": len(active_events),
@@ -627,9 +661,19 @@ def build_admin_tournament_checkin_snapshot(
     )
     draws = _query_rows(
         supabase.table("tournament_event_draws")
-        .select("id,tournament_id,event_option_id,name,status,updated_at")
+        .select(
+            "id,tournament_id,event_option_id,registration_day_id,name,status,draw_kind,hidden_from_primary_ops,updated_at"
+        )
         .eq("tournament_id", str(tournament_id)),
         label="draw readiness",
+    )
+    draw_teams = _query_rows(
+        supabase.table("tournament_teams")
+        .select(
+            "id,tournament_id,draw_id,event_option_id,player1_id,player2_id,updated_at"
+        )
+        .eq("tournament_id", str(tournament_id)),
+        label="draw teams",
     )
     orders = _optional_rows(
         supabase.table("tournament_commerce_orders")
@@ -655,11 +699,6 @@ def build_admin_tournament_checkin_snapshot(
         if _clean(row.get("event_option_id"), limit=160)
         in selected_day_event_ids
     ]
-    scheduled_registration_ids = {
-        _clean(row.get("registration_id"), limit=160)
-        for row in selected_day_selections
-        if _clean(row.get("registration_id"), limit=160)
-    }
     registrations_by_id = {
         _clean(row.get("id"), limit=160): row
         for row in registrations
@@ -671,7 +710,221 @@ def build_admin_tournament_checkin_snapshot(
         if _clean(row.get("id"), limit=160)
     }
     players_by_id = {
-        _safe_int(row.get("id")): row for row in players if _safe_int(row.get("id")) is not None
+        _safe_int(row.get("id")): row
+        for row in players
+        if _safe_int(row.get("id")) is not None
+    }
+    selected_day_draws = [
+        row
+        for row in draws
+        if _draw_is_primary_for_day(
+            row,
+            events_by_id.get(_clean(row.get("event_option_id"), limit=160)),
+            selected_day_id,
+        )
+    ]
+    selected_day_draw_events = {
+        _clean(row.get("id"), limit=160): _clean(
+            row.get("event_option_id"), limit=160
+        )
+        for row in selected_day_draws
+        if _clean(row.get("id"), limit=160)
+    }
+    selected_day_draw_teams = [
+        row
+        for row in draw_teams
+        if _clean(row.get("draw_id"), limit=160) in selected_day_draw_events
+    ]
+    draw_ids_by_event: dict[str, list[str]] = {}
+    for draw_id, event_id in selected_day_draw_events.items():
+        draw_ids_by_event.setdefault(event_id, []).append(draw_id)
+    roster_player_ids_by_event: dict[str, set[int]] = {}
+    roster_integrity_blockers: list[dict[str, str]] = []
+    integrity_codes: set[str] = set()
+
+    def add_roster_integrity_blocker(code: str, title: str, detail: str) -> None:
+        if code in integrity_codes:
+            return
+        integrity_codes.add(code)
+        roster_integrity_blockers.append(_blocker(code, title, detail))
+
+    for event_id, draw_ids in draw_ids_by_event.items():
+        if len(draw_ids) > 1:
+            add_roster_integrity_blocker(
+                "DRAW_SCOPE_AMBIGUOUS",
+                f"{_event_label(events_by_id.get(event_id, {}))} has multiple primary draws",
+                "Keep exactly one visible standard draw for this event day before check-in.",
+            )
+
+    for team in selected_day_draw_teams:
+        draw_id = _clean(team.get("draw_id"), limit=160)
+        # The draw owns event scope. Child team event columns are legacy
+        # projections and may be null or stale, so never use them to decide
+        # who belongs on today's check-in roster.
+        event_id = selected_day_draw_events.get(draw_id) or ""
+        if not event_id:
+            continue
+        event = events_by_id.get(event_id, {})
+        player1_id = _safe_int(team.get("player1_id"))
+        player2_id = _safe_int(team.get("player2_id"))
+        partner_required = bool(event.get("partner_required")) or _upper(
+            event.get("event_type")
+        ) in {"DOUBLES", "MIXED_DOUBLES"}
+        if player1_id is None or (partner_required and player2_id is None):
+            add_roster_integrity_blocker(
+                "DRAW_ROSTER_SLOT_INVALID",
+                f"{_event_label(event)} has an incomplete team",
+                "Every draw team must have the participant slots required by its event type.",
+            )
+        if (
+            _upper(event.get("event_type")) == "SINGLES"
+            and player2_id is not None
+        ):
+            add_roster_integrity_blocker(
+                "DRAW_ROSTER_SLOT_INVALID",
+                f"{_event_label(event)} has an invalid singles team",
+                "Singles draw teams must contain exactly one player.",
+            )
+        if player1_id is not None and player1_id == player2_id:
+            add_roster_integrity_blocker(
+                "DRAW_ROSTER_PLAYER_DUPLICATE",
+                f"{_event_label(event)} repeats a player on one team",
+                "Each player may occupy only one participant slot in an event draw.",
+            )
+        for player_id in (player1_id, player2_id):
+            if player_id is None:
+                continue
+            existing = roster_player_ids_by_event.setdefault(event_id, set())
+            if player_id in existing:
+                add_roster_integrity_blocker(
+                    "DRAW_ROSTER_PLAYER_DUPLICATE",
+                    f"{_event_label(event)} assigns a player more than once",
+                    "Each player may belong to only one team in an event draw.",
+                )
+            existing.add(player_id)
+            if (
+                player_id not in players_by_id
+                or players_by_id[player_id].get("active") is not True
+            ):
+                add_roster_integrity_blocker(
+                    "DRAW_ROSTER_PLAYER_UNKNOWN",
+                    f"{_event_label(event)} contains an unavailable player",
+                    "Every draw participant must resolve to an active player in this club.",
+                )
+
+    active_selections_by_event_player: dict[
+        tuple[str, int], list[dict[str, Any]]
+    ] = {}
+    for selection in selected_day_selections:
+        registration = registrations_by_id.get(
+            _clean(selection.get("registration_id"), limit=160)
+        )
+        player_id = _safe_int((registration or {}).get("player_id"))
+        event_id = _clean(selection.get("event_option_id"), limit=160)
+        if (
+            registration
+            and _registration_is_active(registration)
+            and player_id is not None
+            and event_id
+        ):
+            active_selections_by_event_player.setdefault(
+                (event_id, player_id), []
+            ).append(selection)
+
+    for event_id, roster_player_ids in roster_player_ids_by_event.items():
+        for player_id in roster_player_ids:
+            if len(active_selections_by_event_player.get((event_id, player_id), [])) != 1:
+                add_roster_integrity_blocker(
+                    "DRAW_ROSTER_REGISTRATION_UNRESOLVED",
+                    (
+                        f"{_event_label(events_by_id.get(event_id, {}))} has an "
+                        "unresolvable roster entry"
+                    ),
+                    (
+                        "Every draw player must resolve to exactly one active "
+                        "registration selection for this event."
+                    ),
+                )
+
+    # Before a primary draw exists for an event, registration selections are
+    # the best available scope. Once a draw shell exists (even an empty one),
+    # check-in follows that event's authoritative roster.
+    authoritative_event_ids = set(draw_ids_by_event)
+    operational_selections: list[dict[str, Any]] = []
+    registration_follow_up: list[dict[str, Any]] = []
+    for selection in selected_day_selections:
+        registration_id = _clean(selection.get("registration_id"), limit=160)
+        registration = registrations_by_id.get(registration_id)
+        if not registration or not _registration_is_active(registration):
+            continue
+        event_id = _clean(selection.get("event_option_id"), limit=160)
+        player_id = _safe_int(registration.get("player_id"))
+        exact_registration_selections = (
+            active_selections_by_event_player.get((event_id, player_id), [])
+            if player_id is not None
+            else []
+        )
+        is_rostered = bool(
+            event_id not in authoritative_event_ids
+            or (
+                player_id is not None
+                and player_id in roster_player_ids_by_event.get(event_id, set())
+                and len(exact_registration_selections) == 1
+            )
+        )
+        if is_rostered:
+            operational_selections.append(selection)
+            continue
+        event = events_by_id.get(event_id, {})
+        roster_contains_player = bool(
+            player_id is not None
+            and player_id in roster_player_ids_by_event.get(event_id, set())
+        )
+        registration_follow_up.append(
+            {
+                "kind": (
+                    "ROSTER_REGISTRATION_UNRESOLVED"
+                    if roster_contains_player
+                    else "NOT_ON_DRAW_ROSTER"
+                ),
+                "registration_id": registration_id,
+                "registration_name": _display_name(registration),
+                "player_id": player_id,
+                "selection_id": _clean(selection.get("id"), limit=160),
+                "event_option_id": event_id,
+                "event_label": _event_label(event),
+                "title": "Registered but not rostered",
+                "detail": (
+                    (
+                        "This draw player does not resolve to exactly one active "
+                        "registration selection for the event, so check-in is "
+                        "blocked until the registration mapping is repaired."
+                    )
+                    if roster_contains_player
+                    else (
+                        "This active registration entry is not assigned to an "
+                        "authoritative selected-day draw team, so it is excluded "
+                        "from Expected Today and readiness blockers. Update the "
+                        "draw roster before play if this player should participate."
+                    )
+                ),
+            }
+        )
+    registration_follow_up.sort(
+        key=lambda row: (
+            str(row.get("registration_name") or "").lower(),
+            str(row.get("event_label") or "").lower(),
+        )
+    )
+    scheduled_registration_ids = {
+        _clean(row.get("registration_id"), limit=160)
+        for row in operational_selections
+        if _clean(row.get("registration_id"), limit=160)
+    }
+    selected_registration_ids = {
+        _clean(row.get("registration_id"), limit=160)
+        for row in selected_day_selections
+        if _clean(row.get("registration_id"), limit=160)
     }
     check_ins_by_registration = {
         _clean(row.get("registration_id"), limit=160): row
@@ -681,7 +934,7 @@ def build_admin_tournament_checkin_snapshot(
     payment_by_registration = _payment_map(registrations, orders)
     events_by_registration, unresolved_participants = _relationship_projection(
         registrations_by_id=registrations_by_id,
-        selections=selected_day_selections,
+        selections=operational_selections,
         events_by_id=events_by_id,
         links=links,
         members=members,
@@ -696,7 +949,7 @@ def build_admin_tournament_checkin_snapshot(
     inactive_registrations = [
         row
         for row in registrations
-        if _clean(row.get("id"), limit=160) in scheduled_registration_ids
+        if _clean(row.get("id"), limit=160) in selected_registration_ids
         and not _registration_is_active(row)
     ]
     active_registration_ids = {
@@ -723,7 +976,7 @@ def build_admin_tournament_checkin_snapshot(
         registration_id = _clean(registration.get("id"), limit=160)
         substitution = _substitution_policy(
             registration_id=registration_id,
-            selections=selected_day_selections,
+            selections=operational_selections,
             events_by_id=events_by_id,
         )
         state = check_ins_by_registration.get(registration_id, {})
@@ -933,14 +1186,11 @@ def build_admin_tournament_checkin_snapshot(
     schedule = _schedule_readiness(
         tournament=tournament, settings=settings, days=[selected_day]
     )
-    selected_day_draws = [
-        row
-        for row in draws
-        if _clean(row.get("event_option_id"), limit=160)
-        in selected_day_event_ids
-    ]
     draw_readiness = _draw_readiness(
-        event_options=selected_day_event_options, draws=selected_day_draws
+        event_options=selected_day_event_options,
+        draws=selected_day_draws,
+        teams=selected_day_draw_teams,
+        integrity_blockers=roster_integrity_blockers,
     )
     staffing = {
         "status": "NEEDS_REVIEW",
@@ -980,7 +1230,7 @@ def build_admin_tournament_checkin_snapshot(
         },
         {
             "code": "SCHEDULE",
-            "title": "Dates, courts, and times",
+            "title": "Dates and courts",
             "status": schedule["status"],
             "detail": (
                 "Event-day schedule fields are complete."
@@ -1023,6 +1273,7 @@ def build_admin_tournament_checkin_snapshot(
             for row in inactive_registrations
         ],
         "unresolved_participants": unresolved_participants,
+        "registration_follow_up": registration_follow_up,
         "player_options": [
             {
                 "id": int(player_id),
@@ -1181,6 +1432,21 @@ def update_admin_tournament_checkin(
     if not selected_day_selections:
         raise ValueError(
             "Registration is not entered in an active event scheduled for this day."
+        )
+    authoritative_snapshot = build_admin_tournament_checkin_snapshot(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=str(tournament_id),
+        registration_day_id=selected_day_id,
+    )
+    if str(registration_id) not in {
+        _clean(row.get("registration_id"), limit=160)
+        for row in authoritative_snapshot.get("registrants", [])
+    }:
+        raise ValueError(
+            "Registration is not eligible for check-in because it is not mapped "
+            "to an authoritative selected-day draw roster. Reload check-in and "
+            "repair the draw or registration mapping before saving attendance."
         )
 
     substitute_id = _safe_int(approved_substitute_player_id)

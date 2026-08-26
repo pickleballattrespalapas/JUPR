@@ -197,6 +197,7 @@ function checkInSnapshot(dayId: string) {
     player_options: players,
     inactive_registrants: [],
     unresolved_participants: unresolvedParticipants,
+    registration_follow_up: [],
     readiness: {
       schedule: { status: "COMPLETE", timezone: "America/Chicago", active_day_count: 1, blockers: [], days: [selectedDay] },
       draws: { status: "COMPLETE", active_division_count: 1, draw_count: 1, blockers: [] },

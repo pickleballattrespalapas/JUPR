@@ -83,6 +83,8 @@ def test_check_in_web_contract_has_real_controls_and_no_client_only_truth() -> N
     assert "Roster changes do not happen at check-in" in panel
     assert "authoritative draw or four-player team roster" in panel
     assert "SUBSTITUTE_ASSIGNMENT_ATOMICITY_UNAVAILABLE" in api
+    assert "Registered but not rostered" in panel
+    assert "registration_follow_up" in api
 
 
 def test_check_in_api_rejects_name_only_substitutes_before_service_update() -> None:

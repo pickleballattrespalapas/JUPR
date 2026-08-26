@@ -386,7 +386,7 @@ export default function TournamentCheckInPanel({
             <div className={styles.readinessGrid}>
               {(
                 [
-                  ["Dates, courts, and times", snapshot.readiness.schedule],
+                  ["Dates and courts", snapshot.readiness.schedule],
                   ["Draws", snapshot.readiness.draws],
                   ["Staffing", snapshot.readiness.staffing]
                 ] as const
@@ -420,6 +420,29 @@ export default function TournamentCheckInPanel({
               <h2 id="unresolved-title">Unresolved participants</h2>
               <ul className={styles.blockerList}>
                 {snapshot.unresolved_participants.map((row) => (
+                  <li
+                    className={styles.blockerRow}
+                    key={`${row.registration_id}:${row.selection_id}`}
+                  >
+                    <strong>{row.registration_name} · {row.event_label}</strong><br />
+                    {row.detail}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
+          {(snapshot.registration_follow_up || []).length ? (
+            <section className={styles.panel} aria-labelledby="registration-follow-up-title">
+              <h2 id="registration-follow-up-title">Registered but not rostered</h2>
+              <p className={styles.muted}>
+                These active registration entries are either off the authoritative draw
+                roster for {selectedDayLabel} or do not map uniquely to it. They remain
+                visible for follow-up, but do not count toward Expected Today. Any roster
+                integrity problem is reported separately as a draw-readiness blocker.
+              </p>
+              <ul className={styles.blockerList}>
+                {snapshot.registration_follow_up.map((row) => (
                   <li
                     className={styles.blockerRow}
                     key={`${row.registration_id}:${row.selection_id}`}

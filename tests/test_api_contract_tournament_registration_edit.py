@@ -201,6 +201,7 @@ def test_public_registration_edit_imported_draw_returns_conflict_without_mutatio
             "registration_day_id": "day1",
             "event_option_id": "event1",
             "source": "REGISTRATION",
+            "player1_id": storage["tournament_registrations"][0]["player_id"],
         }
     )
     before = deepcopy(storage)
