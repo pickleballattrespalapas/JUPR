@@ -8,12 +8,22 @@ import uuid
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.tournaments import SUPPORTED_TEAM_COUNTS, build_round_robin_games
 from jupr_app.services.admin_tournament_draw_service import _draw_payload
-from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
+from jupr_app.services.admin_tournament_guarded_operation import (
+    StaleTournamentAdminStateError,
+    TournamentAdminMutationNotAppliedError,
+)
 from jupr_app.services.admin_tournament_service import TOURNAMENT_SELECT, _clean_text, _first_row, is_admin_tournament_admin_enabled
 
 CONFIRM_GENERATE_GAMES = "GENERATE GAMES"
 CONFIRM_REBUILD_GAMES = "REBUILD GAMES"
 CONFIRM_RECONCILE_GAMES = "RECONCILE GAMES"
+DEFINITELY_NOT_APPLIED_GAME_RPC_SQLSTATES = frozenset(
+    {
+        # unique_violation: PostgreSQL returned a statement rejection from the
+        # atomic RPC, so its transaction was rolled back before commit.
+        "23505",
+    }
+)
 
 
 def _now_iso() -> str:
@@ -25,6 +35,20 @@ def _safe_rows(resp: Any) -> list[dict[str, Any]]:
         return [dict(row) for row in (resp.data or [])]
     except Exception:
         return []
+
+
+def _server_database_error_code(exc: Exception) -> str:
+    """Return a structured PostgREST/Postgres error code, never parsed prose."""
+
+    code = str(getattr(exc, "code", "") or "").strip().upper()
+    if code:
+        return code
+    for value in getattr(exc, "args", ()):
+        if isinstance(value, dict):
+            code = str(value.get("code") or "").strip().upper()
+            if code:
+                return code
+    return ""
 
 
 def _truthy_env(name: str) -> bool:
@@ -579,6 +603,12 @@ def _insert_tournament_draw_games_atomic(
         ):
             raise StaleTournamentAdminStateError(
                 "The draw, team set, or source game set changed while games were being generated. Reload the Ops snapshot."
+            ) from exc
+        database_error_code = _server_database_error_code(exc)
+        if database_error_code in DEFINITELY_NOT_APPLIED_GAME_RPC_SQLSTATES:
+            raise TournamentAdminMutationNotAppliedError(
+                "The database rejected the atomic game schedule; no games were created. "
+                f"Database code: {database_error_code}. Reload the draw before another attempt."
             ) from exc
         raise RuntimeError("Atomic tournament game generation failed; no game set was committed.") from exc
     data = getattr(response, "data", None)

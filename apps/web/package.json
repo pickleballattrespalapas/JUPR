@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:component": "node tests/challenge-ladder-result-render.cjs && node tests/match-uploader-layout.cjs && node tests/mixed-round-robin-format.cjs && node tests/interaction-foundation.cjs && node tests/guarded-operation-recovery.cjs && node tests/tournament-draw-operational-status.mjs && node tests/league-manager-route-status.cjs && node tests/league-movement-court-board.cjs && node tests/tournament-day-workspace-state.mjs",
+    "test:component": "node tests/challenge-ladder-result-render.cjs && node tests/match-uploader-layout.cjs && node tests/mixed-round-robin-format.cjs && node tests/interaction-foundation.cjs && node tests/guarded-operation-recovery.cjs && node tests/tournament-draw-operational-status.mjs && node tests/tournament-round-robin-idempotency.mjs && node tests/league-manager-route-status.cjs && node tests/league-movement-court-board.cjs && node tests/tournament-day-workspace-state.mjs",
     "test:e2e:public-read": "playwright test e2e/staging.smoke.spec.ts e2e/leaderboards.staging.spec.ts e2e/league-results.parity.spec.ts e2e/players.staging.spec.ts e2e/public-explorer-recap.spec.ts e2e/admin-operations-auth.spec.ts e2e/tournament-admin-navigation.spec.ts --retries=0 --forbid-only",
     "test:e2e:staging": "playwright test"
   },

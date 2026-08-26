@@ -215,7 +215,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 80
+    assert len(versions) == 81
     assert versions[-20:] == (
         "20261025000000",
         "20261026000000",
@@ -238,9 +238,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261108015000",
         "20261108016000",
     )
-    assert len(names) == 80
+    assert len(names) == 81
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 80
+    assert len(contract["required_ledger_names"]) == 81
     assert "tournament_complete_registration_editor" in contract[
         "required_ledger_names"
     ]

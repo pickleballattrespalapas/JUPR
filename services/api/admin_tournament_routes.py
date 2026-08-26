@@ -84,6 +84,7 @@ from jupr_app.services.admin_tournament_service import (
 )
 from jupr_app.services.admin_tournament_guarded_operation import (
     StaleTournamentAdminStateError,
+    TournamentAdminMutationNotAppliedError,
     TournamentAdminRecoveryRequiredError,
     require_tournament_admin_mutation_runtime,
     run_tournament_admin_guarded_operation,
@@ -243,12 +244,20 @@ class AdminTournamentRowVersion(BaseModel):
     updated_at: str
 
 
-class AdminTournamentRoundRobinGenerateRequest(BaseModel):
+class AdminTournamentRoundRobinWriteRequest(BaseModel):
     expected_state_fingerprint: str | None = None
     expected_draw_updated_at: str | None = None
     expected_team_versions: list[AdminTournamentRowVersion] = Field(default_factory=list)
     confirmation_text: str = ""
     source: str = "next_tournament_admin_generate_round_robin"
+
+
+class AdminTournamentRoundRobinGenerateRequest(AdminTournamentRoundRobinWriteRequest):
+    idempotency_key: UUID
+
+
+class AdminTournamentRoundRobinRecoveryRequest(AdminTournamentRoundRobinWriteRequest):
+    pass
 
 
 class AdminTournamentEmptyDrawCancelRequest(BaseModel):
@@ -431,6 +440,17 @@ def _resolve_tournament_role_or_403(
 
 
 def _handle(exc: Exception) -> None:
+    if isinstance(exc, TournamentAdminMutationNotAppliedError):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "kind": "failed",
+                "code": "TOURNAMENT_ADMIN_MUTATION_NOT_APPLIED",
+                "message": str(exc),
+                "operation_key": str(exc.operation_key or ""),
+                "recovery_required": False,
+            },
+        ) from exc
     if isinstance(
         exc,
         (
@@ -868,6 +888,7 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 source=payload.source,
                 preflight=lambda: generate_admin_tournament_round_robin_games(supabase, **kwargs, dry_run=True),
                 mutate=lambda: generate_admin_tournament_round_robin_games(supabase, **kwargs),
+                idempotency_key=str(payload.idempotency_key),
             )
         except Exception as exc:
             _handle(exc)
@@ -877,7 +898,7 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         club_id: str,
         tournament_id: str,
         draw_id: str,
-        payload: AdminTournamentRoundRobinGenerateRequest,
+        payload: AdminTournamentRoundRobinRecoveryRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         if not is_admin_tournament_admin_enabled():
@@ -947,7 +968,7 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         club_id: str,
         tournament_id: str,
         draw_id: str,
-        payload: AdminTournamentRoundRobinGenerateRequest,
+        payload: AdminTournamentRoundRobinRecoveryRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
         if not is_admin_tournament_admin_enabled():
