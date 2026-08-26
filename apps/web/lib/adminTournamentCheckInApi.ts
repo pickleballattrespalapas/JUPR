@@ -101,6 +101,17 @@ export type TournamentCheckInSnapshot = {
     title: string;
     detail: string;
   }>;
+  registration_follow_up: Array<{
+    kind: "NOT_ON_DRAW_ROSTER" | string;
+    registration_id: string;
+    registration_name: string;
+    player_id?: number | null;
+    selection_id: string;
+    event_option_id: string;
+    event_label: string;
+    title: "Registered but not rostered" | string;
+    detail: string;
+  }>;
   player_options: Array<{ id: number; name: string }>;
   readiness: {
     schedule: {

@@ -588,6 +588,7 @@ def test_selection_delete_prechecks_relationships_and_draw_without_rpc(
                 "registration_day_id": "day_1",
                 "event_option_id": "event_1",
                 "source": "REGISTRATION",
+                "source_selection_id": "selection_1",
             }
         ]
     before = list(tables["tournament_registration_selections"])

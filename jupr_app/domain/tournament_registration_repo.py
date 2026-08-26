@@ -2935,23 +2935,89 @@ def registration_is_imported_to_draw(
         selections = _safe_data(selection_resp)
     if not selections:
         return False
-    for selection in selections:
-        day_id = str(selection.get("registration_day_id") or "")
-        event_option_id = str(selection.get("event_option_id") or "")
-        if not day_id or not event_option_id:
-            continue
-        teams_resp = (
-            supabase.table("tournament_teams")
-            .select("id")
+
+    registration_ids = {
+        str(selection.get("registration_id") or "").strip()
+        for selection in selections
+        if str(selection.get("registration_id") or "").strip()
+    }
+    registrations_by_id: dict[str, dict[str, Any]] = {}
+    if registration_ids:
+        registration_resp = (
+            supabase.table("tournament_registrations")
+            .select("id,player_id")
             .eq("tournament_id", str(tournament_id))
-            .eq("registration_day_id", day_id)
-            .eq("event_option_id", event_option_id)
-            .eq("source", "REGISTRATION")
-            .limit(1)
+            .in_("id", sorted(registration_ids))
             .execute()
         )
-        if _safe_data(teams_resp):
-            return True
+        registrations_by_id = {
+            str(row.get("id") or "").strip(): row
+            for row in _safe_data(registration_resp)
+            if str(row.get("id") or "").strip()
+        }
+
+    def _player_key(value: Any) -> str:
+        return "" if value in (None, "") else str(value).strip()
+
+    draw_resp = (
+        supabase.table("tournament_event_draws")
+        .select("id,registration_day_id,event_option_id")
+        .eq("tournament_id", str(tournament_id))
+        .execute()
+    )
+    draw_scope_by_id = {
+        str(row.get("id") or "").strip(): (
+            str(row.get("registration_day_id") or "").strip(),
+            str(row.get("event_option_id") or "").strip(),
+        )
+        for row in _safe_data(draw_resp)
+        if str(row.get("id") or "").strip()
+    }
+    teams_resp = (
+        supabase.table("tournament_teams")
+        .select(
+            "id,draw_id,registration_day_id,event_option_id,"
+            "player1_id,player2_id,source_selection_id"
+        )
+        .eq("tournament_id", str(tournament_id))
+        .in_("source", ["REGISTRATION", "REGISTRATION_COMBINED_RATING"])
+        .execute()
+    )
+    registration_teams = _safe_data(teams_resp)
+
+    for selection in selections:
+        day_id = str(selection.get("registration_day_id") or "").strip()
+        event_option_id = str(selection.get("event_option_id") or "").strip()
+        if not day_id or not event_option_id:
+            continue
+        selection_id = str(selection.get("id") or "").strip()
+        registration = registrations_by_id.get(
+            str(selection.get("registration_id") or "").strip()
+        ) or {}
+        player_id = _player_key(registration.get("player_id"))
+        for team in registration_teams:
+            draw_scope = draw_scope_by_id.get(
+                str(team.get("draw_id") or "").strip()
+            )
+            team_day_id = (draw_scope or ("", ""))[0] or str(
+                team.get("registration_day_id") or ""
+            ).strip()
+            team_event_option_id = (draw_scope or ("", ""))[1] or str(
+                team.get("event_option_id") or ""
+            ).strip()
+            if (team_day_id, team_event_option_id) != (day_id, event_option_id):
+                continue
+            if (
+                selection_id
+                and str(team.get("source_selection_id") or "").strip()
+                == selection_id
+            ):
+                return True
+            if player_id and player_id in {
+                _player_key(team.get("player1_id")),
+                _player_key(team.get("player2_id")),
+            }:
+                return True
     return False
 
 

@@ -173,6 +173,7 @@ def test_imported_draw_refusal_precedes_registration_mutation(monkeypatch) -> No
             "registration_day_id": "day_1",
             "event_option_id": "event_1",
             "source": "REGISTRATION",
+            "source_selection_id": "selection_1",
         }
     )
     supabase = FakeSupabase(tables)

@@ -442,6 +442,7 @@ def checkin_tables() -> dict[str, list[dict]]:
             }
         ],
         "tournament_event_draws": [],
+        "tournament_teams": [],
         "players": [
             {"id": 1, "club_id": "club-1", "name": "Alex Original", "active": True},
             {"id": 2, "club_id": "club-1", "name": "Blair Partner", "active": True},
@@ -653,6 +654,333 @@ def test_snapshot_exposes_unlinked_and_needs_partner_participants() -> None:
     confirmed = next(card for card in snapshot["registrants"] if card["registration_id"] == "reg-1")
     assert confirmed["events"][0]["team_state"] == "CONFIRMED_LINK"
     assert confirmed["events"][0]["partner_name"] == "Blair Partner"
+    assert snapshot["registration_follow_up"] == []
+
+
+def test_snapshot_uses_authoritative_draw_roster_for_expected_and_partner_blockers() -> None:
+    tables = checkin_tables()
+    tables["tournament_event_draws"] = [
+        {
+            "id": "draw-1",
+            "tournament_id": "tour-1",
+            "event_option_id": "event-1",
+            "name": "Women's 3.5 draw",
+            "status": "ACTIVE",
+        }
+    ]
+    tables["tournament_teams"] = [
+        {
+            "id": "team-1",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-1",
+            # The draw relation, not this legacy projection, owns event scope.
+            "event_option_id": "stale-event",
+            "player1_id": 1,
+            "player2_id": 2,
+        }
+    ]
+    tables["tournament_registration_check_ins"].append(
+        {
+            "id": "check-in-excluded",
+            "tournament_id": "tour-1",
+            "registration_id": "reg-3",
+            "registration_day_id": "day-1",
+            "attendance_status": "CHECKED_IN",
+            "checked_in": True,
+            "waiver_verified": True,
+            "attendee_identity_key": "player:3",
+            "updated_at": "2026-08-15T12:03:00Z",
+        }
+    )
+
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables), club_id="club-1", tournament_id="tour-1"
+    )
+
+    assert snapshot["summary"] == {
+        "expected": 2,
+        "checked_in": 1,
+        "absent": 0,
+        "not_checked_in": 1,
+        "unresolved": 0,
+    }
+    assert {row["registration_id"] for row in snapshot["registrants"]} == {
+        "reg-1",
+        "reg-2",
+    }
+    assert snapshot["unresolved_participants"] == []
+    assert {
+        (row["registration_id"], row["selection_id"])
+        for row in snapshot["registration_follow_up"]
+    } == {("reg-3", "sel-3"), ("reg-4", "sel-4")}
+    assert {
+        row["title"] for row in snapshot["registration_follow_up"]
+    } == {"Registered but not rostered"}
+    partner_item = next(
+        row for row in snapshot["completed_items"] if row["code"] == "PARTNER_TEAMS"
+    )
+    assert partner_item["status"] == "COMPLETE"
+
+
+def test_snapshot_scopes_each_selection_to_its_own_draw_roster() -> None:
+    tables = checkin_tables()
+    tables["tournament_event_options"].append(
+        {
+            "id": "event-2",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "scheduled_day_ids": ["day-1"],
+            "label": "Open doubles",
+            "event_family_label": "Open doubles",
+            "division_name": "4.0",
+            "event_type": "DOUBLES",
+            "partner_required": True,
+            "team_allow_substitutes": False,
+            "enabled": True,
+            "sort_order": 2,
+        }
+    )
+    tables["tournament_registration_selections"].append(
+        {
+            "id": "sel-1-event-2",
+            "tournament_id": "tour-1",
+            "registration_id": "reg-1",
+            "registration_day_id": "day-1",
+            "event_option_id": "event-2",
+            "partner_mode": "NEEDS_PARTNER",
+        }
+    )
+    tables["tournament_event_draws"] = [
+        {
+            "id": "draw-1",
+            "tournament_id": "tour-1",
+            "event_option_id": "event-1",
+            "name": "Women's 3.5 draw",
+            "status": "ACTIVE",
+        },
+        {
+            "id": "draw-2",
+            "tournament_id": "tour-1",
+            "event_option_id": "event-2",
+            "name": "Open 4.0 draw",
+            "status": "ACTIVE",
+        },
+    ]
+    tables["tournament_teams"] = [
+        {
+            "id": "team-1",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-1",
+            "event_option_id": "event-1",
+            "player1_id": 1,
+            "player2_id": 2,
+        },
+        {
+            "id": "team-2",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-2",
+            "event_option_id": "event-2",
+            "player1_id": 3,
+            "player2_id": 4,
+        },
+    ]
+
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables), club_id="club-1", tournament_id="tour-1"
+    )
+
+    alex = next(
+        row for row in snapshot["registrants"] if row["registration_id"] == "reg-1"
+    )
+    assert {row["event_option_id"] for row in alex["events"]} == {"event-1"}
+    assert snapshot["unresolved_participants"] == []
+    assert {
+        (row["registration_id"], row["selection_id"])
+        for row in snapshot["registration_follow_up"]
+    } >= {("reg-1", "sel-1-event-2")}
+
+
+def test_snapshot_applies_draw_authority_per_event() -> None:
+    tables = checkin_tables()
+    tables["tournament_event_options"].append(
+        {
+            "id": "event-2",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "scheduled_day_ids": ["day-1"],
+            "label": "Open singles",
+            "event_family_label": "Singles",
+            "division_name": "Open",
+            "event_type": "SINGLES",
+            "partner_required": False,
+            "team_allow_substitutes": False,
+            "enabled": True,
+            "sort_order": 2,
+        }
+    )
+    casey_selection = next(
+        row
+        for row in tables["tournament_registration_selections"]
+        if row["registration_id"] == "reg-3"
+    )
+    casey_selection.update({"event_option_id": "event-2", "partner_mode": "NONE"})
+    tables["tournament_event_draws"] = [
+        {
+            "id": "draw-1",
+            "tournament_id": "tour-1",
+            "event_option_id": "event-1",
+            "name": "Women's 3.5 draw",
+            "status": "ACTIVE",
+        }
+    ]
+    tables["tournament_teams"] = [
+        {
+            "id": "team-1",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-1",
+            "player1_id": 1,
+            "player2_id": 2,
+        }
+    ]
+
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables), club_id="club-1", tournament_id="tour-1"
+    )
+
+    assert {row["registration_id"] for row in snapshot["registrants"]} == {
+        "reg-1",
+        "reg-2",
+        "reg-3",
+    }
+    assert {row["registration_id"] for row in snapshot["registration_follow_up"]} == {
+        "reg-4"
+    }
+
+
+def test_snapshot_blocks_empty_draw_roster_and_counts_no_unrostered_entries() -> None:
+    tables = checkin_tables()
+    tables["tournament_event_draws"] = [
+        {
+            "id": "draw-1",
+            "tournament_id": "tour-1",
+            "event_option_id": "event-1",
+            "name": "Women's 3.5 draw",
+            "status": "ACTIVE",
+        }
+    ]
+
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables), club_id="club-1", tournament_id="tour-1"
+    )
+
+    assert snapshot["summary"]["expected"] == 0
+    assert snapshot["registrants"] == []
+    assert len(snapshot["registration_follow_up"]) == 4
+    assert snapshot["readiness"]["draws"]["status"] == "BLOCKED"
+    assert "DRAW_ROSTER_EMPTY" in {
+        row["code"] for row in snapshot["readiness"]["draws"]["blockers"]
+    }
+
+
+def test_snapshot_blocks_draw_player_without_exact_registration_selection() -> None:
+    tables = checkin_tables()
+    tables["tournament_event_draws"] = [
+        {
+            "id": "draw-1",
+            "tournament_id": "tour-1",
+            "event_option_id": "event-1",
+            "name": "Women's 3.5 draw",
+            "status": "ACTIVE",
+        }
+    ]
+    tables["tournament_teams"] = [
+        {
+            "id": "team-1",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-1",
+            "player1_id": 1,
+            "player2_id": 99,
+        }
+    ]
+
+    snapshot = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables), club_id="club-1", tournament_id="tour-1"
+    )
+
+    assert {row["registration_id"] for row in snapshot["registrants"]} == {"reg-1"}
+    blocker_codes = {
+        row["code"] for row in snapshot["readiness"]["draws"]["blockers"]
+    }
+    assert "DRAW_ROSTER_PLAYER_UNKNOWN" in blocker_codes
+    assert "DRAW_ROSTER_REGISTRATION_UNRESOLVED" in blocker_codes
+
+
+def test_snapshot_honors_explicit_draw_day_and_hidden_primary_ops_boundary() -> None:
+    tables = checkin_tables()
+    tables["tournament_registration_days"].append(
+        {
+            "id": "day-2",
+            "tournament_id": "tour-1",
+            "label": "Friday",
+            "event_date": "2026-08-21",
+            "enabled": True,
+            "sort_order": 2,
+            "court_count": 2,
+            "court_labels": ["1", "2"],
+        }
+    )
+    tables["tournament_event_options"][0]["scheduled_day_ids"] = ["day-1", "day-2"]
+    tables["tournament_event_draws"] = [
+        {
+            "id": "draw-day-1",
+            "tournament_id": "tour-1",
+            "event_option_id": "event-1",
+            "registration_day_id": "day-1",
+            "name": "Thursday draw",
+            "status": "ACTIVE",
+            "draw_kind": "STANDARD",
+            "hidden_from_primary_ops": False,
+        },
+        {
+            "id": "draw-day-2-hidden",
+            "tournament_id": "tour-1",
+            "event_option_id": "event-1",
+            "registration_day_id": "day-2",
+            "name": "Hidden Friday draw",
+            "status": "ACTIVE",
+            "draw_kind": "STANDARD",
+            "hidden_from_primary_ops": True,
+        },
+    ]
+    tables["tournament_teams"] = [
+        {
+            "id": "team-day-1",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-day-1",
+            "player1_id": 1,
+            "player2_id": 2,
+        },
+        {
+            "id": "team-day-2-hidden",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-day-2-hidden",
+            "player1_id": 3,
+            "player2_id": 4,
+        },
+    ]
+
+    friday = build_admin_tournament_checkin_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-2",
+    )
+
+    assert friday["summary"]["expected"] == 4
+    assert friday["registration_follow_up"] == []
+    assert "DRAW_MISSING" in {
+        row["code"] for row in friday["readiness"]["draws"]["blockers"]
+    }
 
 
 def test_snapshot_scopes_players_unresolved_and_readiness_to_selected_day() -> None:
@@ -702,6 +1030,16 @@ def test_snapshot_scopes_players_unresolved_and_readiness_to_selected_day() -> N
             "event_option_id": "event-2",
             "name": "Friday singles draw",
             "status": "ACTIVE",
+        }
+    )
+    tables["tournament_teams"].append(
+        {
+            "id": "team-2",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-2",
+            "event_option_id": "event-2",
+            "player1_id": 3,
+            "player2_id": None,
         }
     )
 
@@ -904,20 +1242,22 @@ def test_confirmed_link_is_not_complete_when_partner_registration_is_inactive() 
     }
 
 
-def test_snapshot_has_real_schedule_blockers_and_truthful_staffing_review() -> None:
+def test_snapshot_ignores_legacy_court_hours_and_truthfully_reports_staffing_review() -> None:
     tables = checkin_tables()
     tables["tournament_registration_settings"][0]["timezone"] = ""
     tables["tournament_registration_days"][0]["court_open_time"] = None
+    tables["tournament_registration_days"][0]["court_close_time"] = None
 
     snapshot = build_admin_tournament_checkin_snapshot(
         FakeSupabase(tables), club_id="club-1", tournament_id="tour-1"
     )
 
     assert snapshot["readiness"]["schedule"]["status"] == "BLOCKED"
-    assert {row["code"] for row in snapshot["readiness"]["schedule"]["blockers"]} >= {
-        "TIMEZONE_MISSING",
-        "COURT_TIME_MISSING",
+    schedule_blocker_codes = {
+        row["code"] for row in snapshot["readiness"]["schedule"]["blockers"]
     }
+    assert "TIMEZONE_MISSING" in schedule_blocker_codes
+    assert "COURT_TIME_MISSING" not in schedule_blocker_codes
     assert snapshot["readiness"]["staffing"]["status"] == "NEEDS_REVIEW"
     assert snapshot["readiness"]["staffing"]["source"] == "no_authoritative_staffing_record"
 
@@ -961,6 +1301,52 @@ def test_update_uses_sql_cas_and_resets_attendance_when_attendee_changes(monkeyp
     assert result["check_in"]["checked_in"] is False
     assert result["check_in"]["waiver_verified"] is False
     assert client.rpc_calls[0][0] == "admin_upsert_tournament_registration_check_in"
+
+
+def test_update_refuses_registration_excluded_from_authoritative_draw_roster(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUPR_ENV", "local")
+    tables = checkin_tables()
+    tables["tournament_event_draws"] = [
+        {
+            "id": "draw-1",
+            "tournament_id": "tour-1",
+            "event_option_id": "event-1",
+            "name": "Women's 3.5 draw",
+            "status": "ACTIVE",
+        }
+    ]
+    tables["tournament_teams"] = [
+        {
+            "id": "team-1",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-1",
+            "player1_id": 1,
+            "player2_id": 2,
+        }
+    ]
+    client = FakeSupabase(tables)
+
+    with pytest.raises(ValueError, match="not mapped to an authoritative"):
+        update_admin_tournament_checkin(
+            client,
+            club_id="club-1",
+            tournament_id="tour-1",
+            registration_id="reg-3",
+            registration_day_id="day-1",
+            expected_updated_at=None,
+            attendance_status="CHECKED_IN",
+            operation_key="00000000-0000-4000-8000-000000000109",
+            waiver_verified=True,
+            approved_substitute_player_id=None,
+            approved_substitute_name=None,
+            notes=None,
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+    assert client.rpc_calls == []
 
 
 def test_update_rejects_stale_version(monkeypatch) -> None:

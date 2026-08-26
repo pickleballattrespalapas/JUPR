@@ -268,15 +268,52 @@ class FakeRegistrationEditRpc:
         if expected_versions != current_versions:
             return SimpleNamespace(data={"ok": False, "code": "REGISTRATION_EDIT_CONFLICT"})
 
-        imported_pairs = {
-            (str(row.get("registration_day_id") or ""), str(row.get("event_option_id") or ""))
-            for row in self.storage.get("tournament_teams", [])
-            if str(row.get("tournament_id")) == tournament_id and str(row.get("source") or "").upper() == "REGISTRATION"
+        registration_player_id = str(registration.get("player_id") or "")
+        draw_scope_by_id = {
+            str(draw.get("id") or ""): (
+                str(draw.get("registration_day_id") or ""),
+                str(draw.get("event_option_id") or ""),
+            )
+            for draw in self.storage.get("tournament_event_draws", [])
+            if str(draw.get("tournament_id") or "") == tournament_id
         }
-        if any(
-            (str(row.get("registration_day_id") or ""), str(row.get("event_option_id") or "")) in imported_pairs
-            for row in current_selections
-        ):
+        imported = False
+        for selection in current_selections:
+            selection_scope = (
+                str(selection.get("registration_day_id") or ""),
+                str(selection.get("event_option_id") or ""),
+            )
+            for team in self.storage.get("tournament_teams", []):
+                draw_scope = draw_scope_by_id.get(str(team.get("draw_id") or ""))
+                team_scope = (
+                    (draw_scope or ("", ""))[0]
+                    or str(team.get("registration_day_id") or ""),
+                    (draw_scope or ("", ""))[1]
+                    or str(team.get("event_option_id") or ""),
+                )
+                if (
+                    str(team.get("tournament_id")) == tournament_id
+                    and str(team.get("source") or "").upper()
+                    in {"REGISTRATION", "REGISTRATION_COMBINED_RATING"}
+                    and team_scope == selection_scope
+                    and (
+                        str(team.get("source_selection_id") or "")
+                        == str(selection.get("id") or "")
+                        or (
+                            bool(registration_player_id)
+                            and registration_player_id
+                            in {
+                                str(team.get("player1_id") or ""),
+                                str(team.get("player2_id") or ""),
+                            }
+                        )
+                    )
+                ):
+                    imported = True
+                    break
+            if imported:
+                break
+        if imported:
             return SimpleNamespace(data={"ok": False, "code": "REGISTRATION_IMPORTED_TO_DRAW"})
 
         if self.storage.get("_fail_public_registration_edit_rpc"):
