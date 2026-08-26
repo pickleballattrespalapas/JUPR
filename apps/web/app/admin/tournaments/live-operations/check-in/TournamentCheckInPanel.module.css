@@ -77,6 +77,7 @@
   grid-template-columns: minmax(220px, 1fr) minmax(180px, 260px) auto;
   align-items: end;
   gap: 0.75rem;
+  margin-bottom: 0.85rem;
 }
 
 .field {
@@ -127,6 +128,170 @@
 .secondaryButton {
   background: #fff;
   color: #0f172a;
+}
+
+.smallButton {
+  min-height: 34px;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.78rem;
+}
+
+.bulkActionBar {
+  position: sticky;
+  z-index: 2;
+  top: 0.5rem;
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(190px, 1fr) minmax(190px, 1fr) auto;
+  align-items: end;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #eff6ff;
+  padding: 0.85rem;
+  box-shadow: 0 8px 20px rgb(15 23 42 / 8%);
+}
+
+.selectionControls {
+  display: grid;
+  align-self: stretch;
+  align-content: space-between;
+  gap: 0.45rem;
+}
+
+.selectionButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.bulkHelp {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #475569;
+  font-size: 0.82rem;
+}
+
+.tableWrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.playerTable {
+  width: 100%;
+  min-width: 1080px;
+  border-collapse: collapse;
+  background: #fff;
+  font-size: 0.84rem;
+}
+
+.playerTable th,
+.playerTable td {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0.7rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.playerTable thead th {
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.playerTable tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.playerTable tbody tr:hover > * {
+  background: #f8fafc;
+}
+
+.playerTable .selectedRow > * {
+  background: #eff6ff;
+}
+
+.playerTable .selectedRow:hover > * {
+  background: #dbeafe;
+}
+
+.selectCell {
+  width: 38px;
+  text-align: center !important;
+}
+
+.selectionCheckbox {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.playerCell {
+  min-width: 170px;
+  color: #0f172a;
+}
+
+.rowMeta {
+  display: block;
+  margin: 0.2rem 0 0.45rem;
+  color: #64748b;
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+.compactList {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rowDetails {
+  margin-top: 0.45rem;
+  color: #92400e;
+  font-weight: 600;
+}
+
+.rowDetails summary {
+  cursor: pointer;
+}
+
+.rowDetails .compactList {
+  margin-top: 0.4rem;
+  font-weight: 500;
+}
+
+.noteCell {
+  width: 190px;
+}
+
+.noteInput {
+  width: 100%;
+  min-width: 150px;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  padding: 0.48rem 0.55rem;
+  color: #0f172a;
+  font: inherit;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .cardList {
@@ -293,14 +458,23 @@
   .readinessGrid {
     grid-template-columns: 1fr;
   }
+
+  .bulkActionBar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
   .summaryGrid,
   .dayPicker,
   .toolbar,
-  .controlGrid {
+  .controlGrid,
+  .bulkActionBar {
     grid-template-columns: 1fr;
+  }
+
+  .bulkActionBar {
+    position: static;
   }
 
   .cardHeader,

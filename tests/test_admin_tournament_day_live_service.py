@@ -683,6 +683,147 @@ def test_snapshot_is_day_scoped_multi_draw_human_readable_and_stable() -> None:
     assert first["queue_version"] == "0"
 
 
+def test_check_in_waiver_and_payment_are_informational_to_live_day() -> None:
+    baseline_tables = snapshot_tables()
+    informational_tables = deepcopy(baseline_tables)
+    informational_tables["tournament_registration_check_ins"] = [
+        {
+            **row,
+            "attendance_status": "NOT_CHECKED_IN",
+            "checked_in": False,
+            "waiver_verified": False,
+            "attendee_identity_key": None,
+            "updated_at": "2026-08-17T09:00:00Z",
+        }
+        for row in informational_tables["tournament_registration_check_ins"]
+    ]
+    for registration in informational_tables["tournament_registrations"]:
+        registration["payment_status"] = "UNPAID"
+        registration["updated_at"] = "2026-08-17T09:00:00Z"
+    informational_tables["tournament_commerce_orders"] = [
+        {
+            "id": f"commerce-{player_id}",
+            "club_id": "club-1",
+            "tournament_id": "tour-1",
+            "registration_id": f"registration-{player_id}",
+            "payment_status": "UNPAID",
+            "status": "OPEN",
+            "updated_at": "2026-08-17T09:00:00Z",
+        }
+        for player_id in range(1, 9)
+    ]
+
+    baseline = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(baseline_tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+    informational = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(informational_tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+
+    assert informational["state_fingerprint"] == baseline["state_fingerprint"]
+    for draw in informational["draws"]:
+        blocker_codes = {
+            blocker["code"]
+            for blocker in draw["readiness"]["activate"]["blockers"]
+        }
+        assert "PLAYER_NOT_READY" not in blocker_codes
+        assert "PAYMENT_UNRESOLVED" not in blocker_codes
+
+
+def test_active_queue_ignores_check_in_waiver_and_payment_but_not_registration() -> None:
+    tables = snapshot_tables()
+    tables["tournament_registration_check_ins"] = []
+    for registration in tables["tournament_registrations"]:
+        registration["payment_status"] = "UNPAID"
+    tables["tournament_commerce_orders"] = []
+    tables["tournament_day_live_runs"] = [
+        {
+            "id": "run-1",
+            "club_id": "club-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "state": "ACTIVE",
+            "version": 2,
+            "queue_version": 3,
+        }
+    ]
+    tables["tournament_day_live_draws"] = [
+        {
+            "id": "day-draw-a",
+            "run_id": "run-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "draw_id": "draw-a",
+            "state": "ACTIVE",
+            "source_draw_updated_at": "2026-08-17T08:00:00Z",
+            "version": 1,
+        }
+    ]
+    tables["tournament_day_live_courts"] = [
+        {
+            "id": "court-row-1",
+            "run_id": "run-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "court_key": "court-1",
+            "label": "Center 1",
+            "position": 1,
+            "state": "OPEN",
+            "version": 1,
+        }
+    ]
+    tables["tournament_day_live_queue"] = [
+        {
+            "id": "queue-a",
+            "run_id": "run-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "day_draw_id": "day-draw-a",
+            "draw_id": "draw-a",
+            "game_id": "game-a",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "state": "WAITING",
+            "priority": 1,
+            "version": 1,
+        }
+    ]
+
+    snapshot = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+
+    assert [row["game_id"] for row in snapshot["eligible_queue"]] == ["game-a"]
+    assert snapshot["readiness"]["auto_fill_courts"]["ready"] is True
+
+    structurally_invalid = deepcopy(tables)
+    structurally_invalid["tournament_registrations"][0]["status"] = "CANCELLED"
+    invalid_snapshot = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(structurally_invalid),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+
+    assert invalid_snapshot["state_fingerprint"] != snapshot["state_fingerprint"]
+    assert all(
+        row["game_id"] != "game-a" for row in invalid_snapshot["eligible_queue"]
+    )
+    blocked = next(
+        row for row in invalid_snapshot["blocked_games"] if row["game_id"] == "game-a"
+    )
+    assert blocked["reason"] == "REGISTRATION_AMBIGUOUS"
+
+
 def test_activation_readiness_rejects_unsupported_incomplete_or_prebuilt_games() -> None:
     def activation_codes(tables: dict[str, list[dict]]) -> set[str]:
         snapshot = build_admin_tournament_day_live_snapshot(

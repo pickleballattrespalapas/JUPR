@@ -14,6 +14,8 @@ def test_check_in_routes_are_authenticated_and_installed() -> None:
 
     assert '@app.get("/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/check-in")' in source
     assert '@app.put(' in source
+    assert '@app.post(' in source
+    assert '"/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/check-in/bulk"' in source
     assert '"/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/check-in/{registration_id}"' in source
     assert "_resolve_tournament_role_or_403" in source
     assert "PERMISSION_MANAGE_TOURNAMENTS" in source
@@ -41,6 +43,24 @@ def test_check_in_put_is_only_in_both_tournament_live_waves() -> None:
         "PUT",
         "/admin/clubs/{club_id}/tournament-live/tournaments/"
         "{tournament_id}/check-in/{registration_id}",
+    )
+
+    containing_waves = {
+        wave for wave, routes in STAGING_WRITE_WAVE_ROUTES.items() if route in routes
+    }
+    assert containing_waves == {
+        "tournament-live",
+        "tournament-live-official-publish",
+    }
+
+
+def test_bulk_check_in_post_is_only_in_both_tournament_live_waves() -> None:
+    from scripts.staging_write_waves import STAGING_WRITE_WAVE_ROUTES
+
+    route = (
+        "POST",
+        "/admin/clubs/{club_id}/tournament-live/tournaments/"
+        "{tournament_id}/check-in/bulk",
     )
 
     containing_waves = {

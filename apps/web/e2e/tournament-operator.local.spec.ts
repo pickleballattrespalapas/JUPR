@@ -356,7 +356,7 @@ function dayWorkspaceSnapshot() {
       { game_id: "day-game-held", draw_id: secondDrawId, state: "HELD", reason: "Operator hold awaiting participant arrival", note: null, held_at: "2026-08-17T09:03:00Z", version: "held-v1", blockers: [] }
     ],
     blocked_games: [
-      { game_id: "day-game-blocked", draw_id: drawId, state: "BLOCKED", reason: "Check-in review required", note: null, held_at: null, version: "blocked-v1", blockers: [{ code: "CHECK_IN_REQUIRED", message: "One participant has not completed check-in." }] }
+      { game_id: "day-game-blocked", draw_id: drawId, state: "BLOCKED", reason: "Participant already assigned", note: null, held_at: null, version: "blocked-v1", blockers: [{ code: "PLAYER_ALREADY_CLAIMED", message: "One participant is already assigned to another court." }] }
     ],
     operations: [] as Array<{
       operation_key: string;
@@ -379,6 +379,35 @@ function dayWorkspaceSnapshot() {
 
 async function installMockApi(page: Page) {
   let currentDaySnapshot = dayWorkspaceSnapshot();
+  const checkInUpdates = new Map<string, {
+    attendanceStatus: "EXPECTED" | "CHECKED_IN" | "ABSENT";
+    waiverVerified: boolean;
+    notes: string | null;
+    updatedAt: string;
+  }>();
+  const currentCheckInSnapshot = (selectedDayId: string) => {
+    const snapshot = structuredClone(checkInSnapshot(selectedDayId));
+    snapshot.registrants.forEach((registrant) => {
+      const update = checkInUpdates.get(registrant.registration_id);
+      if (!update) return;
+      registrant.attendance_status = update.attendanceStatus;
+      registrant.check_in.attendance_status = update.attendanceStatus;
+      registrant.check_in.checked_in = update.attendanceStatus === "CHECKED_IN";
+      (registrant.check_in as unknown as { notes: string | null }).notes = update.notes;
+      registrant.check_in.updated_at = update.updatedAt;
+      registrant.waiver.verified = update.waiverVerified;
+    });
+    snapshot.summary.checked_in = snapshot.registrants.filter(
+      (row) => row.attendance_status === "CHECKED_IN"
+    ).length;
+    snapshot.summary.not_checked_in = snapshot.registrants.filter(
+      (row) => row.attendance_status === "EXPECTED"
+    ).length;
+    snapshot.summary.absent = snapshot.registrants.filter(
+      (row) => row.attendance_status === "ABSENT"
+    ).length;
+    return snapshot;
+  };
   await page.addInitScript(() => {
     window.localStorage.setItem("jupr_admin_session_v1", JSON.stringify({
       access_token: "local-operator-token",
@@ -496,7 +525,101 @@ async function installMockApi(page: Page) {
       return;
     }
     if (url.pathname.endsWith(`/tournament-live/tournaments/${tournamentId}/check-in`) && request.method() === "GET") {
-      await route.fulfill({ json: checkInSnapshot(url.searchParams.get("day_id") || "day-1") });
+      await route.fulfill({ json: currentCheckInSnapshot(url.searchParams.get("day_id") || "day-1") });
+      return;
+    }
+    if (url.pathname.endsWith(`/tournament-live/tournaments/${tournamentId}/check-in/bulk`) && request.method() === "POST") {
+      const dayId = url.searchParams.get("day_id") || "day-1";
+      const input = request.postDataJSON() as {
+        operation_key: string;
+        updates: Array<{
+          registration_id: string;
+          attendance_status?: "EXPECTED" | "CHECKED_IN" | "ABSENT";
+          waiver_verified?: boolean;
+          notes?: string | null;
+        }>;
+      };
+      const before = currentCheckInSnapshot(dayId);
+      const checkIns = input.updates.map((update, index) => {
+        const registrant = before.registrants.find(
+          (row) => row.registration_id === update.registration_id
+        );
+        if (!registrant) throw new Error(`Unknown mocked registration ${update.registration_id}`);
+        const updatedAt = `2026-08-15T12:02:${String(index).padStart(2, "0")}Z`;
+        const attendanceStatus = update.attendance_status || registrant.attendance_status;
+        const waiverVerified = update.waiver_verified ?? registrant.waiver.verified;
+        const notes = Object.prototype.hasOwnProperty.call(update, "notes")
+          ? update.notes ?? null
+          : registrant.check_in.notes;
+        checkInUpdates.set(update.registration_id, {
+          attendanceStatus,
+          waiverVerified,
+          notes,
+          updatedAt
+        });
+        return {
+          registration_id: update.registration_id,
+          registration_day_id: dayId,
+          attendance_status: attendanceStatus,
+          checked_in: attendanceStatus === "CHECKED_IN",
+          waiver_verified: waiverVerified,
+          approved_substitute_player_id: null,
+          notes,
+          updated_by: "operator@example.invalid",
+          updated_at: updatedAt
+        };
+      });
+      await route.fulfill({
+        json: {
+          ok: true,
+          mode: "tournament_registration_check_in_bulk_update",
+          operation_key: input.operation_key,
+          updated_count: checkIns.length,
+          check_ins: checkIns,
+          idempotent_replay: false,
+          message: `${checkIns.length} selected player${checkIns.length === 1 ? "" : "s"} updated.`
+        }
+      });
+      return;
+    }
+    const checkInUpdateMatch = url.pathname.match(
+      new RegExp(`/tournament-live/tournaments/${tournamentId}/check-in/([^/]+)$`)
+    );
+    if (checkInUpdateMatch && request.method() === "PUT") {
+      const registrationId = decodeURIComponent(checkInUpdateMatch[1]);
+      const input = request.postDataJSON() as {
+        attendance_status: "EXPECTED" | "CHECKED_IN" | "ABSENT";
+        waiver_verified: boolean;
+        notes: string | null;
+      };
+      const updatedAt = `2026-08-15T12:01:${String(checkInUpdates.size).padStart(2, "0")}Z`;
+      checkInUpdates.set(registrationId, {
+        attendanceStatus: input.attendance_status,
+        waiverVerified: input.waiver_verified,
+        notes: input.notes,
+        updatedAt
+      });
+      await route.fulfill({
+        json: {
+          ok: true,
+          mode: "tournament_registration_check_in_update",
+          check_in: {
+            registration_id: registrationId,
+            registration_day_id: url.searchParams.get("day_id") || "day-1",
+            attendance_status: input.attendance_status,
+            checked_in: input.attendance_status === "CHECKED_IN",
+            waiver_verified: input.waiver_verified,
+            approved_substitute_player_id: null,
+            notes: input.notes,
+            updated_by: "operator@example.invalid",
+            updated_at: updatedAt
+          },
+          attendee_identity_changed: false,
+          attendance_reset: false,
+          idempotent_replay: false,
+          message: "Check-in saved for the reviewed attendee."
+        }
+      });
       return;
     }
     if (url.pathname.endsWith(`/tournament-live/tournaments/${tournamentId}/draws/${drawId}/commands`)) {
@@ -541,7 +664,7 @@ test("legacy draw route opens the authoritative 10-court day workspace", async (
   await expect(queueRows.nth(1)).toContainText("#2");
   await expect(page.getByRole("heading", { name: "Held and blocked matches" })).toBeVisible();
   await expect(page.getByText("Operator hold awaiting participant arrival")).toBeVisible();
-  await expect(page.getByText("One participant has not completed check-in.")).toBeVisible();
+  await expect(page.getByText("One participant is already assigned to another court.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Pause draw" })).toHaveCount(2);
   await expect(page.getByRole("button", { name: "Generate playoffs" })).toHaveCount(2);
 
@@ -588,7 +711,7 @@ test("legacy score route retains day context and focuses the unified queue", asy
   await expect(page.getByRole("heading", { name: "Unified eligible queue" })).toBeVisible();
 });
 
-test("Preflight check-in changes day without retaining old cards or losing context", async ({ page }) => {
+test("Preflight check-in changes day without retaining old rows or losing context", async ({ page }) => {
   await page.goto(`/admin/tournaments/live-operations/check-in?${selectedQuery}`);
   await expect(page.getByRole("heading", { name: "Staging Summer Classic preflight and check-in" })).toBeVisible();
   const summary = page.getByRole("region", { name: "Check-in summary" });
@@ -599,23 +722,70 @@ test("Preflight check-in changes day without retaining old cards or losing conte
   await expect(summary.getByText("Unresolved")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Player check-in" })).toBeVisible();
   await expect(page.getByText("Partner unresolved")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Mateo Rivera" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Diego Alvarez" })).toHaveCount(0);
+  await expect(page.getByRole("row", { name: /Mateo Rivera/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Diego Alvarez/ })).toHaveCount(0);
 
   await page.getByLabel("Tournament day").selectOption("day-2");
   await expect(page).toHaveURL(/day=day-2/);
   await expect(page).toHaveURL(new RegExp(`tournament=${tournamentId}`));
   await expect(page).toHaveURL(new RegExp(`draw=${drawId}`));
-  await expect(page.getByRole("heading", { name: "Diego Alvarez" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Mateo Rivera" })).toHaveCount(0);
+  await expect(page.getByRole("row", { name: /Diego Alvarez/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Mateo Rivera/ })).toHaveCount(0);
   await expect(page.getByText("Partner unresolved")).toHaveCount(0);
-  await expect(page.getByText("Absent", { exact: true }).last()).toBeVisible();
+  await expect(page.getByRole("row", { name: /Diego Alvarez.*Absent/ })).toBeVisible();
 
   await page.reload();
   await expect(page.getByLabel("Tournament day")).toHaveValue("day-2");
-  await expect(page.getByRole("heading", { name: "Diego Alvarez" })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Diego Alvarez/ })).toBeVisible();
   const dayWorkspace = page.getByRole("link", { name: "Day workspace" });
   await expect(dayWorkspace).toHaveAttribute("href", new RegExp(`tournament=${tournamentId}.*draw=${drawId}.*day=day-2`));
+});
+
+test("Preflight applies one attendance and waiver action to selected player rows", async ({ page }) => {
+  const updates: Array<Record<string, unknown>> = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !request.url().endsWith("/check-in/bulk?day_id=day-1")) return;
+    updates.push(request.postDataJSON() as Record<string, unknown>);
+  });
+
+  await page.goto(`/admin/tournaments/live-operations/check-in?${selectedQuery}`);
+  const playerTable = page.getByRole("table");
+  await expect(playerTable.getByRole("row", { name: /Jordan Lee/ })).toBeVisible();
+  await page.getByLabel("Select Jordan Lee").check();
+  await page.getByLabel("Attendance action").selectOption("CHECKED_IN");
+  await page.getByLabel("Waiver action").selectOption("VERIFY");
+  await page.getByRole("button", { name: "Apply to 1 selected" }).click();
+
+  await expect(page.getByRole("status")).toContainText("1 selected player updated.");
+  await expect(playerTable.getByRole("row", { name: /Jordan Lee.*Checked in.*Verified/ })).toBeVisible();
+  await expect.poll(() => updates.length).toBe(1);
+  expect(updates[0]).toMatchObject({
+    updates: [{
+      registration_id: "registration-8",
+      expected_updated_at: "2026-08-15T12:00:00Z",
+      attendance_status: "CHECKED_IN",
+      waiver_verified: true
+    }]
+  });
+  expect(String(updates[0].operation_key)).toMatch(/^[0-9a-f-]{36}$/);
+});
+
+test("Preflight clears hidden selections before applying filtered bulk actions", async ({ page }) => {
+  await page.goto(`/admin/tournaments/live-operations/check-in?${selectedQuery}`);
+  await page.getByLabel("Select Jordan Lee").check();
+  await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
+
+  await page.getByLabel("View").selectOption("checked_in");
+  await expect(page.getByText("0 selected", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Select Jordan Lee")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Select all shown" }).click();
+  await expect(page.getByLabel("Select Mateo Rivera")).toBeChecked();
+  await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
+
+  await page.getByLabel("Search players").fill("nobody matches");
+  await expect(page.getByText("0 selected", { exact: true })).toBeVisible();
+  await expect(page.getByText("No scheduled players match these filters.")).toBeVisible();
 });
 
 test("A 9–9 tie is rejected before inline score-and-release submits the exact day fence", async ({ page }) => {
