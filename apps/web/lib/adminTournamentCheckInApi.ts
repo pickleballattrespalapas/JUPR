@@ -188,6 +188,29 @@ export type TournamentCheckInUpdateResponse = {
   message: string;
 };
 
+export type TournamentCheckInBulkPatch = {
+  registration_id: string;
+  expected_updated_at: string | null;
+  attendance_status?: "EXPECTED" | "CHECKED_IN" | "ABSENT";
+  waiver_verified?: boolean;
+  notes?: string | null;
+};
+
+export type TournamentCheckInBulkUpdate = {
+  operation_key: string;
+  updates: TournamentCheckInBulkPatch[];
+};
+
+export type TournamentCheckInBulkUpdateResponse = {
+  ok: true;
+  mode: "tournament_registration_check_in_bulk_update";
+  operation_key: string;
+  updated_count: number;
+  check_ins: TournamentCheckInUpdateResponse["check_in"][];
+  idempotent_replay: boolean;
+  message: string;
+};
+
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
 }
@@ -247,6 +270,29 @@ export async function updateAdminTournamentCheckIn(options: {
     options.accessToken,
     {
       method: "PUT",
+      body: JSON.stringify(options.input),
+      signal: options.signal
+    }
+  );
+}
+
+export async function updateAdminTournamentCheckInBulk(options: {
+  apiBase: string;
+  clubId: string;
+  tournamentId: string;
+  dayId: string;
+  accessToken: string;
+  input: TournamentCheckInBulkUpdate;
+  signal?: AbortSignal;
+}): Promise<TournamentCheckInBulkUpdateResponse> {
+  return requestJson<TournamentCheckInBulkUpdateResponse>(
+    apiUrl(
+      options.apiBase,
+      `/admin/clubs/${encodeURIComponent(options.clubId)}/tournament-live/tournaments/${encodeURIComponent(options.tournamentId)}/check-in/bulk?day_id=${encodeURIComponent(options.dayId)}`
+    ),
+    options.accessToken,
+    {
+      method: "POST",
       body: JSON.stringify(options.input),
       signal: options.signal
     }

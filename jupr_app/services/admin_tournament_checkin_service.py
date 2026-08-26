@@ -11,7 +11,9 @@ from jupr_app.services.admin_tournament_guarded_operation import (
 
 
 CHECK_IN_RPC = "admin_upsert_tournament_registration_check_in"
+CHECK_IN_BULK_RPC = "admin_bulk_upsert_tournament_registration_check_ins"
 CHECK_IN_SURFACE = "tournament_live"
+CHECK_IN_BULK_MAX_UPDATES = 100
 ACTIVE_REGISTRATION_STATUSES = {"ACTIVE", "APPROVED", "CONFIRMED", "REGISTERED"}
 INACTIVE_REGISTRATION_STATUSES = {"CANCELLED", "CANCELED", "WITHDRAWN", "REJECTED"}
 ACTIVE_TEAM_LINK_STATUSES = {"CONFIRMED", "ADMIN_CONFIRMED"}
@@ -1551,10 +1553,200 @@ def update_admin_tournament_checkin(
     }
 
 
+def bulk_update_admin_tournament_checkins(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    registration_day_id: str,
+    operation_key: str,
+    updates: list[dict[str, Any]],
+    actor_email: str,
+    actor_role: str,
+) -> dict[str, Any]:
+    """Apply one canonical, day-scoped check-in batch in one database transaction."""
+
+    require_tournament_admin_mutation_runtime(CHECK_IN_SURFACE)
+    selected_day_id = _clean(registration_day_id, limit=160)
+    if not selected_day_id:
+        raise ValueError("Select an enabled tournament day before applying bulk check-in actions.")
+    try:
+        normalized_operation_key = str(UUID(str(operation_key)))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError(
+            "A UUID operation key is required for this bulk check-in action."
+        ) from exc
+    if not isinstance(updates, list) or not updates:
+        raise ValueError("Select at least one player for the bulk check-in action.")
+    if len(updates) > CHECK_IN_BULK_MAX_UPDATES:
+        raise ValueError(
+            f"Bulk check-in supports at most {CHECK_IN_BULK_MAX_UPDATES} players per action."
+        )
+
+    canonical_updates: list[dict[str, Any]] = []
+    seen_registration_ids: set[str] = set()
+    allowed_keys = {
+        "registration_id",
+        "expected_updated_at",
+        "attendance_status",
+        "waiver_verified",
+        "notes",
+    }
+    for raw_update in updates:
+        if not isinstance(raw_update, dict):
+            raise ValueError("Every bulk check-in row must be an object.")
+        unknown_keys = set(raw_update) - allowed_keys
+        if unknown_keys:
+            raise ValueError(
+                "Bulk check-in does not support substitutions or unrecognized row fields."
+            )
+        registration_id = _clean(raw_update.get("registration_id"), limit=160)
+        if not registration_id:
+            raise ValueError("Every bulk check-in row needs a registration id.")
+        if "expected_updated_at" not in raw_update:
+            raise ValueError(
+                "Every bulk check-in row needs its expected updated-at version or null."
+            )
+        if registration_id in seen_registration_ids:
+            raise ValueError("Each registration may appear only once in a bulk check-in action.")
+        seen_registration_ids.add(registration_id)
+
+        canonical: dict[str, Any] = {
+            "registration_id": registration_id,
+            "expected_updated_at": (
+                _clean(raw_update.get("expected_updated_at"), limit=120) or None
+            ),
+        }
+        changed = False
+        if "attendance_status" in raw_update:
+            attendance_status = _upper(raw_update.get("attendance_status"))
+            if attendance_status not in ATTENDANCE_STATUSES:
+                raise ValueError(
+                    "Attendance status must be EXPECTED, CHECKED_IN, or ABSENT."
+                )
+            canonical["attendance_status"] = attendance_status
+            changed = True
+        if "waiver_verified" in raw_update:
+            if not isinstance(raw_update.get("waiver_verified"), bool):
+                raise ValueError("Waiver verification must be true or false.")
+            canonical["waiver_verified"] = bool(raw_update["waiver_verified"])
+            changed = True
+        if "notes" in raw_update:
+            raw_notes = raw_update.get("notes")
+            if raw_notes is not None and not isinstance(raw_notes, str):
+                raise ValueError("Operator notes must be text or null.")
+            canonical["notes"] = _clean(raw_notes, limit=1000) or None
+            changed = True
+        if not changed:
+            raise ValueError(
+                "Every selected player needs an attendance, waiver, or note change."
+            )
+        canonical_updates.append(canonical)
+
+    canonical_updates.sort(key=lambda row: str(row["registration_id"]))
+    params = {
+        "p_club_id": str(club_id),
+        "p_tournament_id": str(tournament_id),
+        "p_registration_day_id": selected_day_id,
+        "p_operation_key": normalized_operation_key,
+        "p_updates": canonical_updates,
+        "p_actor_email": _clean(actor_email, limit=320),
+        "p_actor_role": _clean(actor_role, limit=120),
+    }
+    if not params["p_actor_email"] or not params["p_actor_role"]:
+        raise ValueError("An authenticated tournament operator is required.")
+
+    try:
+        payload = _rpc_payload(supabase.rpc(CHECK_IN_BULK_RPC, params).execute())
+    except Exception as exc:
+        detail = str(exc)
+        lowered = detail.lower()
+        if "jupr_check_in_bulk_stale" in lowered or "40001" in lowered:
+            raise StaleTournamentCheckInError(
+                "At least one selected check-in changed after it was loaded. No player in the batch was changed; reload and review the selection."
+            ) from exc
+        if "jupr_check_in_bulk_idempotency_conflict" in lowered:
+            raise TournamentCheckInIdempotencyConflictError(
+                "This bulk operation key was already used for a different selection or action. Reload before applying another bulk action."
+            ) from exc
+        if "jupr_check_in_bulk_roster" in lowered:
+            raise ValueError(
+                "Every selected player must belong to the authoritative roster for this tournament day. Reload check-in and repair the draw roster first."
+            ) from exc
+        if "jupr_check_in_bulk_day" in lowered:
+            raise ValueError(
+                "Select an enabled day that belongs to this tournament."
+            ) from exc
+        if "jupr_check_in_bulk_inactive" in lowered:
+            raise ValueError(
+                "Only active, approved, confirmed, or registered entries can be updated."
+            ) from exc
+        if "jupr_check_in_bulk_invalid" in lowered:
+            raise ValueError(detail) from exc
+        raise RuntimeError(
+            "Bulk tournament check-in did not return a response. Retry the exact same request with the same operation key; the database will replay a committed result or apply the whole batch once."
+        ) from exc
+
+    if not payload.get("ok"):
+        raise RuntimeError("Bulk tournament check-in did not return a durable result.")
+    if (
+        payload.get("mode") != "tournament_registration_check_in_bulk_update"
+        or payload.get("operation_key") != normalized_operation_key
+        or payload.get("updated_count") != len(canonical_updates)
+    ):
+        raise RuntimeError(
+            "Bulk tournament check-in returned evidence for a different operation scope."
+        )
+    check_ins = payload.get("check_ins")
+    if not isinstance(check_ins, list) or len(check_ins) != len(canonical_updates):
+        raise RuntimeError(
+            "Bulk tournament check-in returned incomplete authoritative row evidence."
+        )
+    public_rows = [
+        _public_check_in_row(dict(row)) for row in check_ins if isinstance(row, dict)
+    ]
+    if len(public_rows) != len(canonical_updates) or any(
+        not row.get("registration_id") or not row.get("updated_at")
+        for row in public_rows
+    ):
+        raise RuntimeError(
+            "Bulk tournament check-in returned incomplete authoritative row versions."
+        )
+    requested_registration_ids = [
+        str(row["registration_id"]) for row in canonical_updates
+    ]
+    returned_registration_ids = sorted(
+        str(row["registration_id"]) for row in public_rows
+    )
+    if (
+        returned_registration_ids != requested_registration_ids
+    ):
+        raise RuntimeError(
+            "Bulk tournament check-in returned evidence for a different operation scope."
+        )
+    idempotent_replay = bool(payload.get("idempotent_replay"))
+    return {
+        "ok": True,
+        "mode": "tournament_registration_check_in_bulk_update",
+        "operation_key": normalized_operation_key,
+        "updated_count": len(public_rows),
+        "check_ins": public_rows,
+        "idempotent_replay": idempotent_replay,
+        "message": (
+            f"Replayed the completed bulk check-in result for {len(public_rows)} player(s)."
+            if idempotent_replay
+            else f"Bulk check-in saved for {len(public_rows)} player(s)."
+        ),
+    }
+
+
 __all__ = [
+    "CHECK_IN_BULK_MAX_UPDATES",
+    "CHECK_IN_BULK_RPC",
     "CHECK_IN_RPC",
     "TournamentCheckInIdempotencyConflictError",
     "StaleTournamentCheckInError",
     "build_admin_tournament_checkin_snapshot",
+    "bulk_update_admin_tournament_checkins",
     "update_admin_tournament_checkin",
 ]

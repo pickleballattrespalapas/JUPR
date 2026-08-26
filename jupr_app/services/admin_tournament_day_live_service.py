@@ -647,41 +647,10 @@ def build_admin_tournament_day_live_snapshot(
         player_id = _safe_int(registration.get("player_id"))
         if player_id is not None:
             registrations_by_player.setdefault(player_id, []).append(registration)
-    check_ins = [
-        row
-        for row in _rows(
-            supabase,
-            "tournament_registration_check_ins",
-            filters=(
-                ("eq", "tournament_id", str(tournament_id)),
-                ("eq", "registration_day_id", str(registration_day_id)),
-            ),
-        )
-        if _text(row.get("tournament_id")) == str(tournament_id)
-        and _text(row.get("registration_day_id")) == str(registration_day_id)
-    ]
-    check_in_by_registration = {
-        _text(row.get("registration_id")): row for row in check_ins
-    }
-
-    commerce_orders = _rows(
-        supabase,
-        "tournament_commerce_orders",
-        filters=(
-            ("eq", "club_id", str(club_id)),
-            ("eq", "tournament_id", str(tournament_id)),
-        ),
-    )
-    commerce_by_registration: dict[str, dict[str, Any]] = {}
-    for order in sorted(
-        commerce_orders,
-        key=lambda row: (_text(row.get("updated_at")), _text(row.get("id"))),
-    ):
-        commerce_by_registration[_text(order.get("registration_id"))] = order
 
     active_registration_statuses = {"ACTIVE", "APPROVED", "CONFIRMED", "REGISTERED"}
 
-    def player_readiness_blockers(player_ids: set[int]) -> list[dict[str, Any]]:
+    def player_registration_blockers(player_ids: set[int]) -> list[dict[str, Any]]:
         blockers: list[dict[str, Any]] = []
         for player_id in sorted(player_ids):
             if player_id not in players:
@@ -704,36 +673,6 @@ def build_admin_tournament_day_live_snapshot(
                         "A participant must resolve to exactly one active tournament registration.",
                     )
                 )
-                continue
-            registration = active_registrations[0]
-            registration_id = _text(registration.get("id"))
-            check_in = check_in_by_registration.get(registration_id) or {}
-            if (
-                _text(check_in.get("attendance_status")).upper() != "CHECKED_IN"
-                or not check_in.get("waiver_verified")
-                or _text(check_in.get("attendee_identity_key")) != f"player:{player_id}"
-            ):
-                blockers.append(
-                    _blocker(
-                        "PLAYER_NOT_READY",
-                        "A participant must be checked in with canonical identity and a verified waiver.",
-                    )
-                )
-            commerce = commerce_by_registration.get(registration_id)
-            payment_status = _text(
-                (commerce or {}).get("payment_status")
-                if commerce
-                else registration.get("payment_status")
-            ).upper()
-            if payment_status not in {"PAID", "WAIVED"}:
-                blockers.append(
-                    _blocker(
-                        "PAYMENT_UNRESOLVED",
-                        "A participant payment must be resolved as paid or waived.",
-                    )
-                )
-        # Operators need a finite list, while the database still returns the
-        # exact player-specific reason under lock.
         return list({row["code"]: row for row in blockers}.values())
 
     live_courts = [
@@ -1149,14 +1088,7 @@ def build_admin_tournament_day_live_snapshot(
                     "Every game in this draw must belong to the selected tournament day.",
                 )
             )
-        team_ids = {
-            _text(game.get(field))
-            for game in draw_games
-            for field in ("team_a_id", "team_b_id")
-            if game.get(field)
-        }
         draw_event_id = _text(draw.get("event_option_id"))
-        player_ids: set[int] = set()
         for game in draw_games:
             stage = _text(game.get("stage")).upper()
             if stage not in {"ROUND_ROBIN", "PLAYOFF"}:
@@ -1263,12 +1195,6 @@ def build_admin_tournament_day_live_snapshot(
                         "Every playable game requires two or four distinct effective players on valid teams.",
                     )
                 )
-        for team_id in team_ids:
-            team = teams_by_id.get(team_id) or {}
-            for field in ("player1_id", "player2_id"):
-                player_id = _safe_int(team.get(field))
-                if player_id is not None:
-                    player_ids.add(player_id)
         all_draw_teams = [row for row in teams if _text(row.get("draw_id")) == draw_id]
         draw_teams = [
             row
@@ -1319,6 +1245,9 @@ def build_admin_tournament_day_live_snapshot(
                 )
             )
             activate_blockers.extend(roster_uniqueness_blockers)
+        activate_blockers.extend(
+            player_registration_blockers(set(exact_roster_player_ids))
+        )
         allowed_advance_counts = [
             count for count in SUPPORTED_ADVANCE_COUNTS if count <= len(draw_teams)
         ]
@@ -1329,7 +1258,6 @@ def build_admin_tournament_day_live_snapshot(
                     "At least four exact in-draw teams are required to reach a supported playoff and closeout format.",
                 )
             )
-        activate_blockers.extend(player_readiness_blockers(player_ids))
         activate_blockers = list(
             {row["code"]: row for row in activate_blockers}.values()
         )
@@ -1646,7 +1574,7 @@ def build_admin_tournament_day_live_snapshot(
             blockers.append(_blocker("PARTICIPANTS_INVALID", "This game does not have two or four distinct effective players."))
         if effective & active_claimed_players:
             blockers.append(_blocker("PLAYER_ALREADY_CLAIMED", "A participant is already on another court for this tournament day."))
-        blockers.extend(player_readiness_blockers(effective))
+        blockers.extend(player_registration_blockers(effective))
         priority = _safe_int(row.get("priority"), 0) or 0
         if any(
             _text(earlier.get("draw_id")) == draw_id
@@ -1858,26 +1786,16 @@ def build_admin_tournament_day_live_snapshot(
             }
             for row in all_draw_games
         ],
-        "check_ins": [{"id": row.get("id"), "updated_at": row.get("updated_at"), "attendance_status": row.get("attendance_status"), "waiver_verified": row.get("waiver_verified")} for row in check_ins],
+        # Registration identity/status is structural evidence for a rostered
+        # participant. Payment is intentionally omitted so a commerce update
+        # cannot stale an otherwise safe live-day command.
         "registrations": [
             {
                 "id": row.get("id"),
-                "updated_at": row.get("updated_at"),
                 "status": row.get("status"),
-                "payment_status": row.get("payment_status"),
                 "player_id": row.get("player_id"),
             }
-            for row in registrations
-        ],
-        "commerce_orders": [
-            {
-                "id": row.get("id"),
-                "registration_id": row.get("registration_id"),
-                "payment_status": row.get("payment_status"),
-                "status": row.get("status"),
-                "updated_at": row.get("updated_at"),
-            }
-            for row in commerce_orders
+            for row in sorted(registrations, key=lambda item: _text(item.get("id")))
         ],
     }
     state_fingerprint = _fingerprint(state_evidence)
