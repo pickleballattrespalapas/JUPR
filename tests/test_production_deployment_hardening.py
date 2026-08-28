@@ -376,7 +376,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261108019000"
+    assert migrations[-1] == "20261108020000"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(
