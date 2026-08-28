@@ -257,6 +257,16 @@
   background: #f8fbff;
 }
 
+.scoreDialogDescription {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.scoreDialogDescription p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .scoreGrid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import { actionSuccess, actionUncertain } from "@/components/interaction";
+import { InteractionDialog, actionSuccess, actionUncertain } from "@/components/interaction";
 import type { ActionCompletion } from "@/components/interaction";
 import type { AdminTournamentLiveStatusResponse } from "@/lib/adminTournamentApi";
 import {
@@ -1106,15 +1106,54 @@ export default function TournamentDayWorkspacePanel({
             {!snapshot.courts.length ? <p className={styles.emptyState}>No authoritative courts are available for this day. Return to Tournament Builder.</p> : null}
 
             {scoreEditor && selectedScoreGame && selectedScoreCourt && selectedScoreDraw && selectedScoreAssignmentCurrent ? (
-              <article className={styles.scoreEditor} aria-labelledby="court-score-title">
-                <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>Inline score and release</p><h3 id="court-score-title">{selectedScoreCourt.label} · {gameStageLabel(selectedScoreGame)}</h3></div><button type="button" className={styles.secondaryButton} onClick={() => setScoreEditor(null)}>Close editor</button></div>
+              <InteractionDialog
+                open
+                phase={busyKey ? "working" : "ready"}
+                size="wide"
+                title={`Enter score · ${selectedScoreCourt.label}`}
+                description={(
+                  <div className={styles.scoreDialogDescription}>
+                    <p>{gameStageLabel(selectedScoreGame)}</p>
+                    <p><strong>{matchupLabel(selectedScoreGame)}</strong></p>
+                  </div>
+                )}
+                onRequestClose={() => setScoreEditor(null)}
+                actions={(
+                  <>
+                    <button type="button" className={styles.secondaryButton} onClick={() => setScoreEditor(null)} disabled={Boolean(busyKey)}>Close score entry</button>
+                    {!scoreEditor.reviewing ? (
+                      <button type="button" className={styles.primaryButton} onClick={reviewScore} disabled={writesFrozen || Boolean(busyKey)}>Review score</button>
+                    ) : selectedScoreValidation?.ok ? (
+                      <>
+                        <button type="button" className={styles.secondaryButton} onClick={() => setScoreEditor({ ...scoreEditor, reviewing: false })} disabled={Boolean(busyKey)}>Edit score</button>
+                        <ConfirmAction
+                          triggerLabel="Confirm & release court"
+                          title="Confirm this score and release the court?"
+                          description={`${matchupLabel(selectedScoreGame)} · ${selectedScoreValidation.scoreA}–${selectedScoreValidation.scoreB} on ${selectedScoreCourt.label}.`}
+                          confirmLabel="Confirm & release court"
+                          confirmationText={dayActionConfirmation("score_and_release")}
+                          disabled={!dayActive || !runtimeWritesEnabled || writesFrozen || selectedScoreValidation.acknowledgementRequired}
+                          disabledReason={selectedScoreValidation.acknowledgementRequired ? "Acknowledge the unusual score after reviewing the configured format." : !dayActive ? "The day must be active to save a score." : writesFrozen ? "Resolve day recovery first." : "Tournament-day writes are unavailable."}
+                          busy={Boolean(busyKey)}
+                          onConfirm={(confirmationText) => submitCommand(
+                            "score_and_release",
+                            confirmationText,
+                            { game_id: selectedScoreGame.id, score_a: selectedScoreValidation.scoreA, score_b: selectedScoreValidation.scoreB, unusual_score_acknowledgement: scoreEditor.unusualScoreAcknowledged },
+                            scoreEditor.expected
+                          )}
+                        />
+                      </>
+                    ) : null}
+                  </>
+                )}
+              >
                 <div className={styles.scoreGrid}>
-                  <label>{sideLabel(selectedScoreGame.team_a)} score<input aria-invalid={Boolean(scoreEditor.error) || undefined} aria-describedby={scoreEditor.error ? "day-score-error" : undefined} value={scoreEditor.scoreA} onChange={(event) => setScoreEditor({ ...scoreEditor, scoreA: event.target.value, reviewing: false, error: "", unusualScoreAcknowledged: false })} type="number" min={0} step={1} inputMode="numeric" /></label>
+                  <label>{sideLabel(selectedScoreGame.team_a)} score<input data-autofocus aria-invalid={Boolean(scoreEditor.error) || undefined} aria-describedby={scoreEditor.error ? "day-score-error" : undefined} value={scoreEditor.scoreA} onChange={(event) => setScoreEditor({ ...scoreEditor, scoreA: event.target.value, reviewing: false, error: "", unusualScoreAcknowledged: false })} type="number" min={0} step={1} inputMode="numeric" /></label>
                   <span aria-hidden="true">–</span>
                   <label>{sideLabel(selectedScoreGame.team_b)} score<input aria-invalid={Boolean(scoreEditor.error) || undefined} aria-describedby={scoreEditor.error ? "day-score-error" : undefined} value={scoreEditor.scoreB} onChange={(event) => setScoreEditor({ ...scoreEditor, scoreB: event.target.value, reviewing: false, error: "", unusualScoreAcknowledged: false })} type="number" min={0} step={1} inputMode="numeric" /></label>
                 </div>
                 {scoreEditor.error ? <p id="day-score-error" role="alert" className={styles.errorText}>{scoreEditor.error}</p> : null}
-                {!scoreEditor.reviewing ? <button type="button" className={styles.primaryButton} onClick={reviewScore} disabled={writesFrozen || Boolean(busyKey)}>Review score</button> : selectedScoreValidation?.ok ? (
+                {scoreEditor.reviewing && selectedScoreValidation?.ok ? (
                   <div className={styles.scoreConfirmation} aria-label="Score and court release confirmation">
                     <div><strong>{sideLabel(selectedScoreGame.team_a)}</strong><span>{selectedScoreValidation.scoreA}</span></div>
                     <p>Winner: <strong>{selectedScoreValidation.scoreA > selectedScoreValidation.scoreB ? sideLabel(selectedScoreGame.team_a) : sideLabel(selectedScoreGame.team_b)}</strong></p>
@@ -1126,31 +1165,19 @@ export default function TournamentDayWorkspacePanel({
                         <span><strong>Unusual score:</strong> {selectedScoreValidation.reasons.join(" ")} I reviewed the configured {selectedScoreValidation.scoringFormat} format and confirm this exact result.</span>
                       </label>
                     ) : null}
-                    <div className={styles.buttonRow}><button type="button" className={styles.secondaryButton} onClick={() => setScoreEditor({ ...scoreEditor, reviewing: false })}>Edit score</button><ConfirmAction
-                      triggerLabel="Confirm & release court"
-                      title="Confirm this score and release the court?"
-                      description={`${matchupLabel(selectedScoreGame)} · ${selectedScoreValidation.scoreA}–${selectedScoreValidation.scoreB} on ${selectedScoreCourt.label}.`}
-                      confirmLabel="Confirm & release court"
-                      confirmationText={dayActionConfirmation("score_and_release")}
-                      disabled={!dayActive || !runtimeWritesEnabled || writesFrozen || selectedScoreValidation.acknowledgementRequired}
-                      disabledReason={selectedScoreValidation.acknowledgementRequired ? "Acknowledge the unusual score after reviewing the configured format." : !dayActive ? "The day must be active to save a score." : writesFrozen ? "Resolve day recovery first." : "Tournament-day writes are unavailable."}
-                      busy={Boolean(busyKey)}
-                      onConfirm={(confirmationText) => submitCommand(
-                        "score_and_release",
-                        confirmationText,
-                        { game_id: selectedScoreGame.id, score_a: selectedScoreValidation.scoreA, score_b: selectedScoreValidation.scoreB, unusual_score_acknowledgement: scoreEditor.unusualScoreAcknowledged },
-                        scoreEditor.expected
-                      )}
-                    /></div>
                   </div>
                 ) : null}
-              </article>
+              </InteractionDialog>
             ) : scoreEditor ? (
-              <article className={styles.scoreEditor} role="alert">
-                <h3>Score entry needs a fresh court assignment</h3>
-                <p>The selected matchup is no longer the authoritative assignment on this court. Review the refreshed board before scoring.</p>
-                <button type="button" className={styles.secondaryButton} onClick={() => setScoreEditor(null)}>Close stale score entry</button>
-              </article>
+              <InteractionDialog
+                open
+                phase="error"
+                title="Score entry needs a fresh court assignment"
+                onRequestClose={() => setScoreEditor(null)}
+                actions={<button type="button" className={styles.secondaryButton} onClick={() => setScoreEditor(null)}>Close stale score entry</button>}
+              >
+                <p role="alert">The selected matchup is no longer the authoritative assignment on this court. Review the refreshed board before scoring.</p>
+              </InteractionDialog>
             ) : null}
           </section>
           ) : null}

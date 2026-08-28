@@ -129,6 +129,10 @@ def test_day_console_renders_authoritative_courts_and_progression_controls() -> 
         "lib/tournamentDayWorkspaceState.mjs"
     )
     assert "Confirm & release court" in panel
+    assert "InteractionDialog" in panel
+    assert 'title={`Enter score · ${selectedScoreCourt.label}`}' in panel
+    assert "Inline score and release" not in panel
+    assert "data-autofocus" in panel
     assert "Use the non-played outcome command" in panel
     assert '"record_non_played_result"' in panel
     assert "synthetic progression result" in panel
