@@ -25,6 +25,7 @@ class AdminTournamentDayLiveExpected(BaseModel):
     draw_version: str | int | None = None
     game_version: str | None = Field(default=None, max_length=120)
     court_version: str | int | None = None
+    target_court_version: str | int | None = None
     queue_version: str | int | None = None
     queue_entry_version: str | int | None = None
 
@@ -35,6 +36,7 @@ class AdminTournamentDayLivePayload(BaseModel):
     draw_id: str | None = Field(default=None, max_length=160)
     advance_count: int | None = Field(default=None, ge=4, le=6)
     game_id: str | None = Field(default=None, max_length=160)
+    court_id: str | None = Field(default=None, max_length=160)
     score_a: int | None = None
     score_b: int | None = None
     unusual_score_acknowledgement: bool | None = None
@@ -50,6 +52,10 @@ class AdminTournamentDayLiveCommandRequest(BaseModel):
         "pause_draw",
         "resume_draw",
         "auto_fill_courts",
+        "assign_next_court",
+        "assign_game_to_court",
+        "requeue_game",
+        "move_game_to_court",
         "score_and_release",
         "correct_completed_score",
         "record_non_played_result",

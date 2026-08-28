@@ -237,6 +237,7 @@ function dayGame(options: {
     result_note: null as string | null,
     updated_at: "2026-08-17T09:00:00Z",
     version: `${options.id}-v1`,
+    queue_entry_version: options.courtId ? "5" : "1",
     blockers: [],
     correction_readiness: dayReadiness(false, "CORRECT COMPLETED SCORE", "Only released completed results are correctable.")
   };
@@ -450,6 +451,7 @@ async function installMockApi(page: Page) {
           draw_id?: string;
           advance_count?: number;
           game_id?: string;
+          court_id?: string;
           score_a?: number;
           score_b?: number;
           result_type?: "FORFEIT" | "NO_SHOW" | "RETIREMENT";
@@ -458,6 +460,63 @@ async function installMockApi(page: Page) {
         };
       };
       const refreshed = structuredClone(currentDaySnapshot);
+      if (command.action === "assign_next_court" || command.action === "assign_game_to_court") {
+        const entry = refreshed.eligible_queue.find((row) => row.game_id === command.payload.game_id);
+        const targetCourt = command.action === "assign_game_to_court"
+          ? refreshed.courts.find((court) => court.id === command.payload.court_id)
+          : refreshed.courts.find((court) => court.state === "AVAILABLE" && !court.current_assignment);
+        const game = refreshed.games.find((row) => row.id === command.payload.game_id);
+        if (entry && targetCourt && game) {
+          targetCourt.state = "ON_COURT";
+          targetCourt.current_assignment = {
+            id: `assignment-${game.id}`,
+            game_id: game.id,
+            state: "ON_COURT",
+            version: `${entry.version}-assigned`,
+            assigned_at: "2026-08-17T09:06:00Z",
+            started_at: "2026-08-17T09:06:00Z"
+          };
+          game.court_id = targetCourt.id;
+          game.queue_entry_version = `${entry.version}-assigned`;
+          refreshed.eligible_queue = refreshed.eligible_queue.filter((row) => row.game_id !== game.id);
+          refreshed.summary.available_courts -= 1;
+          refreshed.summary.eligible_games -= 1;
+        }
+      }
+      if (command.action === "requeue_game" || command.action === "move_game_to_court") {
+        const sourceCourt = refreshed.courts.find((court) => court.current_assignment?.game_id === command.payload.game_id);
+        const game = refreshed.games.find((row) => row.id === command.payload.game_id);
+        if (sourceCourt && game) {
+          const assignment = sourceCourt.current_assignment;
+          sourceCourt.current_assignment = null;
+          sourceCourt.state = "AVAILABLE";
+          if (command.action === "move_game_to_court") {
+            const targetCourt = refreshed.courts.find((court) => court.id === command.payload.court_id);
+            if (targetCourt && assignment) {
+              targetCourt.current_assignment = { ...assignment, version: `${assignment.version}-moved`, assigned_at: "2026-08-17T09:07:00Z" };
+              targetCourt.state = "ON_COURT";
+              game.court_id = targetCourt.id;
+              game.queue_entry_version = `${assignment.version}-moved`;
+            }
+          } else {
+            game.court_id = null;
+            game.queue_entry_version = `${assignment?.version || "queue"}-requeued`;
+            refreshed.eligible_queue.push({
+              game_id: game.id,
+              draw_id: game.draw_id,
+              position: refreshed.eligible_queue.length + 1,
+              priority: 50,
+              state: "WAITING",
+              version: game.queue_entry_version,
+              eligible_since: "2026-08-17T08:58:00Z",
+              reason: "Returned to existing queue priority",
+              blockers: []
+            });
+            refreshed.summary.available_courts += 1;
+            refreshed.summary.eligible_games += 1;
+          }
+        }
+      }
       if (command.action === "score_and_release") {
         const completedGame = refreshed.games.find((game) => game.id === command.payload.game_id);
         if (completedGame) {
@@ -469,15 +528,9 @@ async function installMockApi(page: Page) {
           completedGame.state = "COMPLETED";
           completedGame.version = `${completedGame.id}-v2`;
         }
-        refreshed.courts[0].current_assignment = {
-          id: "assignment-b",
-          game_id: "day-game-b",
-          state: "ON_COURT",
-          version: "assignment-b-v1",
-          assigned_at: "2026-08-17T09:06:00Z",
-          started_at: null
-        };
-        refreshed.eligible_queue = refreshed.eligible_queue.filter((entry) => entry.game_id !== "day-game-b");
+        refreshed.courts[0].current_assignment = null;
+        refreshed.courts[0].state = "AVAILABLE";
+        refreshed.summary.available_courts += 1;
         refreshed.summary.completed_games += 1;
       }
       if (command.action === "record_non_played_result") {
@@ -491,15 +544,9 @@ async function installMockApi(page: Page) {
           completedGame.state = "COMPLETED";
           completedGame.version = `${completedGame.id}-v2`;
         }
-        refreshed.courts[0].current_assignment = {
-          id: "assignment-b",
-          game_id: "day-game-b",
-          state: "ON_COURT",
-          version: "assignment-b-v1",
-          assigned_at: "2026-08-17T09:06:00Z",
-          started_at: null
-        };
-        refreshed.eligible_queue = refreshed.eligible_queue.filter((entry) => entry.game_id !== "day-game-b");
+        refreshed.courts[0].current_assignment = null;
+        refreshed.courts[0].state = "AVAILABLE";
+        refreshed.summary.available_courts += 1;
         refreshed.summary.completed_games += 1;
       }
       if (command.action === "correct_completed_score") {
@@ -513,8 +560,8 @@ async function installMockApi(page: Page) {
           correctedGame.version = `${correctedGame.id}-v2`;
         }
       }
-      refreshed.state_fingerprint = "e".repeat(64);
-      refreshed.queue_version = "12";
+      refreshed.queue_version = String(Number(currentDaySnapshot.queue_version) + 1);
+      refreshed.state_fingerprint = Number(refreshed.queue_version).toString(16).slice(-1).repeat(64);
       refreshed.generated_at = "2026-08-17T09:06:00Z";
       refreshed.operations = [{
         operation_key: "day-operation-1",
@@ -761,6 +808,52 @@ test("legacy score route retains day context and focuses the unified queue", asy
   await expect(page.getByRole("heading", { name: "Unified eligible queue" })).toBeVisible();
 });
 
+test("Queued games can use the next court, a chosen court, move, and requeue", async ({ page }) => {
+  const commands: Array<{ action: string }> = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
+    commands.push(request.postDataJSON() as { action: string });
+  });
+  await page.goto(`/admin/tournaments/live-operations?${selectedQuery}&panel=queue`);
+  const queue = page.getByRole("region", { name: "Eligible match queue" });
+  const gameBRow = queue.locator("ol > li").filter({ hasText: "Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith" });
+  await gameBRow.getByRole("button", { name: "Send to next open court" }).click();
+  await expect(page.getByRole("status")).toContainText("Matchup assigned to the next authoritative open court.");
+
+  await page.getByRole("tab", { name: "Court board" }).click();
+  let court2 = page.getByRole("heading", { name: "Court 2", exact: true }).locator("xpath=ancestor::article[1]");
+  await expect(court2).toContainText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith");
+  await court2.getByRole("button", { name: /Move or remove Avery Patel/ }).click();
+  let assignmentDialog = page.getByRole("dialog", { name: /Move or remove · Court 2/ });
+  await assignmentDialog.getByLabel("Move to open court").selectOption("day-court-3");
+  await assignmentDialog.getByRole("button", { name: "Move to Court 3" }).click();
+
+  const court3 = page.getByRole("heading", { name: "Court 3", exact: true }).locator("xpath=ancestor::article[1]");
+  await expect(court3).toContainText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith");
+  await court3.getByRole("button", { name: /Move or remove Avery Patel/ }).click();
+  assignmentDialog = page.getByRole("dialog", { name: /Move or remove · Court 3/ });
+  await assignmentDialog.getByRole("button", { name: "Return game to queue" }).click();
+  await expect(court3).toContainText("Available for a queued matchup.");
+
+  await page.getByRole("tab", { name: "Eligible queue" }).click();
+  await expect(queue.locator("ol > li").filter({ hasText: "Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith" })).toBeVisible();
+  const gameCRow = queue.locator("ol > li").filter({ hasText: "Nora Williams / Sofia Kim vs Emma Davis / Mia Johnson" });
+  await gameCRow.getByRole("button", { name: "Choose court" }).click();
+  const chooseDialog = page.getByRole("dialog", { name: "Choose a court" });
+  await chooseDialog.getByLabel("Open court").selectOption("day-court-4");
+  await chooseDialog.getByRole("button", { name: "Assign to Court 4" }).click();
+
+  await page.getByRole("tab", { name: "Court board" }).click();
+  const court4 = page.getByRole("heading", { name: "Court 4", exact: true }).locator("xpath=ancestor::article[1]");
+  await expect(court4).toContainText("Nora Williams / Sofia Kim vs Emma Davis / Mia Johnson");
+  await expect.poll(() => commands.map((command) => command.action)).toEqual([
+    "assign_next_court",
+    "move_game_to_court",
+    "requeue_game",
+    "assign_game_to_court"
+  ]);
+});
+
 test("Preflight check-in changes day without retaining old rows or losing context", async ({ page }) => {
   await page.goto(`/admin/tournaments/live-operations/check-in?${selectedQuery}`);
   await expect(page.getByRole("heading", { name: "Staging Summer Classic preflight and check-in" })).toBeVisible();
@@ -860,13 +953,13 @@ test("Score entry saves in two clicks with a live preview and the exact day fenc
   await scoreDialog.getByLabel("Caleb Nguyen / Diego Alvarez score").fill("7");
   await expect(scoreDialog.getByText("Winner:")).toBeVisible();
   await expect(scoreDialog.getByText("Mateo Rivera / Liam Chen", { exact: true }).last()).toBeVisible();
-  await expect(scoreDialog.getByText(/refills it from the server-ordered eligible queue/)).toBeVisible();
+  await expect(scoreDialog.getByText(/remains in the queue until an operator/)).toBeVisible();
   const saveScore = scoreDialog.getByRole("button", { name: "Save 11–7 & release Court 1" });
   await expect(saveScore).toBeEnabled();
 
   await saveScore.click();
   await expect(scoreDialog).toHaveCount(0);
-  await expect(page.getByRole("status")).toContainText("Score saved, court released, and the authoritative day queue refreshed.");
+  await expect(page.getByRole("status")).toContainText("Score saved and court released. The next matchup remains queued until an operator assigns it.");
   await expect(page.getByRole("dialog", { name: "Tournament-day operation complete" })).toHaveCount(0);
   await expect.poll(() => commands.length).toBe(1);
   expect(commands[0]).toMatchObject({
@@ -882,7 +975,8 @@ test("Score entry saves in two clicks with a live preview and the exact day fenc
     },
     payload: { game_id: "day-game-a", score_a: 11, score_b: 7 }
   });
-  await expect(page.getByRole("tabpanel", { name: "Court board" }).getByText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith")).toBeVisible();
+  const releasedCourt = page.getByRole("heading", { name: "Court 1", exact: true }).locator("xpath=ancestor::article[1]");
+  await expect(releasedCourt).toContainText("Available for a queued matchup.");
 });
 
 test("The score dialog records a non-play result without leaving the court board", async ({ page }) => {
@@ -909,7 +1003,7 @@ test("The score dialog records a non-play result without leaving the court board
   await saveOutcome.click();
 
   await expect(resultDialog).toHaveCount(0);
-  await expect(page.getByRole("status")).toContainText("Non-played outcome recorded, court and participant claims released, and the authoritative day queue refreshed.");
+  await expect(page.getByRole("status")).toContainText("Non-played outcome recorded and any court and participant claims released. The next matchup remains queued until assigned.");
   await expect.poll(() => commands.length).toBe(1);
   expect(commands[0]).toMatchObject({
     action: "record_non_played_result",
@@ -929,7 +1023,8 @@ test("The score dialog records a non-play result without leaving the court board
       result_note: "Mateo and Liam did not arrive; the desk verified the no-show."
     }
   });
-  await expect(board.getByText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith")).toBeVisible();
+  const releasedCourt = page.getByRole("heading", { name: "Court 1", exact: true }).locator("xpath=ancestor::article[1]");
+  await expect(releasedCourt).toContainText("Available for a queued matchup.");
 });
 
 test("Corrections & recovery submits an exact versioned day correction with before/after evidence", async ({ page }) => {

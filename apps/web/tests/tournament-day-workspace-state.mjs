@@ -31,6 +31,10 @@ assert.equal(
   "CORRECT COMPLETED SCORE",
   "day-owned score corrections must retain the exact guarded confirmation"
 );
+assert.equal(dayActionConfirmation("assign_next_court"), "ASSIGN NEXT OPEN COURT");
+assert.equal(dayActionConfirmation("assign_game_to_court"), "ASSIGN GAME TO COURT");
+assert.equal(dayActionConfirmation("requeue_game"), "RETURN GAME TO QUEUE");
+assert.equal(dayActionConfirmation("move_game_to_court"), "MOVE GAME TO COURT");
 
 assert.equal(advanceCountSelection([4, 5, 6], null, undefined), "");
 assert.equal(

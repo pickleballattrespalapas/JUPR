@@ -542,6 +542,10 @@ def _request(
         "pause_draw": "PAUSE DRAW",
         "resume_draw": "RESUME DRAW",
         "auto_fill_courts": "AUTO FILL COURTS",
+        "assign_next_court": "ASSIGN NEXT OPEN COURT",
+        "assign_game_to_court": "ASSIGN GAME TO COURT",
+        "requeue_game": "RETURN GAME TO QUEUE",
+        "move_game_to_court": "MOVE GAME TO COURT",
         "score_and_release": "SAVE SCORE AND RELEASE COURT",
         "correct_completed_score": "CORRECT COMPLETED SCORE",
         "record_non_played_result": "RECORD NON-PLAYED RESULT",
@@ -1339,7 +1343,196 @@ def test_auto_fill_uses_one_shared_queue_and_respects_cross_draw_player_claims(
     assert result["snapshot"]["blocked_games"][0]["reason"] == "PLAYER_BUSY"
 
 
-def test_score_release_and_next_fill_are_one_atomic_rpc(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("action", "rpc_action", "selected_court_id", "selected_court_version"),
+    [
+        ("assign_next_court", "NEXT_OPEN", None, None),
+        ("assign_game_to_court", "SELECTED", "court-row-2", "2"),
+    ],
+)
+def test_operator_assigns_one_queued_game_to_next_or_selected_court(
+    monkeypatch,
+    action: str,
+    rpc_action: str,
+    selected_court_id: str | None,
+    selected_court_version: str | None,
+) -> None:
+    before = _workspace_snapshot()
+    before["eligible_queue"] = [
+        {
+            "game_id": "game-a",
+            "draw_id": "draw-a",
+            "position": 1,
+            "state": "WAITING",
+            "version": "5",
+            "blockers": [],
+        }
+    ]
+    before["games"] = [
+        {
+            "id": "game-a",
+            "draw_id": "draw-a",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "version": "game-a-v1",
+            "queue_entry_version": "5",
+        }
+    ]
+    assigned_court_index = 1 if selected_court_id else 0
+    after = deepcopy(before)
+    after["queue_version"] = "12"
+    after["eligible_queue"] = []
+    after["courts"][assigned_court_index]["state"] = "ON_COURT"
+    after["courts"][assigned_court_index]["current_assignment"] = {
+        "id": "queue-a",
+        "game_id": "game-a",
+        "state": "ON_COURT",
+        "version": "6",
+    }
+    supabase = FakeSupabase()
+    _install_command_harness(monkeypatch, supabase, (before, after))
+    supabase.rpc_handlers["admin_assign_tournament_day_game_cas"] = lambda _params: {
+        "ok": True,
+        "assignments": [{"game_id": "game-a"}],
+    }
+    payload = {"game_id": "game-a"}
+    expected = {
+        "game_version": "game-a-v1",
+        "queue_entry_version": "5",
+    }
+    if selected_court_id:
+        payload["court_id"] = selected_court_id
+        expected["court_version"] = selected_court_version
+
+    result = _execute(
+        supabase,
+        _request(action, before, payload=payload, **expected),
+    )
+
+    assert [name for name, _params in supabase.rpc_calls] == [
+        "admin_assign_tournament_day_game_cas"
+    ]
+    params = supabase.rpc_calls[0][1]
+    assert params["p_action"] == rpc_action
+    assert params["p_game_id"] == "game-a"
+    assert params["p_court_id"] == selected_court_id
+    assert params["p_expected_queue_entry_version"] == 5
+    assert params["p_expected_game_updated_at"] == "game-a-v1"
+    assert (
+        str(params["p_expected_court_version"])
+        if params["p_expected_court_version"] is not None
+        else None
+    ) == selected_court_version
+    assert result["snapshot"]["eligible_queue"] == []
+
+
+@pytest.mark.parametrize(
+    ("action", "rpc_action", "target_court_id", "target_court_version"),
+    [
+        ("requeue_game", "REQUEUE", None, None),
+        ("move_game_to_court", "MOVE", "court-row-2", "2"),
+    ],
+)
+def test_operator_requeues_or_moves_an_exact_on_court_assignment(
+    monkeypatch,
+    action: str,
+    rpc_action: str,
+    target_court_id: str | None,
+    target_court_version: str | None,
+) -> None:
+    before = _workspace_snapshot()
+    before["courts"][0].update(
+        {
+            "state": "ON_COURT",
+            "current_assignment": {
+                "id": "queue-a",
+                "game_id": "game-a",
+                "state": "ON_COURT",
+                "version": "5",
+            },
+        }
+    )
+    before["games"] = [
+        {
+            "id": "game-a",
+            "draw_id": "draw-a",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "version": "game-a-v1",
+            "queue_entry_version": "5",
+            "court_id": "court-row-1",
+        }
+    ]
+    after = deepcopy(before)
+    after["queue_version"] = "12"
+    after["courts"][0].update({"state": "AVAILABLE", "current_assignment": None})
+    if action == "requeue_game":
+        after["eligible_queue"] = [
+            {
+                "game_id": "game-a",
+                "draw_id": "draw-a",
+                "position": 1,
+                "state": "WAITING",
+                "version": "6",
+                "blockers": [],
+            }
+        ]
+    else:
+        after["courts"][1].update(
+            {
+                "state": "ON_COURT",
+                "current_assignment": {
+                    "id": "queue-a",
+                    "game_id": "game-a",
+                    "state": "ON_COURT",
+                    "version": "6",
+                },
+            }
+        )
+    supabase = FakeSupabase()
+    _install_command_harness(monkeypatch, supabase, (before, after))
+    supabase.rpc_handlers["admin_reassign_tournament_day_game_cas"] = lambda _params: {
+        "ok": True,
+        "action": rpc_action,
+    }
+    payload = {"game_id": "game-a"}
+    expected = {
+        "game_version": "game-a-v1",
+        "queue_entry_version": "5",
+        "court_version": "2",
+    }
+    if target_court_id:
+        payload["court_id"] = target_court_id
+        expected["target_court_version"] = target_court_version
+
+    result = _execute(
+        supabase,
+        _request(action, before, payload=payload, **expected),
+    )
+
+    assert [name for name, _params in supabase.rpc_calls] == [
+        "admin_reassign_tournament_day_game_cas"
+    ]
+    params = supabase.rpc_calls[0][1]
+    assert params["p_action"] == rpc_action
+    assert params["p_game_id"] == "game-a"
+    assert params["p_target_court_id"] == target_court_id
+    assert params["p_expected_queue_entry_version"] == 5
+    assert params["p_expected_source_court_version"] == 2
+    assert (
+        str(params["p_expected_target_court_version"])
+        if params["p_expected_target_court_version"] is not None
+        else None
+    ) == target_court_version
+    if action == "requeue_game":
+        assert result["snapshot"]["eligible_queue"][0]["game_id"] == "game-a"
+    else:
+        assert result["snapshot"]["courts"][1]["current_assignment"]["game_id"] == "game-a"
+
+
+def test_score_release_leaves_the_next_matchup_queued(monkeypatch) -> None:
     before = _workspace_snapshot()
     before["courts"][0]["current_assignment"] = {
         "id": "queue-a",
@@ -1365,14 +1558,8 @@ def test_score_release_and_next_fill_are_one_atomic_rpc(monkeypatch) -> None:
     after = deepcopy(before)
     after["queue_version"] = "12"
     after["held_games"] = []
-    after["eligible_queue"] = []
-    after["courts"][0]["current_assignment"] = {
-        "id": "queue-c",
-        "game_id": "game-c",
-        "state": "ON_COURT",
-        "version": "4",
-    }
-    after["courts"][0]["state"] = "ON_COURT"
+    after["courts"][0]["current_assignment"] = None
+    after["courts"][0]["state"] = "AVAILABLE"
     after["summary"]["completed_games"] = 1
     supabase = FakeSupabase()
     _install_command_harness(monkeypatch, supabase, (before, after))
@@ -1380,7 +1567,7 @@ def test_score_release_and_next_fill_are_one_atomic_rpc(monkeypatch) -> None:
         "ok": True,
         "completed_game_id": "game-a",
         "released_court_id": "court-row-1",
-        "next_assigned_game_ids": ["game-c"],
+        "assignments": [],
     }
     request = _request(
         "score_and_release",
@@ -1403,7 +1590,8 @@ def test_score_release_and_next_fill_are_one_atomic_rpc(monkeypatch) -> None:
     assert str(params["p_expected_game_updated_at"]) == "game-a-v1"
     assert str(params["p_expected_court_version"]) == "2"
     assert str(params["p_expected_queue_version"]) == "11"
-    assert result["snapshot"]["courts"][0]["current_assignment"]["game_id"] == "game-c"
+    assert result["snapshot"]["courts"][0]["current_assignment"] is None
+    assert result["snapshot"]["eligible_queue"][0]["game_id"] == "game-c"
     assert result["snapshot"]["summary"]["completed_games"] == 1
 
 
