@@ -217,6 +217,7 @@ function dayGame(options: {
   slot: string;
   teamA: string[];
   teamB: string[];
+  courtId?: string;
 }) {
   return {
     id: options.id,
@@ -226,11 +227,14 @@ function dayGame(options: {
     stage: "ROUND_ROBIN",
     round_label: options.round,
     slot_label: options.slot,
-    team_a: { name: options.teamA.join(" / "), participant_names: options.teamA },
-    team_b: { name: options.teamB.join(" / "), participant_names: options.teamB },
+    team_a: { team_id: `${options.id}-team-a`, name: options.teamA.join(" / "), participant_names: options.teamA },
+    team_b: { team_id: `${options.id}-team-b`, name: options.teamB.join(" / "), participant_names: options.teamB },
+    court_id: options.courtId ?? null,
     score_a: null as number | null,
     score_b: null as number | null,
     winner_name: null as string | null,
+    result_type: "PLAYED",
+    result_note: null as string | null,
     updated_at: "2026-08-17T09:00:00Z",
     version: `${options.id}-v1`,
     blockers: [],
@@ -248,7 +252,7 @@ function dayReadiness(ready: boolean, confirmation: string, message = "") {
 
 function dayWorkspaceSnapshot() {
   const dayGames = [
-    dayGame({ id: "day-game-a", drawId, drawName: "Manual Acceptance Draw", round: "Round 1", slot: "Match 1", teamA: ["Mateo Rivera", "Liam Chen"], teamB: ["Caleb Nguyen", "Diego Alvarez"] }),
+    dayGame({ id: "day-game-a", drawId, drawName: "Manual Acceptance Draw", round: "Round 1", slot: "Match 1", teamA: ["Mateo Rivera", "Liam Chen"], teamB: ["Caleb Nguyen", "Diego Alvarez"], courtId: "day-court-1" }),
     dayGame({ id: "day-game-b", drawId: secondDrawId, drawName: "Open Division Draw", round: "Round 1", slot: "Match 2", teamA: ["Avery Patel", "Jordan Lee"], teamB: ["Morgan Diaz", "Riley Smith"] }),
     dayGame({ id: "day-game-c", drawId, drawName: "Manual Acceptance Draw", round: "Round 2", slot: "Match 1", teamA: ["Nora Williams", "Sofia Kim"], teamB: ["Emma Davis", "Mia Johnson"] }),
     dayGame({ id: "day-game-held", drawId: secondDrawId, drawName: "Open Division Draw", round: "Round 2", slot: "Match 2", teamA: ["Taylor Reed", "Casey Brooks"], teamB: ["Jamie Flores", "Skyler Moore"] }),
@@ -442,7 +446,16 @@ async function installMockApi(page: Page) {
         action: string;
         client_idempotency_key: string;
         confirmation_text: string;
-        payload: { draw_id?: string; advance_count?: number; game_id?: string; score_a?: number; score_b?: number };
+        payload: {
+          draw_id?: string;
+          advance_count?: number;
+          game_id?: string;
+          score_a?: number;
+          score_b?: number;
+          result_type?: "FORFEIT" | "NO_SHOW" | "RETIREMENT";
+          winner_team_id?: string;
+          result_note?: string;
+        };
       };
       const refreshed = structuredClone(currentDaySnapshot);
       if (command.action === "score_and_release") {
@@ -451,6 +464,28 @@ async function installMockApi(page: Page) {
           completedGame.score_a = command.payload.score_a ?? null;
           completedGame.score_b = command.payload.score_b ?? null;
           completedGame.winner_name = Number(command.payload.score_a) > Number(command.payload.score_b)
+            ? completedGame.team_a.name
+            : completedGame.team_b.name;
+          completedGame.state = "COMPLETED";
+          completedGame.version = `${completedGame.id}-v2`;
+        }
+        refreshed.courts[0].current_assignment = {
+          id: "assignment-b",
+          game_id: "day-game-b",
+          state: "ON_COURT",
+          version: "assignment-b-v1",
+          assigned_at: "2026-08-17T09:06:00Z",
+          started_at: null
+        };
+        refreshed.eligible_queue = refreshed.eligible_queue.filter((entry) => entry.game_id !== "day-game-b");
+        refreshed.summary.completed_games += 1;
+      }
+      if (command.action === "record_non_played_result") {
+        const completedGame = refreshed.games.find((game) => game.id === command.payload.game_id);
+        if (completedGame) {
+          completedGame.result_type = command.payload.result_type ?? "NO_SHOW";
+          completedGame.result_note = command.payload.result_note ?? null;
+          completedGame.winner_name = command.payload.winner_team_id === completedGame.team_a.team_id
             ? completedGame.team_a.name
             : completedGame.team_b.name;
           completedGame.state = "COMPLETED";
@@ -803,7 +838,7 @@ test("Preflight clears hidden selections before applying filtered bulk actions",
   await expect(page.getByText("No scheduled players match these filters.")).toBeVisible();
 });
 
-test("Score entry opens in a dialog and rejects a 9–9 tie before submitting the exact day fence", async ({ page }) => {
+test("Score entry saves in two clicks with a live preview and the exact day fence", async ({ page }) => {
   const commands: Array<Record<string, unknown>> = [];
   page.on("request", (request) => {
     if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
@@ -811,29 +846,28 @@ test("Score entry opens in a dialog and rejects a 9–9 tie before submitting th
   });
   await page.goto(`/admin/tournaments/live-operations?${selectedQuery}`);
   await page.getByRole("button", { name: /Enter score for Mateo Rivera \/ Liam Chen vs Caleb Nguyen \/ Diego Alvarez on Court 1/ }).click();
-  const scoreDialog = page.getByRole("dialog", { name: /Enter score · Court 1/ });
+  const scoreDialog = page.getByRole("dialog", { name: /Enter result · Court 1/ });
   await expect(scoreDialog).toBeVisible();
+  await expect(scoreDialog.getByRole("button", { name: "Played score" })).toHaveAttribute("aria-pressed", "true");
+  await expect(scoreDialog.getByRole("button", { name: "Non-play result" })).toBeVisible();
   await expect(scoreDialog.getByLabel("Mateo Rivera / Liam Chen score")).toBeFocused();
   await scoreDialog.getByLabel("Mateo Rivera / Liam Chen score").fill("9");
   await scoreDialog.getByLabel("Caleb Nguyen / Diego Alvarez score").fill("9");
-  await scoreDialog.getByRole("button", { name: "Review score" }).click();
   await expect(scoreDialog.getByText("Tournament games cannot be saved with a tied score.")).toBeVisible();
-  await expect(scoreDialog.getByRole("button", { name: "Confirm & release court" })).toHaveCount(0);
+  await expect(scoreDialog.getByRole("button", { name: "Save score & release Court 1" })).toBeDisabled();
+  await expect(scoreDialog.getByRole("button", { name: "Review score" })).toHaveCount(0);
   await scoreDialog.getByLabel("Mateo Rivera / Liam Chen score").fill("11");
   await scoreDialog.getByLabel("Caleb Nguyen / Diego Alvarez score").fill("7");
-  await scoreDialog.getByRole("button", { name: "Review score" }).click();
   await expect(scoreDialog.getByText("Winner:")).toBeVisible();
   await expect(scoreDialog.getByText("Mateo Rivera / Liam Chen", { exact: true }).last()).toBeVisible();
-  await expect(scoreDialog.getByRole("button", { name: "Edit score" })).toBeVisible();
-  await expect(scoreDialog.getByText(/refills from the server-ordered eligible queue/)).toBeVisible();
+  await expect(scoreDialog.getByText(/refills it from the server-ordered eligible queue/)).toBeVisible();
+  const saveScore = scoreDialog.getByRole("button", { name: "Save 11–7 & release Court 1" });
+  await expect(saveScore).toBeEnabled();
 
-  await scoreDialog.getByRole("button", { name: "Confirm & release court" }).click();
-  const confirmationDialog = page.getByRole("dialog", { name: "Confirm this score and release the court?" });
-  await expect(confirmationDialog).toBeVisible();
-  await confirmationDialog.getByRole("button", { name: "Confirm & release court" }).click();
-  const completionDialog = page.getByRole("dialog", { name: "Tournament-day operation complete" });
-  await expect(completionDialog).toBeVisible();
-  await expect(completionDialog.getByText("Score saved, court released, and the authoritative day queue refreshed.")).toBeVisible();
+  await saveScore.click();
+  await expect(scoreDialog).toHaveCount(0);
+  await expect(page.getByRole("status")).toContainText("Score saved, court released, and the authoritative day queue refreshed.");
+  await expect(page.getByRole("dialog", { name: "Tournament-day operation complete" })).toHaveCount(0);
   await expect.poll(() => commands.length).toBe(1);
   expect(commands[0]).toMatchObject({
     action: "score_and_release",
@@ -849,6 +883,53 @@ test("Score entry opens in a dialog and rejects a 9–9 tie before submitting th
     payload: { game_id: "day-game-a", score_a: 11, score_b: 7 }
   });
   await expect(page.getByRole("tabpanel", { name: "Court board" }).getByText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith")).toBeVisible();
+});
+
+test("The score dialog records a non-play result without leaving the court board", async ({ page }) => {
+  const commands: Array<Record<string, unknown>> = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
+    commands.push(request.postDataJSON() as Record<string, unknown>);
+  });
+  await page.goto(`/admin/tournaments/live-operations?${selectedQuery}`);
+  const board = page.getByRole("tabpanel", { name: "Court board" });
+  await board.getByRole("button", { name: /Enter score for Mateo Rivera \/ Liam Chen vs Caleb Nguyen \/ Diego Alvarez on Court 1/ }).click();
+  let resultDialog = page.getByRole("dialog", { name: /Enter result · Court 1/ });
+  await resultDialog.getByRole("button", { name: "Non-play result" }).click();
+  resultDialog = page.getByRole("dialog", { name: /Enter result · Court 1/ });
+
+  await expect(resultDialog.getByRole("button", { name: "Non-play result" })).toHaveAttribute("aria-pressed", "true");
+  await expect(board).toBeVisible();
+  await expect(page).not.toHaveURL(/panel=queue/);
+  await resultDialog.getByLabel("Winning team").selectOption("day-game-a-team-b");
+  await resultDialog.getByLabel("Operator note").fill("Mateo and Liam did not arrive; the desk verified the no-show.");
+  await expect(resultDialog.getByText("Winner:")).toContainText("Caleb Nguyen / Diego Alvarez");
+  const saveOutcome = resultDialog.getByRole("button", { name: "Record no show & release Court 1" });
+  await expect(saveOutcome).toBeEnabled();
+  await saveOutcome.click();
+
+  await expect(resultDialog).toHaveCount(0);
+  await expect(page.getByRole("status")).toContainText("Non-played outcome recorded, court and participant claims released, and the authoritative day queue refreshed.");
+  await expect.poll(() => commands.length).toBe(1);
+  expect(commands[0]).toMatchObject({
+    action: "record_non_played_result",
+    confirmation_text: "RECORD NON-PLAYED RESULT",
+    expected: {
+      day_run_version: "7",
+      state_fingerprint: "d".repeat(64),
+      queue_version: "11",
+      draw_version: "3",
+      game_version: "day-game-a-v1",
+      court_version: "court-1-v2"
+    },
+    payload: {
+      game_id: "day-game-a",
+      result_type: "NO_SHOW",
+      winner_team_id: "day-game-a-team-b",
+      result_note: "Mateo and Liam did not arrive; the desk verified the no-show."
+    }
+  });
+  await expect(board.getByText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith")).toBeVisible();
 });
 
 test("Corrections & recovery submits an exact versioned day correction with before/after evidence", async ({ page }) => {

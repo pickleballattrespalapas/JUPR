@@ -4,7 +4,13 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import { InteractionDialog, actionSuccess, actionUncertain } from "@/components/interaction";
+import {
+  ActionFeedback,
+  InteractionDialog,
+  actionSuccess,
+  actionUncertain,
+  useActionLifecycle
+} from "@/components/interaction";
 import type { ActionCompletion } from "@/components/interaction";
 import type { AdminTournamentLiveStatusResponse } from "@/lib/adminTournamentApi";
 import {
@@ -84,7 +90,6 @@ type ScoreEditor = {
   courtId: string;
   scoreA: string;
   scoreB: string;
-  reviewing: boolean;
   error: string;
   unusualScoreAcknowledged: boolean;
   expected: AdminTournamentDayCommandExpected;
@@ -108,10 +113,10 @@ type OutcomeEditor = {
   resultType: "FORFEIT" | "NO_SHOW" | "RETIREMENT";
   winnerTeamId: string;
   resultNote: string;
-  reviewing: boolean;
   error: string;
   expected: AdminTournamentDayCommandExpected;
   reviewedGame: ReviewedGameTruth;
+  reviewedAssignmentVersion: string;
 };
 
 const RECOVERY_STATUSES = new Set(["intent", "mutated", "recovery_required"]);
@@ -316,6 +321,7 @@ export default function TournamentDayWorkspacePanel({
   const scopeKey = workspaceScopeKey(accessToken, tournamentId, selectedDayId);
   const snapshotRequest = useLatestRequestGuard(scopeKey);
   const actionRequest = useLatestRequestGuard(scopeKey);
+  const resultAction = useActionLifecycle();
 
   const gamesById = useMemo(
     () => new Map((snapshot?.games || []).map((game) => [game.id, game])),
@@ -460,6 +466,29 @@ export default function TournamentDayWorkspacePanel({
   }, [accessToken, loadWorkspace, selectedDayId]);
 
   useEffect(() => {
+    if (!message) return;
+    const timeout = window.setTimeout(() => {
+      setMessage((current) => current === message ? null : current);
+    }, 6_000);
+    return () => window.clearTimeout(timeout);
+  }, [message]);
+
+  const activeScoreEditorGameId = scoreEditor?.gameId || "";
+  const activeOutcomeEditorGameId = outcomeEditor?.gameId || "";
+  useEffect(() => {
+    const targetId = activeScoreEditorGameId
+      ? "day-score-a"
+      : activeOutcomeEditorGameId
+        ? "day-non-play-outcome"
+        : "";
+    if (!targetId) return;
+    const focusFrame = window.requestAnimationFrame(() => {
+      document.getElementById(targetId)?.focus();
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [activeOutcomeEditorGameId, activeScoreEditorGameId]);
+
+  useEffect(() => {
     if (!snapshot) return;
     const expectedSnapshotChanged = (expected: AdminTournamentDayCommandExpected) => (
       expected.day_run_version !== snapshot.day_run.version
@@ -510,10 +539,14 @@ export default function TournamentDayWorkspacePanel({
 
     if (outcomeEditor) {
       const game = snapshot.games.find((row) => row.id === outcomeEditor.gameId);
+      const court = snapshot.courts.find((row) => row.id === outcomeEditor.reviewedGame.courtId);
       const stale = expectedSnapshotChanged(outcomeEditor.expected)
         || !reviewedGameStillCurrent(game, outcomeEditor.reviewedGame)
         || drawVersionChanged(outcomeEditor.reviewedGame, outcomeEditor.expected)
         || courtVersionChanged(outcomeEditor.reviewedGame, outcomeEditor.expected)
+        || (Boolean(outcomeEditor.reviewedAssignmentVersion)
+          && (court?.current_assignment?.game_id !== outcomeEditor.gameId
+            || court.current_assignment.version !== outcomeEditor.reviewedAssignmentVersion))
         || (Boolean(outcomeEditor.expected.queue_entry_version)
           && queueEntryVersion(outcomeEditor.gameId, game) !== outcomeEditor.expected.queue_entry_version);
       if (stale) {
@@ -713,6 +746,7 @@ export default function TournamentDayWorkspacePanel({
     setPendingCommand(null);
     setMessage(null);
     setError(null);
+    resultAction.reset();
     replaceWorkspaceUrl({ dayId, drawId: "", courtId: "", gameId: "", panel: panelFocus });
   }
 
@@ -736,12 +770,12 @@ export default function TournamentDayWorkspacePanel({
     }
     setCorrectionEditor(null);
     setOutcomeEditor(null);
+    resultAction.reset();
     setScoreEditor({
       gameId: game.id,
       courtId,
       scoreA: game.score_a == null ? "" : String(game.score_a),
       scoreB: game.score_b == null ? "" : String(game.score_b),
-      reviewing: false,
       error: "",
       unusualScoreAcknowledged: false,
       expected: expectedVersions({ draw_version: draw.version, game_version: game.version, court_version: court.version }),
@@ -775,9 +809,16 @@ export default function TournamentDayWorkspacePanel({
     replaceWorkspaceUrl({ gameId: game.id, courtId: "", panel: "corrections" });
   }
 
-  function openOutcome(game: AdminTournamentDayGame) {
+  function openOutcome(game: AdminTournamentDayGame, reviewedCourtId = "") {
     const draw = snapshot?.draws.find((row) => row.id === game.draw_id);
-    const court = game.court_id ? snapshot?.courts.find((row) => row.id === game.court_id) : undefined;
+    const court = reviewedCourtId
+      ? snapshot?.courts.find((row) => row.id === reviewedCourtId)
+      : game.court_id
+        ? snapshot?.courts.find((row) => row.id === game.court_id)
+        : snapshot?.courts.find((row) => row.current_assignment?.game_id === game.id);
+    const assignmentVersion = court?.current_assignment?.game_id === game.id
+      ? court.current_assignment.version
+      : "";
     const queueEntryVersion = game.queue_entry_version
       || snapshot?.eligible_queue.find((entry) => entry.game_id === game.id)?.version
       || snapshot?.held_games.find((entry) => entry.game_id === game.id)?.version
@@ -788,12 +829,12 @@ export default function TournamentDayWorkspacePanel({
     }
     setScoreEditor(null);
     setCorrectionEditor(null);
+    resultAction.reset();
     setOutcomeEditor({
       gameId: game.id,
       resultType: "NO_SHOW",
       winnerTeamId: "",
       resultNote: "",
-      reviewing: false,
       error: "",
       expected: expectedVersions({
         draw_version: draw.version,
@@ -804,24 +845,18 @@ export default function TournamentDayWorkspacePanel({
       reviewedGame: reviewedGameTruth(game, {
         courtId: court?.id || "",
         queueEntryVersion: String(queueEntryVersion || "")
-      })
+      }),
+      reviewedAssignmentVersion: assignmentVersion
     });
     setFocusedGameId(game.id);
-    setFocusedCourtId(game.court_id || "");
-    setPanelFocus("queue");
-    replaceWorkspaceUrl({ gameId: game.id, courtId: game.court_id || "", panel: "queue" });
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        const editor = document.getElementById("non-played-outcome-editor");
-        editor?.scrollIntoView({ behavior: "smooth", block: "center" });
-        editor?.focus({ preventScroll: true });
-      });
-    });
+    setFocusedCourtId(court?.id || "");
+    replaceWorkspaceUrl({ gameId: game.id, courtId: court?.id || "", panel: panelFocus });
   }
 
-  function reviewScore() {
+  async function saveScore() {
     if (!scoreEditor) return;
     const game = gamesById.get(scoreEditor.gameId);
+    const court = snapshot?.courts.find((row) => row.id === scoreEditor.courtId);
     const validation = validateDayScoreDraft(
       scoreEditor.scoreA,
       scoreEditor.scoreB,
@@ -829,10 +864,29 @@ export default function TournamentDayWorkspacePanel({
       scoreEditor.unusualScoreAcknowledged
     );
     if (!validation.ok) {
-      setScoreEditor({ ...scoreEditor, reviewing: false, error: validation.message });
+      setScoreEditor({ ...scoreEditor, error: validation.message });
       return;
     }
-    setScoreEditor({ ...scoreEditor, reviewing: true, error: "" });
+    if (validation.acknowledgementRequired) {
+      setScoreEditor({ ...scoreEditor, error: "Acknowledge the unusual score before saving this result." });
+      return;
+    }
+    if (!game || !court || court.current_assignment?.game_id !== game.id) {
+      setScoreEditor({ ...scoreEditor, error: "Reload the court board before saving; this assignment is no longer current." });
+      return;
+    }
+    setScoreEditor({ ...scoreEditor, error: "" });
+    await resultAction.run(() => submitCommand(
+      "score_and_release",
+      dayActionConfirmation("score_and_release"),
+      {
+        game_id: game.id,
+        score_a: validation.scoreA,
+        score_b: validation.scoreB,
+        unusual_score_acknowledgement: scoreEditor.unusualScoreAcknowledged
+      },
+      scoreEditor.expected
+    ));
   }
 
   function reviewCorrection() {
@@ -853,18 +907,34 @@ export default function TournamentDayWorkspacePanel({
     setCorrectionEditor({ ...correctionEditor, reviewing: true, error: "" });
   }
 
-  function reviewOutcome() {
+  async function saveOutcome() {
     if (!outcomeEditor) return;
+    const game = gamesById.get(outcomeEditor.gameId);
     const validation = validateNonPlayedOutcomeDraft(
       outcomeEditor.resultType,
       outcomeEditor.winnerTeamId,
       outcomeEditor.resultNote
     );
     if (!validation.ok) {
-      setOutcomeEditor({ ...outcomeEditor, reviewing: false, error: validation.message });
+      setOutcomeEditor({ ...outcomeEditor, error: validation.message });
       return;
     }
-    setOutcomeEditor({ ...outcomeEditor, reviewing: true, error: "" });
+    if (!game) {
+      setOutcomeEditor({ ...outcomeEditor, error: "Reload the tournament day before recording this result." });
+      return;
+    }
+    setOutcomeEditor({ ...outcomeEditor, error: "" });
+    await resultAction.run(() => submitCommand(
+      "record_non_played_result",
+      dayActionConfirmation("record_non_played_result"),
+      {
+        game_id: game.id,
+        result_type: validation.resultType,
+        winner_team_id: validation.winnerTeamId,
+        result_note: validation.resultNote
+      },
+      outcomeEditor.expected
+    ));
   }
 
   if (sessionLoading) return <p className={styles.notice}>Restoring the admin session…</p>;
@@ -893,6 +963,13 @@ export default function TournamentDayWorkspacePanel({
     selectedScoreGame?.scoring,
     scoreEditor.unusualScoreAcknowledged
   ) : null;
+  const selectedScoreDraftComplete = Boolean(
+    scoreEditor?.scoreA.trim() && scoreEditor.scoreB.trim()
+  );
+  const selectedScoreError = scoreEditor?.error
+    || (selectedScoreDraftComplete && selectedScoreValidation && !selectedScoreValidation.ok
+      ? selectedScoreValidation.message
+      : "");
   const selectedCorrectionGame = correctionEditor ? gamesById.get(correctionEditor.gameId) : undefined;
   const selectedCorrectionDraw = selectedCorrectionGame
     ? snapshot?.draws.find((draw) => draw.id === selectedCorrectionGame.draw_id)
@@ -912,6 +989,13 @@ export default function TournamentDayWorkspacePanel({
       )
     : null;
   const selectedOutcomeGame = outcomeEditor ? gamesById.get(outcomeEditor.gameId) : undefined;
+  const selectedOutcomeCourt = outcomeEditor?.reviewedGame.courtId
+    ? snapshot?.courts.find((court) => court.id === outcomeEditor.reviewedGame.courtId)
+    : undefined;
+  const selectedOutcomeAssignmentCurrent = Boolean(
+    selectedOutcomeGame
+      && selectedOutcomeCourt?.current_assignment?.game_id === selectedOutcomeGame.id
+  );
   const selectedOutcomeValidation = outcomeEditor
     ? validateNonPlayedOutcomeDraft(
         outcomeEditor.resultType,
@@ -919,11 +1003,15 @@ export default function TournamentDayWorkspacePanel({
         outcomeEditor.resultNote
       )
     : null;
+  const resultWorking = resultAction.phase === "working" || Boolean(busyKey);
+  const uncertainResult = resultAction.phase === "uncertain" && resultAction.completion?.status === "uncertain"
+    ? resultAction.completion
+    : null;
 
   return (
     <div className={styles.root} aria-busy={loading || undefined}>
       {error ? <p role="alert" className={`${styles.notice} ${styles.error}`}>{error}</p> : null}
-      {message ? <p role="status" aria-live="polite" className={styles.notice}>{message}</p> : null}
+      {message ? <p role="status" aria-live="polite" className={`${styles.notice} ${styles.statusToast}`}>{message}</p> : null}
 
       <section className={styles.scopeBar} aria-label="Tournament day scope">
         <div>
@@ -1091,7 +1179,6 @@ export default function TournamentDayWorkspacePanel({
                         <p className={styles.muted}>Assigned {timestamp(assignment?.assigned_at)}</p>
                         <div className={styles.buttonRow}>
                           <button type="button" className={styles.primaryButton} onClick={() => openScore(game, court.id)} disabled={!dayActive || !runtimeWritesEnabled || writesFrozen || Boolean(busyKey)} aria-label={`Enter score for ${matchupLabel(game)} on ${court.label}`}>Enter score</button>
-                          <button type="button" className={styles.secondaryButton} onClick={() => openOutcome(game)} disabled={!dayActive || !runtimeWritesEnabled || writesFrozen || Boolean(busyKey)}>Record no-play outcome</button>
                         </div>
                       </>
                     ) : assignment ? (
@@ -1104,81 +1191,6 @@ export default function TournamentDayWorkspacePanel({
               })}
             </div>
             {!snapshot.courts.length ? <p className={styles.emptyState}>No authoritative courts are available for this day. Return to Tournament Builder.</p> : null}
-
-            {scoreEditor && selectedScoreGame && selectedScoreCourt && selectedScoreDraw && selectedScoreAssignmentCurrent ? (
-              <InteractionDialog
-                open
-                phase={busyKey ? "working" : "ready"}
-                size="wide"
-                title={`Enter score · ${selectedScoreCourt.label}`}
-                description={(
-                  <div className={styles.scoreDialogDescription}>
-                    <p>{gameStageLabel(selectedScoreGame)}</p>
-                    <p><strong>{matchupLabel(selectedScoreGame)}</strong></p>
-                  </div>
-                )}
-                onRequestClose={() => setScoreEditor(null)}
-                actions={(
-                  <>
-                    <button type="button" className={styles.secondaryButton} onClick={() => setScoreEditor(null)} disabled={Boolean(busyKey)}>Close score entry</button>
-                    {!scoreEditor.reviewing ? (
-                      <button type="button" className={styles.primaryButton} onClick={reviewScore} disabled={writesFrozen || Boolean(busyKey)}>Review score</button>
-                    ) : selectedScoreValidation?.ok ? (
-                      <>
-                        <button type="button" className={styles.secondaryButton} onClick={() => setScoreEditor({ ...scoreEditor, reviewing: false })} disabled={Boolean(busyKey)}>Edit score</button>
-                        <ConfirmAction
-                          triggerLabel="Confirm & release court"
-                          title="Confirm this score and release the court?"
-                          description={`${matchupLabel(selectedScoreGame)} · ${selectedScoreValidation.scoreA}–${selectedScoreValidation.scoreB} on ${selectedScoreCourt.label}.`}
-                          confirmLabel="Confirm & release court"
-                          confirmationText={dayActionConfirmation("score_and_release")}
-                          disabled={!dayActive || !runtimeWritesEnabled || writesFrozen || selectedScoreValidation.acknowledgementRequired}
-                          disabledReason={selectedScoreValidation.acknowledgementRequired ? "Acknowledge the unusual score after reviewing the configured format." : !dayActive ? "The day must be active to save a score." : writesFrozen ? "Resolve day recovery first." : "Tournament-day writes are unavailable."}
-                          busy={Boolean(busyKey)}
-                          onConfirm={(confirmationText) => submitCommand(
-                            "score_and_release",
-                            confirmationText,
-                            { game_id: selectedScoreGame.id, score_a: selectedScoreValidation.scoreA, score_b: selectedScoreValidation.scoreB, unusual_score_acknowledgement: scoreEditor.unusualScoreAcknowledged },
-                            scoreEditor.expected
-                          )}
-                        />
-                      </>
-                    ) : null}
-                  </>
-                )}
-              >
-                <div className={styles.scoreGrid}>
-                  <label>{sideLabel(selectedScoreGame.team_a)} score<input data-autofocus aria-invalid={Boolean(scoreEditor.error) || undefined} aria-describedby={scoreEditor.error ? "day-score-error" : undefined} value={scoreEditor.scoreA} onChange={(event) => setScoreEditor({ ...scoreEditor, scoreA: event.target.value, reviewing: false, error: "", unusualScoreAcknowledged: false })} type="number" min={0} step={1} inputMode="numeric" /></label>
-                  <span aria-hidden="true">–</span>
-                  <label>{sideLabel(selectedScoreGame.team_b)} score<input aria-invalid={Boolean(scoreEditor.error) || undefined} aria-describedby={scoreEditor.error ? "day-score-error" : undefined} value={scoreEditor.scoreB} onChange={(event) => setScoreEditor({ ...scoreEditor, scoreB: event.target.value, reviewing: false, error: "", unusualScoreAcknowledged: false })} type="number" min={0} step={1} inputMode="numeric" /></label>
-                </div>
-                {scoreEditor.error ? <p id="day-score-error" role="alert" className={styles.errorText}>{scoreEditor.error}</p> : null}
-                {scoreEditor.reviewing && selectedScoreValidation?.ok ? (
-                  <div className={styles.scoreConfirmation} aria-label="Score and court release confirmation">
-                    <div><strong>{sideLabel(selectedScoreGame.team_a)}</strong><span>{selectedScoreValidation.scoreA}</span></div>
-                    <p>Winner: <strong>{selectedScoreValidation.scoreA > selectedScoreValidation.scoreB ? sideLabel(selectedScoreGame.team_a) : sideLabel(selectedScoreGame.team_b)}</strong></p>
-                    <div><strong>{sideLabel(selectedScoreGame.team_b)}</strong><span>{selectedScoreValidation.scoreB}</span></div>
-                    <p>This atomic command finalizes the score, releases {selectedScoreCourt.label}, and refills from the server-ordered eligible queue. The refreshed state may immediately show the next assignment.</p>
-                    {selectedScoreValidation.unusual ? (
-                      <label className={styles.forfeitBoundary}>
-                        <input type="checkbox" checked={scoreEditor.unusualScoreAcknowledged} onChange={(event) => setScoreEditor({ ...scoreEditor, unusualScoreAcknowledged: event.target.checked })} />
-                        <span><strong>Unusual score:</strong> {selectedScoreValidation.reasons.join(" ")} I reviewed the configured {selectedScoreValidation.scoringFormat} format and confirm this exact result.</span>
-                      </label>
-                    ) : null}
-                  </div>
-                ) : null}
-              </InteractionDialog>
-            ) : scoreEditor ? (
-              <InteractionDialog
-                open
-                phase="error"
-                title="Score entry needs a fresh court assignment"
-                onRequestClose={() => setScoreEditor(null)}
-                actions={<button type="button" className={styles.secondaryButton} onClick={() => setScoreEditor(null)}>Close stale score entry</button>}
-              >
-                <p role="alert">The selected matchup is no longer the authoritative assignment on this court. Review the refreshed board before scoring.</p>
-              </InteractionDialog>
-            ) : null}
           </section>
           ) : null}
 
@@ -1216,40 +1228,6 @@ export default function TournamentDayWorkspacePanel({
                 <Link className={styles.textLink} href="/admin/match-log">Open Match Log</Link>
                 <Link className={styles.textLink} href="/admin/replay-history">Open replay evidence</Link>
               </div>
-              {outcomeEditor && selectedOutcomeGame ? (
-                <article id="non-played-outcome-editor" tabIndex={-1} className={styles.scoreEditor} aria-labelledby="non-played-outcome-title">
-                  <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>Reviewed non-played result</p><h3 id="non-played-outcome-title">{matchupLabel(selectedOutcomeGame)}</h3></div><button type="button" className={styles.secondaryButton} onClick={() => setOutcomeEditor(null)}>Close outcome</button></div>
-                  <div className={styles.scoreGrid}>
-                    <label>Outcome<select value={outcomeEditor.resultType} onChange={(event) => setOutcomeEditor({ ...outcomeEditor, resultType: event.target.value as OutcomeEditor["resultType"], reviewing: false, error: "" })}><option value="FORFEIT">Forfeit</option><option value="NO_SHOW">No-show</option><option value="RETIREMENT">Retirement</option></select></label>
-                    <label>Winning team<select value={outcomeEditor.winnerTeamId} onChange={(event) => setOutcomeEditor({ ...outcomeEditor, winnerTeamId: event.target.value, reviewing: false, error: "" })}><option value="">Choose winner…</option><option value={selectedOutcomeGame.team_a.team_id || ""}>{sideLabel(selectedOutcomeGame.team_a)}</option><option value={selectedOutcomeGame.team_b.team_id || ""}>{sideLabel(selectedOutcomeGame.team_b)}</option></select></label>
-                  </div>
-                  <label className={styles.field}>Operator note<textarea value={outcomeEditor.resultNote} maxLength={500} onChange={(event) => setOutcomeEditor({ ...outcomeEditor, resultNote: event.target.value, reviewing: false, error: "" })} placeholder="State who was absent, withdrew, or retired and what was verified." /></label>
-                  {outcomeEditor.error ? <p role="alert" className={styles.errorText}>{outcomeEditor.error}</p> : null}
-                  {!outcomeEditor.reviewing ? <button type="button" className={styles.primaryButton} onClick={reviewOutcome}>Review non-played result</button> : selectedOutcomeValidation?.ok ? (
-                    <div className={styles.scoreConfirmation}>
-                      <p><strong>{statusLabel(selectedOutcomeValidation.resultType)}</strong> · Winner: <strong>{selectedOutcomeValidation.winnerTeamId === selectedOutcomeGame.team_a.team_id ? sideLabel(selectedOutcomeGame.team_a) : sideLabel(selectedOutcomeGame.team_b)}</strong></p>
-                      <p>{selectedOutcomeValidation.resultNote}</p>
-                      <p>This is not a played score. The server will create only a synthetic progression result, release any court and participant claims, resolve bracket dependencies, refill courts, and keep this game out of rating publication.</p>
-                      <div className={styles.buttonRow}><button type="button" className={styles.secondaryButton} onClick={() => setOutcomeEditor({ ...outcomeEditor, reviewing: false })}>Edit outcome</button><ConfirmAction
-                        triggerLabel="Confirm non-played result"
-                        title="Confirm this non-played tournament result?"
-                        description={`${statusLabel(selectedOutcomeValidation.resultType)} · ${matchupLabel(selectedOutcomeGame)}`}
-                        confirmLabel="Confirm outcome"
-                        confirmationText={dayActionConfirmation("record_non_played_result")}
-                        disabled={!dayActive || !runtimeWritesEnabled || writesFrozen}
-                        disabledReason={!dayActive ? "The day must be active." : writesFrozen ? "Resolve day recovery first." : "Tournament-day writes are unavailable."}
-                        busy={Boolean(busyKey)}
-                        onConfirm={(confirmationText) => submitCommand(
-                          "record_non_played_result",
-                          confirmationText,
-                          { game_id: selectedOutcomeGame.id, result_type: selectedOutcomeValidation.resultType, winner_team_id: selectedOutcomeValidation.winnerTeamId, result_note: selectedOutcomeValidation.resultNote },
-                          outcomeEditor.expected
-                        )}
-                      /></div>
-                    </div>
-                  ) : null}
-                </article>
-              ) : null}
             </section>
           </div>
           ) : null}
@@ -1479,6 +1457,276 @@ export default function TournamentDayWorkspacePanel({
                 onConfirm={(confirmationText) => submitCommand("close_day", confirmationText, {})}
               />
             </section>
+          ) : null}
+
+          {scoreEditor && selectedScoreGame && selectedScoreCourt && selectedScoreDraw && selectedScoreAssignmentCurrent ? (
+            <InteractionDialog
+              open
+              phase={resultAction.phase}
+              size="wide"
+              title={`Enter result · ${selectedScoreCourt.label}`}
+              description={(
+                <div className={styles.scoreDialogDescription}>
+                  <p>{gameStageLabel(selectedScoreGame)}</p>
+                  <p><strong>{matchupLabel(selectedScoreGame)}</strong></p>
+                </div>
+              )}
+              dirty={Boolean(scoreEditor.scoreA.trim() || scoreEditor.scoreB.trim())}
+              onRequestClose={() => setScoreEditor(null)}
+              actions={uncertainResult ? (
+                <button
+                  type="button"
+                  className={styles.primaryButton}
+                  onClick={() => void resultAction.recover(uncertainResult.onRecover)}
+                >
+                  {uncertainResult.recoveryLabel}
+                </button>
+              ) : (
+                <>
+                  <button type="button" className={styles.secondaryButton} onClick={() => setScoreEditor(null)} disabled={resultWorking}>Close result entry</button>
+                  <button
+                    type="submit"
+                    form="day-score-entry-form"
+                    className={styles.primaryButton}
+                    disabled={
+                      resultWorking
+                      || !dayActive
+                      || !runtimeWritesEnabled
+                      || writesFrozen
+                      || !selectedScoreValidation?.ok
+                      || selectedScoreValidation.acknowledgementRequired
+                    }
+                  >
+                    {resultWorking
+                      ? "Saving score…"
+                      : selectedScoreValidation?.ok
+                        ? `Save ${selectedScoreValidation.scoreA}–${selectedScoreValidation.scoreB} & release ${selectedScoreCourt.label}`
+                        : `Save score & release ${selectedScoreCourt.label}`}
+                  </button>
+                </>
+              )}
+            >
+              <form
+                id="day-score-entry-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void saveScore();
+                }}
+              >
+                <div className={styles.resultModeSwitch} role="group" aria-label="Result type">
+                  <button type="button" aria-pressed="true" disabled={resultWorking}>Played score</button>
+                  <button type="button" aria-pressed="false" disabled={resultWorking} onClick={() => openOutcome(selectedScoreGame, selectedScoreCourt.id)}>Non-play result</button>
+                </div>
+                <div className={styles.scoreGrid}>
+                  <label>
+                    {sideLabel(selectedScoreGame.team_a)} score
+                    <input
+                      id="day-score-a"
+                      data-autofocus
+                      aria-invalid={Boolean(selectedScoreError) || undefined}
+                      aria-describedby={selectedScoreError ? "day-score-error" : undefined}
+                      value={scoreEditor.scoreA}
+                      disabled={resultWorking}
+                      onChange={(event) => {
+                        resultAction.reset();
+                        setScoreEditor({ ...scoreEditor, scoreA: event.target.value, error: "", unusualScoreAcknowledged: false });
+                      }}
+                      type="number"
+                      min={0}
+                      step={1}
+                      inputMode="numeric"
+                    />
+                  </label>
+                  <span aria-hidden="true">–</span>
+                  <label>
+                    {sideLabel(selectedScoreGame.team_b)} score
+                    <input
+                      aria-invalid={Boolean(selectedScoreError) || undefined}
+                      aria-describedby={selectedScoreError ? "day-score-error" : undefined}
+                      value={scoreEditor.scoreB}
+                      disabled={resultWorking}
+                      onChange={(event) => {
+                        resultAction.reset();
+                        setScoreEditor({ ...scoreEditor, scoreB: event.target.value, error: "", unusualScoreAcknowledged: false });
+                      }}
+                      type="number"
+                      min={0}
+                      step={1}
+                      inputMode="numeric"
+                    />
+                  </label>
+                </div>
+                {selectedScoreError ? <p id="day-score-error" role="alert" className={styles.errorText}>{selectedScoreError}</p> : null}
+                {selectedScoreValidation?.ok ? (
+                  <div className={styles.scoreConfirmation} aria-label="Live score and court release preview">
+                    <div><strong>{sideLabel(selectedScoreGame.team_a)}</strong><span>{selectedScoreValidation.scoreA}</span></div>
+                    <div><strong>{sideLabel(selectedScoreGame.team_b)}</strong><span>{selectedScoreValidation.scoreB}</span></div>
+                    <p>Winner: <strong>{selectedScoreValidation.scoreA > selectedScoreValidation.scoreB ? sideLabel(selectedScoreGame.team_a) : sideLabel(selectedScoreGame.team_b)}</strong></p>
+                    <p>Saving finalizes the score, releases {selectedScoreCourt.label}, and refills it from the server-ordered eligible queue. The refreshed board may immediately show the next assignment.</p>
+                    {selectedScoreValidation.unusual ? (
+                      <label className={styles.forfeitBoundary}>
+                        <input
+                          type="checkbox"
+                          checked={scoreEditor.unusualScoreAcknowledged}
+                          disabled={resultWorking}
+                          onChange={(event) => {
+                            resultAction.reset();
+                            setScoreEditor({ ...scoreEditor, unusualScoreAcknowledged: event.target.checked, error: "" });
+                          }}
+                        />
+                        <span><strong>Unusual score:</strong> {selectedScoreValidation.reasons.join(" ")} I reviewed the configured {selectedScoreValidation.scoringFormat} format and confirm this exact result.</span>
+                      </label>
+                    ) : null}
+                  </div>
+                ) : !selectedScoreDraftComplete ? (
+                  <p className={styles.muted}>Enter both final scores. The winner and court-release action will preview here.</p>
+                ) : null}
+                <ActionFeedback
+                  phase={resultAction.phase}
+                  completion={resultAction.completion}
+                  error={resultAction.error}
+                  workingLabel="Saving score and refreshing the court…"
+                />
+              </form>
+            </InteractionDialog>
+          ) : outcomeEditor && selectedOutcomeGame ? (
+            <InteractionDialog
+              open
+              phase={resultAction.phase}
+              size="wide"
+              title={selectedOutcomeCourt ? `Enter result · ${selectedOutcomeCourt.label}` : "Record non-play result"}
+              description={(
+                <div className={styles.scoreDialogDescription}>
+                  <p>{gameStageLabel(selectedOutcomeGame)}</p>
+                  <p><strong>{matchupLabel(selectedOutcomeGame)}</strong></p>
+                </div>
+              )}
+              dirty={Boolean(outcomeEditor.winnerTeamId || outcomeEditor.resultNote.trim())}
+              onRequestClose={() => setOutcomeEditor(null)}
+              actions={uncertainResult ? (
+                <button
+                  type="button"
+                  className={styles.primaryButton}
+                  onClick={() => void resultAction.recover(uncertainResult.onRecover)}
+                >
+                  {uncertainResult.recoveryLabel}
+                </button>
+              ) : (
+                <>
+                  <button type="button" className={styles.secondaryButton} onClick={() => setOutcomeEditor(null)} disabled={resultWorking}>Close result entry</button>
+                  <button
+                    type="submit"
+                    form="day-non-play-entry-form"
+                    className={styles.primaryButton}
+                    disabled={resultWorking || !dayActive || !runtimeWritesEnabled || writesFrozen || !selectedOutcomeValidation?.ok}
+                  >
+                    {resultWorking
+                      ? "Recording result…"
+                      : selectedOutcomeValidation?.ok
+                        ? `Record ${statusLabel(selectedOutcomeValidation.resultType).toLowerCase()}${selectedOutcomeCourt ? ` & release ${selectedOutcomeCourt.label}` : ""}`
+                        : "Record non-play result"}
+                  </button>
+                </>
+              )}
+            >
+              <form
+                id="day-non-play-entry-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void saveOutcome();
+                }}
+              >
+                {selectedOutcomeCourt && selectedOutcomeAssignmentCurrent ? (
+                  <div className={styles.resultModeSwitch} role="group" aria-label="Result type">
+                    <button type="button" aria-pressed="false" disabled={resultWorking} onClick={() => openScore(selectedOutcomeGame, selectedOutcomeCourt.id)}>Played score</button>
+                    <button type="button" aria-pressed="true" disabled={resultWorking}>Non-play result</button>
+                  </div>
+                ) : null}
+                <div className={styles.outcomeGrid}>
+                  <label>
+                    Outcome
+                    <select
+                      id="day-non-play-outcome"
+                      data-autofocus
+                      value={outcomeEditor.resultType}
+                      disabled={resultWorking}
+                      onChange={(event) => {
+                        resultAction.reset();
+                        setOutcomeEditor({ ...outcomeEditor, resultType: event.target.value as OutcomeEditor["resultType"], error: "" });
+                      }}
+                    >
+                      <option value="FORFEIT">Forfeit</option>
+                      <option value="NO_SHOW">No-show</option>
+                      <option value="RETIREMENT">Retirement</option>
+                    </select>
+                  </label>
+                  <label>
+                    Winning team
+                    <select
+                      value={outcomeEditor.winnerTeamId}
+                      disabled={resultWorking}
+                      onChange={(event) => {
+                        resultAction.reset();
+                        setOutcomeEditor({ ...outcomeEditor, winnerTeamId: event.target.value, error: "" });
+                      }}
+                    >
+                      <option value="">Choose winner…</option>
+                      <option value={selectedOutcomeGame.team_a.team_id || ""}>{sideLabel(selectedOutcomeGame.team_a)}</option>
+                      <option value={selectedOutcomeGame.team_b.team_id || ""}>{sideLabel(selectedOutcomeGame.team_b)}</option>
+                    </select>
+                  </label>
+                </div>
+                <label className={styles.field}>
+                  Operator note
+                  <textarea
+                    value={outcomeEditor.resultNote}
+                    maxLength={500}
+                    disabled={resultWorking}
+                    onChange={(event) => {
+                      resultAction.reset();
+                      setOutcomeEditor({ ...outcomeEditor, resultNote: event.target.value, error: "" });
+                    }}
+                    placeholder="State who was absent, withdrew, or retired and what was verified."
+                  />
+                </label>
+                {outcomeEditor.error ? <p role="alert" className={styles.errorText}>{outcomeEditor.error}</p> : null}
+                {selectedOutcomeValidation?.ok ? (
+                  <div className={styles.scoreConfirmation} aria-label="Live non-play result preview">
+                    <p><strong>{statusLabel(selectedOutcomeValidation.resultType)}</strong> · Winner: <strong>{selectedOutcomeValidation.winnerTeamId === selectedOutcomeGame.team_a.team_id ? sideLabel(selectedOutcomeGame.team_a) : sideLabel(selectedOutcomeGame.team_b)}</strong></p>
+                    <p>{selectedOutcomeValidation.resultNote}</p>
+                    <p>This records a non-played result, releases any court and participant claims, resolves progression, refills available courts, and keeps the synthetic progression score out of rating publication.</p>
+                  </div>
+                ) : !outcomeEditor.error ? (
+                  <p className={styles.muted}>{selectedOutcomeValidation?.message || "Choose an outcome, winner, and operator note."}</p>
+                ) : null}
+                <ActionFeedback
+                  phase={resultAction.phase}
+                  completion={resultAction.completion}
+                  error={resultAction.error}
+                  workingLabel="Recording the non-play result and refreshing the day…"
+                />
+              </form>
+            </InteractionDialog>
+          ) : scoreEditor ? (
+            <InteractionDialog
+              open
+              phase="error"
+              title="Score entry needs a fresh court assignment"
+              onRequestClose={() => setScoreEditor(null)}
+              actions={<button type="button" className={styles.secondaryButton} onClick={() => setScoreEditor(null)}>Close stale result entry</button>}
+            >
+              <p role="alert">The selected matchup is no longer the authoritative assignment on this court. Review the refreshed board before scoring.</p>
+            </InteractionDialog>
+          ) : outcomeEditor ? (
+            <InteractionDialog
+              open
+              phase="error"
+              title="Non-play entry needs fresh tournament-day truth"
+              onRequestClose={() => setOutcomeEditor(null)}
+              actions={<button type="button" className={styles.secondaryButton} onClick={() => setOutcomeEditor(null)}>Close stale result entry</button>}
+            >
+              <p role="alert">The selected matchup is no longer available in this tournament day. Review the refreshed board or queue before recording an outcome.</p>
+            </InteractionDialog>
           ) : null}
 
           {panelFocus === "corrections" ? (

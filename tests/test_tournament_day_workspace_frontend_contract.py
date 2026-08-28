@@ -92,7 +92,7 @@ def test_day_console_tabs_render_one_clean_workspace_panel_at_a_time() -> None:
         assert f'aria-labelledby="day-workspace-tab-{focus}"' in panel
     assert 'document.getElementById(`day-workspace-${panel}`)?.focus()' not in panel
     assert 'button[aria-selected="true"]' in css
-    assert 'button[aria-pressed="true"]' not in css
+    assert '.viewNav button[aria-pressed="true"]' not in css
 
 
 def test_day_console_places_global_actions_with_their_labeled_tab() -> None:
@@ -102,7 +102,7 @@ def test_day_console_places_global_actions_with_their_labeled_tab() -> None:
     assert 'panelFocus === "draws" && dayStarted' in panel
     assert 'panelFocus === "corrections" && writesFrozen' in panel
     assert 'panelFocus === "corrections" ? (\n            <details className={styles.technicalDetails}' in panel
-    assert 'setPanelFocus("queue")' in panel
+    assert 'setPanelFocus("queue")' not in panel
     assert 'panel: "queue"' in panel
 
 
@@ -128,14 +128,17 @@ def test_day_console_renders_authoritative_courts_and_progression_controls() -> 
     assert "CLOSE TOURNAMENT DAY" in read_web(
         "lib/tournamentDayWorkspaceState.mjs"
     )
-    assert "Confirm & release court" in panel
+    assert "Review score" not in panel
+    assert "Confirm this score and release the court?" not in panel
+    assert "Save ${selectedScoreValidation.scoreA}–${selectedScoreValidation.scoreB} & release ${selectedScoreCourt.label}" in panel
     assert "InteractionDialog" in panel
-    assert 'title={`Enter score · ${selectedScoreCourt.label}`}' in panel
+    assert 'title={`Enter result · ${selectedScoreCourt.label}`}' in panel
     assert "Inline score and release" not in panel
     assert "data-autofocus" in panel
+    assert "Non-play result" in panel
     assert "Use the non-played outcome command" in panel
     assert '"record_non_played_result"' in panel
-    assert "synthetic progression result" in panel
+    assert "synthetic progression" in panel
     assert "Unusual score" in panel
     assert "unusual_score_acknowledgement" in panel
     assert "draw.readiness.assignments" in panel
@@ -186,9 +189,25 @@ def test_day_score_outcome_and_correction_editors_are_version_fenced_and_isolate
     assert "outcomeEditor.expected" in panel
     assert "setCorrectionEditor(null);\n    setOutcomeEditor(null);" in panel
     assert "setScoreEditor(null);\n    setCorrectionEditor(null);" in panel
-    assert 'id="non-played-outcome-editor"' in panel
-    assert 'document.getElementById("non-played-outcome-editor")' in panel
-    assert "scrollIntoView" in panel
+    assert 'id="day-non-play-entry-form"' in panel
+    assert 'title={selectedOutcomeCourt ? `Enter result · ${selectedOutcomeCourt.label}` : "Record non-play result"}' in panel
+    assert 'document.getElementById("non-played-outcome-editor")' not in panel
+    assert "scrollIntoView" not in panel
+
+
+def test_day_result_dialog_submits_directly_and_retains_uncertain_recovery() -> None:
+    panel = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.tsx")
+    css = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.module.css")
+
+    assert 'id="day-score-entry-form"' in panel
+    assert 'void saveScore()' in panel
+    assert 'void saveOutcome()' in panel
+    assert 'await resultAction.run(() => submitCommand(' in panel
+    assert 'resultAction.recover(uncertainResult.onRecover)' in panel
+    assert 'phase={resultAction.phase}' in panel
+    assert 'className={`${styles.notice} ${styles.statusToast}`}' in panel
+    assert ".statusToast" in css
+    assert 'setPanelFocus("queue")' not in panel
 
 
 def test_day_snapshot_identity_is_checked_for_club_tournament_and_day() -> None:
@@ -262,4 +281,4 @@ def test_day_console_is_explicit_and_accessible_about_live_scope() -> None:
     assert "days.length === 1 ? days[0] : null" in panel
     assert "occupied ? assignment?.state : court.state" in panel
     assert 'id="day-score-error"' in panel
-    assert 'aria-describedby={scoreEditor.error ? "day-score-error" : undefined}' in panel
+    assert 'aria-describedby={selectedScoreError ? "day-score-error" : undefined}' in panel
