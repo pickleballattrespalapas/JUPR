@@ -644,17 +644,31 @@ test("Home shows authoritative 1 of 21 truth and preserves selected context", as
   expect(scoringHref).toContain(`draw=${drawId}`);
 });
 
-test("legacy draw route opens the authoritative 10-court day workspace", async ({ page }) => {
+test("legacy draw route opens a clean tabbed day workspace", async ({ page }) => {
   await page.goto(`/admin/tournaments/live-operations/draws?${selectedQuery}`);
   await expect(page).toHaveURL(/\/admin\/tournaments\/live-operations\?/);
   await expect(page).toHaveURL(/panel=draws/);
   await expect(page).toHaveURL(new RegExp(`day=${dayId}`));
   await expect(page.getByRole("heading", { name: "Staging Summer Classic day workspace" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Tournament day scope" }).getByLabel("Tournament day")).toHaveValue(dayId);
-  await expect(page.getByRole("heading", { name: /^Court \d+$/ })).toHaveCount(10);
-  await expect(page.getByRole("region", { name: "Court board" }).getByText("Mateo Rivera / Liam Chen vs Caleb Nguyen / Diego Alvarez")).toBeVisible();
+  await expect(page.getByRole("tabpanel", { name: "Draws & progression" })).toBeVisible();
+  await expect(page.getByRole("tabpanel", { name: "Court board" })).toHaveCount(0);
+  await expect(page.getByRole("tabpanel", { name: "Eligible queue" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Pause draw" })).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Generate playoffs" })).toHaveCount(2);
 
-  const queueRows = page.getByRole("region", { name: "Eligible match queue" }).locator("ol > li");
+  await page.getByRole("tab", { name: "Court board" }).click();
+  await expect(page).toHaveURL(/panel=board/);
+  const courtBoard = page.getByRole("tabpanel", { name: "Court board" });
+  await expect(courtBoard.getByRole("heading", { name: /^Court \d+$/ })).toHaveCount(10);
+  await expect(courtBoard.getByText("Mateo Rivera / Liam Chen vs Caleb Nguyen / Diego Alvarez")).toBeVisible();
+  await expect(page.getByRole("tabpanel", { name: "Draws & progression" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Pause draw" })).toHaveCount(0);
+
+  await page.getByRole("tab", { name: "Eligible queue" }).click();
+  await expect(page).toHaveURL(/panel=queue/);
+  const queuePanel = page.getByRole("tabpanel", { name: "Eligible queue" });
+  const queueRows = queuePanel.getByRole("region", { name: "Eligible match queue" }).locator("ol > li");
   await expect(queueRows).toHaveCount(2);
   expect(await queueRows.allTextContents()).toEqual([
     expect.stringContaining("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith"),
@@ -665,11 +679,12 @@ test("legacy draw route opens the authoritative 10-court day workspace", async (
   await expect(page.getByRole("heading", { name: "Held and blocked matches" })).toBeVisible();
   await expect(page.getByText("Operator hold awaiting participant arrival")).toBeVisible();
   await expect(page.getByText("One participant is already assigned to another court.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Pause draw" })).toHaveCount(2);
-  await expect(page.getByRole("button", { name: "Generate playoffs" })).toHaveCount(2);
+  await expect(page.getByRole("tabpanel", { name: "Court board" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Generate playoffs" })).toHaveCount(0);
 
   await page.reload();
   await expect(page.getByRole("region", { name: "Tournament day scope" }).getByLabel("Tournament day")).toHaveValue(dayId);
+  await expect(page.getByRole("tabpanel", { name: "Eligible queue" })).toBeVisible();
 });
 
 test("playoff generation requires an explicit server-reviewed advance count", async ({ page }) => {
@@ -829,7 +844,7 @@ test("A 9–9 tie is rejected before inline score-and-release submits the exact 
     },
     payload: { game_id: "day-game-a", score_a: 11, score_b: 7 }
   });
-  await expect(page.getByRole("region", { name: "Court board" }).getByText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith")).toBeVisible();
+  await expect(page.getByRole("tabpanel", { name: "Court board" }).getByText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith")).toBeVisible();
 });
 
 test("Corrections & recovery submits an exact versioned day correction with before/after evidence", async ({ page }) => {
