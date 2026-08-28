@@ -68,7 +68,7 @@ def test_live_operations_base_is_the_canonical_day_console() -> None:
     assert "initialDayId={context.dayId}" in route
     assert "TournamentDayWorkspacePanel" in route
     assert 'aria-label="Tournament day scope"' in panel
-    assert 'aria-label="Court board"' in panel
+    assert 'aria-labelledby="day-workspace-tab-board"' in panel
     assert 'aria-label="Eligible match queue"' in panel
     assert "snapshot.eligible_queue" in panel
     assert "Server order" in panel
@@ -76,6 +76,34 @@ def test_live_operations_base_is_the_canonical_day_console() -> None:
     assert "Recovery required" in panel
     assert 'confirmationText="RECONCILE DAY OPERATIONS"' in panel
     assert "Day workspace" in nav
+
+
+def test_day_console_tabs_render_one_clean_workspace_panel_at_a_time() -> None:
+    panel = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.tsx")
+    css = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.module.css")
+
+    assert 'role="tablist"' in panel
+    assert 'role="tab"' in panel
+    assert "aria-selected={panelFocus === panel}" in panel
+    assert "tabIndex={panelFocus === panel ? 0 : -1}" in panel
+    for focus in ("board", "queue", "draws", "corrections"):
+        assert f'panelFocus === "{focus}" ? (' in panel
+        assert f'id="day-workspace-{focus}"' in panel
+        assert f'aria-labelledby="day-workspace-tab-{focus}"' in panel
+    assert 'document.getElementById(`day-workspace-${panel}`)?.focus()' not in panel
+    assert 'button[aria-selected="true"]' in css
+    assert 'button[aria-pressed="true"]' not in css
+
+
+def test_day_console_places_global_actions_with_their_labeled_tab() -> None:
+    panel = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.tsx")
+
+    assert 'panelFocus === "draws" && !dayStarted' in panel
+    assert 'panelFocus === "draws" && dayStarted' in panel
+    assert 'panelFocus === "corrections" && writesFrozen' in panel
+    assert 'panelFocus === "corrections" ? (\n            <details className={styles.technicalDetails}' in panel
+    assert 'setPanelFocus("queue")' in panel
+    assert 'panel: "queue"' in panel
 
 
 def test_day_console_renders_authoritative_courts_and_progression_controls() -> None:

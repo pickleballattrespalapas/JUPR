@@ -100,7 +100,7 @@
   cursor: pointer;
 }
 
-.viewNav button[aria-pressed="true"] {
+.viewNav button[aria-selected="true"] {
   border-color: #2563eb;
   background: #dbeafe;
   color: #1d4ed8;
@@ -181,11 +181,6 @@
 .cardHeading > *,
 .recoveryRow > * {
   min-width: 0;
-}
-
-.focusedSection {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 2px #dbeafe;
 }
 
 .courtBoard {

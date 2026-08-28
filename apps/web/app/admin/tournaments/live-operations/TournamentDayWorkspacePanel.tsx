@@ -719,7 +719,6 @@ export default function TournamentDayWorkspacePanel({
   function setPanel(panel: TournamentDayWorkspacePanelFocus) {
     setPanelFocus(panel);
     replaceWorkspaceUrl({ panel });
-    document.getElementById(`day-workspace-${panel}`)?.focus();
   }
 
   function chooseQueueDraw(drawId: string) {
@@ -809,11 +808,14 @@ export default function TournamentDayWorkspacePanel({
     });
     setFocusedGameId(game.id);
     setFocusedCourtId(game.court_id || "");
-    replaceWorkspaceUrl({ gameId: game.id, courtId: game.court_id || "" });
+    setPanelFocus("queue");
+    replaceWorkspaceUrl({ gameId: game.id, courtId: game.court_id || "", panel: "queue" });
     window.requestAnimationFrame(() => {
-      const editor = document.getElementById("non-played-outcome-editor");
-      editor?.scrollIntoView({ behavior: "smooth", block: "center" });
-      editor?.focus({ preventScroll: true });
+      window.requestAnimationFrame(() => {
+        const editor = document.getElementById("non-played-outcome-editor");
+        editor?.scrollIntoView({ behavior: "smooth", block: "center" });
+        editor?.focus({ preventScroll: true });
+      });
     });
   }
 
@@ -943,9 +945,33 @@ export default function TournamentDayWorkspacePanel({
         </div>
       </section>
 
-      <nav aria-label="Day workspace views" className={styles.viewNav}>
+      <nav aria-label="Day workspace views" className={styles.viewNav} role="tablist">
         {(["board", "queue", "draws", "corrections"] as const).map((panel) => (
-          <button type="button" key={panel} aria-pressed={panelFocus === panel} onClick={() => setPanel(panel)}>
+          <button
+            type="button"
+            key={panel}
+            id={`day-workspace-tab-${panel}`}
+            role="tab"
+            aria-controls={`day-workspace-${panel}`}
+            aria-selected={panelFocus === panel}
+            tabIndex={panelFocus === panel ? 0 : -1}
+            onClick={() => setPanel(panel)}
+            onKeyDown={(event) => {
+              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+              event.preventDefault();
+              const panels = ["board", "queue", "draws", "corrections"] as const;
+              const currentIndex = panels.indexOf(panel);
+              const nextPanel = event.key === "Home"
+                ? panels[0]
+                : event.key === "End"
+                  ? panels[panels.length - 1]
+                  : panels[(currentIndex + (event.key === "ArrowRight" ? 1 : -1) + panels.length) % panels.length];
+              setPanel(nextPanel);
+              window.requestAnimationFrame(() => {
+                document.getElementById(`day-workspace-tab-${nextPanel}`)?.focus();
+              });
+            }}
+          >
             {panel === "board" ? "Court board" : panel === "queue" ? "Eligible queue" : panel === "draws" ? "Draws & progression" : "Corrections & recovery"}
           </button>
         ))}
@@ -970,7 +996,7 @@ export default function TournamentDayWorkspacePanel({
             <article><span>Completed</span><strong>{snapshot.summary.completed_games}</strong></article>
           </section>
 
-          {!dayStarted ? (
+          {panelFocus === "draws" && !dayStarted ? (
             <section className={styles.activationCard} aria-labelledby="activate-day-title">
               <div>
                 <p className={styles.eyebrow}>Day activation</p>
@@ -993,7 +1019,7 @@ export default function TournamentDayWorkspacePanel({
             </section>
           ) : null}
 
-          {writesFrozen ? (
+          {panelFocus === "corrections" && writesFrozen ? (
             <section className={styles.recoveryCard} aria-labelledby="day-recovery-title">
               <p className={styles.eyebrow}>Recovery required</p>
               <h2 id="day-recovery-title">Day writes are frozen</h2>
@@ -1025,7 +1051,13 @@ export default function TournamentDayWorkspacePanel({
             </section>
           ) : null}
 
-          <section id="day-workspace-board" tabIndex={-1} className={`${styles.workspaceSection} ${panelFocus === "board" ? styles.focusedSection : ""}`} aria-label="Court board">
+          {panelFocus === "board" ? (
+          <section
+            id="day-workspace-board"
+            role="tabpanel"
+            aria-labelledby="day-workspace-tab-board"
+            className={styles.workspaceSection}
+          >
             <div className={styles.sectionHeading}>
               <div><p className={styles.eyebrow}>Live allocation</p><h2>Court board</h2><p className={styles.muted}>Physical courts come only from the authoritative day allocation—not bracket slot numbers.</p></div>
               <div>
@@ -1121,9 +1153,16 @@ export default function TournamentDayWorkspacePanel({
               </article>
             ) : null}
           </section>
+          ) : null}
 
-          <div className={styles.lowerGrid}>
-            <section id="day-workspace-queue" tabIndex={-1} autoFocus={initialPanel === "queue"} className={`${styles.workspaceSection} ${panelFocus === "queue" ? styles.focusedSection : ""}`} aria-label="Eligible match queue">
+          {panelFocus === "queue" ? (
+          <div
+            id="day-workspace-queue"
+            role="tabpanel"
+            aria-labelledby="day-workspace-tab-queue"
+            className={styles.lowerGrid}
+          >
+            <section className={styles.workspaceSection} aria-label="Eligible match queue">
               <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>Server order</p><h2>Unified eligible queue</h2><p className={styles.muted}>One authoritative order across every active draw. Filtering never renumbers priority.</p></div><label className={styles.field}>Visible draw<select value={drawFilter} onChange={(event) => chooseQueueDraw(event.target.value)}><option value="all">All eligible draws</option>{snapshot.draws.map((draw) => <option key={draw.id} value={draw.id}>{draw.name}</option>)}</select></label></div>
               <ol className={styles.queueList}>
                 {visibleQueue.map((entry) => {
@@ -1186,8 +1225,15 @@ export default function TournamentDayWorkspacePanel({
               ) : null}
             </section>
           </div>
+          ) : null}
 
-          <section id="day-workspace-corrections" tabIndex={-1} autoFocus={initialPanel === "corrections"} className={`${styles.workspaceSection} ${panelFocus === "corrections" ? styles.focusedSection : ""}`} aria-label="Completed score corrections and recovery">
+          {panelFocus === "corrections" ? (
+          <section
+            id="day-workspace-corrections"
+            role="tabpanel"
+            aria-labelledby="day-workspace-tab-corrections"
+            className={styles.workspaceSection}
+          >
             <div className={styles.sectionHeading}>
               <div>
                 <p className={styles.eyebrow}>Guarded day recovery</p>
@@ -1304,8 +1350,15 @@ export default function TournamentDayWorkspacePanel({
               <article className={styles.scoreEditor} role="alert"><h3>Correction needs refreshed day truth</h3><p>The selected completed game or draw is no longer in this day snapshot. Reload before taking another action.</p><button type="button" className={styles.secondaryButton} onClick={() => setCorrectionEditor(null)}>Close stale correction</button></article>
             ) : null}
           </section>
+          ) : null}
 
-          <section id="day-workspace-draws" tabIndex={-1} autoFocus={initialPanel === "draws"} className={`${styles.workspaceSection} ${panelFocus === "draws" ? styles.focusedSection : ""}`} aria-label="Draw activation and progression">
+          {panelFocus === "draws" ? (
+          <section
+            id="day-workspace-draws"
+            role="tabpanel"
+            aria-labelledby="day-workspace-tab-draws"
+            className={styles.workspaceSection}
+          >
             <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>Active draw control</p><h2>Draws & progression</h2><p className={styles.muted}>Activation and playoff generation remain fenced by this exact day version.</p></div></div>
             <div className={styles.drawGrid}>
               {snapshot.draws.map((draw) => {
@@ -1376,8 +1429,9 @@ export default function TournamentDayWorkspacePanel({
               })}
             </div>
           </section>
+          ) : null}
 
-          {dayStarted ? (
+          {panelFocus === "draws" && dayStarted ? (
             <section className={styles.activationCard} aria-labelledby="close-day-title">
               <div>
                 <p className={styles.eyebrow}>End-of-day control</p>
@@ -1400,7 +1454,9 @@ export default function TournamentDayWorkspacePanel({
             </section>
           ) : null}
 
-          <details className={styles.technicalDetails}><summary>Technical day evidence</summary><p><code>{snapshot.state_fingerprint}</code></p><p>Day version: <code>{snapshot.day_run.version}</code> · queue version: <code>{snapshot.queue_version}</code></p></details>
+          {panelFocus === "corrections" ? (
+            <details className={styles.technicalDetails}><summary>Technical day evidence</summary><p><code>{snapshot.state_fingerprint}</code></p><p>Day version: <code>{snapshot.day_run.version}</code> · queue version: <code>{snapshot.queue_version}</code></p></details>
+          ) : null}
         </>
       ) : null}
     </div>
