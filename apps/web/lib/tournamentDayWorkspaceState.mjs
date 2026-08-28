@@ -37,6 +37,20 @@ export function visibleServerQueue(queue, drawId) {
   return rows.filter((row) => String(row?.draw_id || "") === String(drawId));
 }
 
+export function readyActiveDrawQueue(queue, draws) {
+  const activeDrawIds = new Set(
+    (Array.isArray(draws) ? draws : [])
+      .filter((draw) => String(draw?.activation_state || "").trim().toUpperCase() === "ACTIVE")
+      .map((draw) => String(draw?.id || ""))
+      .filter(Boolean)
+  );
+  return (Array.isArray(queue) ? queue : []).filter((row) => (
+    activeDrawIds.has(String(row?.draw_id || ""))
+    && String(row?.state || "").trim().toUpperCase() === "WAITING"
+    && (!Array.isArray(row?.blockers) || row.blockers.length === 0)
+  ));
+}
+
 export function resetFocusForDay(current, dayId) {
   return {
     dayId: String(dayId || ""),

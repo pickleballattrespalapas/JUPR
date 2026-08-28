@@ -26,6 +26,14 @@ export type TournamentDayWorkspaceFocus = {
 
 export type ServerQueueRow = {
   draw_id?: string | null;
+  state?: string | null;
+  blockers?: readonly unknown[] | null;
+  [key: string]: unknown;
+};
+
+export type DayDrawRow = {
+  id?: string | null;
+  activation_state?: string | null;
   [key: string]: unknown;
 };
 
@@ -33,6 +41,7 @@ export function dayActionConfirmation(action: TournamentDayCommandAction): strin
 export function dayRunHasStarted(state: string | null | undefined): boolean;
 export function dayRunAcceptsLiveCommands(state: string | null | undefined): boolean;
 export function visibleServerQueue<T extends ServerQueueRow>(queue: readonly T[], drawId: string): T[];
+export function readyActiveDrawQueue<T extends ServerQueueRow>(queue: readonly T[], draws: readonly DayDrawRow[]): T[];
 export function resetFocusForDay(
   current: Partial<TournamentDayWorkspaceFocus>,
   dayId: string

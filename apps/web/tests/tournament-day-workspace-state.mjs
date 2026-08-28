@@ -5,6 +5,7 @@ import {
   dayActionConfirmation,
   dayRunAcceptsLiveCommands,
   dayRunHasStarted,
+  readyActiveDrawQueue,
   resetFocusForDay,
   retainedDayCommandStorageKey,
   validateDayCorrectionDraft,
@@ -61,6 +62,21 @@ assert.deepEqual(
   visibleServerQueue(queue, "draw-a").map((row) => [row.game_id, row.position]),
   [["g-a-1", 1], ["g-a-2", 3]],
   "a draw visibility filter may hide rows but must retain authoritative positions"
+);
+
+const boardQueue = [
+  { game_id: "ready-a", draw_id: "draw-a", position: 1, state: "WAITING", blockers: [] },
+  { game_id: "paused-b", draw_id: "draw-b", position: 2, state: "WAITING", blockers: [] },
+  { game_id: "blocked-a", draw_id: "draw-a", position: 3, state: "WAITING", blockers: [{ code: "PLAYER_ALREADY_CLAIMED" }] },
+  { game_id: "on-court-a", draw_id: "draw-a", position: 4, state: "ON_COURT", blockers: [] }
+];
+assert.deepEqual(
+  readyActiveDrawQueue(boardQueue, [
+    { id: "draw-a", activation_state: "ACTIVE" },
+    { id: "draw-b", activation_state: "PAUSED" }
+  ]).map((row) => [row.game_id, row.position]),
+  [["ready-a", 1]],
+  "the Court board strip must include only unblocked waiting games from active draws"
 );
 
 assert.deepEqual(
