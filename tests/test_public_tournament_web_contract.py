@@ -45,6 +45,21 @@ def test_standard_results_page_renders_all_patron_result_surfaces() -> None:
     assert "email" not in api
 
 
+def test_current_public_draws_render_as_url_backed_tabs() -> None:
+    page = read("app/clubs/[clubSlug]/tournament-results/page.tsx")
+
+    assert 'draw?: string;' in page
+    assert 'draw.state === "LIVE" || draw.state === "READY"' in page
+    assert 'aria-label="Current tournament draws"' in page
+    assert 'aria-current={selected ? "page" : undefined}' in page
+    assert "prefetch={false}" in page
+    assert "scroll={false}" in page
+    assert "draw: publicDrawKey" in page
+    assert "selectedCurrentDraw ? <DrawResults draw={selectedCurrentDraw} /> : null" in page
+    assert "Completed draws" in page
+    assert "Upcoming draws" in page
+
+
 def test_registration_and_edit_render_multiday_event_once_with_schedule_detail() -> None:
     create = read(
         "app/clubs/[clubSlug]/tournament-registration/TournamentRegistrationForm.tsx"

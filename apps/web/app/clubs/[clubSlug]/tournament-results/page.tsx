@@ -10,6 +10,7 @@ import {
 type Props = {
   params: { clubSlug: string };
   searchParams?: {
+    draw?: string;
     tournament_id?: string;
     view?: string;
   };
@@ -208,6 +209,23 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
     );
   }
 
+  const currentDraws = data.draws
+    .filter((draw) => draw.state === "LIVE" || draw.state === "READY")
+    .sort((left, right) => Number(right.state === "LIVE") - Number(left.state === "LIVE"));
+  const selectedDrawKey = String(searchParams?.draw || "").trim();
+  const selectedCurrentDraw = currentDraws.find((draw) => draw.public_draw_key === selectedDrawKey)
+    || currentDraws[0]
+    || null;
+  const completedDraws = data.draws.filter((draw) => draw.state === "COMPLETE");
+  const upcomingDraws = data.draws.filter((draw) => draw.state === "SCHEDULED");
+  const drawHref = (publicDrawKey: string) => {
+    const query = new URLSearchParams({
+      tournament_id: data.tournament.id,
+      draw: publicDrawKey
+    });
+    if (view === "past") query.set("view", "past");
+    return `/clubs/${params.clubSlug}/tournament-results?${query.toString()}`;
+  };
   const registrationSlug = data.tournament.settings.registration_slug || null;
   return (
     <section>
@@ -224,7 +242,66 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
         registrationSlug={registrationSlug}
         active="results"
       />
-      {data.draws.map((draw) => <DrawResults key={draw.public_draw_key} draw={draw} />)}
+      {currentDraws.length ? (
+        <section aria-labelledby="current-draws-title" style={{ marginBottom: "1.25rem" }}>
+          <h2 id="current-draws-title" style={{ marginBottom: "0.25rem" }}>Current draws</h2>
+          <p style={{ color: "#475569", marginTop: 0 }}>Choose a draw to see its live standings, scores, and bracket.</p>
+          <nav
+            aria-label="Current tournament draws"
+            style={{
+              display: "flex",
+              gap: "0.6rem",
+              overflowX: "auto",
+              padding: "0.15rem 0 0.55rem",
+              marginBottom: "0.75rem"
+            }}
+          >
+            {currentDraws.map((draw) => {
+              const selected = selectedCurrentDraw?.public_draw_key === draw.public_draw_key;
+              const badge = stateColors[draw.state] || stateColors.READY;
+              return (
+                <Link
+                  key={draw.public_draw_key}
+                  href={drawHref(draw.public_draw_key)}
+                  prefetch={false}
+                  scroll={false}
+                  aria-current={selected ? "page" : undefined}
+                  style={{
+                    display: "grid",
+                    gap: "0.15rem",
+                    flex: "0 0 auto",
+                    minWidth: "min(18rem, 76vw)",
+                    padding: "0.7rem 0.85rem",
+                    border: selected ? "2px solid #2563eb" : "1px solid #cbd5e1",
+                    borderRadius: "12px",
+                    background: selected ? "#eff6ff" : "#ffffff",
+                    color: "#0f172a",
+                    textDecoration: "none",
+                    boxShadow: selected ? "0 0 0 2px rgb(37 99 235 / 10%)" : "none"
+                  }}
+                >
+                  <strong>{draw.event_family_label} · {draw.division_name}</strong>
+                  <span style={{ color: "#475569", fontSize: "0.9rem" }}>{draw.name}</span>
+                  <span style={{ color: badge.color, fontSize: "0.78rem", fontWeight: 850 }}>{draw.state}</span>
+                </Link>
+              );
+            })}
+          </nav>
+          {selectedCurrentDraw ? <DrawResults draw={selectedCurrentDraw} /> : null}
+        </section>
+      ) : null}
+      {completedDraws.length ? (
+        <section aria-labelledby="completed-draws-title">
+          <h2 id="completed-draws-title">Completed draws</h2>
+          {completedDraws.map((draw) => <DrawResults key={draw.public_draw_key} draw={draw} />)}
+        </section>
+      ) : null}
+      {upcomingDraws.length ? (
+        <section aria-labelledby="upcoming-draws-title">
+          <h2 id="upcoming-draws-title">Upcoming draws</h2>
+          {upcomingDraws.map((draw) => <DrawResults key={draw.public_draw_key} draw={draw} />)}
+        </section>
+      ) : null}
       {!data.draws.length ? <article style={cardStyle}><h2 style={{ marginTop: 0 }}>No standard draw results yet</h2><p style={{ color: "#475569", marginBottom: 0 }}>Singles and doubles draws will appear here after tournament staff publish them.</p></article> : null}
       <p><Link href={`/clubs/${params.clubSlug}/tournament-team-results`}>Four-player team results</Link></p>
     </section>
