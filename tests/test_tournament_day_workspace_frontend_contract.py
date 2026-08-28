@@ -32,6 +32,10 @@ def test_day_ops_transport_is_typed_and_isolated_from_the_draw_client() -> None:
         "pause_draw",
         "resume_draw",
         "auto_fill_courts",
+        "assign_next_court",
+        "assign_game_to_court",
+        "requeue_game",
+        "move_game_to_court",
         "score_and_release",
         "correct_completed_score",
         "generate_playoffs",
@@ -51,6 +55,8 @@ def test_day_ops_transport_is_typed_and_isolated_from_the_draw_client() -> None:
     assert "allowed_advance_counts: number[]" in client
     assert "default_advance_count: number | null" in client
     assert "advance_count?: number" in client
+    assert "court_id?: string" in client
+    assert "target_court_version?: string" in client
     assert 'action: AdminTournamentDayCommandAction | "reconcile"' in client
     assert "scope: {" in client
     assert "club_id: string" in client
@@ -115,7 +121,16 @@ def test_day_console_renders_authoritative_courts_and_progression_controls() -> 
     assert "Activate draw" in panel
     assert "Pause draw" in panel
     assert "Resume draw" in panel
-    assert "Fill available courts" in panel
+    assert "Fill available courts" not in panel
+    assert "Send to next open court" in panel
+    assert "Choose court" in panel
+    assert "Move or remove" in panel
+    assert "Return game to queue" in panel
+    assert '"assign_next_court"' in panel
+    assert '"assign_game_to_court"' in panel
+    assert '"requeue_game"' in panel
+    assert '"move_game_to_court"' in panel
+    assert "target_court_version" in panel
     assert "Progression" in panel
     assert "score_and_release" in panel
     assert "generate_playoffs" in panel
@@ -148,6 +163,27 @@ def test_day_console_renders_authoritative_courts_and_progression_controls() -> 
     assert "@media (max-width: 1320px)" in css
     assert "@media (max-width: 640px)" in css
     assert "overflow-x: clip" in css
+
+
+def test_day_court_assignment_is_manual_atomic_and_version_fenced() -> None:
+    panel = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.tsx")
+    state = read_web("lib/tournamentDayWorkspaceState.mjs")
+
+    assert 'submitCommand(\n      "assign_next_court"' in panel
+    assert 'submitCommand(\n      "assign_game_to_court"' in panel
+    assert 'submitCommand(\n      "requeue_game"' in panel
+    assert 'submitCommand(\n      "move_game_to_court"' in panel
+    assert "queue_entry_version: entry.version" in panel
+    assert "court_version: targetCourt.version" in panel
+    assert "target_court_version: targetCourt.version" in panel
+    assert "Court assignment controls closed because the queue or court board changed" in panel
+    assert "The next matchup remains in the queue until an operator" in panel
+    assert "refills it from the server-ordered eligible queue" not in panel
+    assert "refills available courts" not in panel
+    assert "ASSIGN NEXT OPEN COURT" in state
+    assert "ASSIGN GAME TO COURT" in state
+    assert "RETURN GAME TO QUEUE" in state
+    assert "MOVE GAME TO COURT" in state
 
 
 def test_day_console_corrects_only_server_authorized_completed_scores() -> None:

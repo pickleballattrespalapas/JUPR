@@ -42,8 +42,13 @@ def _request(action: str, *, payload: dict | None = None) -> dict:
             "pause_draw": "PAUSE DRAW",
             "resume_draw": "RESUME DRAW",
             "auto_fill_courts": "AUTO FILL COURTS",
+            "assign_next_court": "ASSIGN NEXT OPEN COURT",
+            "assign_game_to_court": "ASSIGN GAME TO COURT",
+            "requeue_game": "RETURN GAME TO QUEUE",
+            "move_game_to_court": "MOVE GAME TO COURT",
             "score_and_release": "SAVE SCORE AND RELEASE COURT",
             "correct_completed_score": "CORRECT COMPLETED SCORE",
+            "record_non_played_result": "RECORD NON-PLAYED RESULT",
             "generate_playoffs": "GENERATE PLAYOFFS",
             "close_day": "CLOSE TOURNAMENT DAY",
         }[action],
@@ -110,14 +115,23 @@ def test_day_live_routes_use_one_day_scoped_nested_command_envelope() -> None:
     assert "draw_version" in source
     assert "game_version" in source
     assert "court_version" in source
+    assert "target_court_version" in source
     assert "queue_version" in source
     assert "payload:" in source
     assert "draw_ids" not in source
     assert "draw_id" in source
     assert "advance_count" in source
     assert "game_id" in source
+    assert "court_id" in source
     assert "score_a" in source and "score_b" in source
     assert '"generate_playoffs"' in source
+    for action in (
+        "assign_next_court",
+        "assign_game_to_court",
+        "requeue_game",
+        "move_game_to_court",
+    ):
+        assert f'"{action}"' in source
     assert "client_idempotency_key" in source
     assert "execute_admin_tournament_day_live_command" in source
     assert "build_admin_tournament_day_live_snapshot" in source

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-tournament-acceptance-2026-08-25",
-  "repository_migration_content_sha256": "05ddf4ab475eff2606fd893ff87f20ec4ae7a640c3db7d5dd36a9991a5112671",
+  "repository_migration_content_sha256": "edf472ebea3be771b4af8ea121feb409166c8ec31c64b4a95e7bb1cd68abce66",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -40,6 +40,7 @@
     "league_roster_rating_integrity",
     "live_ladder_admin_operations",
     "manual_partner_canonical_teams",
+    "manual_tournament_day_court_assignment",
     "match_exclusion_atomic_recovery",
     "match_exclusion_nonretryable_conflicts",
     "match_log_club_recovery_mutex",

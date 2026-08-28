@@ -4,6 +4,10 @@ export type AdminTournamentDayCommandAction =
   | "pause_draw"
   | "resume_draw"
   | "auto_fill_courts"
+  | "assign_next_court"
+  | "assign_game_to_court"
+  | "requeue_game"
+  | "move_game_to_court"
   | "score_and_release"
   | "correct_completed_score"
   | "record_non_played_result"
@@ -101,6 +105,8 @@ export type AdminTournamentDayQueueEntry = {
   priority?: number | null;
   state: string;
   version: string;
+  court_id?: string | null;
+  immediate_fill_candidate?: boolean;
   eligible_since?: string | null;
   reason?: string | null;
   blockers: AdminTournamentDayBlockerValue[];
@@ -218,6 +224,7 @@ export type AdminTournamentDayCommandExpected = {
   draw_version?: string;
   game_version?: string;
   court_version?: string;
+  target_court_version?: string;
   queue_version?: string;
   queue_entry_version?: string;
 };
@@ -226,6 +233,7 @@ export type AdminTournamentDayCommandPayload = {
   draw_id?: string;
   advance_count?: number;
   game_id?: string;
+  court_id?: string;
   score_a?: number;
   score_b?: number;
   unusual_score_acknowledgement?: boolean;

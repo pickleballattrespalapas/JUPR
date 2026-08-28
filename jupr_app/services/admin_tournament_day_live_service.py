@@ -58,6 +58,10 @@ COMMAND_CONFIRMATIONS = {
     "pause_draw": "PAUSE DRAW",
     "resume_draw": "RESUME DRAW",
     "auto_fill_courts": "AUTO FILL COURTS",
+    "assign_next_court": "ASSIGN NEXT OPEN COURT",
+    "assign_game_to_court": "ASSIGN GAME TO COURT",
+    "requeue_game": "RETURN GAME TO QUEUE",
+    "move_game_to_court": "MOVE GAME TO COURT",
     "score_and_release": "SAVE SCORE AND RELEASE COURT",
     "correct_completed_score": "CORRECT COMPLETED SCORE",
     "record_non_played_result": "RECORD NON-PLAYED RESULT",
@@ -2007,6 +2011,10 @@ def _normalize_request(request: dict[str, Any]) -> tuple[str, str, str, dict[str
         "activate_day": set(),
         "auto_fill_courts": set(),
         "close_day": set(),
+        "assign_next_court": {"game_id"},
+        "assign_game_to_court": {"game_id", "court_id"},
+        "requeue_game": {"game_id"},
+        "move_game_to_court": {"game_id", "court_id"},
         "activate_draw": {"draw_id"},
         "pause_draw": {"draw_id"},
         "resume_draw": {"draw_id"},
@@ -2093,6 +2101,122 @@ def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], 
     elif action == "auto_fill_courts":
         # Rechecking the database RPC under locks is final authority. Allow a
         # no-op fill when no game is ready so operators can safely refresh it.
+        return
+    elif action in {"assign_next_court", "assign_game_to_court"}:
+        game_id = _text(payload.get("game_id"))
+        game = _selected_game(snapshot, game_id)
+        queue_entry = next(
+            (
+                row
+                for row in snapshot.get("eligible_queue", [])
+                if _text(row.get("game_id")) == game_id
+            ),
+            None,
+        )
+        if not game or not queue_entry:
+            raise ValueError("Choose a currently eligible queued game.")
+        if expected.get("game_version") in (None, "") or str(
+            expected.get("game_version")
+        ) != str(game.get("version")):
+            raise StaleTournamentAdminStateError(
+                "Tournament game version changed after court-assignment review."
+            )
+        if expected.get("queue_entry_version") in (None, "") or str(
+            expected.get("queue_entry_version")
+        ) != str(queue_entry.get("version")):
+            raise StaleTournamentAdminStateError(
+                "Tournament queue entry changed after court-assignment review."
+            )
+        available_courts = [
+            row
+            for row in snapshot.get("courts", [])
+            if _text(row.get("state")).upper() == "AVAILABLE"
+            and not row.get("current_assignment")
+        ]
+        if not available_courts:
+            raise ValueError("No tournament-day court is currently available.")
+        if action == "assign_game_to_court":
+            court_id = _text(payload.get("court_id"))
+            court = next(
+                (row for row in available_courts if _text(row.get("id")) == court_id),
+                None,
+            )
+            if not court:
+                raise StaleTournamentAdminStateError(
+                    "The selected tournament-day court is no longer available."
+                )
+            if expected.get("court_version") in (None, "") or str(
+                expected.get("court_version")
+            ) != str(court.get("version")):
+                raise StaleTournamentAdminStateError(
+                    "Selected court version changed after assignment review."
+                )
+        elif expected.get("court_version") not in (None, ""):
+            raise StaleTournamentAdminStateError(
+                "Next-open-court assignment must let the server select the court."
+            )
+        return
+    elif action in {"requeue_game", "move_game_to_court"}:
+        game_id = _text(payload.get("game_id"))
+        game = _selected_game(snapshot, game_id)
+        source_court = next(
+            (
+                row
+                for row in snapshot.get("courts", [])
+                if _text((row.get("current_assignment") or {}).get("game_id"))
+                == game_id
+            ),
+            None,
+        )
+        if not game or not source_court:
+            raise StaleTournamentAdminStateError(
+                "This game is no longer assigned to a tournament-day court."
+            )
+        if expected.get("game_version") in (None, "") or str(
+            expected.get("game_version")
+        ) != str(game.get("version")):
+            raise StaleTournamentAdminStateError(
+                "Tournament game version changed after assignment review."
+            )
+        if expected.get("queue_entry_version") in (None, "") or str(
+            expected.get("queue_entry_version")
+        ) != str(game.get("queue_entry_version")):
+            raise StaleTournamentAdminStateError(
+                "Tournament queue entry changed after assignment review."
+            )
+        if expected.get("court_version") in (None, "") or str(
+            expected.get("court_version")
+        ) != str(source_court.get("version")):
+            raise StaleTournamentAdminStateError(
+                "Assigned court version changed after assignment review."
+            )
+        if action == "requeue_game":
+            if expected.get("target_court_version") not in (None, ""):
+                raise StaleTournamentAdminStateError(
+                    "Returning a game to the queue cannot include a target court."
+                )
+            return
+        target_court_id = _text(payload.get("court_id"))
+        target_court = next(
+            (
+                row
+                for row in snapshot.get("courts", [])
+                if _text(row.get("id")) == target_court_id
+                and _text(row.get("state")).upper() == "AVAILABLE"
+                and not row.get("current_assignment")
+            ),
+            None,
+        )
+        if not target_court or target_court_id == _text(source_court.get("id")):
+            raise StaleTournamentAdminStateError(
+                "The selected destination court is no longer available."
+            )
+        if expected.get("target_court_version") in (None, "") or str(
+            expected.get("target_court_version")
+        ) != str(target_court.get("version")):
+            raise StaleTournamentAdminStateError(
+                "Destination court version changed after assignment review."
+            )
         return
     elif action in {"score_and_release", "correct_completed_score"}:
         game_id = _text(payload.get("game_id"))
@@ -2678,6 +2802,57 @@ def execute_admin_tournament_day_live_command(
             )
         if action == "auto_fill_courts":
             return _rpc(supabase, "admin_fill_tournament_day_courts_cas", common)
+        if action in {"assign_next_court", "assign_game_to_court"}:
+            return _rpc(
+                supabase,
+                "admin_assign_tournament_day_game_cas",
+                {
+                    **common,
+                    "p_action": (
+                        "NEXT_OPEN"
+                        if action == "assign_next_court"
+                        else "SELECTED"
+                    ),
+                    "p_game_id": _text(submitted_payload.get("game_id")),
+                    "p_court_id": (
+                        _text(submitted_payload.get("court_id")) or None
+                    ),
+                    "p_expected_queue_entry_version": int(
+                        expected.get("queue_entry_version") or 0
+                    ),
+                    "p_expected_game_updated_at": expected.get("game_version"),
+                    "p_expected_court_version": (
+                        int(expected.get("court_version"))
+                        if expected.get("court_version") not in (None, "")
+                        else None
+                    ),
+                },
+            )
+        if action in {"requeue_game", "move_game_to_court"}:
+            return _rpc(
+                supabase,
+                "admin_reassign_tournament_day_game_cas",
+                {
+                    **common,
+                    "p_action": "REQUEUE" if action == "requeue_game" else "MOVE",
+                    "p_game_id": _text(submitted_payload.get("game_id")),
+                    "p_target_court_id": (
+                        _text(submitted_payload.get("court_id")) or None
+                    ),
+                    "p_expected_queue_entry_version": int(
+                        expected.get("queue_entry_version") or 0
+                    ),
+                    "p_expected_game_updated_at": expected.get("game_version"),
+                    "p_expected_source_court_version": int(
+                        expected.get("court_version") or 0
+                    ),
+                    "p_expected_target_court_version": (
+                        int(expected.get("target_court_version"))
+                        if expected.get("target_court_version") not in (None, "")
+                        else None
+                    ),
+                },
+            )
         if action == "close_day":
             return _rpc(supabase, "admin_close_tournament_day_live_cas", common)
         if action == "score_and_release":
