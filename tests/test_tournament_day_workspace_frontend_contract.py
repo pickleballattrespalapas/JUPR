@@ -184,6 +184,12 @@ def test_day_court_assignment_is_manual_atomic_and_version_fenced() -> None:
     assert "ASSIGN GAME TO COURT" in state
     assert "RETURN GAME TO QUEUE" in state
     assert "MOVE GAME TO COURT" in state
+    assert "readyActiveDrawQueue" in panel
+    assert 'aria-label="Ready games from active draws"' in panel
+    assert "courtBoardQueue.map" in panel
+    assert "flex-wrap: nowrap" in read_web(
+        "app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.module.css"
+    )
 
 
 def test_day_console_corrects_only_server_authorized_completed_scores() -> None:

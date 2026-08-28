@@ -226,11 +226,121 @@
   min-width: 0;
 }
 
+.boardHeading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.boardHeading h2,
+.boardHeading p {
+  margin: 0;
+}
+
+.compactQueueCard {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+  border: 1px solid #93c5fd;
+  border-radius: 12px;
+  padding: 0.5rem 0.6rem;
+  background: #eff6ff;
+}
+
+.compactQueueLead {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 105px;
+}
+
+.compactQueueLead span {
+  color: #1d4ed8;
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.compactQueueLead strong {
+  color: #0f172a;
+  font-size: 1.05rem;
+}
+
+.compactQueueList {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0 0 0.1rem;
+  overflow-x: auto;
+  list-style: none;
+  scrollbar-width: thin;
+}
+
+.compactQueueList li {
+  display: grid;
+  grid-template-columns: auto minmax(170px, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 min(520px, calc(100vw - 8rem));
+  min-width: 0;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 0.4rem 0.5rem;
+  background: #fff;
+}
+
+.compactPosition {
+  color: #1d4ed8;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.compactQueueDetails {
+  display: grid;
+  min-width: 0;
+}
+
+.compactQueueDetails strong,
+.compactQueueDetails small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compactQueueDetails small {
+  color: #475569;
+}
+
+.compactQueueActions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.35rem;
+}
+
+.compactQueueActions .primaryButton,
+.compactQueueActions .secondaryButton {
+  min-height: 44px;
+  padding: 0.4rem 0.65rem;
+  white-space: nowrap;
+}
+
+.compactQueueEmpty {
+  margin: 0;
+  color: #475569;
+  font-weight: 700;
+}
+
 .courtBoard {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0.75rem;
-  margin-top: 0.85rem;
+  margin-top: 0.65rem;
 }
 
 .courtCard,
@@ -658,5 +768,19 @@
   .buttonRow > button,
   .scopeStatus > button {
     width: 100%;
+  }
+
+  .compactQueueCard {
+    grid-template-columns: 90px minmax(0, 1fr);
+  }
+
+  .compactQueueList li {
+    grid-template-columns: auto minmax(150px, 1fr);
+    flex-basis: min(440px, calc(100vw - 3.5rem));
+  }
+
+  .compactQueueActions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
   }
 }

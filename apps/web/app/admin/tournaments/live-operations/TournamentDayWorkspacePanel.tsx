@@ -40,6 +40,7 @@ import {
   dayActionConfirmation,
   dayRunAcceptsLiveCommands,
   dayRunHasStarted,
+  readyActiveDrawQueue,
   retainedDayCommandStorageKey,
   validateDayCorrectionDraft,
   validateDayScoreDraft,
@@ -355,6 +356,10 @@ export default function TournamentDayWorkspacePanel({
   const visibleQueue = useMemo(
     () => visibleServerQueue(snapshot?.eligible_queue || [], drawFilter),
     [drawFilter, snapshot]
+  );
+  const courtBoardQueue = useMemo(
+    () => readyActiveDrawQueue(snapshot?.eligible_queue || [], snapshot?.draws || []),
+    [snapshot]
   );
   const availableCourts = useMemo(
     () => (snapshot?.courts || []).filter((court) => (
@@ -1305,10 +1310,40 @@ export default function TournamentDayWorkspacePanel({
             aria-labelledby="day-workspace-tab-board"
             className={styles.workspaceSection}
           >
-            <div className={styles.sectionHeading}>
-              <div><p className={styles.eyebrow}>Live allocation</p><h2>Court board</h2><p className={styles.muted}>Games stay in the authoritative queue until an operator sends one to the next open court or chooses a specific court.</p></div>
-              <p className={styles.muted}>{snapshot.summary.available_courts} open court(s) · {snapshot.eligible_queue.length} eligible queued matchup(s)</p>
+            <div className={styles.boardHeading}>
+              <div><p className={styles.eyebrow}>Live allocation</p><h2>Court board</h2></div>
+              <p className={styles.muted}>{snapshot.summary.available_courts} open court(s)</p>
             </div>
+            <section className={styles.compactQueueCard} aria-label="Ready games from active draws">
+              <div className={styles.compactQueueLead}>
+                <span>Eligible queue</span>
+                <strong>{courtBoardQueue.length} ready</strong>
+              </div>
+              {courtBoardQueue.length ? (
+                <ol className={styles.compactQueueList}>
+                  {courtBoardQueue.map((entry) => {
+                    const game = gamesById.get(entry.game_id);
+                    const assignmentDisabled = !dayActive || !runtimeWritesEnabled || writesFrozen || Boolean(busyKey) || !availableCourts.length;
+                    const label = game ? matchupLabel(game) : "Matchup unavailable";
+                    return (
+                      <li value={entry.position} key={entry.game_id}>
+                        <span className={styles.compactPosition}>#{entry.position}</span>
+                        <div className={styles.compactQueueDetails}>
+                          <strong title={label}>{label}</strong>
+                          <small title={game ? gameStageLabel(game) : "Draw details unavailable"}>{game ? gameStageLabel(game) : "Draw details unavailable"}</small>
+                        </div>
+                        {game ? (
+                          <div className={styles.compactQueueActions}>
+                            <button type="button" className={styles.primaryButton} onClick={() => void assignNextCourt(game, entry)} disabled={assignmentDisabled} aria-label={`Send ${label} to next open court`}>Next open court</button>
+                            <button type="button" className={styles.secondaryButton} onClick={() => openCourtPicker(game, entry)} disabled={assignmentDisabled} aria-label={`Choose court for ${label}`}>Choose</button>
+                          </div>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ol>
+              ) : <p className={styles.compactQueueEmpty}>No games are ready from active draws.</p>}
+            </section>
             <div className={styles.courtBoard}>
               {snapshot.courts.map((court) => {
                 const assignment = court.current_assignment;

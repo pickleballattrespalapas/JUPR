@@ -742,6 +742,11 @@ test("legacy draw route opens a clean tabbed day workspace", async ({ page }) =>
   await page.getByRole("tab", { name: "Court board" }).click();
   await expect(page).toHaveURL(/panel=board/);
   const courtBoard = page.getByRole("tabpanel", { name: "Court board" });
+  const boardQueue = courtBoard.getByRole("region", { name: "Ready games from active draws" });
+  await expect(boardQueue).toContainText("2 ready");
+  await expect(boardQueue.locator("ol > li")).toHaveCount(2);
+  await expect(boardQueue).toContainText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith");
+  await expect(boardQueue).toContainText("Nora Williams / Sofia Kim vs Emma Davis / Mia Johnson");
   await expect(courtBoard.getByRole("heading", { name: /^Court \d+$/ })).toHaveCount(10);
   await expect(courtBoard.getByText("Mateo Rivera / Liam Chen vs Caleb Nguyen / Diego Alvarez")).toBeVisible();
   await expect(page.getByRole("tabpanel", { name: "Draws & progression" })).toHaveCount(0);
@@ -808,19 +813,18 @@ test("legacy score route retains day context and focuses the unified queue", asy
   await expect(page.getByRole("heading", { name: "Unified eligible queue" })).toBeVisible();
 });
 
-test("Queued games can use the next court, a chosen court, move, and requeue", async ({ page }) => {
+test("Court board queue can use the next court, a chosen court, move, and requeue", async ({ page }) => {
   const commands: Array<{ action: string }> = [];
   page.on("request", (request) => {
     if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
     commands.push(request.postDataJSON() as { action: string });
   });
-  await page.goto(`/admin/tournaments/live-operations?${selectedQuery}&panel=queue`);
-  const queue = page.getByRole("region", { name: "Eligible match queue" });
+  await page.goto(`/admin/tournaments/live-operations?${selectedQuery}&panel=board`);
+  const queue = page.getByRole("region", { name: "Ready games from active draws" });
   const gameBRow = queue.locator("ol > li").filter({ hasText: "Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith" });
-  await gameBRow.getByRole("button", { name: "Send to next open court" }).click();
+  await gameBRow.getByRole("button", { name: /Send Avery Patel.*to next open court/ }).click();
   await expect(page.getByRole("status")).toContainText("Matchup assigned to the next authoritative open court.");
 
-  await page.getByRole("tab", { name: "Court board" }).click();
   let court2 = page.getByRole("heading", { name: "Court 2", exact: true }).locator("xpath=ancestor::article[1]");
   await expect(court2).toContainText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith");
   await court2.getByRole("button", { name: /Move or remove Avery Patel/ }).click();
@@ -835,15 +839,13 @@ test("Queued games can use the next court, a chosen court, move, and requeue", a
   await assignmentDialog.getByRole("button", { name: "Return game to queue" }).click();
   await expect(court3).toContainText("Available for a queued matchup.");
 
-  await page.getByRole("tab", { name: "Eligible queue" }).click();
   await expect(queue.locator("ol > li").filter({ hasText: "Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith" })).toBeVisible();
   const gameCRow = queue.locator("ol > li").filter({ hasText: "Nora Williams / Sofia Kim vs Emma Davis / Mia Johnson" });
-  await gameCRow.getByRole("button", { name: "Choose court" }).click();
+  await gameCRow.getByRole("button", { name: /Choose court for Nora Williams/ }).click();
   const chooseDialog = page.getByRole("dialog", { name: "Choose a court" });
   await chooseDialog.getByLabel("Open court").selectOption("day-court-4");
   await chooseDialog.getByRole("button", { name: "Assign to Court 4" }).click();
 
-  await page.getByRole("tab", { name: "Court board" }).click();
   const court4 = page.getByRole("heading", { name: "Court 4", exact: true }).locator("xpath=ancestor::article[1]");
   await expect(court4).toContainText("Nora Williams / Sofia Kim vs Emma Davis / Mia Johnson");
   await expect.poll(() => commands.map((command) => command.action)).toEqual([
