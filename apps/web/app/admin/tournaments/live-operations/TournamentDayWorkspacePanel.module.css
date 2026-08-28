@@ -45,7 +45,8 @@
 }
 
 .field,
-.scoreGrid label {
+.scoreGrid label,
+.outcomeGrid label {
   display: grid;
   gap: 0.35rem;
   min-width: 0;
@@ -54,7 +55,9 @@
 }
 
 .field select,
-.scoreGrid input {
+.field textarea,
+.scoreGrid input,
+.outcomeGrid select {
   width: 100%;
   min-height: 44px;
   box-sizing: border-box;
@@ -64,6 +67,11 @@
   background: #fff;
   color: #0f172a;
   font: inherit;
+}
+
+.field textarea {
+  min-height: 104px;
+  resize: vertical;
 }
 
 .eyebrow {
@@ -111,11 +119,43 @@
   color: #0f172a;
 }
 
+.resultModeSwitch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.3rem;
+  margin-bottom: 0.2rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 0.25rem;
+  background: #f1f5f9;
+}
+
+.resultModeSwitch button {
+  min-height: 40px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  background: transparent;
+  color: #334155;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.resultModeSwitch button[aria-pressed="true"] {
+  background: #fff;
+  color: #1d4ed8;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 18%);
+}
+
 .viewNav button:focus-visible,
 .primaryButton:focus-visible,
 .secondaryButton:focus-visible,
 .field select:focus-visible,
+.field textarea:focus-visible,
 .scoreGrid input:focus-visible,
+.outcomeGrid select:focus-visible,
+.resultModeSwitch button:focus-visible,
 .root a:focus-visible {
   outline: 3px solid #60a5fa;
   outline-offset: 2px;
@@ -125,7 +165,10 @@
 .primaryButton:disabled,
 .secondaryButton:disabled,
 .field select:disabled,
-.scoreGrid input:disabled {
+.field textarea:disabled,
+.scoreGrid input:disabled,
+.outcomeGrid select:disabled,
+.resultModeSwitch button:disabled {
   cursor: not-allowed;
   opacity: 0.58;
 }
@@ -275,6 +318,13 @@
   margin: 0.85rem 0;
 }
 
+.outcomeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin: 0.85rem 0;
+}
+
 .scoreGrid > span {
   padding-bottom: 0.7rem;
   font-size: 1.3rem;
@@ -299,11 +349,12 @@
 }
 
 .scoreConfirmation > p,
-.scoreConfirmation > .buttonRow {
+.scoreConfirmation > .buttonRow,
+.scoreConfirmation > label {
   grid-column: 1 / -1;
 }
 
-.scoreConfirmation span {
+.scoreConfirmation > div > span {
   font-size: 1.5rem;
   font-weight: 900;
 }
@@ -493,6 +544,16 @@
   font-weight: 700;
 }
 
+.statusToast {
+  position: fixed;
+  right: clamp(0.75rem, 2vw, 1.5rem);
+  bottom: clamp(0.75rem, 2vw, 1.5rem);
+  z-index: 1000;
+  width: min(420px, calc(100vw - 1.5rem));
+  box-sizing: border-box;
+  box-shadow: 0 14px 36px rgb(15 23 42 / 22%);
+}
+
 .error,
 .errorText {
   color: #b91c1c;
@@ -561,6 +622,7 @@
   }
 
   .scoreGrid,
+  .outcomeGrid,
   .scoreConfirmation,
   .correctionComparison {
     grid-template-columns: 1fr;
@@ -571,7 +633,8 @@
   }
 
   .scoreConfirmation > p,
-  .scoreConfirmation > .buttonRow {
+  .scoreConfirmation > .buttonRow,
+  .scoreConfirmation > label {
     grid-column: auto;
   }
 }
@@ -585,6 +648,10 @@
   .viewNav {
     display: grid;
     grid-template-columns: 1fr;
+  }
+
+  .resultModeSwitch {
+    width: 100%;
   }
 
   .viewNav button,
