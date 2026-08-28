@@ -803,7 +803,7 @@ test("Preflight clears hidden selections before applying filtered bulk actions",
   await expect(page.getByText("No scheduled players match these filters.")).toBeVisible();
 });
 
-test("A 9–9 tie is rejected before inline score-and-release submits the exact day fence", async ({ page }) => {
+test("Score entry opens in a dialog and rejects a 9–9 tie before submitting the exact day fence", async ({ page }) => {
   const commands: Array<Record<string, unknown>> = [];
   page.on("request", (request) => {
     if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
@@ -811,25 +811,29 @@ test("A 9–9 tie is rejected before inline score-and-release submits the exact 
   });
   await page.goto(`/admin/tournaments/live-operations?${selectedQuery}`);
   await page.getByRole("button", { name: /Enter score for Mateo Rivera \/ Liam Chen vs Caleb Nguyen \/ Diego Alvarez on Court 1/ }).click();
-  await page.getByLabel("Mateo Rivera / Liam Chen score").fill("9");
-  await page.getByLabel("Caleb Nguyen / Diego Alvarez score").fill("9");
-  await page.getByRole("button", { name: "Review score" }).click();
-  await expect(page.getByText("Tournament games cannot be saved with a tied score.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Confirm & release court" })).toHaveCount(0);
-  await page.getByLabel("Mateo Rivera / Liam Chen score").fill("11");
-  await page.getByLabel("Caleb Nguyen / Diego Alvarez score").fill("7");
-  await page.getByRole("button", { name: "Review score" }).click();
-  await expect(page.getByText("Winner:")).toBeVisible();
-  await expect(page.getByText("Mateo Rivera / Liam Chen", { exact: true }).last()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Edit score" })).toBeVisible();
-  await expect(page.getByText(/refills from the server-ordered eligible queue/)).toBeVisible();
+  const scoreDialog = page.getByRole("dialog", { name: /Enter score · Court 1/ });
+  await expect(scoreDialog).toBeVisible();
+  await expect(scoreDialog.getByLabel("Mateo Rivera / Liam Chen score")).toBeFocused();
+  await scoreDialog.getByLabel("Mateo Rivera / Liam Chen score").fill("9");
+  await scoreDialog.getByLabel("Caleb Nguyen / Diego Alvarez score").fill("9");
+  await scoreDialog.getByRole("button", { name: "Review score" }).click();
+  await expect(scoreDialog.getByText("Tournament games cannot be saved with a tied score.")).toBeVisible();
+  await expect(scoreDialog.getByRole("button", { name: "Confirm & release court" })).toHaveCount(0);
+  await scoreDialog.getByLabel("Mateo Rivera / Liam Chen score").fill("11");
+  await scoreDialog.getByLabel("Caleb Nguyen / Diego Alvarez score").fill("7");
+  await scoreDialog.getByRole("button", { name: "Review score" }).click();
+  await expect(scoreDialog.getByText("Winner:")).toBeVisible();
+  await expect(scoreDialog.getByText("Mateo Rivera / Liam Chen", { exact: true }).last()).toBeVisible();
+  await expect(scoreDialog.getByRole("button", { name: "Edit score" })).toBeVisible();
+  await expect(scoreDialog.getByText(/refills from the server-ordered eligible queue/)).toBeVisible();
 
-  await page.getByRole("button", { name: "Confirm & release court" }).click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog.getByRole("heading", { name: "Confirm this score and release the court?" })).toBeVisible();
-  await dialog.getByRole("button", { name: "Confirm & release court" }).click();
-  await expect(dialog.getByRole("heading", { name: "Tournament-day operation complete" })).toBeVisible();
-  await expect(dialog.getByText("Score saved, court released, and the authoritative day queue refreshed.")).toBeVisible();
+  await scoreDialog.getByRole("button", { name: "Confirm & release court" }).click();
+  const confirmationDialog = page.getByRole("dialog", { name: "Confirm this score and release the court?" });
+  await expect(confirmationDialog).toBeVisible();
+  await confirmationDialog.getByRole("button", { name: "Confirm & release court" }).click();
+  const completionDialog = page.getByRole("dialog", { name: "Tournament-day operation complete" });
+  await expect(completionDialog).toBeVisible();
+  await expect(completionDialog.getByText("Score saved, court released, and the authoritative day queue refreshed.")).toBeVisible();
   await expect.poll(() => commands.length).toBe(1);
   expect(commands[0]).toMatchObject({
     action: "score_and_release",
