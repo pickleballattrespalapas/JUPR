@@ -8,6 +8,7 @@ import {
   readyActiveDrawQueue,
   resetFocusForDay,
   retainedDayCommandStorageKey,
+  tournamentDayMedalMatchKind,
   validateDayCorrectionDraft,
   validateDayScoreDraft,
   validateNonPlayedOutcomeDraft,
@@ -78,6 +79,32 @@ assert.deepEqual(
   ]).map((row) => [row.game_id, row.position]),
   [["ready-a", 1]],
   "the Court board strip must include only unblocked waiting games from active draws"
+);
+
+assert.equal(
+  tournamentDayMedalMatchKind({ stage: "PLAYOFF", playoff_round: "Final" }),
+  "gold"
+);
+assert.equal(
+  tournamentDayMedalMatchKind({ stage: "PLAYOFF", round_label: "Championship" }),
+  "gold"
+);
+assert.equal(
+  tournamentDayMedalMatchKind({ stage: "PLAYOFF", playoff_round: "Bronze" }),
+  "bronze"
+);
+assert.equal(
+  tournamentDayMedalMatchKind({ stage: "PLAYOFF", round_label: "Third_place" }),
+  "bronze"
+);
+assert.equal(
+  tournamentDayMedalMatchKind({ stage: "PLAYOFF", playoff_round: "Semifinal" }),
+  null
+);
+assert.equal(
+  tournamentDayMedalMatchKind({ stage: "ROUND_ROBIN", round_label: "Final" }),
+  null,
+  "a non-playoff round named Final must not receive medal styling"
 );
 
 assert.deepEqual(

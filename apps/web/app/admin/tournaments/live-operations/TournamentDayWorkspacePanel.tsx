@@ -42,6 +42,7 @@ import {
   dayRunHasStarted,
   readyActiveDrawQueue,
   retainedDayCommandStorageKey,
+  tournamentDayMedalMatchKind,
   validateDayCorrectionDraft,
   validateDayScoreDraft,
   validateNonPlayedOutcomeDraft,
@@ -205,6 +206,22 @@ function gameStageLabel(game: AdminTournamentDayGame | undefined): string {
     .map((value) => String(value || "").trim())
     .filter(Boolean)
     .join(" · ");
+}
+
+function medalMatchLabel(kind: "gold" | "bronze"): string {
+  return kind === "gold" ? "Gold medal match" : "Bronze medal match";
+}
+
+function medalMatchClassName(kind: "gold" | "bronze" | null): string {
+  return kind === "gold"
+    ? styles.goldMedalMatch
+    : kind === "bronze"
+      ? styles.bronzeMedalMatch
+      : "";
+}
+
+function medalBadgeClassName(kind: "gold" | "bronze"): string {
+  return `${styles.medalBadge} ${kind === "gold" ? styles.goldMedalBadge : styles.bronzeMedalBadge}`;
 }
 
 function resultTypeLabel(game: AdminTournamentDayGame): string {
@@ -1421,10 +1438,17 @@ export default function TournamentDayWorkspacePanel({
                       ? snapshot.courts.find((court) => court.id === entry.reserved_court_id)
                       : undefined;
                     const reserved = String(entry.state).toUpperCase() === "RESERVED";
+                    const medalKind = tournamentDayMedalMatchKind(game);
                     return (
-                      <li value={entry.position} key={entry.game_id} className={reserved ? styles.compactReservedItem : undefined}>
+                      <li
+                        value={entry.position}
+                        key={entry.game_id}
+                        data-medal-match={medalKind || undefined}
+                        className={[reserved ? styles.compactReservedItem : "", medalMatchClassName(medalKind)].filter(Boolean).join(" ") || undefined}
+                      >
                         <span className={styles.compactPosition}>#{entry.priority || entry.position}</span>
                         <div className={styles.compactQueueDetails}>
+                          {medalKind ? <span className={medalBadgeClassName(medalKind)}>{medalMatchLabel(medalKind)}</span> : null}
                           <strong title={label}>{label}</strong>
                           <small title={entry.note || (game ? gameStageLabel(game) : "Draw details unavailable")}>
                             {reserved ? `Next on ${reservedCourt?.label || "selected court"}` : game ? gameStageLabel(game) : "Draw details unavailable"}
@@ -1515,9 +1539,16 @@ export default function TournamentDayWorkspacePanel({
                     ? snapshot.courts.find((court) => court.id === entry.reserved_court_id)
                     : undefined;
                   const reserved = String(entry.state).toUpperCase() === "RESERVED";
+                  const medalKind = tournamentDayMedalMatchKind(game);
                   return (
-                    <li value={entry.position} key={entry.game_id}>
+                    <li
+                      value={entry.position}
+                      key={entry.game_id}
+                      data-medal-match={medalKind || undefined}
+                      className={medalMatchClassName(medalKind) || undefined}
+                    >
                       <div>
+                        {medalKind ? <span className={medalBadgeClassName(medalKind)}>{medalMatchLabel(medalKind)}</span> : null}
                         <strong>{game ? matchupLabel(game) : "Matchup unavailable"}</strong>
                         <p>{game ? gameStageLabel(game) : "Draw details unavailable"}</p>
                         <small>{entry.note || entry.reason || `Eligible since ${timestamp(entry.eligible_since)}`}</small>

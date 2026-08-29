@@ -52,6 +52,22 @@ export function readyActiveDrawQueue(queue, draws) {
   ));
 }
 
+export function tournamentDayMedalMatchKind(game) {
+  if (String(game?.stage || "").trim().toUpperCase() !== "PLAYOFF") return null;
+  const round = String(game?.playoff_round || game?.round_label || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+  if (["BRONZE", "BRONZE MEDAL", "THIRD PLACE", "3RD PLACE"].includes(round)) {
+    return "bronze";
+  }
+  if (["FINAL", "GOLD", "GOLD MEDAL", "CHAMPIONSHIP"].includes(round)) {
+    return "gold";
+  }
+  return null;
+}
+
 export function resetFocusForDay(current, dayId) {
   return {
     dayId: String(dayId || ""),

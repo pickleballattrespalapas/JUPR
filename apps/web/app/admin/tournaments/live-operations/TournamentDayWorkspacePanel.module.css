@@ -305,6 +305,30 @@
   background: #fffbeb;
 }
 
+.compactQueueList .goldMedalMatch,
+.queueList .goldMedalMatch {
+  border-color: #d79b16;
+  background: linear-gradient(135deg, #fff4b8 0%, #fffbeb 62%, #fef3c7 100%);
+  box-shadow: inset 4px 0 0 #c58a08;
+}
+
+.compactQueueList .bronzeMedalMatch,
+.queueList .bronzeMedalMatch {
+  border-color: #b46b38;
+  background: linear-gradient(135deg, #f7dcc5 0%, #fff7ed 62%, #fed7aa 100%);
+  box-shadow: inset 4px 0 0 #99542d;
+}
+
+.goldMedalMatch .compactPosition,
+.goldMedalMatch .positionBadge {
+  color: #8a5a00;
+}
+
+.bronzeMedalMatch .compactPosition,
+.bronzeMedalMatch .positionBadge {
+  color: #7c3d20;
+}
+
 .compactPosition {
   color: #1d4ed8;
   font-weight: 900;
@@ -313,6 +337,7 @@
 
 .compactQueueDetails {
   display: grid;
+  gap: 0.12rem;
   min-width: 0;
 }
 
@@ -325,6 +350,37 @@
 
 .compactQueueDetails small {
   color: #475569;
+}
+
+.medalBadge {
+  display: inline-flex;
+  justify-self: start;
+  width: fit-content;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 0.12rem 0.42rem;
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.035em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.goldMedalBadge {
+  border-color: #b77905;
+  background: #fde68a;
+  color: #713f12;
+}
+
+.bronzeMedalBadge {
+  border-color: #9a4f2c;
+  background: #edc4a4;
+  color: #6b2f1a;
+}
+
+.queueList .medalBadge {
+  margin: 0 0.45rem 0.35rem 0;
 }
 
 .compactQueueActions {

@@ -218,15 +218,20 @@ function dayGame(options: {
   teamA: string[];
   teamB: string[];
   courtId?: string;
+  stage?: "ROUND_ROBIN" | "PLAYOFF";
+  playoffRound?: string;
+  playoffGameCode?: string;
 }) {
   return {
     id: options.id,
     draw_id: options.drawId,
     draw_name: options.drawName,
     state: "READY",
-    stage: "ROUND_ROBIN",
-    round_label: options.round,
+    stage: options.stage ?? "ROUND_ROBIN",
+    round_label: options.playoffRound ?? options.round,
     slot_label: options.slot,
+    playoff_round: options.playoffRound ?? null,
+    playoff_game_code: options.playoffGameCode ?? null,
     team_a: { team_id: `${options.id}-team-a`, name: options.teamA.join(" / "), participant_names: options.teamA },
     team_b: { team_id: `${options.id}-team-b`, name: options.teamB.join(" / "), participant_names: options.teamB },
     court_id: options.courtId ?? null,
@@ -254,8 +259,8 @@ function dayReadiness(ready: boolean, confirmation: string, message = "") {
 function dayWorkspaceSnapshot() {
   const dayGames = [
     dayGame({ id: "day-game-a", drawId, drawName: "Manual Acceptance Draw", round: "Round 1", slot: "Match 1", teamA: ["Mateo Rivera", "Liam Chen"], teamB: ["Caleb Nguyen", "Diego Alvarez"], courtId: "day-court-1" }),
-    dayGame({ id: "day-game-b", drawId: secondDrawId, drawName: "Open Division Draw", round: "Round 1", slot: "Match 2", teamA: ["Avery Patel", "Jordan Lee"], teamB: ["Morgan Diaz", "Riley Smith"] }),
-    dayGame({ id: "day-game-c", drawId, drawName: "Manual Acceptance Draw", round: "Round 2", slot: "Match 1", teamA: ["Nora Williams", "Sofia Kim"], teamB: ["Emma Davis", "Mia Johnson"] }),
+    dayGame({ id: "day-game-b", drawId: secondDrawId, drawName: "Open Division Draw", round: "Round 1", slot: "P3", teamA: ["Avery Patel", "Jordan Lee"], teamB: ["Morgan Diaz", "Riley Smith"], stage: "PLAYOFF", playoffRound: "Final", playoffGameCode: "P3" }),
+    dayGame({ id: "day-game-c", drawId, drawName: "Manual Acceptance Draw", round: "Round 2", slot: "P4", teamA: ["Nora Williams", "Sofia Kim"], teamB: ["Emma Davis", "Mia Johnson"], stage: "PLAYOFF", playoffRound: "Bronze", playoffGameCode: "P4" }),
     dayGame({ id: "day-game-held", drawId: secondDrawId, drawName: "Open Division Draw", round: "Round 2", slot: "Match 2", teamA: ["Taylor Reed", "Casey Brooks"], teamB: ["Jamie Flores", "Skyler Moore"] }),
     dayGame({ id: "day-game-blocked", drawId, drawName: "Manual Acceptance Draw", round: "Round 3", slot: "Match 1", teamA: ["Quinn Parker", "Alexis Bell"], teamB: ["Cameron Price", "Robin Ward"] }),
     {
@@ -822,6 +827,10 @@ test("legacy draw route opens a clean tabbed day workspace", async ({ page }) =>
   await expect(boardQueue.locator("ol > li")).toHaveCount(2);
   await expect(boardQueue).toContainText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith");
   await expect(boardQueue).toContainText("Nora Williams / Sofia Kim vs Emma Davis / Mia Johnson");
+  const goldBoardMatch = boardQueue.locator('[data-medal-match="gold"]');
+  const bronzeBoardMatch = boardQueue.locator('[data-medal-match="bronze"]');
+  await expect(goldBoardMatch).toContainText("Gold medal match");
+  await expect(bronzeBoardMatch).toContainText("Bronze medal match");
   await expect(courtBoard.getByRole("heading", { name: /^Court \d+$/ })).toHaveCount(10);
   await expect(courtBoard.getByText("Mateo Rivera / Liam Chen vs Caleb Nguyen / Diego Alvarez")).toBeVisible();
   await expect(page.getByRole("tabpanel", { name: "Draws & progression" })).toHaveCount(0);
@@ -838,6 +847,8 @@ test("legacy draw route opens a clean tabbed day workspace", async ({ page }) =>
   ]);
   await expect(queueRows.nth(0)).toContainText("#1");
   await expect(queueRows.nth(1)).toContainText("#2");
+  await expect(queuePanel.locator('[data-medal-match="gold"]')).toContainText("Gold medal match");
+  await expect(queuePanel.locator('[data-medal-match="bronze"]')).toContainText("Bronze medal match");
   await expect(page.getByRole("heading", { name: "Held and blocked matches" })).toBeVisible();
   await expect(page.getByText("Operator hold awaiting participant arrival")).toBeVisible();
   await expect(page.getByText("One participant is already assigned to another court.")).toBeVisible();

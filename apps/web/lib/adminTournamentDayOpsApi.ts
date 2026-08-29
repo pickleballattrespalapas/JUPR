@@ -56,6 +56,8 @@ export type AdminTournamentDayGame = {
   stage: string;
   round_label: string;
   slot_label?: string | null;
+  playoff_game_code?: string | null;
+  playoff_round?: string | null;
   team_a: AdminTournamentDaySide;
   team_b: AdminTournamentDaySide;
   score_a?: number | null;

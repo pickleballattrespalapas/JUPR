@@ -167,6 +167,26 @@ def test_day_console_renders_authoritative_courts_and_progression_controls() -> 
     assert "overflow-x: clip" in css
 
 
+def test_day_console_visually_and_textually_marks_medal_matches_in_both_queues() -> None:
+    panel = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.tsx")
+    css = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.module.css")
+    state = read_web("lib/tournamentDayWorkspaceState.mjs")
+    client = read_web("lib/adminTournamentDayOpsApi.ts")
+
+    assert "tournamentDayMedalMatchKind(game)" in panel
+    assert panel.count("data-medal-match={medalKind || undefined}") == 2
+    assert "Gold medal match" in panel
+    assert "Bronze medal match" in panel
+    assert ".goldMedalMatch" in css
+    assert ".bronzeMedalMatch" in css
+    assert ".goldMedalBadge" in css
+    assert ".bronzeMedalBadge" in css
+    assert '"PLAYOFF"' in state
+    assert '"FINAL"' in state
+    assert '"BRONZE"' in state
+    assert "playoff_round?: string | null" in client
+
+
 def test_day_court_assignment_is_manual_atomic_and_version_fenced() -> None:
     panel = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.tsx")
     state = read_web("lib/tournamentDayWorkspaceState.mjs")
