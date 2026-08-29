@@ -38,6 +38,29 @@ export function visibleServerQueue(queue, drawId) {
   return rows.filter((row) => String(row?.draw_id || "") === String(drawId));
 }
 
+export function oldestReadyQueue(queue) {
+  const rows = Array.isArray(queue) ? queue : [];
+  return [...rows].sort((left, right) => {
+    const leftPosition = Number(left?.position);
+    const rightPosition = Number(right?.position);
+    const safeLeftPosition = Number.isFinite(leftPosition) && leftPosition > 0
+      ? leftPosition
+      : Number.MAX_SAFE_INTEGER;
+    const safeRightPosition = Number.isFinite(rightPosition) && rightPosition > 0
+      ? rightPosition
+      : Number.MAX_SAFE_INTEGER;
+    if (safeLeftPosition !== safeRightPosition) {
+      return safeLeftPosition - safeRightPosition;
+    }
+    const leftReadyAt = Date.parse(String(left?.eligible_since || ""));
+    const rightReadyAt = Date.parse(String(right?.eligible_since || ""));
+    const safeLeftReadyAt = Number.isFinite(leftReadyAt) ? leftReadyAt : Number.MAX_SAFE_INTEGER;
+    const safeRightReadyAt = Number.isFinite(rightReadyAt) ? rightReadyAt : Number.MAX_SAFE_INTEGER;
+    if (safeLeftReadyAt !== safeRightReadyAt) return safeLeftReadyAt - safeRightReadyAt;
+    return String(left?.game_id || "").localeCompare(String(right?.game_id || ""));
+  });
+}
+
 export function readyActiveDrawQueue(queue, draws) {
   const activeDrawIds = new Set(
     (Array.isArray(draws) ? draws : [])

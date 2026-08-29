@@ -1090,6 +1090,149 @@ def test_active_draw_scope_drift_stays_visible_and_blocks_refill_human_readably(
     )
 
 
+def test_newly_ready_match_joins_the_end_of_the_eligible_queue() -> None:
+    tables = snapshot_tables()
+    tables["tournament_day_live_runs"] = [
+        {
+            "id": "run-1",
+            "club_id": "club-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "state": "ACTIVE",
+            "version": 2,
+            "queue_version": 3,
+        }
+    ]
+    tables["tournament_day_live_draws"] = [
+        {
+            "id": "day-draw-a",
+            "run_id": "run-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "draw_id": "draw-a",
+            "state": "ACTIVE",
+            "source_draw_updated_at": "2026-08-17T08:00:00Z",
+            "activated_at": "2026-08-17T08:00:00Z",
+            "version": 1,
+        },
+        {
+            "id": "day-draw-b",
+            "run_id": "run-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "draw_id": "draw-b",
+            "state": "ACTIVE",
+            "source_draw_updated_at": "2026-08-17T08:00:00Z",
+            "activated_at": "2026-08-17T08:00:00Z",
+            "version": 1,
+        },
+    ]
+    tables["tournament_day_live_courts"] = [
+        {
+            "id": f"court-row-{position}",
+            "run_id": "run-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "court_key": f"court-{position}",
+            "label": f"Center {position}",
+            "position": position,
+            "state": "OPEN",
+            "version": 1,
+        }
+        for position in (1, 2)
+    ]
+    completed = tables["tournament_games"][0]
+    completed.update(
+        {
+            "score_a": 11,
+            "score_b": 7,
+            "winner_team_id": "team-a1",
+            "loser_team_id": "team-a2",
+            "finalized_at": "2026-08-17T09:10:00Z",
+            "updated_at": "2026-08-17T09:10:00Z",
+        }
+    )
+    tables["tournament_games"].append(
+        {
+            **completed,
+            "id": "game-a-next",
+            "rr_round_number": 2,
+            "score_a": None,
+            "score_b": None,
+            "winner_team_id": None,
+            "loser_team_id": None,
+            "finalized_at": None,
+            "updated_at": "2026-08-17T08:00:00Z",
+        }
+    )
+    tables["tournament_day_live_queue"] = [
+        {
+            "id": "queue-a-completed",
+            "run_id": "run-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "day_draw_id": "day-draw-a",
+            "draw_id": "draw-a",
+            "game_id": "game-a",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "state": "COMPLETED",
+            "priority": 1,
+            "eligible_since": "2026-08-17T08:00:00Z",
+            "released_at": "2026-08-17T09:10:00Z",
+            "completed_at": "2026-08-17T09:10:00Z",
+            "updated_at": "2026-08-17T09:10:00Z",
+            "version": 2,
+        },
+        {
+            "id": "queue-a-next",
+            "run_id": "run-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "day_draw_id": "day-draw-a",
+            "draw_id": "draw-a",
+            "game_id": "game-a-next",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "state": "WAITING",
+            "priority": 2,
+            "eligible_since": "2026-08-17T08:00:00Z",
+            "created_at": "2026-08-17T08:00:00Z",
+            "version": 1,
+        },
+        {
+            "id": "queue-b-oldest",
+            "run_id": "run-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "day_draw_id": "day-draw-b",
+            "draw_id": "draw-b",
+            "game_id": "game-b",
+            "team_a_id": "team-b1",
+            "team_b_id": "team-b2",
+            "state": "WAITING",
+            "priority": 50,
+            "eligible_since": "2026-08-17T09:05:00Z",
+            "created_at": "2026-08-17T09:05:00Z",
+            "version": 1,
+        },
+    ]
+
+    snapshot = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+
+    assert [row["game_id"] for row in snapshot["eligible_queue"]] == [
+        "game-b",
+        "game-a-next",
+    ]
+    assert [row["position"] for row in snapshot["eligible_queue"]] == [1, 2]
+    assert snapshot["eligible_queue"][1]["eligible_since"] == "2026-08-17T09:10:00Z"
+
+
 def test_day_activation_and_close_require_supported_represented_draws() -> None:
     no_supported = snapshot_tables()
     for event in no_supported["tournament_event_options"]:

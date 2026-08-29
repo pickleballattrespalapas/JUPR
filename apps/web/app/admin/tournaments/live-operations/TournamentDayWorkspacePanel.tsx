@@ -40,6 +40,7 @@ import {
   dayActionConfirmation,
   dayRunAcceptsLiveCommands,
   dayRunHasStarted,
+  oldestReadyQueue,
   readyActiveDrawQueue,
   retainedDayCommandStorageKey,
   tournamentDayMedalMatchKind,
@@ -390,8 +391,10 @@ export default function TournamentDayWorkspacePanel({
   const dayActive = dayRunAcceptsLiveCommands(dayRunState);
   const visibleQueue = useMemo(
     () => visibleServerQueue(
-      [...(snapshot?.eligible_queue || []), ...(snapshot?.reserved_queue || [])]
-        .sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0)),
+      oldestReadyQueue([
+        ...(snapshot?.eligible_queue || []),
+        ...(snapshot?.reserved_queue || [])
+      ]),
       drawFilter
     ),
     [drawFilter, snapshot]
@@ -409,8 +412,7 @@ export default function TournamentDayWorkspacePanel({
     return (snapshot?.reserved_queue || []).filter((entry) => activeDrawIds.has(entry.draw_id));
   }, [snapshot]);
   const courtBoardQueue = useMemo(
-    () => [...readyCourtBoardQueue, ...reservedCourtBoardQueue]
-      .sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0)),
+    () => oldestReadyQueue([...readyCourtBoardQueue, ...reservedCourtBoardQueue]),
     [readyCourtBoardQueue, reservedCourtBoardQueue]
   );
   const availableCourts = useMemo(
@@ -1446,7 +1448,7 @@ export default function TournamentDayWorkspacePanel({
                         data-medal-match={medalKind || undefined}
                         className={[reserved ? styles.compactReservedItem : "", medalMatchClassName(medalKind)].filter(Boolean).join(" ") || undefined}
                       >
-                        <span className={styles.compactPosition}>#{entry.priority || entry.position}</span>
+                        <span className={styles.compactPosition}>#{entry.position}</span>
                         <div className={styles.compactQueueDetails}>
                           {medalKind ? <span className={medalBadgeClassName(medalKind)}>{medalMatchLabel(medalKind)}</span> : null}
                           <strong title={label}>{label}</strong>
@@ -1530,7 +1532,7 @@ export default function TournamentDayWorkspacePanel({
             className={styles.lowerGrid}
           >
             <section className={styles.workspaceSection} aria-label="Tournament match queue">
-              <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>Server order</p><h2>Unified game queue</h2><p className={styles.muted}>Ready games and matchups reserved next for a court stay visible in one authoritative order. Filtering never renumbers priority.</p></div><label className={styles.field}>Visible draw<select value={drawFilter} onChange={(event) => chooseQueueDraw(event.target.value)}><option value="all">All active draws</option>{snapshot.draws.map((draw) => <option key={draw.id} value={draw.id}>{draw.name}</option>)}</select></label></div>
+              <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>Oldest ready first</p><h2>Unified game queue</h2><p className={styles.muted}>The matchup ready the longest stays on the left and at #1. Newly ready games join the right end; filtering never renumbers the server order.</p></div><label className={styles.field}>Visible draw<select value={drawFilter} onChange={(event) => chooseQueueDraw(event.target.value)}><option value="all">All active draws</option>{snapshot.draws.map((draw) => <option key={draw.id} value={draw.id}>{draw.name}</option>)}</select></label></div>
               <ol className={styles.queueList}>
                 {visibleQueue.map((entry) => {
                   const game = gamesById.get(entry.game_id);
@@ -1565,7 +1567,7 @@ export default function TournamentDayWorkspacePanel({
                           </div>
                         ) : null}
                       </div>
-                      <span className={styles.positionBadge}>#{entry.priority || entry.position}</span>
+                      <span className={styles.positionBadge}>#{entry.position}</span>
                     </li>
                   );
                 })}

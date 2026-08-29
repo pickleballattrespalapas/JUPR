@@ -78,7 +78,10 @@ def test_live_operations_base_is_the_canonical_day_console() -> None:
     assert 'aria-labelledby="day-workspace-tab-board"' in panel
     assert 'aria-label="Tournament match queue"' in panel
     assert "snapshot.eligible_queue" in panel
-    assert "Server order" in panel
+    assert "Oldest ready first" in panel
+    assert "oldestReadyQueue" in panel
+    assert ".sort((left, right) => Number(left.priority || 0)" not in panel
+    assert "#{entry.priority || entry.position}" not in panel
     assert "Held and blocked matches" in panel
     assert "Recovery required" in panel
     assert 'confirmationText="RECONCILE DAY OPERATIONS"' in panel
