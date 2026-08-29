@@ -92,6 +92,13 @@ PROVEN_PRE_MUTATION_PODIUM_VERSION_ERRORS = {
     "The reviewed podium version set is malformed. Reload the live board.",
     "The reviewed podium version set is incomplete or duplicated. Reload the live board.",
 }
+ATOMIC_PODIUM_AWARD_ROLLBACK_ERROR = (
+    "Atomic tournament podium awards failed; no badge set was committed."
+)
+PROVEN_NO_WRITE_PODIUM_AWARD_ERRORS = (
+    PROVEN_PRE_MUTATION_PODIUM_VERSION_ERRORS
+    | {ATOMIC_PODIUM_AWARD_ROLLBACK_ERROR}
+)
 
 
 def _truthy_env(name: str) -> bool:
@@ -526,6 +533,45 @@ def _award_rows_for_draw(
     except Exception:
         return [], False, "Podium award evidence could not be verified; award and official-publish actions are blocked."
     return [row for row in rows if str(row.get("context_id") or "").startswith(context_prefix)], True, None
+
+
+def _require_podium_badge_catalog(
+    supabase: Any,
+    *,
+    award_plan: list[dict[str, Any]],
+) -> None:
+    required_badge_ids = sorted(
+        {
+            str(row.get("badge_id") or "").strip()
+            for row in award_plan
+            if str(row.get("badge_id") or "").strip()
+        }
+    )
+    if not required_badge_ids:
+        raise ValueError("No podium badge definitions were requested.")
+    try:
+        catalog_rows = _safe_rows(
+            supabase.table("badges")
+            .select("badge_id")
+            .in_("badge_id", required_badge_ids)
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "The tournament podium badge catalog is unavailable; no durable intent was created."
+        ) from exc
+    present_badge_ids = {
+        str(row.get("badge_id") or "").strip()
+        for row in catalog_rows
+        if str(row.get("badge_id") or "").strip()
+    }
+    missing_badge_ids = sorted(set(required_badge_ids) - present_badge_ids)
+    if missing_badge_ids:
+        raise ValueError(
+            "The tournament podium badge catalog is incomplete; missing "
+            + ", ".join(missing_badge_ids)
+            + ". No durable intent was created."
+        )
 
 
 def _award_key_sets(
@@ -1208,17 +1254,22 @@ def _build_command_evidence(
     if command == "generate_podium":
         return {"podium_plan": _podium_plan(teams=teams, games=games)}
     if command == "award_podium":
+        award_plan = _expected_awards(
+            tournament_id=str(tournament_id),
+            draw_id=str(draw_id),
+            teams=teams,
+            podium=podium,
+        )
+        _require_podium_badge_catalog(
+            supabase,
+            award_plan=award_plan,
+        )
         return {
             "award_podium_plan": sorted(
                 [_podium_projection(row) for row in podium],
                 key=lambda row: int(row["placement"] or 0),
             ),
-            "award_plan": _expected_awards(
-                tournament_id=str(tournament_id),
-                draw_id=str(draw_id),
-                teams=teams,
-                podium=podium,
-            )
+            "award_plan": award_plan,
         }
     if command == "publish_official_matches":
         publish_plan = build_admin_tournament_official_publish_plan(
@@ -1799,7 +1850,7 @@ def _verified_recovery_outcome(
         result.update({"candidate_count": len(expected), "awarded_count": len(observed)})
         if (
             str(operation.get("error_text") or "")
-            in PROVEN_PRE_MUTATION_PODIUM_VERSION_ERRORS
+            in PROVEN_NO_WRITE_PODIUM_AWARD_ERRORS
             and awards_visible
             and bool(expected)
             and not observed
@@ -1809,7 +1860,14 @@ def _verified_recovery_outcome(
                 "result": {},
                 "evidence": {
                     **evidence,
-                    "pre_mutation_podium_version_rejection": True,
+                    "pre_mutation_podium_version_rejection": (
+                        str(operation.get("error_text") or "")
+                        in PROVEN_PRE_MUTATION_PODIUM_VERSION_ERRORS
+                    ),
+                    "atomic_award_rollback": (
+                        str(operation.get("error_text") or "")
+                        == ATOMIC_PODIUM_AWARD_ROLLBACK_ERROR
+                    ),
                     "no_award_rows_observed": True,
                 },
             }
