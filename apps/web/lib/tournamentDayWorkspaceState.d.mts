@@ -38,11 +38,22 @@ export type DayDrawRow = {
   [key: string]: unknown;
 };
 
+export type TournamentDayMedalMatchKind = "gold" | "bronze";
+
+export type TournamentDayMedalGame = {
+  stage?: string | null;
+  round_label?: string | null;
+  playoff_round?: string | null;
+};
+
 export function dayActionConfirmation(action: TournamentDayCommandAction): string;
 export function dayRunHasStarted(state: string | null | undefined): boolean;
 export function dayRunAcceptsLiveCommands(state: string | null | undefined): boolean;
 export function visibleServerQueue<T extends ServerQueueRow>(queue: readonly T[], drawId: string): T[];
 export function readyActiveDrawQueue<T extends ServerQueueRow>(queue: readonly T[], draws: readonly DayDrawRow[]): T[];
+export function tournamentDayMedalMatchKind(
+  game: TournamentDayMedalGame | null | undefined
+): TournamentDayMedalMatchKind | null;
 export function resetFocusForDay(
   current: Partial<TournamentDayWorkspaceFocus>,
   dayId: string
