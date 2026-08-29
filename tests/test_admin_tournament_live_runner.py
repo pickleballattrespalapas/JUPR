@@ -227,6 +227,10 @@ def live_tables() -> dict[str, list[dict]]:
             {"id": player_id, "club_id": "club", "name": f"Player {player_id}", "active": True, "is_active": True}
             for player_id in range(1, 9)
         ],
+        "badges": [
+            {"badge_id": badge_id}
+            for badge_id in PODIUM_BADGE_MAP.values()
+        ],
         "matches": [],
         "player_badges": [],
         "tournament_admin_operations": [],
@@ -1039,7 +1043,60 @@ def test_missing_podium_versions_fail_before_durable_live_intent(monkeypatch) ->
     )
 
 
-def test_exact_retry_closes_proven_pre_mutation_podium_version_failure(monkeypatch) -> None:
+def test_missing_podium_badge_catalog_fails_before_durable_live_intent(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    _install_completed_draw_podium(tables, include_versions=True)
+    tables["badges"] = [
+        row
+        for row in tables["badges"]
+        if row.get("badge_id") != "tournament_runner_up"
+    ]
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="badge catalog is incomplete; missing tournament_runner_up",
+    ):
+        execute_admin_tournament_live_command(
+            supabase,
+            club_id="club",
+            tournament_id="tour-1",
+            draw_id="draw-1",
+            request=_award_command(snapshot),
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+    assert tables["player_badges"] == []
+    assert tables["tournament_admin_operations"] == []
+    assert not any(
+        row.get("action_type") == "tournament_live_awards_intent"
+        for row in tables["admin_activity_log"]
+    )
+
+
+@pytest.mark.parametrize(
+    "error_text",
+    [
+        (
+            "The reviewed podium version set is incomplete or duplicated. "
+            "Reload the live board."
+        ),
+        "Atomic tournament podium awards failed; no badge set was committed.",
+    ],
+    ids=["podium-version-rejection", "atomic-award-rollback"],
+)
+def test_exact_retry_closes_proven_no_write_podium_award_failure(
+    monkeypatch,
+    error_text: str,
+) -> None:
     _enable_live(monkeypatch)
     tables = live_tables()
     _install_completed_draw_podium(tables, include_versions=True)
@@ -1115,10 +1172,7 @@ def test_exact_retry_closes_proven_pre_mutation_podium_version_failure(monkeypat
             "status": "recovery_required",
             "request_json": operation,
             "result_json": {},
-            "error_text": (
-                "The reviewed podium version set is incomplete or duplicated. "
-                "Reload the live board."
-            ),
+            "error_text": error_text,
             "attempt_count": 1,
             "created_by": "admin@example.com",
             "updated_by": "admin@example.com",
