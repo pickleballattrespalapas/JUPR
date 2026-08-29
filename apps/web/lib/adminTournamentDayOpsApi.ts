@@ -6,6 +6,7 @@ export type AdminTournamentDayCommandAction =
   | "auto_fill_courts"
   | "assign_next_court"
   | "assign_game_to_court"
+  | "reserve_game_for_court"
   | "requeue_game"
   | "move_game_to_court"
   | "score_and_release"
@@ -87,6 +88,7 @@ export type AdminTournamentDayCourtAssignment = {
   version: string;
   assigned_at?: string | null;
   started_at?: string | null;
+  reserved_at?: string | null;
 };
 
 export type AdminTournamentDayCourt = {
@@ -96,6 +98,7 @@ export type AdminTournamentDayCourt = {
   state: string;
   version: string;
   current_assignment?: AdminTournamentDayCourtAssignment | null;
+  next_assignment?: AdminTournamentDayCourtAssignment | null;
 };
 
 export type AdminTournamentDayQueueEntry = {
@@ -106,9 +109,12 @@ export type AdminTournamentDayQueueEntry = {
   state: string;
   version: string;
   court_id?: string | null;
+  reserved_court_id?: string | null;
   immediate_fill_candidate?: boolean;
   eligible_since?: string | null;
   reason?: string | null;
+  note?: string | null;
+  reserved_at?: string | null;
   blockers: AdminTournamentDayBlockerValue[];
 };
 
@@ -197,6 +203,7 @@ export type AdminTournamentDayWorkspaceSnapshot = {
     available_courts: number;
     active_draws: number;
     eligible_games: number;
+    reserved_games: number;
     held_games: number;
     completed_games: number;
   };
@@ -205,6 +212,7 @@ export type AdminTournamentDayWorkspaceSnapshot = {
   courts: AdminTournamentDayCourt[];
   games: AdminTournamentDayGame[];
   eligible_queue: AdminTournamentDayQueueEntry[];
+  reserved_queue: AdminTournamentDayQueueEntry[];
   held_games: AdminTournamentDayHeldEntry[];
   blocked_games: AdminTournamentDayHeldEntry[];
   operations: AdminTournamentDayOperation[];

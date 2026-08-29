@@ -407,6 +407,7 @@ def _workspace_snapshot(*, draw_b_state: str = "ACTIVE") -> dict:
             "available_courts": 2,
             "active_draws": 2,
             "eligible_games": 3,
+            "reserved_games": 0,
             "held_games": 0,
             "completed_games": 0,
         },
@@ -477,6 +478,7 @@ def _workspace_snapshot(*, draw_b_state: str = "ACTIVE") -> dict:
                 "state": "AVAILABLE",
                 "version": "2",
                 "current_assignment": None,
+                "next_assignment": None,
             },
             {
                 "id": "court-row-2",
@@ -485,10 +487,12 @@ def _workspace_snapshot(*, draw_b_state: str = "ACTIVE") -> dict:
                 "state": "AVAILABLE",
                 "version": "2",
                 "current_assignment": None,
+                "next_assignment": None,
             },
         ],
         "games": [],
         "eligible_queue": [],
+        "reserved_queue": [],
         "held_games": [],
         "blocked_games": [],
         "operations": [],
@@ -544,6 +548,7 @@ def _request(
         "auto_fill_courts": "AUTO FILL COURTS",
         "assign_next_court": "ASSIGN NEXT OPEN COURT",
         "assign_game_to_court": "ASSIGN GAME TO COURT",
+        "reserve_game_for_court": "WAIT FOR SELECTED COURT",
         "requeue_game": "RETURN GAME TO QUEUE",
         "move_game_to_court": "MOVE GAME TO COURT",
         "score_and_release": "SAVE SCORE AND RELEASE COURT",
@@ -1425,6 +1430,191 @@ def test_operator_assigns_one_queued_game_to_next_or_selected_court(
         else None
     ) == selected_court_version
     assert result["snapshot"]["eligible_queue"] == []
+
+
+def test_operator_reserves_an_eligible_game_next_for_an_occupied_court(
+    monkeypatch,
+) -> None:
+    before = _workspace_snapshot()
+    before["courts"][0].update(
+        {
+            "state": "ON_COURT",
+            "current_assignment": {
+                "id": "queue-current",
+                "game_id": "game-current",
+                "state": "ON_COURT",
+                "version": "4",
+            },
+        }
+    )
+    before["eligible_queue"] = [
+        {
+            "game_id": "game-a",
+            "draw_id": "draw-a",
+            "position": 1,
+            "priority": 8,
+            "state": "WAITING",
+            "version": "5",
+            "blockers": [],
+        }
+    ]
+    before["games"] = [
+        {
+            "id": "game-a",
+            "draw_id": "draw-a",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "version": "game-a-v1",
+            "queue_entry_version": "5",
+            "state": "WAITING",
+        }
+    ]
+    after = deepcopy(before)
+    after["queue_version"] = "12"
+    after["eligible_queue"] = []
+    after["reserved_queue"] = [
+        {
+            "game_id": "game-a",
+            "draw_id": "draw-a",
+            "position": 1,
+            "priority": 8,
+            "state": "RESERVED",
+            "version": "6",
+            "reserved_court_id": "court-row-1",
+            "reason": "NEXT_ON_COURT",
+            "note": "Next on Center 1",
+            "blockers": [],
+        }
+    ]
+    after["courts"][0]["next_assignment"] = {
+        "id": "queue-a",
+        "game_id": "game-a",
+        "state": "RESERVED",
+        "version": "6",
+        "reserved_at": "2026-08-17T09:05:00Z",
+    }
+    after["games"][0].update(
+        {
+            "state": "RESERVED",
+            "queue_entry_version": "6",
+            "reserved_court_id": "court-row-1",
+        }
+    )
+    supabase = FakeSupabase()
+    _install_command_harness(monkeypatch, supabase, (before, after))
+    supabase.rpc_handlers["admin_reserve_tournament_day_game_cas"] = (
+        lambda _params: {"ok": True, "reserved": True}
+    )
+
+    result = _execute(
+        supabase,
+        _request(
+            "reserve_game_for_court",
+            before,
+            payload={"game_id": "game-a", "court_id": "court-row-1"},
+            game_version="game-a-v1",
+            queue_entry_version="5",
+            court_version="2",
+        ),
+    )
+
+    assert [name for name, _params in supabase.rpc_calls] == [
+        "admin_reserve_tournament_day_game_cas"
+    ]
+    params = supabase.rpc_calls[0][1]
+    assert params["p_game_id"] == "game-a"
+    assert params["p_court_id"] == "court-row-1"
+    assert params["p_expected_queue_entry_version"] == 5
+    assert params["p_expected_court_version"] == 2
+    assert result["snapshot"]["reserved_queue"][0]["reason"] == "NEXT_ON_COURT"
+    assert result["snapshot"]["courts"][0]["next_assignment"]["game_id"] == "game-a"
+
+
+def test_operator_cancels_a_court_wait_back_to_original_queue_priority(
+    monkeypatch,
+) -> None:
+    before = _workspace_snapshot()
+    before["courts"][0].update(
+        {
+            "state": "ON_COURT",
+            "current_assignment": {
+                "id": "queue-current",
+                "game_id": "game-current",
+                "state": "ON_COURT",
+                "version": "4",
+            },
+            "next_assignment": {
+                "id": "queue-a",
+                "game_id": "game-a",
+                "state": "RESERVED",
+                "version": "6",
+                "reserved_at": "2026-08-17T09:05:00Z",
+            },
+        }
+    )
+    before["reserved_queue"] = [
+        {
+            "game_id": "game-a",
+            "draw_id": "draw-a",
+            "position": 1,
+            "priority": 8,
+            "state": "RESERVED",
+            "version": "6",
+            "reserved_court_id": "court-row-1",
+            "blockers": [],
+        }
+    ]
+    before["games"] = [
+        {
+            "id": "game-a",
+            "draw_id": "draw-a",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "version": "game-a-v1",
+            "queue_entry_version": "6",
+            "state": "RESERVED",
+            "reserved_court_id": "court-row-1",
+        }
+    ]
+    after = deepcopy(before)
+    after["queue_version"] = "12"
+    after["courts"][0]["next_assignment"] = None
+    after["reserved_queue"] = []
+    after["eligible_queue"] = [
+        {
+            "game_id": "game-a",
+            "draw_id": "draw-a",
+            "position": 1,
+            "priority": 8,
+            "state": "WAITING",
+            "version": "7",
+            "blockers": [],
+        }
+    ]
+    supabase = FakeSupabase()
+    _install_command_harness(monkeypatch, supabase, (before, after))
+    supabase.rpc_handlers[
+        "admin_cancel_tournament_day_court_reservation_cas"
+    ] = lambda _params: {"ok": True, "requeued": True}
+
+    result = _execute(
+        supabase,
+        _request(
+            "requeue_game",
+            before,
+            payload={"game_id": "game-a"},
+            game_version="game-a-v1",
+            queue_entry_version="6",
+            court_version="2",
+        ),
+    )
+
+    assert [name for name, _params in supabase.rpc_calls] == [
+        "admin_cancel_tournament_day_court_reservation_cas"
+    ]
+    assert result["snapshot"]["eligible_queue"][0]["priority"] == 8
 
 
 @pytest.mark.parametrize(

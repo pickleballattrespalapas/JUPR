@@ -270,6 +270,11 @@
   font-size: 1.05rem;
 }
 
+.compactQueueLead small {
+  color: #92400e;
+  font-weight: 750;
+}
+
 .compactQueueList {
   display: flex;
   flex-wrap: nowrap;
@@ -293,6 +298,11 @@
   border-radius: 10px;
   padding: 0.4rem 0.5rem;
   background: #fff;
+}
+
+.compactQueueList .compactReservedItem {
+  border-color: #fbbf24;
+  background: #fffbeb;
 }
 
 .compactPosition {
@@ -379,6 +389,34 @@
 .occupiedCourt {
   border-color: #93c5fd;
   background: #eff6ff;
+}
+
+.courtReservation {
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.2rem;
+  border-top: 1px solid #93c5fd;
+  padding-top: 0.6rem;
+}
+
+.courtReservation span {
+  color: #1d4ed8;
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.courtReservation strong {
+  overflow-wrap: anywhere;
+}
+
+.courtReservation small {
+  color: #475569;
+}
+
+.courtReservation button {
+  justify-self: start;
 }
 
 .matchup,

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-tournament-acceptance-2026-08-25",
-  "repository_migration_content_sha256": "edf472ebea3be771b4af8ea121feb409166c8ec31c64b4a95e7bb1cd68abce66",
+  "repository_migration_content_sha256": "2c6006211af59f5a6481ea5586559919115e771abdd05db82383d68c59f93c3a",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -73,6 +73,8 @@
     "tournament_check_in_day_fk_index",
     "tournament_commerce",
     "tournament_complete_registration_editor",
+    "tournament_day_court_reservations",
+    "tournament_day_court_reservations_fk_index",
     "tournament_day_live_ops",
     "tournament_day_operator_safety",
     "tournament_day_roster_authority",

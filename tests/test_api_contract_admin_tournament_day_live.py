@@ -44,6 +44,7 @@ def _request(action: str, *, payload: dict | None = None) -> dict:
             "auto_fill_courts": "AUTO FILL COURTS",
             "assign_next_court": "ASSIGN NEXT OPEN COURT",
             "assign_game_to_court": "ASSIGN GAME TO COURT",
+            "reserve_game_for_court": "WAIT FOR SELECTED COURT",
             "requeue_game": "RETURN GAME TO QUEUE",
             "move_game_to_court": "MOVE GAME TO COURT",
             "score_and_release": "SAVE SCORE AND RELEASE COURT",
@@ -128,6 +129,7 @@ def test_day_live_routes_use_one_day_scoped_nested_command_envelope() -> None:
     for action in (
         "assign_next_court",
         "assign_game_to_court",
+        "reserve_game_for_court",
         "requeue_game",
         "move_game_to_court",
     ):
