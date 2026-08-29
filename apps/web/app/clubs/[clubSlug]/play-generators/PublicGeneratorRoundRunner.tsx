@@ -5,10 +5,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
+import { swapRosterPositions } from "@/lib/playGeneratorRoster.mjs";
 
 type GeneratorKind = "round_robin" | "ladder";
 type ScoringMode = "scored" | "unscored";
 type PlayFormat = "singles" | "doubles" | "doubles_singles";
+type RosterAction = "add" | "remove" | "substitute" | "swap" | "reorder";
 
 type Participant = {
   id: string;
@@ -330,8 +332,10 @@ export default function GeneratorRoundRunner({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [skipReason, setSkipReason] = useState("");
-  const [rosterAction, setRosterAction] = useState<"add" | "remove" | "substitute" | "reorder">("add");
+  const [rosterAction, setRosterAction] = useState<RosterAction>("add");
   const [selectedParticipant, setSelectedParticipant] = useState("");
+  const [firstSwapParticipant, setFirstSwapParticipant] = useState("");
+  const [secondSwapParticipant, setSecondSwapParticipant] = useState("");
   const [newPlayerName, setNewPlayerName] = useState("");
   const [newPlayerId, setNewPlayerId] = useState("");
   const [substituteScope, setSubstituteScope] = useState<"round" | "rest">("rest");
@@ -679,9 +683,17 @@ export default function GeneratorRoundRunner({
     setBusy(true);
     setMessage(null);
     try {
-      const body: Record<string, unknown> = { action: rosterAction };
+      const body: Record<string, unknown> = {
+        action: rosterAction === "swap" ? "reorder" : rosterAction
+      };
       if (rosterAction === "reorder") {
         body.roster_order = rosterOrder;
+      } else if (rosterAction === "swap") {
+        body.roster_order = swapRosterPositions(
+          rosterOrder,
+          firstSwapParticipant,
+          secondSwapParticipant
+        );
       } else if (rosterAction === "remove") {
         body.participant_id = selectedParticipant;
       } else if (rosterAction === "add") {
@@ -700,11 +712,15 @@ export default function GeneratorRoundRunner({
         body
       );
       setSelectedParticipant("");
+      setFirstSwapParticipant("");
+      setSecondSwapParticipant("");
       setNewPlayerName("");
       setNewPlayerId("");
       setMessage(
         rosterAction === "substitute"
           ? "Substitution saved. Completed rounds remain unchanged."
+          : rosterAction === "swap"
+            ? "Player positions swapped. Completed rounds remain unchanged; future matchups were regenerated when applicable."
           : "Roster updated. Future matchups were regenerated when applicable."
       );
       const current = next.current_round_number || roundNumber;
@@ -1017,18 +1033,62 @@ export default function GeneratorRoundRunner({
               <select
                 value={rosterAction}
                 onChange={(event_) =>
-                  setRosterAction(
-                    event_.target.value as "add" | "remove" | "substitute" | "reorder"
-                  )
+                  setRosterAction(event_.target.value as RosterAction)
                 }
                 style={inputStyle}
               >
                 <option value="add">Add player</option>
                 <option value="remove">Remove player</option>
                 <option value="substitute">Substitute player</option>
+                <option value="swap">Swap players</option>
                 <option value="reorder">Reorder roster</option>
               </select>
             </label>
+
+            {rosterAction === "swap" ? (
+              <>
+                <label>
+                  First player
+                  <br />
+                  <select
+                    value={firstSwapParticipant}
+                    onChange={(event_) => {
+                      const nextParticipant = event_.target.value;
+                      setFirstSwapParticipant(nextParticipant);
+                      if (nextParticipant === secondSwapParticipant) {
+                        setSecondSwapParticipant("");
+                      }
+                    }}
+                    style={inputStyle}
+                  >
+                    <option value="">Select player</option>
+                    {rosterOrder.map((id, index) => (
+                      <option key={id} value={id}>
+                        {index + 1}. {participants.get(id)?.name || id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Second player
+                  <br />
+                  <select
+                    value={secondSwapParticipant}
+                    onChange={(event_) => setSecondSwapParticipant(event_.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="">Select player</option>
+                    {rosterOrder.map((id, index) =>
+                      id === firstSwapParticipant ? null : (
+                        <option key={id} value={id}>
+                          {index + 1}. {participants.get(id)?.name || id}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </label>
+              </>
+            ) : null}
 
             {["remove", "substitute"].includes(rosterAction) ? (
               <label>
@@ -1141,11 +1201,15 @@ export default function GeneratorRoundRunner({
               (rosterAction === "remove" && !selectedParticipant) ||
               (rosterAction === "substitute" &&
                 (!selectedParticipant || !newPlayerName.trim())) ||
+              (rosterAction === "swap" &&
+                (!firstSwapParticipant ||
+                  !secondSwapParticipant ||
+                  firstSwapParticipant === secondSwapParticipant)) ||
               (rosterAction === "add" && !newPlayerName.trim())
             }
             style={{ ...primaryButton, marginTop: "0.8rem" }}
           >
-            Apply roster change
+            {rosterAction === "swap" ? "Swap player positions" : "Apply roster change"}
           </button>
         </article>
       ) : null}

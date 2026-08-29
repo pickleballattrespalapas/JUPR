@@ -41,6 +41,8 @@ def test_generator_preview_and_round_runner_contracts() -> None:
     assert "Add player" in runner
     assert "Remove player" in runner
     assert "Substitute player" in runner
+    assert "Swap players" in runner
+    assert "swapRosterPositions" in runner
     assert "One round only" in runner
     assert "Rest of session" in runner
     assert "Generate Round" in runner
