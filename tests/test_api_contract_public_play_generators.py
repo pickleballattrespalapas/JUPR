@@ -51,6 +51,8 @@ def test_public_modules_mirror_generator_functionality_without_official_publish(
     assert "Skip round" in runner
     assert "Adaptive roster" in runner
     assert "Substitute player" in runner
+    assert "Swap players" in runner
+    assert "swapRosterPositions" in runner
     assert "View-only link" in runner
     assert "Public generator sessions are unrated" in runner
     assert "Publish official matches" not in runner
