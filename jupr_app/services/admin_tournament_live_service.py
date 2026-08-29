@@ -87,6 +87,11 @@ COMMAND_ACTIONS = {
 }
 ACTION_COMMANDS = {action: command for command, action in COMMAND_ACTIONS.items()}
 STATE_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+PROVEN_PRE_MUTATION_PODIUM_VERSION_ERRORS = {
+    "A complete reviewed podium version set is required. Reload the live board.",
+    "The reviewed podium version set is malformed. Reload the live board.",
+    "The reviewed podium version set is incomplete or duplicated. Reload the live board.",
+}
 
 
 def _truthy_env(name: str) -> bool:
@@ -1327,6 +1332,14 @@ def _validate_command_evidence(
 
 def _preflight_command(snapshot: dict[str, Any], *, command: str, payload: dict[str, Any]) -> None:
     _validate_reviewed_versions(snapshot, command=command, payload=payload)
+    if command == "award_podium":
+        # Podium rows are a first-class reviewed dependency. Validate their
+        # version contract before durable intent so a schema/projection defect
+        # cannot strand the draw behind a recovery lock.
+        _snapshot_version_rows(
+            list(snapshot.get("podium") or []),
+            label="podium",
+        )
     readiness = (snapshot.get("readiness") or {}).get(command) or {}
     blockers = [str(value) for value in (readiness.get("blockers") or []) if str(value)]
     if blockers:
@@ -1499,6 +1512,34 @@ def execute_admin_tournament_live_command(
                 "This idempotency key was already used for a different Tournament Live request. Reload and create a new command."
             )
         payload = dict(stored_payload)
+        if str(existing.get("status") or "") == "recovery_required":
+            recovery = _verified_recovery_outcome(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                draw_id=str(draw_id),
+                operation=existing,
+            )
+            if str(recovery.get("status") or "") == "not_applied":
+                reconciled = reconcile_tournament_admin_guarded_operation(
+                    supabase,
+                    club_id=str(club_id),
+                    surface=TOURNAMENT_LIVE_SURFACE,
+                    operation_key=str(existing.get("operation_key") or ""),
+                    entity_type="tournament_event_draw",
+                    entity_id=str(draw_id),
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    source=f"next_tournament_live_{command}_exact_retry",
+                    verify_outcome=lambda _operation: recovery,
+                )
+                return {
+                    **reconciled,
+                    "authority": "python_fastapi",
+                    "tournament_id": str(tournament_id),
+                    "draw_id": str(draw_id),
+                    "command": command,
+                }
     else:
         # The separate rating/email gate is a pre-intent capability. A closed
         # official-publish gate must never create a durable recovery lock.
@@ -1756,6 +1797,22 @@ def _verified_recovery_outcome(
             }
         )
         result.update({"candidate_count": len(expected), "awarded_count": len(observed)})
+        if (
+            str(operation.get("error_text") or "")
+            in PROVEN_PRE_MUTATION_PODIUM_VERSION_ERRORS
+            and awards_visible
+            and bool(expected)
+            and not observed
+        ):
+            return {
+                "status": "not_applied",
+                "result": {},
+                "evidence": {
+                    **evidence,
+                    "pre_mutation_podium_version_rejection": True,
+                    "no_award_rows_observed": True,
+                },
+            }
     elif command == "publish_official_matches":
         publish_plan = payload.get("publish_plan") if isinstance(payload.get("publish_plan"), dict) else {}
         try:

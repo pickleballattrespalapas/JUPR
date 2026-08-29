@@ -500,7 +500,9 @@ export default function TournamentLivePanel({
       const scoreCompletion = command.body.command === "save_score" && completedGame
         ? `Score saved for ${matchupLabel(completedGame, teamsById, snapshot)}: ${command.body.score_a}–${command.body.score_b}.`
         : "";
-      const completionText = scoreCompletion || (result.reconciled
+      const completionText = scoreCompletion || (result.recovery_disposition === "not_applied"
+        ? `Operation ${compactKey(result.operation_key)} was proven not applied. Review the refreshed draw and submit the command again.`
+        : result.reconciled
         ? `Operation ${compactKey(result.operation_key)} reconciled without repeating the domain write.`
         : result.idempotent_replay
           ? `Operation ${compactKey(result.operation_key)} returned its durable stored result.`

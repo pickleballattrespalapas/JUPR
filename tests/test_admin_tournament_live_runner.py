@@ -955,6 +955,198 @@ def test_award_recovery_uses_stored_recipient_set_and_rejects_duplicates(monkeyp
     assert duplicate["evidence"]["exact_award_set_match"] is False
 
 
+def _award_command(snapshot: dict, *, idempotency_key: str | None = None) -> dict:
+    return {
+        "command": "award_podium",
+        "expected_state_fingerprint": snapshot["state_fingerprint"],
+        "idempotency_key": idempotency_key or str(uuid.uuid4()),
+        "confirmation_text": "AWARD PODIUM",
+        "expected_draw_updated_at": snapshot["draws"][0]["updated_at"],
+        "expected_team_versions": [
+            {"id": row["id"], "updated_at": row["updated_at"]}
+            for row in snapshot["teams"]
+        ],
+        "expected_source_game_versions": [
+            {"id": row["id"], "updated_at": row["updated_at"]}
+            for row in snapshot["games"]
+        ],
+    }
+
+
+def _install_completed_draw_podium(
+    tables: dict[str, list[dict]],
+    *,
+    include_versions: bool,
+) -> None:
+    tables["tournament_games"][0].update(
+        {
+            "score_a": 11,
+            "score_b": 7,
+            "winner_team_id": "team-1",
+            "loser_team_id": "team-2",
+            "finalized_at": "2026-07-19T11:00:00Z",
+            "updated_at": "2026-07-19T11:00:00Z",
+        }
+    )
+    tables["tournament_podium"] = [
+        {
+            "id": f"podium-{placement}",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-1",
+            "placement": placement,
+            "team_id": f"team-{placement}",
+            "source": "ROUND_ROBIN",
+            "created_at": "2026-07-19T11:00:00Z",
+            **(
+                {"updated_at": "2026-07-19T11:00:00Z"}
+                if include_versions
+                else {}
+            ),
+        }
+        for placement in (1, 2, 3)
+    ]
+    install_current_live_podium_review(tables)
+
+
+def test_missing_podium_versions_fail_before_durable_live_intent(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    _install_completed_draw_podium(tables, include_versions=False)
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    with pytest.raises(ValueError, match="reviewed podium version set is incomplete"):
+        execute_admin_tournament_live_command(
+            supabase,
+            club_id="club",
+            tournament_id="tour-1",
+            draw_id="draw-1",
+            request=_award_command(snapshot),
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+    assert tables["player_badges"] == []
+    assert tables["tournament_admin_operations"] == []
+    assert not any(
+        row.get("action_type") == "tournament_live_awards_intent"
+        for row in tables["admin_activity_log"]
+    )
+
+
+def test_exact_retry_closes_proven_pre_mutation_podium_version_failure(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    _install_completed_draw_podium(tables, include_versions=True)
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+    client_key = str(uuid.uuid4())
+    command = _award_command(snapshot, idempotency_key=client_key)
+    award_podium_plan = [
+        {
+            "placement": placement,
+            "team_id": f"team-{placement}",
+            "source": "ROUND_ROBIN",
+        }
+        for placement in (1, 2, 3)
+    ]
+    award_plan = sorted(
+        [
+            {
+                "player_id": player_id,
+                "badge_id": PODIUM_BADGE_MAP[placement],
+                "context_id": f"tour-1:draw:draw-1:podium:{placement}",
+            }
+            for placement, player_ids in (
+                (1, (1, 2)),
+                (2, (3, 4)),
+                (3, (5, 6)),
+            )
+            for player_id in player_ids
+        ],
+        key=lambda row: (row["context_id"], row["badge_id"], row["player_id"]),
+    )
+    stored_payload = {
+        "command": "award_podium",
+        "expected_draw_updated_at": command["expected_draw_updated_at"],
+        "expected_team_versions": command["expected_team_versions"],
+        "expected_source_game_versions": command["expected_source_game_versions"],
+        "award_podium_plan": award_podium_plan,
+        "award_plan": award_plan,
+    }
+    operation = build_tournament_admin_operation_request(
+        club_id="club",
+        surface="tournament_live",
+        action="tournament_live_awards",
+        entity_type="tournament_event_draw",
+        entity_id="draw-1",
+        lock_scope="tournament:tour-1:draw:draw-1",
+        expected_state=snapshot["state_fingerprint"],
+        payload=stored_payload,
+        idempotency_key=client_key,
+    )
+    tables["tournament_admin_operations"].append(
+        {
+            **{
+                key: operation[key]
+                for key in (
+                    "operation_key",
+                    "request_fingerprint",
+                    "club_id",
+                    "surface",
+                    "action",
+                    "entity_type",
+                    "entity_id",
+                    "lock_scope",
+                    "expected_state",
+                )
+            },
+            "client_idempotency_key": client_key,
+            "status": "recovery_required",
+            "request_json": operation,
+            "result_json": {},
+            "error_text": (
+                "The reviewed podium version set is incomplete or duplicated. "
+                "Reload the live board."
+            ),
+            "attempt_count": 1,
+            "created_by": "admin@example.com",
+            "updated_by": "admin@example.com",
+            "created_at": "2026-07-19T12:00:00Z",
+            "updated_at": "2026-07-19T12:00:00Z",
+        }
+    )
+
+    result = execute_admin_tournament_live_command(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+        request=command,
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+    )
+
+    assert result["recovery_disposition"] == "not_applied"
+    assert result["reconciled"] is True
+    assert tables["player_badges"] == []
+    assert tables["tournament_admin_operations"][0]["status"] == "failed"
+    assert tables["tournament_admin_operations"][0]["attempt_count"] == 2
+    assert tables["admin_activity_log"][-1]["action_type"] == (
+        "tournament_live_awards_recovery_not_applied"
+    )
+
+
 def test_atomic_award_refuses_podium_drift_after_live_lock_with_zero_badges(monkeypatch) -> None:
     class DriftingAwardSupabase(FakeSupabase):
         def rpc(self, name, params):
