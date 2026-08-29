@@ -292,6 +292,7 @@ function dayWorkspaceSnapshot() {
       available_courts: 9,
       active_draws: 2,
       eligible_games: 2,
+      reserved_games: 0,
       held_games: 1,
       completed_games: 4
     },
@@ -350,13 +351,15 @@ function dayWorkspaceSnapshot() {
         version: "assignment-v5",
         assigned_at: "2026-08-17T09:01:00Z",
         started_at: "2026-08-17T09:02:00Z" as string | null
-      } : null
+      } : null,
+      next_assignment: null
     })),
     games: dayGames,
     eligible_queue: [
       { game_id: "day-game-b", draw_id: secondDrawId, position: 1, priority: 50, state: "WAITING", version: "queue-b-v3", eligible_since: "2026-08-17T08:58:00Z", reason: "First eligible across active draws", blockers: [] },
       { game_id: "day-game-c", draw_id: drawId, position: 2, priority: 40, state: "WAITING", version: "queue-c-v2", eligible_since: "2026-08-17T08:59:00Z", reason: "Second eligible across active draws", blockers: [] }
     ],
+    reserved_queue: [],
     held_games: [
       { game_id: "day-game-held", draw_id: secondDrawId, state: "HELD", reason: "Operator hold awaiting participant arrival", note: null, held_at: "2026-08-17T09:03:00Z", version: "held-v1", blockers: [] }
     ],
@@ -483,10 +486,61 @@ async function installMockApi(page: Page) {
           refreshed.summary.eligible_games -= 1;
         }
       }
+      if (command.action === "reserve_game_for_court") {
+        const entry = refreshed.eligible_queue.find((row) => row.game_id === command.payload.game_id);
+        const targetCourt = refreshed.courts.find((court) => court.id === command.payload.court_id);
+        const game = refreshed.games.find((row) => row.id === command.payload.game_id);
+        if (entry && targetCourt?.current_assignment && !targetCourt.next_assignment && game) {
+          targetCourt.next_assignment = {
+            id: `reservation-${game.id}`,
+            game_id: game.id,
+            state: "RESERVED",
+            version: `${entry.version}-reserved`,
+            reserved_at: "2026-08-17T09:06:00Z"
+          };
+          game.state = "RESERVED";
+          game.reserved_court_id = targetCourt.id;
+          game.queue_entry_version = `${entry.version}-reserved`;
+          refreshed.eligible_queue = refreshed.eligible_queue.filter((row) => row.game_id !== game.id);
+          refreshed.reserved_queue.push({
+            ...entry,
+            state: "RESERVED",
+            version: game.queue_entry_version,
+            reserved_court_id: targetCourt.id,
+            reserved_at: "2026-08-17T09:06:00Z",
+            reason: "NEXT_ON_COURT",
+            note: `Next on ${targetCourt.label}; this matchup and its players are reserved while the current game finishes.`
+          });
+          refreshed.summary.eligible_games -= 1;
+          refreshed.summary.reserved_games += 1;
+        }
+      }
       if (command.action === "requeue_game" || command.action === "move_game_to_court") {
+        const waitCourt = refreshed.courts.find((court) => court.next_assignment?.game_id === command.payload.game_id);
         const sourceCourt = refreshed.courts.find((court) => court.current_assignment?.game_id === command.payload.game_id);
         const game = refreshed.games.find((row) => row.id === command.payload.game_id);
-        if (sourceCourt && game) {
+        if (command.action === "requeue_game" && waitCourt?.next_assignment && game) {
+          const reservation = waitCourt.next_assignment;
+          waitCourt.next_assignment = null;
+          game.state = "WAITING";
+          game.reserved_court_id = null;
+          game.queue_entry_version = `${reservation.version}-requeued`;
+          const reservedEntry = refreshed.reserved_queue.find((row) => row.game_id === game.id);
+          refreshed.reserved_queue = refreshed.reserved_queue.filter((row) => row.game_id !== game.id);
+          refreshed.eligible_queue.push({
+            game_id: game.id,
+            draw_id: game.draw_id,
+            position: refreshed.eligible_queue.length + 1,
+            priority: reservedEntry?.priority || 50,
+            state: "WAITING",
+            version: game.queue_entry_version,
+            eligible_since: reservedEntry?.eligible_since || "2026-08-17T08:58:00Z",
+            reason: "Returned to existing queue priority",
+            blockers: []
+          });
+          refreshed.summary.eligible_games += 1;
+          refreshed.summary.reserved_games -= 1;
+        } else if (sourceCourt && game) {
           const assignment = sourceCourt.current_assignment;
           sourceCourt.current_assignment = null;
           sourceCourt.state = "AVAILABLE";
@@ -528,9 +582,30 @@ async function installMockApi(page: Page) {
           completedGame.state = "COMPLETED";
           completedGame.version = `${completedGame.id}-v2`;
         }
-        refreshed.courts[0].current_assignment = null;
-        refreshed.courts[0].state = "AVAILABLE";
-        refreshed.summary.available_courts += 1;
+        const releasedCourt = refreshed.courts[0];
+        const reservation = releasedCourt.next_assignment;
+        if (reservation) {
+          releasedCourt.current_assignment = {
+            ...reservation,
+            state: "ON_COURT",
+            assigned_at: "2026-08-17T09:06:01Z",
+            started_at: "2026-08-17T09:06:01Z"
+          };
+          releasedCourt.next_assignment = null;
+          const promotedGame = refreshed.games.find((game) => game.id === reservation.game_id);
+          if (promotedGame) {
+            promotedGame.state = "ON_COURT";
+            promotedGame.court_id = releasedCourt.id;
+            promotedGame.reserved_court_id = null;
+            promotedGame.queue_entry_version = reservation.version;
+          }
+          refreshed.reserved_queue = refreshed.reserved_queue.filter((row) => row.game_id !== reservation.game_id);
+          refreshed.summary.reserved_games -= 1;
+        } else {
+          releasedCourt.current_assignment = null;
+          releasedCourt.state = "AVAILABLE";
+          refreshed.summary.available_courts += 1;
+        }
         refreshed.summary.completed_games += 1;
       }
       if (command.action === "record_non_played_result") {
@@ -742,7 +817,7 @@ test("legacy draw route opens a clean tabbed day workspace", async ({ page }) =>
   await page.getByRole("tab", { name: "Court board" }).click();
   await expect(page).toHaveURL(/panel=board/);
   const courtBoard = page.getByRole("tabpanel", { name: "Court board" });
-  const boardQueue = courtBoard.getByRole("region", { name: "Ready games from active draws" });
+  const boardQueue = courtBoard.getByRole("region", { name: "Ready and court-reserved games from active draws" });
   await expect(boardQueue).toContainText("2 ready");
   await expect(boardQueue.locator("ol > li")).toHaveCount(2);
   await expect(boardQueue).toContainText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith");
@@ -755,7 +830,7 @@ test("legacy draw route opens a clean tabbed day workspace", async ({ page }) =>
   await page.getByRole("tab", { name: "Eligible queue" }).click();
   await expect(page).toHaveURL(/panel=queue/);
   const queuePanel = page.getByRole("tabpanel", { name: "Eligible queue" });
-  const queueRows = queuePanel.getByRole("region", { name: "Eligible match queue" }).locator("ol > li");
+  const queueRows = queuePanel.getByRole("region", { name: "Tournament match queue" }).locator("ol > li");
   await expect(queueRows).toHaveCount(2);
   expect(await queueRows.allTextContents()).toEqual([
     expect.stringContaining("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith"),
@@ -810,7 +885,7 @@ test("legacy score route retains day context and focuses the unified queue", asy
   await expect(page).toHaveURL(/\/admin\/tournaments\/live-operations\?/);
   await expect(page).toHaveURL(/panel=queue/);
   await expect(page).toHaveURL(new RegExp(`day=${dayId}`));
-  await expect(page.getByRole("heading", { name: "Unified eligible queue" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Unified game queue" })).toBeVisible();
 });
 
 test("Court board queue can use the next court, a chosen court, move, and requeue", async ({ page }) => {
@@ -820,7 +895,7 @@ test("Court board queue can use the next court, a chosen court, move, and requeu
     commands.push(request.postDataJSON() as { action: string });
   });
   await page.goto(`/admin/tournaments/live-operations?${selectedQuery}&panel=board`);
-  const queue = page.getByRole("region", { name: "Ready games from active draws" });
+  const queue = page.getByRole("region", { name: "Ready and court-reserved games from active draws" });
   const gameBRow = queue.locator("ol > li").filter({ hasText: "Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith" });
   await gameBRow.getByRole("button", { name: /Send Avery Patel.*to next open court/ }).click();
   await expect(page.getByRole("status")).toContainText("Matchup assigned to the next authoritative open court.");
@@ -841,9 +916,9 @@ test("Court board queue can use the next court, a chosen court, move, and requeu
 
   await expect(queue.locator("ol > li").filter({ hasText: "Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith" })).toBeVisible();
   const gameCRow = queue.locator("ol > li").filter({ hasText: "Nora Williams / Sofia Kim vs Emma Davis / Mia Johnson" });
-  await gameCRow.getByRole("button", { name: /Choose court for Nora Williams/ }).click();
+  await gameCRow.getByRole("button", { name: /Choose court or wait for a court for Nora Williams/ }).click();
   const chooseDialog = page.getByRole("dialog", { name: "Choose a court" });
-  await chooseDialog.getByLabel("Open court").selectOption("day-court-4");
+  await chooseDialog.getByLabel("Court").selectOption("day-court-4");
   await chooseDialog.getByRole("button", { name: "Assign to Court 4" }).click();
 
   const court4 = page.getByRole("heading", { name: "Court 4", exact: true }).locator("xpath=ancestor::article[1]");
@@ -853,6 +928,44 @@ test("Court board queue can use the next court, a chosen court, move, and requeu
     "move_game_to_court",
     "requeue_game",
     "assign_game_to_court"
+  ]);
+});
+
+test("Court reservation stays in the queue and announces automatic promotion", async ({ page }) => {
+  const commands: Array<{ action: string }> = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
+    commands.push(request.postDataJSON() as { action: string });
+  });
+  await page.goto(`/admin/tournaments/live-operations?${selectedQuery}&panel=board`);
+
+  const queue = page.getByRole("region", { name: "Ready and court-reserved games from active draws" });
+  const reservedRow = queue.locator("ol > li").filter({ hasText: "Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith" });
+  await reservedRow.getByRole("button", { name: /Choose court or wait for a court for Avery Patel/ }).click();
+  const chooseDialog = page.getByRole("dialog", { name: "Choose a court" });
+  await chooseDialog.getByLabel("Court").selectOption("day-court-1");
+  await chooseDialog.getByRole("button", { name: "Wait for Court 1" }).click();
+
+  await expect(page.getByRole("status")).toContainText("reserved next for the selected occupied court");
+  await expect(reservedRow).toContainText("Next on Court 1");
+  await expect(reservedRow.getByRole("button", { name: "Cancel wait" })).toBeVisible();
+  const court1 = page.getByRole("heading", { name: "Court 1", exact: true }).locator("xpath=ancestor::article[1]");
+  await expect(court1).toContainText("Next on this court");
+  await expect(court1).toContainText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith");
+
+  await court1.getByRole("button", { name: /Enter score for Mateo Rivera/ }).click();
+  const scoreDialog = page.getByRole("dialog", { name: /Enter result · Court 1/ });
+  await scoreDialog.getByLabel("Mateo Rivera / Liam Chen score").fill("11");
+  await scoreDialog.getByLabel("Caleb Nguyen / Diego Alvarez score").fill("7");
+  await scoreDialog.getByRole("button", { name: "Save 11–7 & release Court 1" }).click();
+
+  await expect(page.getByRole("status")).toContainText("Court 1 became available. The reserved next matchup is now on court.");
+  await expect(court1).toContainText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith");
+  await expect(court1.getByText("Next on this court")).toHaveCount(0);
+  await expect(reservedRow).toHaveCount(0);
+  await expect.poll(() => commands.map((command) => command.action)).toEqual([
+    "reserve_game_for_court",
+    "score_and_release"
   ]);
 });
 
@@ -955,13 +1068,13 @@ test("Score entry saves in two clicks with a live preview and the exact day fenc
   await scoreDialog.getByLabel("Caleb Nguyen / Diego Alvarez score").fill("7");
   await expect(scoreDialog.getByText("Winner:")).toBeVisible();
   await expect(scoreDialog.getByText("Mateo Rivera / Liam Chen", { exact: true }).last()).toBeVisible();
-  await expect(scoreDialog.getByText(/remains in the queue until an operator/)).toBeVisible();
+  await expect(scoreDialog.getByText(/Next on this court moves onto it automatically/)).toBeVisible();
   const saveScore = scoreDialog.getByRole("button", { name: "Save 11–7 & release Court 1" });
   await expect(saveScore).toBeEnabled();
 
   await saveScore.click();
   await expect(scoreDialog).toHaveCount(0);
-  await expect(page.getByRole("status")).toContainText("Score saved and court released. The next matchup remains queued until an operator assigns it.");
+  await expect(page.getByRole("status")).toContainText("Score saved and court released. Any matchup reserved for this court was promoted automatically; all other games remain queued.");
   await expect(page.getByRole("dialog", { name: "Tournament-day operation complete" })).toHaveCount(0);
   await expect.poll(() => commands.length).toBe(1);
   expect(commands[0]).toMatchObject({
@@ -1005,7 +1118,7 @@ test("The score dialog records a non-play result without leaving the court board
   await saveOutcome.click();
 
   await expect(resultDialog).toHaveCount(0);
-  await expect(page.getByRole("status")).toContainText("Non-played outcome recorded and any court and participant claims released. The next matchup remains queued until assigned.");
+  await expect(page.getByRole("status")).toContainText("Non-played outcome recorded and resources released. Any matchup reserved for this court was promoted automatically; all other games remain queued.");
   await expect.poll(() => commands.length).toBe(1);
   expect(commands[0]).toMatchObject({
     action: "record_non_played_result",

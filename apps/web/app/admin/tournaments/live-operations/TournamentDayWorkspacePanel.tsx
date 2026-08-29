@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import {
   ActionFeedback,
@@ -123,7 +123,7 @@ type OutcomeEditor = {
 };
 
 type CourtActionEditor = {
-  kind: "assign" | "manage";
+  kind: "assign" | "manage" | "manage_wait";
   gameId: string;
   sourceCourtId: string;
   targetCourtId: string;
@@ -164,6 +164,23 @@ function statusLabel(value: string | null | undefined): string {
     .replaceAll("_", " ")
     .toLowerCase()
     .replace(/^./, (letter) => letter.toUpperCase());
+}
+
+function promotedReservationNotice(
+  previous: AdminTournamentDayWorkspaceSnapshot | null,
+  current: AdminTournamentDayWorkspaceSnapshot
+): string | null {
+  if (!previous) return null;
+  const promotedCourts = current.courts.filter((court) => {
+    const before = previous.courts.find((candidate) => candidate.id === court.id);
+    return Boolean(
+      before?.next_assignment?.game_id
+      && court.current_assignment?.game_id === before.next_assignment.game_id
+    );
+  });
+  if (!promotedCourts.length) return null;
+  const labels = promotedCourts.map((court) => court.label).join(", ");
+  return `${labels} became available. The reserved next matchup is now on court.`;
 }
 
 function timestamp(value: string | null | undefined): string {
@@ -331,6 +348,7 @@ export default function TournamentDayWorkspacePanel({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
+  const snapshotRef = useRef<AdminTournamentDayWorkspaceSnapshot | null>(null);
   const scopeKey = workspaceScopeKey(accessToken, tournamentId, selectedDayId);
   const snapshotRequest = useLatestRequestGuard(scopeKey);
   const actionRequest = useLatestRequestGuard(scopeKey);
@@ -354,16 +372,40 @@ export default function TournamentDayWorkspacePanel({
   const dayStarted = dayRunHasStarted(dayRunState);
   const dayActive = dayRunAcceptsLiveCommands(dayRunState);
   const visibleQueue = useMemo(
-    () => visibleServerQueue(snapshot?.eligible_queue || [], drawFilter),
+    () => visibleServerQueue(
+      [...(snapshot?.eligible_queue || []), ...(snapshot?.reserved_queue || [])]
+        .sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0)),
+      drawFilter
+    ),
     [drawFilter, snapshot]
   );
-  const courtBoardQueue = useMemo(
+  const readyCourtBoardQueue = useMemo(
     () => readyActiveDrawQueue(snapshot?.eligible_queue || [], snapshot?.draws || []),
     [snapshot]
+  );
+  const reservedCourtBoardQueue = useMemo(() => {
+    const activeDrawIds = new Set(
+      (snapshot?.draws || [])
+        .filter((draw) => String(draw.activation_state).toUpperCase() === "ACTIVE")
+        .map((draw) => draw.id)
+    );
+    return (snapshot?.reserved_queue || []).filter((entry) => activeDrawIds.has(entry.draw_id));
+  }, [snapshot]);
+  const courtBoardQueue = useMemo(
+    () => [...readyCourtBoardQueue, ...reservedCourtBoardQueue]
+      .sort((left, right) => Number(left.priority || 0) - Number(right.priority || 0)),
+    [readyCourtBoardQueue, reservedCourtBoardQueue]
   );
   const availableCourts = useMemo(
     () => (snapshot?.courts || []).filter((court) => (
       String(court.state).toUpperCase() === "AVAILABLE" && !court.current_assignment
+    )),
+    [snapshot]
+  );
+  const assignmentCourtChoices = useMemo(
+    () => (snapshot?.courts || []).filter((court) => (
+      (String(court.state).toUpperCase() === "AVAILABLE" && !court.current_assignment)
+      || (Boolean(court.current_assignment) && !court.next_assignment)
     )),
     [snapshot]
   );
@@ -411,12 +453,15 @@ export default function TournamentDayWorkspacePanel({
       });
       if (!snapshotRequest.isCurrent(generation) || options.signal?.aborted) return;
       assertWorkspaceSnapshotScope(payload, clubId, tournamentId, selectedDayId);
+      const promotionNotice = promotedReservationNotice(snapshotRef.current, payload);
+      snapshotRef.current = payload;
       setSnapshot(payload);
       setDayOptions(payload.day_scope.available_days || []);
       setLastRefresh(payload.generated_at || new Date().toISOString());
       const retained = readPendingCommand(clubId, tournamentId, selectedDayId);
       setPendingCommand(retained);
-      if (!options.silent) setMessage("Authoritative tournament-day state loaded.");
+      if (promotionNotice) setMessage(promotionNotice);
+      else if (!options.silent) setMessage("Authoritative tournament-day state loaded.");
     } catch (loadError) {
       if (!snapshotRequest.isCurrent(generation) || options.signal?.aborted) return;
       setError(loadError instanceof Error ? loadError.message : "Unable to load the tournament-day workspace.");
@@ -465,6 +510,7 @@ export default function TournamentDayWorkspacePanel({
 
   useEffect(() => {
     if (!selectedDayId || !accessToken) {
+      snapshotRef.current = null;
       setSnapshot(null);
       return;
     }
@@ -586,7 +632,12 @@ export default function TournamentDayWorkspacePanel({
         || game?.version !== courtActionEditor.expected.game_version
         || (courtActionEditor.kind === "assign"
           ? queueEntry?.version !== courtActionEditor.expected.queue_entry_version
-          : game?.queue_entry_version !== courtActionEditor.expected.queue_entry_version
+          : courtActionEditor.kind === "manage_wait"
+            ? game?.queue_entry_version !== courtActionEditor.expected.queue_entry_version
+              || sourceCourt?.version !== courtActionEditor.expected.court_version
+              || sourceCourt?.next_assignment?.game_id !== courtActionEditor.gameId
+              || sourceCourt?.next_assignment?.version !== courtActionEditor.reviewedAssignmentVersion
+            : game?.queue_entry_version !== courtActionEditor.expected.queue_entry_version
             || sourceCourt?.version !== courtActionEditor.expected.court_version
             || sourceCourt?.current_assignment?.game_id !== courtActionEditor.gameId
             || sourceCourt?.current_assignment?.version !== courtActionEditor.reviewedAssignmentVersion);
@@ -642,17 +693,19 @@ export default function TournamentDayWorkspacePanel({
       });
       assertWorkspaceSnapshotScope(result.snapshot, clubId, tournamentId, command.dayId);
       const completionText = command.request.action === "score_and_release"
-        ? "Score saved and court released. The next matchup remains queued until an operator assigns it."
+        ? "Score saved and court released. Any matchup reserved for this court was promoted automatically; all other games remain queued."
         : command.request.action === "correct_completed_score"
           ? "Completed score corrected. The authoritative day result and all reviewed versions were refreshed."
         : command.request.action === "record_non_played_result"
-          ? "Non-played outcome recorded and any court and participant claims released. The next matchup remains queued until assigned."
+          ? "Non-played outcome recorded and resources released. Any matchup reserved for this court was promoted automatically; all other games remain queued."
         : command.request.action === "assign_next_court"
           ? "Matchup assigned to the next authoritative open court."
         : command.request.action === "assign_game_to_court"
           ? "Matchup assigned to the selected court."
+        : command.request.action === "reserve_game_for_court"
+          ? "Matchup is reserved next for the selected occupied court."
         : command.request.action === "requeue_game"
-          ? "Matchup returned to its existing queue priority and the court is available again."
+          ? "Matchup returned to its existing queue priority. Any reserved next match was promoted when a court opened."
         : command.request.action === "move_game_to_court"
           ? "Matchup moved to the selected open court."
         : command.request.action === "close_day"
@@ -662,9 +715,14 @@ export default function TournamentDayWorkspacePanel({
           : retry
             ? "The exact retained tournament-day request completed."
             : "The server committed the reviewed tournament-day operation.";
-      const completion = actionSuccess("Tournament-day operation complete", completionText);
+      const promotionNotice = promotedReservationNotice(snapshotRef.current, result.snapshot);
+      const finalCompletionText = promotionNotice
+        ? `${completionText} ${promotionNotice}`
+        : completionText;
+      const completion = actionSuccess("Tournament-day operation complete", finalCompletionText);
       if (!actionRequest.isCurrent(generation)) return completion;
       persistPending(null);
+      snapshotRef.current = result.snapshot;
       setSnapshot(result.snapshot);
       setDayOptions(result.snapshot.day_scope.available_days || []);
       setLastRefresh(result.snapshot.generated_at || new Date().toISOString());
@@ -682,10 +740,10 @@ export default function TournamentDayWorkspacePanel({
         setFocusedCourtId("");
         setFocusedGameId("");
         replaceWorkspaceUrl({ courtId: "", gameId: "", panel: "board" });
-      } else if (["assign_next_court", "assign_game_to_court", "requeue_game", "move_game_to_court"].includes(command.request.action)) {
+      } else if (["assign_next_court", "assign_game_to_court", "reserve_game_for_court", "requeue_game", "move_game_to_court"].includes(command.request.action)) {
         setCourtActionEditor(null);
       }
-      setMessage(completionText);
+      setMessage(finalCompletionText);
       return completion;
     } catch (commandError) {
       const stale = commandError instanceof AdminTournamentDayOpsApiError && commandError.status === 409;
@@ -756,6 +814,7 @@ export default function TournamentDayWorkspacePanel({
       );
       if (!actionRequest.isCurrent(generation)) return completion;
       if (pendingCommand?.request.client_idempotency_key === operation.client_idempotency_key) persistPending(null);
+      snapshotRef.current = result.snapshot;
       setSnapshot(result.snapshot);
       setDayOptions(result.snapshot.day_scope.available_days || []);
       setLastRefresh(result.snapshot.generated_at || new Date().toISOString());
@@ -786,6 +845,7 @@ export default function TournamentDayWorkspacePanel({
     snapshotRequest.invalidate();
     actionRequest.invalidate();
     setSelectedDayId(dayId);
+    snapshotRef.current = null;
     setSnapshot(null);
     setDrawFilter("all");
     setFocusedCourtId("");
@@ -923,8 +983,8 @@ export default function TournamentDayWorkspacePanel({
   }
 
   function openCourtPicker(game: AdminTournamentDayGame, entry: AdminTournamentDayQueueEntry) {
-    if (!availableCourts.length) {
-      setError("No authoritative court is currently open. The matchup will remain safely queued.");
+    if (!assignmentCourtChoices.length) {
+      setError("No court can accept this matchup now. Occupied courts that already have a next match are unavailable.");
       return;
     }
     setScoreEditor(null);
@@ -936,12 +996,37 @@ export default function TournamentDayWorkspacePanel({
       kind: "assign",
       gameId: game.id,
       sourceCourtId: "",
-      targetCourtId: availableCourts[0].id,
+      targetCourtId: assignmentCourtChoices[0].id,
       expected: expectedVersions({
         game_version: game.version,
         queue_entry_version: entry.version
       }),
       reviewedAssignmentVersion: ""
+    });
+  }
+
+  function openReservationManager(game: AdminTournamentDayGame, court: AdminTournamentDayCourt) {
+    const reservation = court.next_assignment;
+    if (reservation?.game_id !== game.id || !game.queue_entry_version) {
+      setError("Reload the court board before changing this wait; its exact queue or court version is unavailable.");
+      return;
+    }
+    setScoreEditor(null);
+    setCorrectionEditor(null);
+    setOutcomeEditor(null);
+    resultAction.reset();
+    setError(null);
+    setCourtActionEditor({
+      kind: "manage_wait",
+      gameId: game.id,
+      sourceCourtId: court.id,
+      targetCourtId: "",
+      expected: expectedVersions({
+        game_version: game.version,
+        queue_entry_version: game.queue_entry_version,
+        court_version: court.version
+      }),
+      reviewedAssignmentVersion: reservation.version
     });
   }
 
@@ -972,22 +1057,25 @@ export default function TournamentDayWorkspacePanel({
 
   async function assignSelectedCourt() {
     if (!courtActionEditor || courtActionEditor.kind !== "assign") return;
-    const targetCourt = availableCourts.find((court) => court.id === courtActionEditor.targetCourtId);
+    const targetCourt = assignmentCourtChoices.find((court) => court.id === courtActionEditor.targetCourtId);
     if (!targetCourt) {
-      setError("The selected court is no longer available. Reopen the matchup from the refreshed queue.");
+      setError("The selected court can no longer accept this matchup. Reopen it from the refreshed queue.");
       setCourtActionEditor(null);
       return;
     }
+    const action = targetCourt.current_assignment
+      ? "reserve_game_for_court"
+      : "assign_game_to_court";
     await submitCommand(
-      "assign_game_to_court",
-      dayActionConfirmation("assign_game_to_court"),
+      action,
+      dayActionConfirmation(action),
       { game_id: courtActionEditor.gameId, court_id: targetCourt.id },
       { ...courtActionEditor.expected, court_version: targetCourt.version }
     );
   }
 
   async function requeueAssignment() {
-    if (!courtActionEditor || courtActionEditor.kind !== "manage") return;
+    if (!courtActionEditor || courtActionEditor.kind === "assign") return;
     await submitCommand(
       "requeue_game",
       dayActionConfirmation("requeue_game"),
@@ -1165,7 +1253,8 @@ export default function TournamentDayWorkspacePanel({
     ? snapshot?.courts.find((court) => court.id === courtActionEditor.sourceCourtId)
     : undefined;
   const selectedCourtActionTarget = courtActionEditor?.targetCourtId
-    ? availableCourts.find((court) => court.id === courtActionEditor.targetCourtId)
+    ? (courtActionEditor.kind === "assign" ? assignmentCourtChoices : availableCourts)
+      .find((court) => court.id === courtActionEditor.targetCourtId)
     : undefined;
   const resultWorking = resultAction.phase === "working" || Boolean(busyKey);
   const uncertainResult = resultAction.phase === "uncertain" && resultAction.completion?.status === "uncertain"
@@ -1243,7 +1332,7 @@ export default function TournamentDayWorkspacePanel({
             <article><span>Courts</span><strong>{snapshot.summary.courts}</strong></article>
             <article><span>Available</span><strong>{snapshot.summary.available_courts}</strong></article>
             <article><span>Active draws</span><strong>{snapshot.summary.active_draws}</strong></article>
-            <article><span>Eligible queue</span><strong>{snapshot.summary.eligible_games}</strong></article>
+            <article><span>Court queue</span><strong>{snapshot.summary.eligible_games + snapshot.summary.reserved_games}</strong></article>
             <article><span>Held</span><strong>{snapshot.summary.held_games}</strong></article>
             <article><span>Completed</span><strong>{snapshot.summary.completed_games}</strong></article>
           </section>
@@ -1314,28 +1403,42 @@ export default function TournamentDayWorkspacePanel({
               <div><p className={styles.eyebrow}>Live allocation</p><h2>Court board</h2></div>
               <p className={styles.muted}>{snapshot.summary.available_courts} open court(s)</p>
             </div>
-            <section className={styles.compactQueueCard} aria-label="Ready games from active draws">
+            <section className={styles.compactQueueCard} aria-label="Ready and court-reserved games from active draws">
               <div className={styles.compactQueueLead}>
-                <span>Eligible queue</span>
-                <strong>{courtBoardQueue.length} ready</strong>
+                <span>Court queue</span>
+                <strong>{readyCourtBoardQueue.length} ready</strong>
+                {reservedCourtBoardQueue.length ? <small>{reservedCourtBoardQueue.length} waiting</small> : null}
               </div>
               {courtBoardQueue.length ? (
                 <ol className={styles.compactQueueList}>
                   {courtBoardQueue.map((entry) => {
                     const game = gamesById.get(entry.game_id);
-                    const assignmentDisabled = !dayActive || !runtimeWritesEnabled || writesFrozen || Boolean(busyKey) || !availableCourts.length;
+                    const actionsDisabled = !dayActive || !runtimeWritesEnabled || writesFrozen || Boolean(busyKey);
+                    const nextOpenDisabled = actionsDisabled || !availableCourts.length;
+                    const chooseDisabled = actionsDisabled || !assignmentCourtChoices.length;
                     const label = game ? matchupLabel(game) : "Matchup unavailable";
+                    const reservedCourt = entry.reserved_court_id
+                      ? snapshot.courts.find((court) => court.id === entry.reserved_court_id)
+                      : undefined;
+                    const reserved = String(entry.state).toUpperCase() === "RESERVED";
                     return (
-                      <li value={entry.position} key={entry.game_id}>
-                        <span className={styles.compactPosition}>#{entry.position}</span>
+                      <li value={entry.position} key={entry.game_id} className={reserved ? styles.compactReservedItem : undefined}>
+                        <span className={styles.compactPosition}>#{entry.priority || entry.position}</span>
                         <div className={styles.compactQueueDetails}>
                           <strong title={label}>{label}</strong>
-                          <small title={game ? gameStageLabel(game) : "Draw details unavailable"}>{game ? gameStageLabel(game) : "Draw details unavailable"}</small>
+                          <small title={entry.note || (game ? gameStageLabel(game) : "Draw details unavailable")}>
+                            {reserved ? `Next on ${reservedCourt?.label || "selected court"}` : game ? gameStageLabel(game) : "Draw details unavailable"}
+                          </small>
                         </div>
-                        {game ? (
+                        {game && reserved && reservedCourt ? (
                           <div className={styles.compactQueueActions}>
-                            <button type="button" className={styles.primaryButton} onClick={() => void assignNextCourt(game, entry)} disabled={assignmentDisabled} aria-label={`Send ${label} to next open court`}>Next open court</button>
-                            <button type="button" className={styles.secondaryButton} onClick={() => openCourtPicker(game, entry)} disabled={assignmentDisabled} aria-label={`Choose court for ${label}`}>Choose</button>
+                            <span className={styles.warningBadge}>Waiting</span>
+                            <button type="button" className={styles.secondaryButton} onClick={() => openReservationManager(game, reservedCourt)} disabled={actionsDisabled}>Cancel wait</button>
+                          </div>
+                        ) : game ? (
+                          <div className={styles.compactQueueActions}>
+                            <button type="button" className={styles.primaryButton} onClick={() => void assignNextCourt(game, entry)} disabled={nextOpenDisabled} aria-label={`Send ${label} to next open court`}>Next open court</button>
+                            <button type="button" className={styles.secondaryButton} onClick={() => openCourtPicker(game, entry)} disabled={chooseDisabled} aria-label={`Choose court or wait for a court for ${label}`}>Choose</button>
                           </div>
                         ) : null}
                       </li>
@@ -1348,6 +1451,8 @@ export default function TournamentDayWorkspacePanel({
               {snapshot.courts.map((court) => {
                 const assignment = court.current_assignment;
                 const game = assignment ? gamesById.get(assignment.game_id) : undefined;
+                const reservation = court.next_assignment;
+                const reservedGame = reservation ? gamesById.get(reservation.game_id) : undefined;
                 const occupied = Boolean(assignment);
                 return (
                   <article key={court.id} className={`${styles.courtCard} ${occupied ? styles.occupiedCourt : styles.availableCourt}`} aria-labelledby={`court-${court.id}`}>
@@ -1367,6 +1472,24 @@ export default function TournamentDayWorkspacePanel({
                     ) : (
                       <><p className={styles.availableText}>Available for a queued matchup.</p><p className={styles.muted}>Assign from Eligible queue. The server rechecks the game, players, queue, and court before committing.</p></>
                     )}
+                    {reservation ? (
+                      <div className={styles.courtReservation}>
+                        <span>Next on this court</span>
+                        <strong>{reservedGame ? matchupLabel(reservedGame) : "Reserved matchup unavailable"}</strong>
+                        <small>Waiting since {timestamp(reservation.reserved_at)}</small>
+                        {reservedGame ? (
+                          <button
+                            type="button"
+                            className={styles.secondaryButton}
+                            onClick={() => openReservationManager(reservedGame, court)}
+                            disabled={!dayActive || !runtimeWritesEnabled || writesFrozen || Boolean(busyKey)}
+                            aria-label={`Cancel court wait for ${matchupLabel(reservedGame)}`}
+                          >
+                            Cancel wait
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </article>
                 );
               })}
@@ -1382,32 +1505,41 @@ export default function TournamentDayWorkspacePanel({
             aria-labelledby="day-workspace-tab-queue"
             className={styles.lowerGrid}
           >
-            <section className={styles.workspaceSection} aria-label="Eligible match queue">
-              <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>Server order</p><h2>Unified eligible queue</h2><p className={styles.muted}>One authoritative order across every active draw. Filtering never renumbers priority.</p></div><label className={styles.field}>Visible draw<select value={drawFilter} onChange={(event) => chooseQueueDraw(event.target.value)}><option value="all">All eligible draws</option>{snapshot.draws.map((draw) => <option key={draw.id} value={draw.id}>{draw.name}</option>)}</select></label></div>
+            <section className={styles.workspaceSection} aria-label="Tournament match queue">
+              <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>Server order</p><h2>Unified game queue</h2><p className={styles.muted}>Ready games and matchups reserved next for a court stay visible in one authoritative order. Filtering never renumbers priority.</p></div><label className={styles.field}>Visible draw<select value={drawFilter} onChange={(event) => chooseQueueDraw(event.target.value)}><option value="all">All active draws</option>{snapshot.draws.map((draw) => <option key={draw.id} value={draw.id}>{draw.name}</option>)}</select></label></div>
               <ol className={styles.queueList}>
                 {visibleQueue.map((entry) => {
                   const game = gamesById.get(entry.game_id);
-                  const assignmentDisabled = !dayActive || !runtimeWritesEnabled || writesFrozen || Boolean(busyKey) || !availableCourts.length;
+                  const actionsDisabled = !dayActive || !runtimeWritesEnabled || writesFrozen || Boolean(busyKey);
+                  const reservedCourt = entry.reserved_court_id
+                    ? snapshot.courts.find((court) => court.id === entry.reserved_court_id)
+                    : undefined;
+                  const reserved = String(entry.state).toUpperCase() === "RESERVED";
                   return (
                     <li value={entry.position} key={entry.game_id}>
                       <div>
                         <strong>{game ? matchupLabel(game) : "Matchup unavailable"}</strong>
                         <p>{game ? gameStageLabel(game) : "Draw details unavailable"}</p>
-                        <small>{entry.reason || `Eligible since ${timestamp(entry.eligible_since)}`}</small>
-                        {game ? (
+                        <small>{entry.note || entry.reason || `Eligible since ${timestamp(entry.eligible_since)}`}</small>
+                        {game && reserved && reservedCourt ? (
                           <div className={styles.buttonRow}>
-                            <button type="button" className={styles.primaryButton} onClick={() => void assignNextCourt(game, entry)} disabled={assignmentDisabled}>Send to next open court</button>
-                            <button type="button" className={styles.secondaryButton} onClick={() => openCourtPicker(game, entry)} disabled={assignmentDisabled}>Choose court</button>
+                            <span className={styles.warningBadge}>Next on {reservedCourt.label}</span>
+                            <button type="button" className={styles.secondaryButton} onClick={() => openReservationManager(game, reservedCourt)} disabled={actionsDisabled}>Cancel wait</button>
+                          </div>
+                        ) : game ? (
+                          <div className={styles.buttonRow}>
+                            <button type="button" className={styles.primaryButton} onClick={() => void assignNextCourt(game, entry)} disabled={actionsDisabled || !availableCourts.length}>Send to next open court</button>
+                            <button type="button" className={styles.secondaryButton} onClick={() => openCourtPicker(game, entry)} disabled={actionsDisabled || !assignmentCourtChoices.length}>Choose court</button>
                             <button type="button" className={styles.secondaryButton} onClick={() => openOutcome(game)} disabled={!dayActive || !runtimeWritesEnabled || writesFrozen || Boolean(busyKey)}>Record no-play outcome</button>
                           </div>
                         ) : null}
                       </div>
-                      <span className={styles.positionBadge}>#{entry.position}</span>
+                      <span className={styles.positionBadge}>#{entry.priority || entry.position}</span>
                     </li>
                   );
                 })}
               </ol>
-              {!visibleQueue.length ? <p className={styles.emptyState}>No server-eligible matchups match this view.</p> : null}
+              {!visibleQueue.length ? <p className={styles.emptyState}>No ready or court-reserved matchups match this view.</p> : null}
             </section>
 
             <section className={styles.workspaceSection} aria-labelledby="held-blocked-title">
@@ -1663,7 +1795,9 @@ export default function TournamentDayWorkspacePanel({
               phase={busyKey ? "working" : "ready"}
               title={courtActionEditor.kind === "assign"
                 ? "Choose a court"
-                : `Move or remove · ${selectedCourtActionSource?.label || "assigned court"}`}
+                : courtActionEditor.kind === "manage_wait"
+                  ? `Waiting for ${selectedCourtActionSource?.label || "selected court"}`
+                  : `Move or remove · ${selectedCourtActionSource?.label || "assigned court"}`}
               description={(
                 <div className={styles.scoreDialogDescription}>
                   <p>{gameStageLabel(selectedCourtActionGame)}</p>
@@ -1677,37 +1811,54 @@ export default function TournamentDayWorkspacePanel({
                   {courtActionEditor.kind === "manage" ? (
                     <button type="button" className={styles.secondaryButton} onClick={() => void requeueAssignment()} disabled={Boolean(busyKey)}>Return game to queue</button>
                   ) : null}
-                  <button
-                    type="button"
-                    className={styles.primaryButton}
-                    onClick={() => void (courtActionEditor.kind === "assign" ? assignSelectedCourt() : moveAssignment())}
-                    disabled={Boolean(busyKey) || !selectedCourtActionTarget}
-                  >
-                    {busyKey
-                      ? "Updating court…"
-                      : courtActionEditor.kind === "assign"
-                        ? `Assign to ${selectedCourtActionTarget?.label || "selected court"}`
-                        : `Move to ${selectedCourtActionTarget?.label || "selected court"}`}
-                  </button>
+                  {courtActionEditor.kind === "manage_wait" ? (
+                    <button type="button" className={styles.primaryButton} onClick={() => void requeueAssignment()} disabled={Boolean(busyKey)}>
+                      {busyKey ? "Updating queue…" : "Return matchup to eligible queue"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className={styles.primaryButton}
+                      onClick={() => void (courtActionEditor.kind === "assign" ? assignSelectedCourt() : moveAssignment())}
+                      disabled={Boolean(busyKey) || !selectedCourtActionTarget}
+                    >
+                      {busyKey
+                        ? "Updating court…"
+                        : courtActionEditor.kind === "assign"
+                          ? selectedCourtActionTarget?.current_assignment
+                            ? `Wait for ${selectedCourtActionTarget.label}`
+                            : `Assign to ${selectedCourtActionTarget?.label || "selected court"}`
+                          : `Move to ${selectedCourtActionTarget?.label || "selected court"}`}
+                    </button>
+                  )}
                 </>
               )}
             >
-              <label className={styles.field}>
-                {courtActionEditor.kind === "assign" ? "Open court" : "Move to open court"}
-                <select
-                  data-autofocus
-                  value={courtActionEditor.targetCourtId}
-                  disabled={Boolean(busyKey) || !availableCourts.length}
-                  onChange={(event) => setCourtActionEditor({ ...courtActionEditor, targetCourtId: event.target.value })}
-                >
-                  {!availableCourts.length ? <option value="">No open courts</option> : null}
-                  {availableCourts.map((court) => <option key={court.id} value={court.id}>{court.label}</option>)}
-                </select>
-              </label>
+              {courtActionEditor.kind !== "manage_wait" ? (
+                <label className={styles.field}>
+                  {courtActionEditor.kind === "assign" ? "Court" : "Move to open court"}
+                  <select
+                    data-autofocus
+                    value={courtActionEditor.targetCourtId}
+                    disabled={Boolean(busyKey) || !(courtActionEditor.kind === "assign" ? assignmentCourtChoices : availableCourts).length}
+                    onChange={(event) => setCourtActionEditor({ ...courtActionEditor, targetCourtId: event.target.value })}
+                  >
+                    {(courtActionEditor.kind === "assign" ? assignmentCourtChoices : availableCourts).map((court) => (
+                      <option key={court.id} value={court.id}>
+                        {court.label} — {court.current_assignment ? "Occupied · wait next" : "Open now"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               {courtActionEditor.kind === "manage" ? (
                 <p className={styles.muted}>Moving keeps the game on court and transfers it atomically. Returning it to the queue releases its player claims and preserves its existing queue priority.</p>
+              ) : courtActionEditor.kind === "manage_wait" ? (
+                <p className={styles.muted}>This matchup and its players are reserved for this court. It will move onto the court automatically when the current match releases it. Returning it to the queue cancels that reservation.</p>
               ) : (
-                <p className={styles.muted}>The server will recheck that this matchup is still eligible and this exact court is still open before assigning it.</p>
+                <p className={styles.muted}>{selectedCourtActionTarget?.current_assignment
+                  ? "The server will reserve this matchup and its players as next for the occupied court, then promote it automatically when that court is released."
+                  : "The server will recheck that this matchup is still eligible and this exact court is still open before assigning it."}</p>
               )}
             </InteractionDialog>
           ) : null}
@@ -1815,7 +1966,7 @@ export default function TournamentDayWorkspacePanel({
                     <div><strong>{sideLabel(selectedScoreGame.team_a)}</strong><span>{selectedScoreValidation.scoreA}</span></div>
                     <div><strong>{sideLabel(selectedScoreGame.team_b)}</strong><span>{selectedScoreValidation.scoreB}</span></div>
                     <p>Winner: <strong>{selectedScoreValidation.scoreA > selectedScoreValidation.scoreB ? sideLabel(selectedScoreGame.team_a) : sideLabel(selectedScoreGame.team_b)}</strong></p>
-                    <p>Saving finalizes the score and releases {selectedScoreCourt.label}. The next matchup remains in the queue until an operator sends it to an open court.</p>
+                    <p>Saving finalizes the score and releases {selectedScoreCourt.label}. A matchup marked Next on this court moves onto it automatically; all other games remain in the queue.</p>
                     {selectedScoreValidation.unusual ? (
                       <label className={styles.forfeitBoundary}>
                         <input

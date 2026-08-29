@@ -34,6 +34,7 @@ def test_day_ops_transport_is_typed_and_isolated_from_the_draw_client() -> None:
         "auto_fill_courts",
         "assign_next_court",
         "assign_game_to_court",
+        "reserve_game_for_court",
         "requeue_game",
         "move_game_to_court",
         "score_and_release",
@@ -75,7 +76,7 @@ def test_live_operations_base_is_the_canonical_day_console() -> None:
     assert "TournamentDayWorkspacePanel" in route
     assert 'aria-label="Tournament day scope"' in panel
     assert 'aria-labelledby="day-workspace-tab-board"' in panel
-    assert 'aria-label="Eligible match queue"' in panel
+    assert 'aria-label="Tournament match queue"' in panel
     assert "snapshot.eligible_queue" in panel
     assert "Server order" in panel
     assert "Held and blocked matches" in panel
@@ -128,6 +129,7 @@ def test_day_console_renders_authoritative_courts_and_progression_controls() -> 
     assert "Return game to queue" in panel
     assert '"assign_next_court"' in panel
     assert '"assign_game_to_court"' in panel
+    assert '"reserve_game_for_court"' in panel
     assert '"requeue_game"' in panel
     assert '"move_game_to_court"' in panel
     assert "target_court_version" in panel
@@ -170,14 +172,16 @@ def test_day_court_assignment_is_manual_atomic_and_version_fenced() -> None:
     state = read_web("lib/tournamentDayWorkspaceState.mjs")
 
     assert 'submitCommand(\n      "assign_next_court"' in panel
-    assert 'submitCommand(\n      "assign_game_to_court"' in panel
+    assert '? "reserve_game_for_court"\n      : "assign_game_to_court"' in panel
+    assert "dayActionConfirmation(action)" in panel
+    assert '"reserve_game_for_court"' in panel
     assert 'submitCommand(\n      "requeue_game"' in panel
     assert 'submitCommand(\n      "move_game_to_court"' in panel
     assert "queue_entry_version: entry.version" in panel
     assert "court_version: targetCourt.version" in panel
     assert "target_court_version: targetCourt.version" in panel
     assert "Court assignment controls closed because the queue or court board changed" in panel
-    assert "The next matchup remains in the queue until an operator" in panel
+    assert "reserved next for the selected occupied court" in panel
     assert "refills it from the server-ordered eligible queue" not in panel
     assert "refills available courts" not in panel
     assert "ASSIGN NEXT OPEN COURT" in state
@@ -185,8 +189,10 @@ def test_day_court_assignment_is_manual_atomic_and_version_fenced() -> None:
     assert "RETURN GAME TO QUEUE" in state
     assert "MOVE GAME TO COURT" in state
     assert "readyActiveDrawQueue" in panel
-    assert 'aria-label="Ready games from active draws"' in panel
+    assert 'aria-label="Ready and court-reserved games from active draws"' in panel
     assert "courtBoardQueue.map" in panel
+    assert "Next on this court" in panel
+    assert "promotedReservationNotice" in panel
     assert "flex-wrap: nowrap" in read_web(
         "app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.module.css"
     )

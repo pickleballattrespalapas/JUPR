@@ -49,7 +49,7 @@ TOURNAMENT_DAY_LIVE_SURFACE = "tournament_live"
 TOURNAMENT_DAY_LIVE_ENTITY = "tournament_registration_day"
 TOURNAMENT_DAY_LIVE_RECONCILE_CONFIRMATION = "RECONCILE DAY OPERATIONS"
 ACTIVE_OPERATION_STATUSES = {"intent", "mutated", "recovery_required"}
-ACTIVE_QUEUE_STATES = {"HELD", "CALLED", "ON_COURT"}
+ACTIVE_QUEUE_STATES = {"HELD", "CALLED", "ON_COURT", "RESERVED"}
 NON_PLAYED_RESULT_TYPES = {"FORFEIT", "NO_SHOW", "RETIREMENT"}
 SUPPORTED_ADVANCE_COUNTS = (4, 5, 6)
 COMMAND_CONFIRMATIONS = {
@@ -60,6 +60,7 @@ COMMAND_CONFIRMATIONS = {
     "auto_fill_courts": "AUTO FILL COURTS",
     "assign_next_court": "ASSIGN NEXT OPEN COURT",
     "assign_game_to_court": "ASSIGN GAME TO COURT",
+    "reserve_game_for_court": "WAIT FOR SELECTED COURT",
     "requeue_game": "RETURN GAME TO QUEUE",
     "move_game_to_court": "MOVE GAME TO COURT",
     "score_and_release": "SAVE SCORE AND RELEASE COURT",
@@ -725,6 +726,13 @@ def build_admin_tournament_day_live_snapshot(
         and not row.get("released_at")
         and row.get("court_id")
     }
+    reservation_by_court = {
+        _text(row.get("reserved_court_id")): row
+        for row in queue_rows
+        if _text(row.get("state")).upper() == "RESERVED"
+        and not row.get("released_at")
+        and row.get("reserved_court_id")
+    }
 
     operation_entity_ids = sorted(
         {f"{tournament_id}:{registration_day_id}", *draw_ids}
@@ -803,6 +811,7 @@ def build_admin_tournament_day_live_snapshot(
     for court in court_source:
         court_id = _text(court.get("id"))
         assignment = queue_by_court.get(court_id)
+        reservation = reservation_by_court.get(court_id)
         operator_state = (
             "ON_COURT"
             if assignment
@@ -818,6 +827,15 @@ def build_admin_tournament_day_live_snapshot(
                 "assigned_at": assignment.get("called_at") or assignment.get("held_at") or assignment.get("updated_at"),
                 "started_at": assignment.get("started_at"),
             }
+        reservation_row = None
+        if reservation:
+            reservation_row = {
+                "id": _text(reservation.get("id")),
+                "game_id": _text(reservation.get("game_id")),
+                "state": "RESERVED",
+                "version": str(reservation.get("version") or "0"),
+                "reserved_at": reservation.get("reserved_at") or reservation.get("updated_at"),
+            }
         court_rows.append(
             {
                 "id": court_id,
@@ -826,6 +844,7 @@ def build_admin_tournament_day_live_snapshot(
                 "state": operator_state,
                 "version": str(court.get("version") or "0"),
                 "current_assignment": assignment_row,
+                "next_assignment": reservation_row,
             }
         )
 
@@ -988,6 +1007,7 @@ def build_admin_tournament_day_live_snapshot(
                 "version": _text(game.get("updated_at")) or "0",
                 "queue_entry_version": str((queue or {}).get("version") or "0"),
                 "court_id": _text((queue or {}).get("court_id")) or None,
+                "reserved_court_id": _text((queue or {}).get("reserved_court_id")) or None,
                 "blockers": (
                     [_blocker(_text(queue.get("blocker_code")) or "BLOCKED", _text(queue.get("blocker_detail")) or "This game is not currently eligible.")]
                     if queue and _text(queue.get("state")).upper() == "BLOCKED"
@@ -1503,6 +1523,7 @@ def build_admin_tournament_day_live_snapshot(
             "state": state or _text(row.get("state")).upper(),
             "version": str(row.get("version") or "0"),
             "court_id": _text(row.get("court_id")) or None,
+            "reserved_court_id": _text(row.get("reserved_court_id")) or None,
             "eligible_since": row.get("eligible_since"),
             "reason": (blockers[0]["code"] if blockers else row.get("blocker_code")),
             "note": (blockers[0]["message"] if blockers else row.get("blocker_detail")),
@@ -1696,6 +1717,31 @@ def build_admin_tournament_day_live_snapshot(
         item = queue_item(row, index)
         item["immediate_fill_candidate"] = index <= assignment_ordinal
         eligible_queue.append(item)
+    court_labels_by_id = {
+        _text(court.get("id")): _text(court.get("label") or "Selected court")
+        for court in court_rows
+    }
+    reserved_queue = []
+    for index, row in enumerate(
+        [
+            row
+            for row in ordered_queue
+            if _text(row.get("state")).upper() == "RESERVED"
+        ],
+        start=1,
+    ):
+        item = queue_item(row, index)
+        court_label = court_labels_by_id.get(
+            _text(row.get("reserved_court_id")), "selected court"
+        )
+        item.update(
+            {
+                "reason": "NEXT_ON_COURT",
+                "note": f"Next on {court_label}; this matchup and its players are reserved while the current game finishes.",
+                "reserved_at": row.get("reserved_at"),
+            }
+        )
+        reserved_queue.append(item)
     held_games = [queue_item(row, index) for index, row in enumerate([row for row in ordered_queue if _text(row.get("state")).upper() == "HELD"], start=1)]
     persisted_blocked = [(row, []) for row in ordered_queue if _text(row.get("state")).upper() == "BLOCKED"]
     blocked_games = [
@@ -1932,6 +1978,7 @@ def build_admin_tournament_day_live_snapshot(
             "available_courts": sum(row["state"] == "AVAILABLE" for row in court_rows),
             "active_draws": sum(row["activation_state"] == "ACTIVE" for row in draw_rows),
             "eligible_games": len(eligible_queue),
+            "reserved_games": len(reserved_queue),
             "held_games": len(held_games),
             "completed_games": sum(_text(row.get("state")).upper() == "COMPLETED" for row in queue_rows),
         },
@@ -1940,6 +1987,7 @@ def build_admin_tournament_day_live_snapshot(
         "courts": court_rows,
         "games": game_rows,
         "eligible_queue": eligible_queue,
+        "reserved_queue": reserved_queue,
         "held_games": held_games,
         "blocked_games": blocked_games,
         "operations": [_safe_operation(row) for row in raw_operations[:25]],
@@ -2013,6 +2061,7 @@ def _normalize_request(request: dict[str, Any]) -> tuple[str, str, str, dict[str
         "close_day": set(),
         "assign_next_court": {"game_id"},
         "assign_game_to_court": {"game_id", "court_id"},
+        "reserve_game_for_court": {"game_id", "court_id"},
         "requeue_game": {"game_id"},
         "move_game_to_court": {"game_id", "court_id"},
         "activate_draw": {"draw_id"},
@@ -2102,7 +2151,11 @@ def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], 
         # Rechecking the database RPC under locks is final authority. Allow a
         # no-op fill when no game is ready so operators can safely refresh it.
         return
-    elif action in {"assign_next_court", "assign_game_to_court"}:
+    elif action in {
+        "assign_next_court",
+        "assign_game_to_court",
+        "reserve_game_for_court",
+    }:
         game_id = _text(payload.get("game_id"))
         game = _selected_game(snapshot, game_id)
         queue_entry = next(
@@ -2133,7 +2186,7 @@ def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], 
             if _text(row.get("state")).upper() == "AVAILABLE"
             and not row.get("current_assignment")
         ]
-        if not available_courts:
+        if action == "assign_next_court" and not available_courts:
             raise ValueError("No tournament-day court is currently available.")
         if action == "assign_game_to_court":
             court_id = _text(payload.get("court_id"))
@@ -2151,6 +2204,28 @@ def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], 
                 raise StaleTournamentAdminStateError(
                     "Selected court version changed after assignment review."
                 )
+        elif action == "reserve_game_for_court":
+            court_id = _text(payload.get("court_id"))
+            court = next(
+                (
+                    row
+                    for row in snapshot.get("courts", [])
+                    if _text(row.get("id")) == court_id
+                    and row.get("current_assignment")
+                    and not row.get("next_assignment")
+                ),
+                None,
+            )
+            if not court:
+                raise StaleTournamentAdminStateError(
+                    "The selected court is no longer occupied or already has a next match."
+                )
+            if expected.get("court_version") in (None, "") or str(
+                expected.get("court_version")
+            ) != str(court.get("version")):
+                raise StaleTournamentAdminStateError(
+                    "Selected court version changed after wait-list review."
+                )
         elif expected.get("court_version") not in (None, ""):
             raise StaleTournamentAdminStateError(
                 "Next-open-court assignment must let the server select the court."
@@ -2163,14 +2238,17 @@ def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], 
             (
                 row
                 for row in snapshot.get("courts", [])
-                if _text((row.get("current_assignment") or {}).get("game_id"))
-                == game_id
+                if game_id
+                in {
+                    _text((row.get("current_assignment") or {}).get("game_id")),
+                    _text((row.get("next_assignment") or {}).get("game_id")),
+                }
             ),
             None,
         )
         if not game or not source_court:
             raise StaleTournamentAdminStateError(
-                "This game is no longer assigned to a tournament-day court."
+                "This game is no longer assigned to or waiting for a tournament-day court."
             )
         if expected.get("game_version") in (None, "") or str(
             expected.get("game_version")
@@ -2196,6 +2274,10 @@ def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], 
                     "Returning a game to the queue cannot include a target court."
                 )
             return
+        if _text((source_court.get("current_assignment") or {}).get("game_id")) != game_id:
+            raise StaleTournamentAdminStateError(
+                "A game waiting for a court must return to the queue before it can move."
+            )
         target_court_id = _text(payload.get("court_id"))
         target_court = next(
             (
@@ -2802,7 +2884,28 @@ def execute_admin_tournament_day_live_command(
             )
         if action == "auto_fill_courts":
             return _rpc(supabase, "admin_fill_tournament_day_courts_cas", common)
-        if action in {"assign_next_court", "assign_game_to_court"}:
+        if action in {
+            "assign_next_court",
+            "assign_game_to_court",
+            "reserve_game_for_court",
+        }:
+            if action == "reserve_game_for_court":
+                return _rpc(
+                    supabase,
+                    "admin_reserve_tournament_day_game_cas",
+                    {
+                        **common,
+                        "p_game_id": _text(submitted_payload.get("game_id")),
+                        "p_court_id": _text(submitted_payload.get("court_id")),
+                        "p_expected_queue_entry_version": int(
+                            expected.get("queue_entry_version") or 0
+                        ),
+                        "p_expected_game_updated_at": expected.get("game_version"),
+                        "p_expected_court_version": int(
+                            expected.get("court_version") or 0
+                        ),
+                    },
+                )
             return _rpc(
                 supabase,
                 "admin_assign_tournament_day_game_cas",
@@ -2829,13 +2932,39 @@ def execute_admin_tournament_day_live_command(
                 },
             )
         if action in {"requeue_game", "move_game_to_court"}:
+            game_id = _text(submitted_payload.get("game_id"))
+            reservation_court = next(
+                (
+                    row
+                    for row in snapshot.get("courts", [])
+                    if _text((row.get("next_assignment") or {}).get("game_id"))
+                    == game_id
+                ),
+                None,
+            )
+            if action == "requeue_game" and reservation_court:
+                return _rpc(
+                    supabase,
+                    "admin_cancel_tournament_day_court_reservation_cas",
+                    {
+                        **common,
+                        "p_game_id": game_id,
+                        "p_expected_queue_entry_version": int(
+                            expected.get("queue_entry_version") or 0
+                        ),
+                        "p_expected_game_updated_at": expected.get("game_version"),
+                        "p_expected_court_version": int(
+                            expected.get("court_version") or 0
+                        ),
+                    },
+                )
             return _rpc(
                 supabase,
                 "admin_reassign_tournament_day_game_cas",
                 {
                     **common,
                     "p_action": "REQUEUE" if action == "requeue_game" else "MOVE",
-                    "p_game_id": _text(submitted_payload.get("game_id")),
+                    "p_game_id": game_id,
                     "p_target_court_id": (
                         _text(submitted_payload.get("court_id")) or None
                     ),

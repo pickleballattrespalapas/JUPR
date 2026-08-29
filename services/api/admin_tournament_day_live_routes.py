@@ -54,6 +54,7 @@ class AdminTournamentDayLiveCommandRequest(BaseModel):
         "auto_fill_courts",
         "assign_next_court",
         "assign_game_to_court",
+        "reserve_game_for_court",
         "requeue_game",
         "move_game_to_court",
         "score_and_release",

@@ -34,6 +34,7 @@ assert.equal(
 );
 assert.equal(dayActionConfirmation("assign_next_court"), "ASSIGN NEXT OPEN COURT");
 assert.equal(dayActionConfirmation("assign_game_to_court"), "ASSIGN GAME TO COURT");
+assert.equal(dayActionConfirmation("reserve_game_for_court"), "WAIT FOR SELECTED COURT");
 assert.equal(dayActionConfirmation("requeue_game"), "RETURN GAME TO QUEUE");
 assert.equal(dayActionConfirmation("move_game_to_court"), "MOVE GAME TO COURT");
 

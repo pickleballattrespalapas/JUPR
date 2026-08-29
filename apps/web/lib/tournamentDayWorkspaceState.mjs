@@ -6,6 +6,7 @@ const DAY_ACTION_CONFIRMATIONS = Object.freeze({
   auto_fill_courts: "AUTO FILL COURTS",
   assign_next_court: "ASSIGN NEXT OPEN COURT",
   assign_game_to_court: "ASSIGN GAME TO COURT",
+  reserve_game_for_court: "WAIT FOR SELECTED COURT",
   requeue_game: "RETURN GAME TO QUEUE",
   move_game_to_court: "MOVE GAME TO COURT",
   score_and_release: "SAVE SCORE AND RELEASE COURT",
