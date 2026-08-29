@@ -5,6 +5,7 @@ import {
   dayActionConfirmation,
   dayRunAcceptsLiveCommands,
   dayRunHasStarted,
+  oldestReadyQueue,
   readyActiveDrawQueue,
   resetFocusForDay,
   retainedDayCommandStorageKey,
@@ -64,6 +65,22 @@ assert.deepEqual(
   visibleServerQueue(queue, "draw-a").map((row) => [row.game_id, row.position]),
   [["g-a-1", 1], ["g-a-2", 3]],
   "a draw visibility filter may hide rows but must retain authoritative positions"
+);
+
+const mixedQueuePayload = [
+  { game_id: "newest", position: 3, priority: 1, eligible_since: "2026-08-17T09:03:00Z" },
+  { game_id: "oldest", position: 1, priority: 50, eligible_since: "2026-08-17T09:01:00Z" },
+  { game_id: "middle", position: 2, priority: 25, eligible_since: "2026-08-17T09:02:00Z" }
+];
+assert.deepEqual(
+  oldestReadyQueue(mixedQueuePayload).map((row) => row.game_id),
+  ["oldest", "middle", "newest"],
+  "the client must use authoritative FIFO positions instead of static bracket priority"
+);
+assert.deepEqual(
+  mixedQueuePayload.map((row) => row.game_id),
+  ["newest", "oldest", "middle"],
+  "ordering the queue must not mutate the snapshot arrays"
 );
 
 const boardQueue = [

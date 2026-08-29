@@ -125,6 +125,19 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _timestamp_order_value(value: Any) -> float:
+    text = _text(value)
+    if not text:
+        return float("inf")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return float("inf")
+
+
 def _canonical(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _canonical(value[key]) for key in sorted(value)}
@@ -1505,6 +1518,8 @@ def build_admin_tournament_day_live_snapshot(
             }
         )
 
+    effective_eligible_since_by_queue_id: dict[str, Any] = {}
+
     def queue_item(
         row: dict[str, Any],
         position: int,
@@ -1524,7 +1539,9 @@ def build_admin_tournament_day_live_snapshot(
             "version": str(row.get("version") or "0"),
             "court_id": _text(row.get("court_id")) or None,
             "reserved_court_id": _text(row.get("reserved_court_id")) or None,
-            "eligible_since": row.get("eligible_since"),
+            "eligible_since": effective_eligible_since_by_queue_id.get(
+                _text(row.get("id")), row.get("eligible_since")
+            ),
             "reason": (blockers[0]["code"] if blockers else row.get("blocker_code")),
             "note": (blockers[0]["message"] if blockers else row.get("blocker_detail")),
             "held_at": row.get("held_at"),
@@ -1559,6 +1576,80 @@ def build_admin_tournament_day_live_snapshot(
             )
             if team_id and player_id is not None
         }
+
+    # Queue age begins when a matchup actually becomes playable, not when its
+    # durable row was first seeded. Round-robin rows are created together and
+    # can spend several rounds behind an earlier team game; cross-draw player
+    # claims can also make a previously waiting matchup leave and later rejoin
+    # the ready queue. Use the latest prerequisite completion / other-game
+    # claim release as the effective ready time while excluding this row's own
+    # claims so a move, reservation cancellation, or requeue preserves age.
+    for row in queue_rows:
+        queue_id = _text(row.get("id"))
+        priority = _safe_int(row.get("priority"), 0) or 0
+        team_ids_for_row = {
+            team_id
+            for team_id in (
+                _text(row.get("team_a_id")),
+                _text(row.get("team_b_id")),
+            )
+            if team_id
+        }
+        effective_players = effective_players_for_queue(row)
+        base_ready_at = next(
+            (
+                value
+                for value in (
+                    row.get("eligible_since"),
+                    row.get("created_at"),
+                    row.get("updated_at"),
+                )
+                if _timestamp_order_value(value) != float("inf")
+            ),
+            None,
+        )
+        ready_candidates = [base_ready_at] if base_ready_at is not None else []
+        ready_candidates.extend(
+            value
+            for earlier in queue_rows
+            if _text(earlier.get("draw_id")) == _text(row.get("draw_id"))
+            and (_safe_int(earlier.get("priority"), 0) or 0) < priority
+            and bool(
+                {
+                    _text(earlier.get("team_a_id")),
+                    _text(earlier.get("team_b_id")),
+                }
+                & team_ids_for_row
+            )
+            and _text(earlier.get("state")).upper() in {"COMPLETED", "WITHDRAWN"}
+            for value in (
+                earlier.get("completed_at"),
+                earlier.get("released_at"),
+                earlier.get("updated_at"),
+            )
+            if _timestamp_order_value(value) != float("inf")
+        )
+        ready_candidates.extend(
+            claim.get("released_at")
+            for claim in claim_rows
+            if _text(claim.get("queue_id")) != queue_id
+            and _safe_int(claim.get("player_id")) in effective_players
+            and _timestamp_order_value(claim.get("released_at")) != float("inf")
+        )
+        effective_eligible_since_by_queue_id[queue_id] = (
+            max(ready_candidates, key=_timestamp_order_value)
+            if ready_candidates
+            else row.get("eligible_since")
+        )
+
+    def ready_queue_key(row: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            _timestamp_order_value(
+                effective_eligible_since_by_queue_id.get(_text(row.get("id")))
+            ),
+            _safe_int(row.get("priority"), 0) or 0,
+            _text(row.get("id")),
+        )
 
     def waiting_blockers(row: dict[str, Any]) -> list[dict[str, Any]]:
         blockers: list[dict[str, Any]] = []
@@ -1661,76 +1752,52 @@ def build_admin_tournament_day_live_snapshot(
             derived_blocked.append((row, blockers))
         else:
             eligible_rows.append(row)
-    # PostgreSQL recomputes fairness after every court assignment. Simulate
-    # that sequence so visible queue positions match an atomic multi-court fill
-    # instead of sorting once and letting one draw monopolize the front.
-    remaining = list(eligible_rows)
-    eligible_rows = []
-    virtual_counts = dict(active_assignments_by_draw)
-    virtual_last = {
-        draw_id: (day_draw_by_draw.get(draw_id) or {}).get("last_assigned_at")
-        for draw_id in draw_ids
-    }
-    assignment_ordinal = 0
+    # The visible queue is strict FIFO by the moment each matchup most recently
+    # became playable. Static bracket priority is only a deterministic
+    # tie-breaker; it must never let a newly ready game jump the line.
+    eligible_rows.sort(key=ready_queue_key)
     virtual_claimed_players = set(active_claimed_players)
     available_assignment_slots = sum(
         row.get("state") == "AVAILABLE" for row in court_rows
     )
-    while remaining and assignment_ordinal < available_assignment_slots:
-        candidates = [
-            row
-            for row in remaining
-            if not (
-                effective_players_for_queue(row) & virtual_claimed_players
-            )
-        ]
-        if not candidates:
+    immediate_fill_ids: set[str] = set()
+    for row in eligible_rows:
+        if len(immediate_fill_ids) >= available_assignment_slots:
             break
-        chosen = min(
-            candidates,
-            key=lambda row: fairness_key(
-                row,
-                assignment_counts=virtual_counts,
-                last_assigned_values=virtual_last,
-            ),
-        )
-        remaining.remove(chosen)
-        eligible_rows.append(chosen)
-        chosen_draw_id = _text(chosen.get("draw_id"))
-        virtual_counts[chosen_draw_id] = virtual_counts.get(chosen_draw_id, 0) + 1
-        assignment_ordinal += 1
-        virtual_claimed_players.update(effective_players_for_queue(chosen))
-        virtual_last[chosen_draw_id] = f"9999-12-31T23:59:59.{assignment_ordinal:06d}Z"
-    # Positions through the available-court window are the exact next atomic
-    # fill sequence. Rows after that window remain eligible but are ordered for
-    # display only because future releases change the scheduler state.
-    remaining.sort(
-        key=lambda row: fairness_key(
-            row,
-            assignment_counts=virtual_counts,
-            last_assigned_values=virtual_last,
-        )
+        players_for_row = effective_players_for_queue(row)
+        if players_for_row & virtual_claimed_players:
+            continue
+        immediate_fill_ids.add(_text(row.get("id")))
+        virtual_claimed_players.update(players_for_row)
+
+    reserved_rows = [
+        row
+        for row in queue_rows
+        if _text(row.get("state")).upper() == "RESERVED"
+    ]
+    unified_queue_rows = sorted(
+        [*eligible_rows, *reserved_rows], key=ready_queue_key
     )
-    eligible_rows.extend(remaining)
+    unified_position_by_queue_id = {
+        _text(row.get("id")): position
+        for position, row in enumerate(unified_queue_rows, start=1)
+    }
     eligible_queue = []
-    for index, row in enumerate(eligible_rows, start=1):
-        item = queue_item(row, index)
-        item["immediate_fill_candidate"] = index <= assignment_ordinal
+    for row in eligible_rows:
+        item = queue_item(
+            row, unified_position_by_queue_id[_text(row.get("id"))]
+        )
+        item["immediate_fill_candidate"] = _text(row.get("id")) in immediate_fill_ids
         eligible_queue.append(item)
     court_labels_by_id = {
         _text(court.get("id")): _text(court.get("label") or "Selected court")
         for court in court_rows
     }
     reserved_queue = []
-    for index, row in enumerate(
-        [
-            row
-            for row in ordered_queue
-            if _text(row.get("state")).upper() == "RESERVED"
-        ],
-        start=1,
-    ):
-        item = queue_item(row, index)
+    for row in sorted(reserved_rows, key=ready_queue_key):
+        item = queue_item(
+            row, unified_position_by_queue_id[_text(row.get("id"))]
+        )
         court_label = court_labels_by_id.get(
             _text(row.get("reserved_court_id")), "selected court"
         )

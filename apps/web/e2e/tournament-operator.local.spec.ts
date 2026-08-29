@@ -907,6 +907,10 @@ test("Court board queue can use the next court, a chosen court, move, and requeu
   });
   await page.goto(`/admin/tournaments/live-operations?${selectedQuery}&panel=board`);
   const queue = page.getByRole("region", { name: "Ready and court-reserved games from active draws" });
+  await expect(queue.locator("ol > li").nth(0)).toContainText("Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith");
+  await expect(queue.locator("ol > li").nth(0)).toContainText("#1");
+  await expect(queue.locator("ol > li").nth(1)).toContainText("Nora Williams / Sofia Kim vs Emma Davis / Mia Johnson");
+  await expect(queue.locator("ol > li").nth(1)).toContainText("#2");
   const gameBRow = queue.locator("ol > li").filter({ hasText: "Avery Patel / Jordan Lee vs Morgan Diaz / Riley Smith" });
   await gameBRow.getByRole("button", { name: /Send Avery Patel.*to next open court/ }).click();
   await expect(page.getByRole("status")).toContainText("Matchup assigned to the next authoritative open court.");

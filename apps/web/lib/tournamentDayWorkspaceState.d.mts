@@ -50,6 +50,7 @@ export function dayActionConfirmation(action: TournamentDayCommandAction): strin
 export function dayRunHasStarted(state: string | null | undefined): boolean;
 export function dayRunAcceptsLiveCommands(state: string | null | undefined): boolean;
 export function visibleServerQueue<T extends ServerQueueRow>(queue: readonly T[], drawId: string): T[];
+export function oldestReadyQueue<T extends ServerQueueRow>(queue: readonly T[]): T[];
 export function readyActiveDrawQueue<T extends ServerQueueRow>(queue: readonly T[], draws: readonly DayDrawRow[]): T[];
 export function tournamentDayMedalMatchKind(
   game: TournamentDayMedalGame | null | undefined
