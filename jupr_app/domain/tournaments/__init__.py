@@ -5,6 +5,7 @@ from .bracket_builder import (
     compute_podium_from_playoffs,
     compute_podium_from_rr,
     compute_round_robin_standings,
+    compute_round_robin_standings_with_tiebreaks,
     finalize_game,
     resolve_playoff_dependencies,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "compute_podium_from_playoffs",
     "compute_podium_from_rr",
     "compute_round_robin_standings",
+    "compute_round_robin_standings_with_tiebreaks",
     "finalize_game",
     "resolve_playoff_dependencies",
     "validate_podium_placements",

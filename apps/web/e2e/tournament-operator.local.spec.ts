@@ -259,9 +259,9 @@ function dayReadiness(ready: boolean, confirmation: string, message = "") {
 
 const playoffStandings = [
   { seed: 1, team_id: "playoff-team-a", team_name: "Avery Patel / Jordan Lee", participant_names: ["Avery Patel", "Jordan Lee"], wins: 5, losses: 0, points_for: 55, points_against: 31, differential: 24, non_play_results: 0, competition_status: "ACTIVE", retired: false },
-  { seed: 2, team_id: "playoff-team-b", team_name: "Morgan Diaz / Riley Smith", participant_names: ["Morgan Diaz", "Riley Smith"], wins: 4, losses: 1, points_for: 52, points_against: 37, differential: 15, non_play_results: 0, competition_status: "ACTIVE", retired: false },
+  { seed: 2, team_id: "playoff-team-b", team_name: "Morgan Diaz / Riley Smith", participant_names: ["Morgan Diaz", "Riley Smith"], wins: 3, losses: 2, points_for: 52, points_against: 37, differential: 15, non_play_results: 0, competition_status: "ACTIVE", retired: false },
   { seed: 3, team_id: "playoff-team-c", team_name: "Taylor Reed / Casey Brooks", participant_names: ["Taylor Reed", "Casey Brooks"], wins: 3, losses: 2, points_for: 48, points_against: 42, differential: 6, non_play_results: 0, competition_status: "ACTIVE", retired: false },
-  { seed: 4, team_id: "playoff-team-d", team_name: "Jamie Flores / Skyler Moore", participant_names: ["Jamie Flores", "Skyler Moore"], wins: 2, losses: 3, points_for: 43, points_against: 47, differential: -4, non_play_results: 1, competition_status: "ACTIVE", retired: false },
+  { seed: 4, team_id: "playoff-team-d", team_name: "Jamie Flores / Skyler Moore", participant_names: ["Jamie Flores", "Skyler Moore"], wins: 3, losses: 2, points_for: 43, points_against: 47, differential: -4, non_play_results: 1, competition_status: "ACTIVE", retired: false },
   { seed: 5, team_id: "playoff-team-e", team_name: "Nora Williams / Sofia Kim", participant_names: ["Nora Williams", "Sofia Kim"], wins: 1, losses: 4, points_for: 38, points_against: 52, differential: -14, non_play_results: 0, competition_status: "ACTIVE", retired: false },
   { seed: 6, team_id: "playoff-team-f", team_name: "Emma Davis / Mia Johnson", participant_names: ["Emma Davis", "Mia Johnson"], wins: 0, losses: 5, points_for: 29, points_against: 55, differential: -26, non_play_results: 0, competition_status: "ACTIVE", retired: false },
   { seed: 7, team_id: "playoff-team-retired", team_name: "Retired Test Team", participant_names: ["Retired Player", "Withdrawn Player"], wins: 0, losses: 5, points_for: 0, points_against: 55, differential: -55, non_play_results: 5, competition_status: "RETIRED", retired: true }
@@ -413,10 +413,28 @@ function dayWorkspaceSnapshot() {
         round_robin_summary: {
           standings: playoffStandings,
           ranking_policy: {
-            description: "Rank active teams by wins, point differential, points scored, head-to-head, then original team number.",
-            criteria: ["WINS", "POINT_DIFFERENTIAL", "POINTS_FOR", "TWO_TEAM_HEAD_TO_HEAD", "TEAM_NUMBER"],
+            description: "Teams are ranked by wins. Tied teams are compared head-to-head first. Any tie that remains uses point differential, then total points scored, then original team number.",
+            criteria: ["WINS", "HEAD_TO_HEAD", "POINT_DIFFERENTIAL", "POINTS_FOR", "TEAM_NUMBER"],
             retired_teams_eligible: false
-          }
+          },
+          tiebreak_explanations: [
+            {
+              title: "Three-way tie at 3–2",
+              summary: "Morgan Diaz / Riley Smith, Taylor Reed / Casey Brooks, and Jamie Flores / Skyler Moore were tied on wins. Head-to-head could not separate them, so point differential set their final order.",
+              steps: [
+                {
+                  criterion: "HEAD_TO_HEAD",
+                  outcome: "UNRESOLVED",
+                  detail: "Each tied team went 1–1 against the other tied teams."
+                },
+                {
+                  criterion: "POINT_DIFFERENTIAL",
+                  outcome: "RESOLVED",
+                  detail: "Morgan Diaz / Riley Smith ranked highest at +15, followed by Taylor Reed / Casey Brooks at +6 and Jamie Flores / Skyler Moore at −4."
+                }
+              ]
+            }
+          ]
         },
         playoff_review: {
           eligible_team_ids: playoffStandings.filter((standing) => !standing.retired).map((standing) => standing.team_id),
@@ -991,6 +1009,13 @@ test("completed round robin opens a reviewed playoff setup with exact seeds and 
 
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "Review playoffs · Open Division Draw" })).toBeVisible();
+  const tiebreakAudit = dialog.getByRole("region", { name: "How tied teams were ranked" });
+  await expect(tiebreakAudit).toBeVisible();
+  await expect(tiebreakAudit.getByRole("heading", { name: "Three-way tie at 3–2" })).toBeVisible();
+  await expect(tiebreakAudit).toContainText("Head-to-head could not separate them, so point differential set their final order.");
+  await expect(tiebreakAudit.getByRole("list", { name: "Tie-break steps for Three-way tie at 3–2" })).toContainText("Each tied team went 1–1 against the other tied teams.");
+  await expect(tiebreakAudit).toContainText("Still tied");
+  await expect(tiebreakAudit).toContainText("Resolved");
   const standings = dialog.getByRole("table", { name: "Completed round-robin standings and current playoff selections" });
   await expect(standings).toContainText("Avery Patel / Jordan Lee");
   await expect(standings).toContainText("5–0");

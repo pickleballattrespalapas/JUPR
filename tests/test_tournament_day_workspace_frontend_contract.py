@@ -372,6 +372,7 @@ def test_finished_round_robin_requires_one_stale_safe_playoff_review() -> None:
 
     assert "progression_alerts" in client
     assert "round_robin_summary" in client
+    assert "tiebreak_explanations" in client
     assert "playoff_review" in client
     assert "playoff_review_fingerprint" in client
     assert "newlyReadyPlayoffNotice" in panel
@@ -380,6 +381,8 @@ def test_finished_round_robin_requires_one_stale_safe_playoff_review() -> None:
     assert "Review playoff setup" in panel
     assert 'size="xwide"' in panel
     assert "Round-robin summary" in panel
+    assert "How tied teams were ranked" in panel
+    assert "tiebreakCriterionLabel" in panel
     assert "Reset to round-robin order" in panel
     assert "Scoring by playoff round" in panel
     assert "Bracket preview" in panel
@@ -396,3 +399,4 @@ def test_finished_round_robin_requires_one_stale_safe_playoff_review() -> None:
     assert "validatePlayoffReviewConfiguration" in state
     assert ".playoffReadyBanner" in css
     assert ".playoffReadyDraw" in css
+    assert ".tiebreakAudit" in css

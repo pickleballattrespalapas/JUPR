@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 # Tournament setup permits divisions as large as 16 teams.  Keep one shared
 # executable contract so setup, the operator readiness model, and game
 # generation cannot disagree about a valid draw size.  Preserve the existing
@@ -201,7 +200,26 @@ def build_round_robin_games(*, tournament_id: str, team_ids_by_number: dict[int,
     return games
 
 
-def compute_round_robin_standings(teams: list[dict[str, Any]], games: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def compute_round_robin_standings(
+    teams: list[dict[str, Any]], games: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Return authoritative standings while preserving the historical list API."""
+
+    return compute_round_robin_standings_with_tiebreaks(teams, games)["standings"]
+
+
+def compute_round_robin_standings_with_tiebreaks(
+    teams: list[dict[str, Any]], games: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Return standings plus an audit of every active-team wins tie.
+
+    Active teams are ordered by wins.  A tied-wins group is refined by its
+    head-to-head record inside that group, then overall point differential,
+    points scored, and finally the original team number.  ``tiebreaks`` keeps
+    the partition before and after every criterion so callers can explain the
+    exact resolution without reimplementing the ranking policy.
+    """
+
     standings = {
         t["id"]: TeamStanding(
             team_id=t["id"],
@@ -249,7 +267,7 @@ def compute_round_robin_standings(teams: list[dict[str, Any]], games: list[dict[
             continue
         try:
             score_a, score_b = int(score_a), int(score_b)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if score_a == 0 and score_b == 0:
             continue
@@ -264,30 +282,35 @@ def compute_round_robin_standings(teams: list[dict[str, Any]], games: list[dict[
             team_b.wins += 1
             team_a.losses += 1
 
-    standings_list = sorted(
-        standings.values(),
-        key=lambda s: (s.retired, -s.wins, -s.differential, -s.points_for, s.team_number),
-    )
-    grouped: dict[tuple[bool, int, int, int], list[TeamStanding]] = {}
-    for standing in standings_list:
-        grouped.setdefault(
-            (standing.retired, standing.wins, standing.differential, standing.points_for),
-            [],
-        ).append(standing)
+    active_by_wins: dict[int, list[TeamStanding]] = {}
+    retired: list[TeamStanding] = []
+    for standing in standings.values():
+        if standing.retired:
+            retired.append(standing)
+        else:
+            active_by_wins.setdefault(standing.wins, []).append(standing)
 
     resolved: list[TeamStanding] = []
-    for group in grouped.values():
-        if len(group) == 2 and not group[0].retired:
-            winner = _head_to_head_winner(group[0].team_id, group[1].team_id, games)
-            if winner == group[0].team_id:
-                resolved.extend([group[0], group[1]])
-                continue
-            if winner == group[1].team_id:
-                resolved.extend([group[1], group[0]])
-                continue
-        resolved.extend(sorted(group, key=lambda s: s.team_number))
+    tiebreaks: list[dict[str, Any]] = []
+    for wins in sorted(active_by_wins, reverse=True):
+        group = active_by_wins[wins]
+        if len(group) == 1:
+            resolved.extend(group)
+            continue
+        ordered, audit = _resolve_wins_tie(group, games)
+        resolved.extend(ordered)
+        tiebreaks.append(audit)
 
-    return [
+    # Retired teams are always ineligible and follow every active team.  Keep
+    # their previous deterministic ordering for operational continuity.
+    resolved.extend(
+        sorted(
+            retired,
+            key=lambda s: (-s.wins, -s.differential, -s.points_for, s.team_number),
+        )
+    )
+
+    standings_rows = [
         {
             "team_id": standing.team_id,
             "team_number": standing.team_number,
@@ -302,6 +325,7 @@ def compute_round_robin_standings(teams: list[dict[str, Any]], games: list[dict[
         }
         for seed, standing in enumerate(resolved, start=1)
     ]
+    return {"standings": standings_rows, "tiebreaks": tiebreaks}
 
 
 def compute_podium_from_rr(teams: list[dict[str, Any]], games: list[dict[str, Any]], *, max_placements: int = 3) -> list[dict[str, Any]]:
@@ -468,21 +492,188 @@ def resolve_playoff_dependencies(games: list[dict[str, Any]]) -> list[dict[str, 
     return list(updates.values())
 
 
-def _head_to_head_winner(team_a_id: str, team_b_id: str, games: list[dict[str, Any]]) -> str | None:
+def _resolve_wins_tie(
+    group: list[TeamStanding], games: list[dict[str, Any]]
+) -> tuple[list[TeamStanding], dict[str, Any]]:
+    """Resolve one active-team wins tie and retain each partition change."""
+
+    initial = sorted(group, key=lambda standing: standing.team_number)
+    head_to_head, head_to_head_matchups, missing_head_to_head_pairs = (
+        _head_to_head_evidence(
+            [standing.team_id for standing in initial], games
+        )
+    )
+    head_to_head_complete = not missing_head_to_head_pairs
+    value_by_criterion = {
+        "HEAD_TO_HEAD": lambda standing: (
+            head_to_head[standing.team_id]["wins"]
+            if head_to_head_complete
+            else 0
+        ),
+        "POINT_DIFFERENTIAL": lambda standing: standing.differential,
+        "POINTS_FOR": lambda standing: standing.points_for,
+        "TEAM_NUMBER": lambda standing: standing.team_number,
+    }
+    descending_by_criterion = {
+        "HEAD_TO_HEAD": True,
+        "POINT_DIFFERENTIAL": True,
+        "POINTS_FOR": True,
+        "TEAM_NUMBER": False,
+    }
+
+    partitions: list[list[TeamStanding]] = [initial]
+    steps: list[dict[str, Any]] = []
+    for criterion in (
+        "HEAD_TO_HEAD",
+        "POINT_DIFFERENTIAL",
+        "POINTS_FOR",
+        "TEAM_NUMBER",
+    ):
+        unresolved_before = [partition for partition in partitions if len(partition) > 1]
+        if not unresolved_before:
+            break
+
+        next_partitions: list[list[TeamStanding]] = []
+        refined_groups: list[list[TeamStanding]] = []
+        for partition in partitions:
+            if len(partition) == 1:
+                next_partitions.append(partition)
+                continue
+            refined = _partition_standings(
+                partition,
+                value=value_by_criterion[criterion],
+                descending=descending_by_criterion[criterion],
+            )
+            next_partitions.extend(refined)
+            refined_groups.extend(refined)
+
+        changed = len(refined_groups) > len(unresolved_before)
+        if not changed:
+            outcome = "UNRESOLVED"
+        elif all(len(partition) == 1 for partition in refined_groups):
+            outcome = "RESOLVED"
+        else:
+            outcome = "PARTIALLY_RESOLVED"
+
+        applied_ids = {
+            standing.team_id
+            for partition in unresolved_before
+            for standing in partition
+        }
+        team_values: list[dict[str, Any]] = []
+        for standing in initial:
+            if standing.team_id not in applied_ids:
+                continue
+            item: dict[str, Any] = {
+                "team_id": standing.team_id,
+                "value": value_by_criterion[criterion](standing),
+            }
+            if criterion == "HEAD_TO_HEAD":
+                item.update(head_to_head[standing.team_id])
+            team_values.append(item)
+        step = {
+            "criterion": criterion,
+            "outcome": outcome,
+            "groups_before": [
+                [standing.team_id for standing in partition]
+                for partition in unresolved_before
+            ],
+            "groups_after": [
+                [standing.team_id for standing in partition]
+                for partition in refined_groups
+            ],
+            "team_values": team_values,
+        }
+        if criterion == "HEAD_TO_HEAD":
+            step.update(
+                {
+                    "complete": head_to_head_complete,
+                    "matchups": head_to_head_matchups,
+                    "missing_pairs": missing_head_to_head_pairs,
+                }
+            )
+        steps.append(step)
+        partitions = next_partitions
+
+    ordered = [standing for partition in partitions for standing in partition]
+    return ordered, {
+        "wins": initial[0].wins,
+        "team_ids": [standing.team_id for standing in initial],
+        "final_team_ids": [standing.team_id for standing in ordered],
+        "steps": steps,
+    }
+
+
+def _partition_standings(
+    standings: list[TeamStanding], *, value: Any, descending: bool
+) -> list[list[TeamStanding]]:
+    ordered = sorted(standings, key=value, reverse=descending)
+    partitions: list[list[TeamStanding]] = []
+    for standing in ordered:
+        if not partitions or value(partitions[-1][0]) != value(standing):
+            partitions.append([standing])
+        else:
+            partitions[-1].append(standing)
+    return partitions
+
+
+def _head_to_head_evidence(
+    team_ids: list[str], games: list[dict[str, Any]]
+) -> tuple[
+    dict[str, dict[str, int]],
+    list[dict[str, Any]],
+    list[list[str]],
+]:
+    team_id_set = set(team_ids)
+    records = {
+        team_id: {"wins": 0, "losses": 0, "games": 0}
+        for team_id in team_ids
+    }
+    matchups: list[dict[str, Any]] = []
+    scored_pairs: set[frozenset[str]] = set()
     for game in games:
-        if {game.get("team_a_id"), game.get("team_b_id")} != {team_a_id, team_b_id}:
+        team_a_id = game.get("team_a_id")
+        team_b_id = game.get("team_b_id")
+        if (
+            team_a_id not in team_id_set
+            or team_b_id not in team_id_set
+            or team_a_id == team_b_id
+        ):
             continue
         score_a, score_b = game.get("score_a"), game.get("score_b")
         if score_a is None or score_b is None:
             continue
         try:
             score_a, score_b = int(score_a), int(score_b)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if score_a == score_b:
-            return None
-        return game.get("team_a_id") if score_a > score_b else game.get("team_b_id")
-    return None
+            continue
+        winner_id, loser_id = (
+            (team_a_id, team_b_id) if score_a > score_b else (team_b_id, team_a_id)
+        )
+        records[winner_id]["wins"] += 1
+        records[loser_id]["losses"] += 1
+        records[winner_id]["games"] += 1
+        records[loser_id]["games"] += 1
+        scored_pairs.add(frozenset((team_a_id, team_b_id)))
+        matchups.append(
+            {
+                "team_a_id": team_a_id,
+                "team_b_id": team_b_id,
+                "score_a": score_a,
+                "score_b": score_b,
+                "winner_team_id": winner_id,
+                "loser_team_id": loser_id,
+            }
+        )
+    missing_pairs = [
+        [team_a_id, team_b_id]
+        for index, team_a_id in enumerate(team_ids)
+        for team_b_id in team_ids[index + 1 :]
+        if frozenset((team_a_id, team_b_id)) not in scored_pairs
+    ]
+    return records, matchups, missing_pairs
 
 
 def _clear_game_results(game: dict[str, Any], updates: dict[str, dict[str, Any]]) -> None:

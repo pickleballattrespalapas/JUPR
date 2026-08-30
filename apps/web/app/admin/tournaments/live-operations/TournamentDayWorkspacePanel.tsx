@@ -393,6 +393,30 @@ function roundRobinPolicyDescription(draw: AdminTournamentDayDraw): string {
     || "Standings use the tournament's authoritative tie-break policy.";
 }
 
+function tiebreakCriterionLabel(criterion: string): string {
+  const normalized = String(criterion || "").trim().toUpperCase();
+  const known: Record<string, string> = {
+    WINS: "Wins",
+    HEAD_TO_HEAD: "Head-to-head",
+    POINT_DIFFERENTIAL: "Point differential",
+    POINTS_FOR: "Total points scored",
+    TEAM_NUMBER: "Original team number"
+  };
+  return known[normalized] || statusLabel(normalized);
+}
+
+function tiebreakOutcomeLabel(outcome: string): string {
+  const normalized = String(outcome || "").trim().toUpperCase();
+  const known: Record<string, string> = {
+    RESOLVED: "Resolved",
+    PARTIAL: "Partially resolved",
+    PARTIALLY_RESOLVED: "Partially resolved",
+    UNRESOLVED: "Still tied",
+    FALLBACK: "Final fallback"
+  };
+  return known[normalized] || statusLabel(normalized);
+}
+
 function eligibleStandings(draw: AdminTournamentDayDraw): AdminTournamentDayRoundRobinStanding[] {
   const standings = draw.round_robin_summary?.standings || [];
   const eligibleIds = new Set((draw.playoff_review?.eligible_team_ids || []).map(String));
@@ -1594,6 +1618,7 @@ export default function TournamentDayWorkspacePanel({
       || ""
     : "";
   const selectedPlayoffStandings = selectedPlayoffDraw?.round_robin_summary?.standings || [];
+  const selectedPlayoffTiebreakExplanations = selectedPlayoffDraw?.round_robin_summary?.tiebreak_explanations || [];
   const selectedPlayoffStandingsById = new Map(selectedPlayoffStandings.map((standing) => [String(standing.team_id), standing]));
   const selectedPlayoffValidation = playoffEditor
     ? validatePlayoffReviewConfiguration(selectedPlayoffReview, {
@@ -2240,6 +2265,38 @@ export default function TournamentDayWorkspacePanel({
                     <span className={styles.successBadge}>{selectedPlayoffStandings.length} teams inspected</span>
                   </div>
                   <p className={styles.muted}>{roundRobinPolicyDescription(selectedPlayoffDraw)}</p>
+                  {selectedPlayoffTiebreakExplanations.length ? (
+                    <section className={styles.tiebreakAudit} aria-labelledby="tiebreak-audit-heading">
+                      <div className={styles.tiebreakAuditHeading}>
+                        <div>
+                          <h4 id="tiebreak-audit-heading">How tied teams were ranked</h4>
+                          <p>The server checked each tie in order and recorded the deciding rule.</p>
+                        </div>
+                        <span className={styles.neutralBadge}>
+                          {selectedPlayoffTiebreakExplanations.length} {selectedPlayoffTiebreakExplanations.length === 1 ? "tie" : "ties"} reviewed
+                        </span>
+                      </div>
+                      <ol className={styles.tiebreakAuditList}>
+                        {selectedPlayoffTiebreakExplanations.map((explanation, explanationIndex) => (
+                          <li className={styles.tiebreakAuditItem} key={`${explanation.title}:${explanationIndex}`}>
+                            <h5>{explanation.title}</h5>
+                            <p>{explanation.summary}</p>
+                            <ol className={styles.tiebreakSteps} aria-label={`Tie-break steps for ${explanation.title}`}>
+                              {(explanation.steps || []).map((step, stepIndex) => (
+                                <li key={`${step.criterion}:${stepIndex}`}>
+                                  <span className={styles.tiebreakStepHeading}>
+                                    <strong>{tiebreakCriterionLabel(step.criterion)}</strong>
+                                    <span className={styles.tiebreakOutcome}>{tiebreakOutcomeLabel(step.outcome)}</span>
+                                  </span>
+                                  <span>{step.detail}</span>
+                                </li>
+                              ))}
+                            </ol>
+                          </li>
+                        ))}
+                      </ol>
+                    </section>
+                  ) : null}
                   <div className={styles.standingsTableWrap}>
                     <table className={styles.standingsTable}>
                       <caption>Completed round-robin standings and current playoff selections</caption>
