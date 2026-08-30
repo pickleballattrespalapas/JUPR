@@ -49,6 +49,7 @@ export type PublicTournamentDrawResult = {
     team_number?: number | null;
     seed?: number | null;
     name: string;
+    competition_status?: string | null;
   }>;
   standings: Array<{
     public_team_key: string;
@@ -59,6 +60,8 @@ export type PublicTournamentDrawResult = {
     points_for?: number | null;
     points_against?: number | null;
     differential?: number | null;
+    competition_status?: string | null;
+    retired?: boolean;
   }>;
   scores: PublicTournamentGameResult[];
   bracket: PublicTournamentGameResult[];

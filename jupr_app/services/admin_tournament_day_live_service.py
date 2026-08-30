@@ -325,7 +325,14 @@ def _side(team: dict[str, Any] | None, players: dict[int, dict[str, Any]]) -> di
         label = " / ".join(names) or (
             f"Team {team_number}" if team_number is not None else "Team name unavailable"
         )
-    return {"team_id": _text(team.get("id")) or None, "name": label, "participant_names": names}
+    return {
+        "team_id": _text(team.get("id")) or None,
+        "name": label,
+        "participant_names": names,
+        "competition_status": _text(
+            team.get("competition_status") or "ACTIVE"
+        ).upper(),
+    }
 
 
 def _draw_scheduled_for_day(
@@ -1285,14 +1292,21 @@ def build_admin_tournament_day_live_snapshot(
         activate_blockers.extend(
             player_registration_blockers(set(exact_roster_player_ids))
         )
+        active_draw_team_count = sum(
+            _text(team.get("competition_status") or "ACTIVE").upper()
+            != "RETIRED"
+            for team in draw_teams
+        )
         allowed_advance_counts = [
-            count for count in SUPPORTED_ADVANCE_COUNTS if count <= len(draw_teams)
+            count
+            for count in SUPPORTED_ADVANCE_COUNTS
+            if count <= active_draw_team_count
         ]
         if not allowed_advance_counts:
             activate_blockers.append(
                 _blocker(
                     "PLAYOFF_FORMAT_UNAVAILABLE",
-                    "At least four exact in-draw teams are required to reach a supported playoff and closeout format.",
+                    "At least four active in-draw teams are required to reach a supported playoff and closeout format.",
                 )
             )
         activate_blockers = list(
@@ -1332,7 +1346,7 @@ def build_admin_tournament_day_live_snapshot(
             playoff_blockers.append(
                 _blocker(
                     "PLAYOFF_FORMAT_UNAVAILABLE",
-                    "This draw does not have enough reviewed teams for a supported playoff format.",
+                    "This draw does not have enough active reviewed teams for a supported playoff format; retired teams cannot advance.",
                 )
             )
         if any(_text(row.get("state")).upper() in ACTIVE_QUEUE_STATES for row in draw_queue):
@@ -1475,6 +1489,14 @@ def build_admin_tournament_day_live_snapshot(
                             "id": _text(row.get("id")),
                             "team_number": _safe_int(row.get("team_number")),
                             "seed": _safe_int(row.get("seed")),
+                            "competition_status": _text(
+                                row.get("competition_status") or "ACTIVE"
+                            ).upper(),
+                            "retirement_max_score": _safe_int(
+                                row.get("retirement_max_score")
+                            ),
+                            "retired_at": row.get("retired_at"),
+                            "updated_at": row.get("updated_at"),
                         }
                         for row in draw_teams
                     ],
@@ -1669,6 +1691,21 @@ def build_admin_tournament_day_live_snapshot(
             or _text(row.get("team_b_id")) != _text(game.get("team_b_id"))
         ):
             blockers.append(_blocker("TEAM_STATE_CHANGED", "The game's assigned teams changed after queueing."))
+        if any(
+            _text(
+                (teams_by_id.get(team_id) or {}).get("competition_status")
+                or "ACTIVE"
+            ).upper()
+            == "RETIRED"
+            for team_id in team_ids_for_game
+            if team_id
+        ):
+            blockers.append(
+                _blocker(
+                    "TEAM_RETIRED",
+                    "A retired team cannot be assigned to another court; its remaining game is being recorded as a retirement loss.",
+                )
+            )
         effective = {
             player_id
             for team_id in team_ids_for_game
@@ -1843,7 +1880,16 @@ def build_admin_tournament_day_live_snapshot(
         "queue": queue_rows,
         "participant_claims": claim_rows,
         "draws": [{"id": row.get("id"), "updated_at": row.get("updated_at")} for row in draws],
-        "teams": [{"id": row.get("id"), "updated_at": row.get("updated_at")} for row in teams],
+        "teams": [
+            {
+                "id": row.get("id"),
+                "competition_status": row.get("competition_status") or "ACTIVE",
+                "retired_at": row.get("retired_at"),
+                "retirement_max_score": row.get("retirement_max_score"),
+                "updated_at": row.get("updated_at"),
+            }
+            for row in teams
+        ],
         "games": [
             {
                 "id": row.get("id"),
@@ -2122,6 +2168,8 @@ def _normalize_request(request: dict[str, Any]) -> tuple[str, str, str, dict[str
         "game_id", "score_a", "score_b"
     }:
         payload["unusual_score_acknowledgement"] = False
+    if action == "record_non_played_result" and "result_note" not in payload:
+        payload["result_note"] = ""
     payload_keys = {
         "activate_day": set(),
         "auto_fill_courts": set(),
@@ -2142,7 +2190,7 @@ def _normalize_request(request: dict[str, Any]) -> tuple[str, str, str, dict[str
             "game_id", "score_a", "score_b", "unusual_score_acknowledgement"
         },
         "record_non_played_result": {
-            "game_id", "result_type", "winner_team_id", "result_note"
+            "game_id", "result_type", "non_playing_team_id", "result_note"
         },
     }[action]
     if set(payload) != payload_keys or any(payload[key] is None for key in payload_keys):
@@ -2444,12 +2492,12 @@ def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], 
             _text((game.get("team_a") or {}).get("team_id")),
             _text((game.get("team_b") or {}).get("team_id")),
         }
-        winner_team_id = _text(payload.get("winner_team_id"))
-        if not winner_team_id or winner_team_id not in team_ids:
-            raise ValueError("Choose the winning team from this reviewed matchup.")
+        non_playing_team_id = _text(payload.get("non_playing_team_id"))
+        if not non_playing_team_id or non_playing_team_id not in team_ids:
+            raise ValueError(
+                "Choose the team responsible for this non-play result from the reviewed matchup."
+            )
         note = _text(payload.get("result_note"))
-        if not note:
-            raise ValueError("Add an operator note explaining the non-played result.")
         if len(note) > 500:
             raise ValueError("The non-played result note is limited to 500 characters.")
         if _text(game.get("state")).upper() not in {
@@ -2521,6 +2569,10 @@ def _playoff_rows(
             "id": _text(row.get("id")),
             "team_number": _safe_int(row.get("team_number")),
             "seed": _safe_int(row.get("seed")),
+            "competition_status": _text(
+                row.get("competition_status") or "ACTIVE"
+            ).upper(),
+            "retirement_max_score": _safe_int(row.get("retirement_max_score")),
         }
         for row in list(draw.get("team_rows") or [])
     ]
@@ -2531,11 +2583,18 @@ def _playoff_rows(
     ) != len(teams):
         raise ValueError("The reviewed draw team identities or numbers are duplicated.")
     count = _safe_int(advance_count)
-    if count not in SUPPORTED_ADVANCE_COUNTS or count > len(teams):
+    active_team_count = sum(
+        row.get("competition_status") != "RETIRED" for row in teams
+    )
+    if count not in SUPPORTED_ADVANCE_COUNTS or count > active_team_count:
         raise ValueError(
-            "Playoff generation requires a reviewed advance count of 4, 5, or 6 within the draw team count."
+            "Playoff generation requires 4, 5, or 6 active teams; retired teams cannot advance."
         )
-    standings = compute_round_robin_standings(teams, rr_games)
+    standings = [
+        row
+        for row in compute_round_robin_standings(teams, rr_games)
+        if not row.get("retired")
+    ]
     now = datetime.now(timezone.utc).isoformat()
     return [
         {
@@ -2644,8 +2703,12 @@ def _non_played_evidence(
         raise ValueError(
             "The configured scoring target is unavailable for this non-played outcome."
         )
-    winner_team_id = _text(payload.get("winner_team_id"))
+    non_playing_team_id = _text(payload.get("non_playing_team_id"))
     team_a_id = _text((game.get("team_a") or {}).get("team_id"))
+    team_b_id = _text((game.get("team_b") or {}).get("team_id"))
+    winner_team_id = (
+        team_b_id if non_playing_team_id == team_a_id else team_a_id
+    )
     score_payload = {
         "game_id": _text(game.get("id")),
         "score_a": target if winner_team_id == team_a_id else 0,
@@ -2653,10 +2716,11 @@ def _non_played_evidence(
         "unusual_score_acknowledgement": False,
     }
     score_evidence = _score_evidence(snapshot, score_payload)
-    return {
+    result = {
         **score_evidence,
         "outcome": {
             "result_type": _text(payload.get("result_type")).upper(),
+            "non_playing_team_id": non_playing_team_id,
             "winner_team_id": winner_team_id,
             "result_note": _text(payload.get("result_note")),
             "result_recorded_by": _text(actor_email),
@@ -2664,6 +2728,28 @@ def _non_played_evidence(
             "rating_publish_eligible": False,
         },
     }
+    if _text(payload.get("result_type")).upper() == "RETIREMENT":
+        draw = _selected_draw(snapshot, _text(game.get("draw_id")))
+        retiring_team = next(
+            (
+                row
+                for row in list(draw.get("team_rows") or [])
+                if _text(row.get("id")) == non_playing_team_id
+            ),
+            None,
+        )
+        if not retiring_team:
+            raise ValueError(
+                "The retiring team no longer belongs to this reviewed draw."
+            )
+        if _text(retiring_team.get("competition_status") or "ACTIVE").upper() == "RETIRED":
+            raise ValueError("This team is already retired from the draw.")
+        result["retirement"] = {
+            "team_id": non_playing_team_id,
+            "expected_team_updated_at": retiring_team.get("updated_at"),
+            "max_score": target,
+        }
+    return result
 
 
 def _rpc_payload(response: Any) -> dict[str, Any]:
@@ -2904,7 +2990,7 @@ def execute_admin_tournament_day_live_command(
             score_evidence = dict(operation_payload.get("score_evidence") or {})
             return _rpc(
                 supabase,
-                "admin_record_non_played_tournament_day_game_cas",
+                "admin_record_tournament_day_non_played_result_cas",
                 {
                     **common,
                     "p_game_id": game_id,
@@ -2927,10 +3013,21 @@ def execute_admin_tournament_day_live_command(
                     "p_result_type": _text(
                         submitted_payload.get("result_type")
                     ).upper(),
+                    "p_non_playing_team_id": _text(
+                        submitted_payload.get("non_playing_team_id")
+                    ),
                     "p_winner_team_id": _text(
-                        submitted_payload.get("winner_team_id")
+                        (score_evidence.get("outcome") or {}).get(
+                            "winner_team_id"
+                        )
                     ),
                     "p_result_note": _text(submitted_payload.get("result_note")),
+                    "p_expected_team_updated_at": (
+                        score_evidence.get("retirement") or {}
+                    ).get("expected_team_updated_at"),
+                    "p_retirement_max_score": (
+                        score_evidence.get("retirement") or {}
+                    ).get("max_score"),
                     "p_actor_role": _text(actor_role).lower(),
                 },
             )

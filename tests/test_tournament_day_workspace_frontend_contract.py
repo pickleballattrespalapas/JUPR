@@ -158,6 +158,12 @@ def test_day_console_renders_authoritative_courts_and_progression_controls() -> 
     assert "Non-play result" in panel
     assert "Use the non-played outcome command" in panel
     assert '"record_non_played_result"' in panel
+    assert "Team that forfeited" in panel
+    assert "Team that retired" in panel
+    assert "Team that did not show" in panel
+    assert "non_playing_team_id" in panel
+    assert "Operator note" in panel and "(optional)" in panel
+    assert "Previously played scores remain unchanged for player ratings" in panel
     assert "synthetic progression" in panel
     assert "Unusual score" in panel
     assert "unusual_score_acknowledgement" in panel

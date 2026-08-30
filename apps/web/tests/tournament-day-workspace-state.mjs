@@ -181,6 +181,12 @@ assert.equal(
   "BEST_2_OF_3 uses games won and cannot finish 1-0"
 );
 assert.equal(validateNonPlayedOutcomeDraft("NO_SHOW", "team-a", "Opponent absent").ok, true);
+assert.deepEqual(validateNonPlayedOutcomeDraft("RETIREMENT", "team-b", ""), {
+  ok: true,
+  resultType: "RETIREMENT",
+  nonPlayingTeamId: "team-b",
+  resultNote: ""
+});
 assert.equal(validateNonPlayedOutcomeDraft("", "team-a", "Opponent absent").ok, false);
 
 console.log("tournament day workspace state contract: ok");

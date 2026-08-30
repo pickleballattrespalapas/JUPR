@@ -189,15 +189,16 @@ export function validateDayCorrectionDraft(scoreA, scoreB, currentScoreA, curren
   return result;
 }
 
-export function validateNonPlayedOutcomeDraft(resultType, winnerTeamId, resultNote) {
+export function validateNonPlayedOutcomeDraft(resultType, nonPlayingTeamId, resultNote) {
   const type = String(resultType || "").trim().toUpperCase();
   if (!["FORFEIT", "NO_SHOW", "RETIREMENT"].includes(type)) {
     return { ok: false, message: "Choose forfeit, no-show, or retirement." };
   }
-  const winner = String(winnerTeamId || "").trim();
-  if (!winner) return { ok: false, message: "Choose the winning team." };
+  const nonPlayingTeam = String(nonPlayingTeamId || "").trim();
+  if (!nonPlayingTeam) {
+    return { ok: false, message: "Choose the team responsible for this non-play result." };
+  }
   const note = String(resultNote || "").trim();
-  if (!note) return { ok: false, message: "Add an operator note explaining the outcome." };
   if (note.length > 500) return { ok: false, message: "The operator note is limited to 500 characters." };
-  return { ok: true, resultType: type, winnerTeamId: winner, resultNote: note };
+  return { ok: true, resultType: type, nonPlayingTeamId: nonPlayingTeam, resultNote: note };
 }

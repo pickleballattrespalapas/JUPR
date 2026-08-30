@@ -125,6 +125,8 @@ def test_day_live_routes_use_one_day_scoped_nested_command_envelope() -> None:
     assert "game_id" in source
     assert "court_id" in source
     assert "score_a" in source and "score_b" in source
+    assert "non_playing_team_id" in source
+    assert "winner_team_id" not in source
     assert '"generate_playoffs"' in source
     for action in (
         "assign_next_court",

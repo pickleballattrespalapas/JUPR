@@ -115,7 +115,9 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
               {draw.standings.map((row) => (
                 <tr key={row.public_team_key}>
                   <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.rank ?? "—"}</td>
-                  <th scope="row" style={{ textAlign: "left", padding: "0.45rem" }}>{row.team_name}</th>
+                  <th scope="row" style={{ textAlign: "left", padding: "0.45rem" }}>
+                    {row.team_name}{row.retired ? " · Retired" : ""}
+                  </th>
                   <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.wins ?? 0}</td>
                   <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.losses ?? 0}</td>
                   <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.points_for ?? 0}</td>

@@ -463,7 +463,7 @@ async function installMockApi(page: Page) {
           score_a?: number;
           score_b?: number;
           result_type?: "FORFEIT" | "NO_SHOW" | "RETIREMENT";
-          winner_team_id?: string;
+          non_playing_team_id?: string;
           result_note?: string;
         };
       };
@@ -618,9 +618,9 @@ async function installMockApi(page: Page) {
         if (completedGame) {
           completedGame.result_type = command.payload.result_type ?? "NO_SHOW";
           completedGame.result_note = command.payload.result_note ?? null;
-          completedGame.winner_name = command.payload.winner_team_id === completedGame.team_a.team_id
-            ? completedGame.team_a.name
-            : completedGame.team_b.name;
+          completedGame.winner_name = command.payload.non_playing_team_id === completedGame.team_a.team_id
+            ? completedGame.team_b.name
+            : completedGame.team_a.name;
           completedGame.state = "COMPLETED";
           completedGame.version = `${completedGame.id}-v2`;
         }
@@ -1074,6 +1074,7 @@ test("Score entry saves in two clicks with a live preview and the exact day fenc
   await expect(scoreDialog.getByRole("button", { name: "Played score" })).toHaveAttribute("aria-pressed", "true");
   await expect(scoreDialog.getByRole("button", { name: "Non-play result" })).toBeVisible();
   await expect(scoreDialog.getByLabel("Mateo Rivera / Liam Chen score")).toBeFocused();
+  // The 9–9 tie remains blocked before the two-click score submission path.
   await scoreDialog.getByLabel("Mateo Rivera / Liam Chen score").fill("9");
   await scoreDialog.getByLabel("Caleb Nguyen / Diego Alvarez score").fill("9");
   await expect(scoreDialog.getByText("Tournament games cannot be saved with a tied score.")).toBeVisible();
@@ -1125,9 +1126,8 @@ test("The score dialog records a non-play result without leaving the court board
   await expect(resultDialog.getByRole("button", { name: "Non-play result" })).toHaveAttribute("aria-pressed", "true");
   await expect(board).toBeVisible();
   await expect(page).not.toHaveURL(/panel=queue/);
-  await resultDialog.getByLabel("Winning team").selectOption("day-game-a-team-b");
-  await resultDialog.getByLabel("Operator note").fill("Mateo and Liam did not arrive; the desk verified the no-show.");
-  await expect(resultDialog.getByText("Winner:")).toContainText("Caleb Nguyen / Diego Alvarez");
+  await resultDialog.getByLabel("Team that did not show").selectOption("day-game-a-team-a");
+  await expect(resultDialog.getByText(/receives this game/)).toContainText("Caleb Nguyen / Diego Alvarez");
   const saveOutcome = resultDialog.getByRole("button", { name: "Record no show & release Court 1" });
   await expect(saveOutcome).toBeEnabled();
   await saveOutcome.click();
@@ -1149,8 +1149,8 @@ test("The score dialog records a non-play result without leaving the court board
     payload: {
       game_id: "day-game-a",
       result_type: "NO_SHOW",
-      winner_team_id: "day-game-a-team-b",
-      result_note: "Mateo and Liam did not arrive; the desk verified the no-show."
+      non_playing_team_id: "day-game-a-team-a",
+      result_note: ""
     }
   });
   const releasedCourt = page.getByRole("heading", { name: "Court 1", exact: true }).locator("xpath=ancestor::article[1]");
