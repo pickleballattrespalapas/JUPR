@@ -34,8 +34,44 @@ export type ServerQueueRow = {
 
 export type DayDrawRow = {
   id?: string | null;
+  name?: string | null;
   activation_state?: string | null;
+  round_robin_complete?: boolean;
+  progression_status?: string | null;
+  playoff_review_fingerprint?: string | null;
+  status?: string | null;
+  readiness?: { generate_playoffs?: { ready?: boolean } };
   [key: string]: unknown;
+};
+
+export type PlayoffProgressionSnapshot<T extends DayDrawRow = DayDrawRow> = {
+  draws?: readonly T[] | null;
+  progression_alerts?: readonly {
+    draw_id?: string | null;
+    ready?: boolean;
+  }[] | null;
+};
+
+export type PlayoffReviewTemplate = {
+  code?: string | null;
+  advance_count?: number | null;
+  applicable_rounds?: readonly string[] | null;
+  rounds?: readonly (string | { code?: string | null; round?: string | null })[] | null;
+  games?: readonly { round?: string | null; playoff_round?: string | null }[] | null;
+  default_seed_team_ids?: readonly string[] | null;
+  default_round_scoring?: Readonly<Record<string, string>> | null;
+};
+
+export type PlayoffReviewContract = {
+  eligible_team_ids?: readonly string[] | null;
+  templates?: readonly PlayoffReviewTemplate[] | null;
+  scoring_formats?: readonly { code?: string | null }[] | null;
+};
+
+export type PlayoffReviewConfiguration = {
+  template_code?: string | null;
+  seed_team_ids?: readonly string[] | null;
+  round_scoring?: Readonly<Record<string, string>> | null;
 };
 
 export type TournamentDayMedalMatchKind = "gold" | "bronze";
@@ -66,6 +102,27 @@ export function advanceCountSelection(
   defaultCount: number | null | undefined,
   currentSelection: string | number | null | undefined
 ): string;
+export function readyPlayoffReviewDraws<T extends DayDrawRow>(
+  snapshot: PlayoffProgressionSnapshot<T> | null | undefined
+): T[];
+export function newlyReadyPlayoffNotice(
+  previous: PlayoffProgressionSnapshot | null | undefined,
+  current: PlayoffProgressionSnapshot | null | undefined
+): string | null;
+export function playoffTemplateRoundCodes(template: PlayoffReviewTemplate | null | undefined): string[];
+export function validatePlayoffReviewConfiguration(
+  review: PlayoffReviewContract | null | undefined,
+  configuration: PlayoffReviewConfiguration | null | undefined
+):
+  | { ok: false; message: string }
+  | {
+      ok: true;
+      template: PlayoffReviewTemplate;
+      advanceCount: number;
+      seedTeamIds: string[];
+      roundScoring: Readonly<Record<string, string>>;
+      roundCodes: string[];
+    };
 export function validateDayScoreDraft(
   scoreA: string | number,
   scoreB: string | number,

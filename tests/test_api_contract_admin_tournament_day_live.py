@@ -122,6 +122,10 @@ def test_day_live_routes_use_one_day_scoped_nested_command_envelope() -> None:
     assert "draw_ids" not in source
     assert "draw_id" in source
     assert "advance_count" in source
+    assert "playoff_configuration" in source
+    assert "template_code" in source
+    assert "seed_team_ids" in source
+    assert "round_scoring" in source
     assert "game_id" in source
     assert "court_id" in source
     assert "score_a" in source and "score_b" in source
@@ -332,6 +336,52 @@ def test_day_live_route_accepts_exact_completed_score_correction_envelope(
     request["expected"].update(
         {"queue_version": 4, "draw_version": 3, "game_version": "game-a-v1"}
     )
+
+    response = _client(monkeypatch, supabase).post(
+        f"{DAY_PREFIX}/commands",
+        headers={"Authorization": "Bearer local"},
+        json=request,
+    )
+
+    assert response.status_code == 200, response.text
+    assert calls == [request]
+
+
+def test_day_live_route_accepts_reviewed_playoff_configuration(
+    monkeypatch,
+) -> None:
+    supabase = FakeSupabase({"admin_activity_log": []})
+    calls: list[dict] = []
+
+    def fake_execute(_supabase, **kwargs):
+        calls.append(kwargs["request"])
+        return {
+            "command": {"action": kwargs["request"]["action"]},
+            "operation": {"status": "completed"},
+            "snapshot": {"ok": True, "state_fingerprint": "b" * 64},
+        }
+
+    monkeypatch.setattr(
+        "services.api.admin_tournament_day_live_routes.execute_admin_tournament_day_live_command",
+        fake_execute,
+    )
+    request = _request(
+        "generate_playoffs",
+        payload={
+            "draw_id": "draw-a",
+            "advance_count": 4,
+            "playoff_configuration": {
+                "template_code": "SINGLE_ELIMINATION_4",
+                "seed_team_ids": ["team-1", "team-2", "team-3", "team-4"],
+                "round_scoring": {
+                    "SF": "GAME_TO_15",
+                    "BRONZE": "GAME_TO_11",
+                    "FINAL": "BEST_2_OF_3",
+                },
+            },
+        },
+    )
+    request["expected"].update({"queue_version": 4, "draw_version": 3})
 
     response = _client(monkeypatch, supabase).post(
         f"{DAY_PREFIX}/commands",

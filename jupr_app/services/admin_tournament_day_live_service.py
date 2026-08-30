@@ -25,9 +25,11 @@ from jupr_app.domain.tournaments import (
 )
 from jupr_app.domain.tournaments.score_policy import (
     GAME_TARGETS,
+    SUPPORTED_SCORING_FORMATS,
     require_tournament_score,
     resolve_tournament_scoring_format,
 )
+from jupr_app.domain.tournaments.bracket_builder import PLAYOFF_TEMPLATES
 from jupr_app.services.admin_tournament_guarded_operation import (
     StaleTournamentAdminStateError,
     TournamentAdminRecoveryRequiredError,
@@ -52,6 +54,43 @@ ACTIVE_OPERATION_STATUSES = {"intent", "mutated", "recovery_required"}
 ACTIVE_QUEUE_STATES = {"HELD", "CALLED", "ON_COURT", "RESERVED"}
 NON_PLAYED_RESULT_TYPES = {"FORFEIT", "NO_SHOW", "RETIREMENT"}
 SUPPORTED_ADVANCE_COUNTS = (4, 5, 6)
+PLAYOFF_TEMPLATE_CODES = {
+    4: "SINGLE_ELIMINATION_4",
+    5: "SINGLE_ELIMINATION_5",
+    6: "SINGLE_ELIMINATION_6",
+}
+PLAYOFF_TEMPLATE_LABELS = {
+    4: "4-team semifinals",
+    5: "5-team play-in and semifinals",
+    6: "6-team quarterfinals and semifinals",
+}
+PLAYOFF_TEMPLATE_DESCRIPTIONS = {
+    4: "Seeds 1–4 play 1v4 and 2v3 semifinals, followed by gold and bronze medal matches.",
+    5: "Seeds 4 and 5 play in; the winner joins seeds 1–3 in semifinals, followed by gold and bronze medal matches.",
+    6: "Seeds 3v6 and 4v5 play quarterfinals while seeds 1 and 2 receive byes, followed by semifinals and medal matches.",
+}
+PLAYOFF_ROUND_LABELS = {
+    "QF": "Quarterfinals",
+    "SF": "Semifinals",
+    "BRONZE": "Bronze medal match",
+    "FINAL": "Gold medal final",
+}
+PLAYOFF_ROUND_DISPLAY_ORDER = ("QF", "SF", "BRONZE", "FINAL")
+PLAYOFF_SCORING_FORMAT_ORDER = (
+    "GAME_TO_11",
+    "GAME_TO_15",
+    "GAME_TO_21",
+    "BEST_2_OF_3",
+)
+OPERATION_REQUEST_BASE_KEYS = frozenset(
+    {
+        "action",
+        "expected",
+        "payload",
+        "operator_review",
+        "playoff_configuration",
+    }
+)
 COMMAND_CONFIRMATIONS = {
     "activate_day": "ACTIVATE DAY",
     "activate_draw": "ACTIVATE DRAW",
@@ -156,9 +195,20 @@ def _fingerprint(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _game_scoring(event: dict[str, Any] | None) -> dict[str, Any]:
+def _game_scoring(
+    event: dict[str, Any] | None,
+    game: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    game_format = _text((game or {}).get("scoring_format")).upper()
     try:
-        format_code = resolve_tournament_scoring_format(event)
+        if game_format:
+            if game_format not in SUPPORTED_SCORING_FORMATS:
+                raise ValueError(
+                    "This playoff game has an unsupported scoring format. Review and regenerate the bracket before recording a result."
+                )
+            format_code = game_format
+        else:
+            format_code = resolve_tournament_scoring_format(event)
     except ValueError as exc:
         return {
             "format": None,
@@ -213,6 +263,75 @@ def _readiness(blockers: list[dict[str, Any]], confirmation: str | None = None) 
     if confirmation:
         result["confirmation"] = confirmation
     return result
+
+
+def _playoff_rounds(advance_count: int) -> list[str]:
+    template = PLAYOFF_TEMPLATES.get(int(advance_count)) or {}
+    rounds = {
+        _text(game.get("round")).upper()
+        for game in list(template.get("games") or [])
+        if _text(game.get("round"))
+    }
+    return [round_name for round_name in PLAYOFF_ROUND_DISPLAY_ORDER if round_name in rounds]
+
+
+def _default_round_scoring(
+    advance_count: int,
+    format_code: str | None,
+) -> dict[str, str]:
+    if not format_code:
+        return {}
+    return {
+        round_name: format_code
+        for round_name in _playoff_rounds(advance_count)
+    }
+
+
+def _playoff_template_review(
+    advance_count: int,
+    *,
+    default_format: str | None,
+    eligible_team_ids: list[str],
+) -> dict[str, Any]:
+    template = PLAYOFF_TEMPLATES[int(advance_count)]
+    applicable_rounds = _playoff_rounds(advance_count)
+    return {
+        "code": PLAYOFF_TEMPLATE_CODES[int(advance_count)],
+        "advance_count": int(advance_count),
+        "label": PLAYOFF_TEMPLATE_LABELS[int(advance_count)],
+        "description": PLAYOFF_TEMPLATE_DESCRIPTIONS[int(advance_count)],
+        "applicable_rounds": applicable_rounds,
+        "rounds": [
+            {
+                "code": round_name,
+                "label": (
+                    "Play-in"
+                    if int(advance_count) == 5 and round_name == "QF"
+                    else PLAYOFF_ROUND_LABELS[round_name]
+                ),
+                "game_codes": [
+                    _text(game.get("id"))
+                    for game in list(template.get("games") or [])
+                    if _text(game.get("round")).upper() == round_name
+                ],
+            }
+            for round_name in applicable_rounds
+        ],
+        "default_seed_team_ids": eligible_team_ids[: int(advance_count)],
+        "default_round_scoring": _default_round_scoring(
+            int(advance_count), default_format
+        ),
+        "games": [
+            {
+                "code": _text(game.get("id")),
+                "label": _text(game.get("name")),
+                "round": _text(game.get("round")).upper(),
+                "team_a_source": dict(game.get("teamA") or {}),
+                "team_b_source": dict(game.get("teamB") or {}),
+            }
+            for game in list(template.get("games") or [])
+        ],
+    }
 
 
 def _day_option(row: dict[str, Any]) -> dict[str, Any]:
@@ -875,7 +994,10 @@ def build_admin_tournament_day_live_snapshot(
         team_a = teams_by_id.get(_text(game.get("team_a_id")))
         team_b = teams_by_id.get(_text(game.get("team_b_id")))
         draw = next((row for row in draws if _text(row.get("id")) == _text(game.get("draw_id"))), {})
-        scoring = _game_scoring(events.get(_text(game.get("event_option_id"))))
+        scoring = _game_scoring(
+            events.get(_text(game.get("event_option_id"))),
+            game,
+        )
         day_draw = day_draw_by_draw.get(_text(game.get("draw_id"))) or {}
         correction_blockers: list[dict[str, Any]] = []
         run_state_for_game = _text((run or {}).get("state") or "DRAFT").upper()
@@ -1002,6 +1124,8 @@ def build_admin_tournament_day_live_snapshot(
                 "team_b": _side(team_b, players),
                 "score_a": _safe_int(game.get("score_a")),
                 "score_b": _safe_int(game.get("score_b")),
+                "scoring_format": _text(game.get("scoring_format")).upper()
+                or None,
                 "scoring": scoring,
                 "result_type": _text(game.get("result_type") or "PLAYED").upper(),
                 "result_note": game.get("result_note"),
@@ -1325,6 +1449,124 @@ def build_admin_tournament_day_live_snapshot(
         )
         rr_games = [row for row in draw_games if _text(row.get("stage")).upper() == "ROUND_ROBIN"]
         playoff_games = [row for row in draw_games if _text(row.get("stage")).upper() == "PLAYOFF"]
+        round_robin_complete = bool(rr_games) and all(
+            _is_finalized_non_tied(row) for row in rr_games
+        )
+        round_robin_standings = compute_round_robin_standings(
+            draw_teams,
+            rr_games,
+        )
+        standings_summary: list[dict[str, Any]] = []
+        for standing in round_robin_standings:
+            team_id = _text(standing.get("team_id"))
+            team = teams_by_id.get(team_id) or {}
+            side = _side(team, players)
+            non_play_results = sum(
+                _text(game.get("result_type") or "PLAYED").upper() != "PLAYED"
+                and team_id
+                in {_text(game.get("team_a_id")), _text(game.get("team_b_id"))}
+                for game in rr_games
+            )
+            standings_summary.append(
+                {
+                    "rank": _safe_int(standing.get("seed")),
+                    "seed": _safe_int(standing.get("seed")),
+                    "team_id": team_id,
+                    "team_number": _safe_int(standing.get("team_number")),
+                    "team_name": side.get("name"),
+                    "participant_names": list(side.get("participant_names") or []),
+                    "wins": _safe_int(standing.get("wins"), 0),
+                    "losses": _safe_int(standing.get("losses"), 0),
+                    "points_for": _safe_int(standing.get("points_for"), 0),
+                    "points_against": _safe_int(
+                        standing.get("points_against"), 0
+                    ),
+                    "differential": _safe_int(standing.get("differential"), 0),
+                    "competition_status": _text(
+                        standing.get("competition_status") or "ACTIVE"
+                    ).upper(),
+                    "retired": bool(standing.get("retired")),
+                    "eligible_for_playoffs": not bool(standing.get("retired")),
+                    "non_play_results": non_play_results,
+                }
+            )
+        eligible_team_ids = [
+            _text(row.get("team_id"))
+            for row in round_robin_standings
+            if not row.get("retired") and _text(row.get("team_id"))
+        ]
+        event_scoring = _game_scoring(event)
+        event_default_format = _text(event_scoring.get("format")) or None
+        playoff_templates = [
+            _playoff_template_review(
+                count,
+                default_format=event_default_format,
+                eligible_team_ids=eligible_team_ids,
+            )
+            for count in allowed_advance_counts
+        ]
+        review_default_count = (
+            default_advance_count
+            if default_advance_count in allowed_advance_counts
+            else (allowed_advance_counts[0] if allowed_advance_counts else None)
+        )
+        default_template = next(
+            (
+                row
+                for row in playoff_templates
+                if _safe_int(row.get("advance_count")) == review_default_count
+            ),
+            None,
+        )
+        round_robin_summary = {
+            "complete": round_robin_complete,
+            "total_games": len(rr_games),
+            "finalized_games": sum(
+                _is_finalized_non_tied(row) for row in rr_games
+            ),
+            "standings": standings_summary,
+            "ranking_policy": {
+                "description": "Rank active teams by wins, point differential, points scored, exact two-team head-to-head, then original team number. Retired teams remain visible after active teams and cannot advance.",
+                "criteria": [
+                    "WINS",
+                    "POINT_DIFFERENTIAL",
+                    "POINTS_FOR",
+                    "TWO_TEAM_HEAD_TO_HEAD",
+                    "TEAM_NUMBER",
+                ],
+                "retired_teams_eligible": False,
+            },
+        }
+        playoff_review = {
+            "eligible_team_ids": eligible_team_ids,
+            "default_seed_team_ids": list(
+                (default_template or {}).get("default_seed_team_ids") or []
+            ),
+            "templates": playoff_templates,
+            "default_template_code": (default_template or {}).get("code"),
+            "scoring_formats": [
+                {
+                    "code": format_code,
+                    "label": (
+                        "Best 2 of 3 games"
+                        if format_code == "BEST_2_OF_3"
+                        else f"Game to {GAME_TARGETS[format_code]}"
+                    ),
+                    "target": GAME_TARGETS.get(format_code, 2),
+                }
+                for format_code in PLAYOFF_SCORING_FORMAT_ORDER
+            ],
+            "default_scoring_format": event_default_format,
+            "default_round_scoring": dict(
+                (default_template or {}).get("default_round_scoring") or {}
+            ),
+        }
+        playoff_review_fingerprint = _fingerprint(
+            {
+                "round_robin_summary": round_robin_summary,
+                "playoff_review": playoff_review,
+            }
+        )
         playoff_blockers: list[dict[str, Any]] = []
         playoff_blockers.extend(source_scope_blockers)
         playoff_blockers.extend(roster_mismatch_blockers)
@@ -1338,7 +1580,7 @@ def build_admin_tournament_day_live_snapshot(
             )
         if activation_state != "ACTIVE":
             playoff_blockers.append(_blocker("DRAW_NOT_ACTIVE", "Activate this draw before generating playoffs."))
-        if not rr_games or not all(_is_finalized_non_tied(row) for row in rr_games):
+        if not round_robin_complete:
             playoff_blockers.append(_blocker("ROUND_ROBIN_INCOMPLETE", "Every round-robin game must be finalized and non-tied."))
         if playoff_games:
             playoff_blockers.append(_blocker("PLAYOFFS_EXIST", "This draw already has playoff games."))
@@ -1349,10 +1591,34 @@ def build_admin_tournament_day_live_snapshot(
                     "This draw does not have enough active reviewed teams for a supported playoff format; retired teams cannot advance.",
                 )
             )
+        if event_scoring.get("blocker"):
+            playoff_blockers.append(
+                _blocker(
+                    "PLAYOFF_SCORING_UNAVAILABLE",
+                    "Configure a supported event scoring format before reviewing playoff rounds.",
+                    detail=_text(event_scoring.get("blocker")),
+                )
+            )
         if any(_text(row.get("state")).upper() in ACTIVE_QUEUE_STATES for row in draw_queue):
             playoff_blockers.append(_blocker("DRAW_ON_COURT", "Finish this draw's current court assignments first."))
         if unsettled_operations:
             playoff_blockers.append(_blocker("OPERATION_UNSETTLED", "Reconcile unsettled tournament day operations first."))
+        playoff_blockers = list(
+            {row["code"]: row for row in playoff_blockers}.values()
+        )
+        progression_status = (
+            "PLAYOFFS_GENERATED"
+            if playoff_games
+            else (
+                "READY_FOR_PLAYOFF_REVIEW"
+                if round_robin_complete and not playoff_blockers
+                else (
+                    "PROGRESSION_BLOCKED"
+                    if round_robin_complete
+                    else "ROUND_ROBIN_IN_PROGRESS"
+                )
+            )
+        )
 
         podium_blockers: list[dict[str, Any]] = []
         if not draw_games or not all(_is_finalized_non_tied(row) for row in draw_games):
@@ -1471,6 +1737,9 @@ def build_admin_tournament_day_live_snapshot(
                 "source_updated_at": draw.get("updated_at"),
                 "event_option_id": _text(draw.get("event_option_id")) or None,
                 "stage": "PLAYOFF" if playoff_games else "ROUND_ROBIN",
+                "round_robin_complete": round_robin_complete,
+                "progression_status": progression_status,
+                "playoff_review_fingerprint": playoff_review_fingerprint,
                 "total_games": len(draw_games),
                 "finalized_games": sum(_is_finalized_non_tied(row) for row in draw_games),
                 "queued_games": sum(_text(row.get("state")).upper() in {"WAITING", "BLOCKED"} for row in draw_queue),
@@ -1531,6 +1800,8 @@ def build_admin_tournament_day_live_snapshot(
                     "podium": _readiness(podium_blockers),
                     "closeout": _readiness(closeout_blockers),
                 },
+                "round_robin_summary": round_robin_summary,
+                "playoff_review": playoff_review,
                 "progression": {
                     "allowed_advance_counts": allowed_advance_counts,
                     "default_advance_count": default_advance_count,
@@ -1539,6 +1810,49 @@ def build_admin_tournament_day_live_snapshot(
                 },
             }
         )
+
+    progression_alerts = [
+        {
+            "key": f"draw:{_text(draw.get('id'))}:round_robin_complete",
+            "draw_id": _text(draw.get("id")),
+            "draw_name": _text(draw.get("name") or "Draw"),
+            "kind": (
+                "PLAYOFF_REVIEW_READY"
+                if draw.get("progression_status")
+                == "READY_FOR_PLAYOFF_REVIEW"
+                else "PLAYOFF_REVIEW_BLOCKED"
+            ),
+            "ready": draw.get("progression_status")
+            == "READY_FOR_PLAYOFF_REVIEW",
+            "status": _text(draw.get("progression_status")),
+            "severity": (
+                "ACTION_REQUIRED"
+                if draw.get("progression_status") == "READY_FOR_PLAYOFF_REVIEW"
+                else "BLOCKED"
+            ),
+            "title": (
+                f"{_text(draw.get('name') or 'Draw')} is ready for playoff review"
+                if draw.get("progression_status")
+                == "READY_FOR_PLAYOFF_REVIEW"
+                else f"{_text(draw.get('name') or 'Draw')} completed round robin but progression is blocked"
+            ),
+            "message": (
+                "Review standings, qualifiers, bracket structure, and round scoring before generating playoffs."
+                if draw.get("progression_status")
+                == "READY_FOR_PLAYOFF_REVIEW"
+                else "Resolve the listed blockers before generating playoffs."
+            ),
+            "blockers": list(
+                draw.get("readiness", {})
+                .get("generate_playoffs", {})
+                .get("blockers", [])
+            ),
+            "review_href": (draw.get("progression") or {}).get("review_href"),
+        }
+        for draw in draw_rows
+        if draw.get("progression_status")
+        in {"READY_FOR_PLAYOFF_REVIEW", "PROGRESSION_BLOCKED"}
+    ]
 
     effective_eligible_since_by_queue_id: dict[str, Any] = {}
 
@@ -1880,6 +2194,24 @@ def build_admin_tournament_day_live_snapshot(
         "queue": queue_rows,
         "participant_claims": claim_rows,
         "draws": [{"id": row.get("id"), "updated_at": row.get("updated_at")} for row in draws],
+        "events": [
+            {
+                "id": row.get("id"),
+                "enabled": row.get("enabled"),
+                "status": row.get("status"),
+                "scoring_override": row.get("scoring_override"),
+                "division_scoring": row.get("division_scoring"),
+                "scoring_default": row.get("scoring_default"),
+                "updated_at": row.get("updated_at"),
+            }
+            for row in events.values()
+            if _text(row.get("id"))
+            in {
+                _text(draw.get("event_option_id"))
+                for draw in draws
+                if _text(draw.get("event_option_id"))
+            }
+        ],
         "teams": [
             {
                 "id": row.get("id"),
@@ -1899,6 +2231,7 @@ def build_admin_tournament_day_live_snapshot(
                 "winner_team_id": row.get("winner_team_id"),
                 "result_type": row.get("result_type") or "PLAYED",
                 "result_note": row.get("result_note"),
+                "scoring_format": row.get("scoring_format"),
                 "score_review_json": row.get("score_review_json") or {},
             }
             for row in games
@@ -2096,6 +2429,7 @@ def build_admin_tournament_day_live_snapshot(
             "completed_games": sum(_text(row.get("state")).upper() == "COMPLETED" for row in queue_rows),
         },
         "draws": draw_rows,
+        "progression_alerts": progression_alerts,
         "activated_draws": [row for row in draw_rows if row["activation_state"] != "INACTIVE"],
         "courts": court_rows,
         "games": game_rows,
@@ -2193,7 +2527,14 @@ def _normalize_request(request: dict[str, Any]) -> tuple[str, str, str, dict[str
             "game_id", "result_type", "non_playing_team_id", "result_note"
         },
     }[action]
-    if set(payload) != payload_keys or any(payload[key] is None for key in payload_keys):
+    accepted_payload_keys = [payload_keys]
+    if action == "generate_playoffs":
+        accepted_payload_keys.append(
+            {"draw_id", "advance_count", "playoff_configuration"}
+        )
+    if set(payload) not in accepted_payload_keys or any(
+        value is None for value in payload.values()
+    ):
         raise ValueError(
             f"{action.replace('_', ' ').title()} requires its exact command payload."
         )
@@ -2219,6 +2560,104 @@ def _validate_review(snapshot: dict[str, Any], expected: dict[str, Any]) -> None
         raise StaleTournamentAdminStateError("Tournament day run version changed after review.")
     if expected.get("queue_version") not in (None, "") and str(snapshot.get("queue_version") or "0") != str(expected.get("queue_version")):
         raise StaleTournamentAdminStateError("Tournament day queue changed after review.")
+
+
+def _validate_playoff_configuration(
+    draw: dict[str, Any],
+    advance_count: int,
+    configuration: Any,
+) -> dict[str, Any]:
+    if not isinstance(configuration, dict) or set(configuration) != {
+        "template_code",
+        "seed_team_ids",
+        "round_scoring",
+    }:
+        raise ValueError(
+            "Playoff configuration requires an exact template, ordered seeds, and scoring for every round."
+        )
+    expected_template_code = PLAYOFF_TEMPLATE_CODES.get(int(advance_count))
+    if configuration.get("template_code") != expected_template_code:
+        raise ValueError(
+            "The reviewed playoff template does not match the advancing-team count."
+        )
+    review = dict(draw.get("playoff_review") or {})
+    templates = list(review.get("templates") or [])
+    template = next(
+        (
+            row
+            for row in templates
+            if _text(row.get("code")) == expected_template_code
+            and _safe_int(row.get("advance_count")) == int(advance_count)
+        ),
+        None,
+    )
+    if not template:
+        raise StaleTournamentAdminStateError(
+            "The selected playoff template is no longer available for this draw. Reload the day workspace."
+        )
+    raw_seed_team_ids = configuration.get("seed_team_ids")
+    if not isinstance(raw_seed_team_ids, list) or any(
+        not isinstance(team_id, str) for team_id in raw_seed_team_ids
+    ):
+        raise ValueError("Playoff seeds must be an ordered list of reviewed team IDs.")
+    seed_team_ids = [_text(team_id) for team_id in raw_seed_team_ids]
+    if raw_seed_team_ids != seed_team_ids:
+        raise ValueError(
+            "Playoff team IDs must use the exact canonical IDs supplied by the review."
+        )
+    if len(seed_team_ids) != int(advance_count) or any(
+        not team_id for team_id in seed_team_ids
+    ):
+        raise ValueError(
+            f"Choose exactly {advance_count} active teams in seed order."
+        )
+    if len(set(seed_team_ids)) != len(seed_team_ids):
+        raise ValueError("A team cannot occupy more than one playoff seed.")
+    eligible_team_ids = {
+        _text(team_id)
+        for team_id in list(review.get("eligible_team_ids") or [])
+        if _text(team_id)
+    }
+    if not set(seed_team_ids).issubset(eligible_team_ids):
+        raise ValueError(
+            "Every playoff seed must be an active, non-retired team from this exact draw."
+        )
+    raw_round_scoring = configuration.get("round_scoring")
+    if not isinstance(raw_round_scoring, dict):
+        raise ValueError("Choose a scoring format for every playoff round.")
+    if any(not isinstance(round_name, str) for round_name in raw_round_scoring):
+        raise ValueError("Playoff round keys must use the canonical reviewed codes.")
+    round_scoring = {
+        _text(round_name).upper(): _text(format_code).upper()
+        for round_name, format_code in raw_round_scoring.items()
+    }
+    if len(round_scoring) != len(raw_round_scoring) or any(
+        round_name != _text(round_name).upper()
+        or format_code != _text(format_code).upper()
+        for round_name, format_code in raw_round_scoring.items()
+    ):
+        raise ValueError(
+            "Playoff round scoring must use the exact canonical round and format codes supplied by the review."
+        )
+    required_rounds = {
+        _text(round_name).upper()
+        for round_name in list(template.get("applicable_rounds") or [])
+        if _text(round_name)
+    }
+    if set(round_scoring) != required_rounds:
+        raise ValueError(
+            "Choose a scoring format for every applicable playoff round, with no extra rounds."
+        )
+    if any(
+        format_code not in SUPPORTED_SCORING_FORMATS
+        for format_code in round_scoring.values()
+    ):
+        raise ValueError("A playoff round uses an unsupported scoring format.")
+    return {
+        "template_code": expected_template_code,
+        "seed_team_ids": seed_team_ids,
+        "round_scoring": round_scoring,
+    }
 
 
 def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], payload: dict[str, Any]) -> None:
@@ -2261,6 +2700,12 @@ def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], 
             if advance_count not in allowed:
                 raise ValueError(
                     "Choose a supported advancing-team count from the reviewed draw."
+                )
+            if "playoff_configuration" in payload:
+                _validate_playoff_configuration(
+                    draw,
+                    int(advance_count),
+                    payload.get("playoff_configuration"),
                 )
     elif action == "auto_fill_courts":
         # Rechecking the database RPC under locks is final authority. Allow a
@@ -2539,6 +2984,7 @@ def _playoff_rows(
     draw: dict[str, Any],
     tournament_id: str,
     advance_count: int,
+    playoff_configuration: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     draw_id = _text(draw.get("id"))
     source_games = [row for row in snapshot.get("games", []) if _text(row.get("draw_id")) == draw_id]
@@ -2595,6 +3041,38 @@ def _playoff_rows(
         for row in compute_round_robin_standings(teams, rr_games)
         if not row.get("retired")
     ]
+    seed_team_ids: list[str] | None = None
+    if playoff_configuration is not None:
+        reviewed_configuration = _validate_playoff_configuration(
+            draw,
+            int(count),
+            playoff_configuration,
+        )
+        seed_team_ids = list(reviewed_configuration["seed_team_ids"])
+        round_scoring = dict(reviewed_configuration["round_scoring"])
+    else:
+        template_code = PLAYOFF_TEMPLATE_CODES[int(count)]
+        template_review = next(
+            (
+                row
+                for row in list(
+                    (draw.get("playoff_review") or {}).get("templates") or []
+                )
+                if _text(row.get("code")) == template_code
+                and _safe_int(row.get("advance_count")) == int(count)
+            ),
+            None,
+        )
+        round_scoring = dict(
+            (template_review or {}).get("default_round_scoring") or {}
+        )
+        if set(round_scoring) != set(_playoff_rounds(int(count))) or any(
+            _text(format_code).upper() not in SUPPORTED_SCORING_FORMATS
+            for format_code in round_scoring.values()
+        ):
+            raise ValueError(
+                "The reviewed event scoring format is unavailable for one or more playoff rounds. Reload the day workspace after configuring scoring."
+            )
     now = datetime.now(timezone.utc).isoformat()
     return [
         {
@@ -2607,7 +3085,11 @@ def _playoff_rows(
             "updated_at": now,
         }
         for row in build_playoff_games(
-            tournament_id=str(tournament_id), advance_count=count, standings=standings
+            tournament_id=str(tournament_id),
+            advance_count=count,
+            standings=standings,
+            seed_team_ids=seed_team_ids,
+            round_scoring=round_scoring,
         )
     ]
 
@@ -2693,13 +3175,50 @@ def _score_evidence(
     }
 
 
+def _round_robin_retirement_target(
+    snapshot: dict[str, Any], draw: dict[str, Any]
+) -> int:
+    """Return the draw's standings target, independent of playoff scoring.
+
+    ``retirement_max_score`` is used only to rewrite round-robin standings.
+    A retirement can be recorded during a playoff round whose game-level
+    format intentionally differs from the event's round-robin format, so the
+    current game's target must never be reused for this value.
+    """
+
+    draw_id = _text(draw.get("id"))
+    format_code = _text(
+        (draw.get("playoff_review") or {}).get("default_scoring_format")
+    ).upper()
+    if format_code in SUPPORTED_SCORING_FORMATS:
+        return GAME_TARGETS.get(format_code, 2)
+
+    # Compatibility for retained/unit snapshots that predate playoff-review
+    # metadata: authoritative round-robin game projections resolve the same
+    # event policy and carry its target.
+    round_robin_targets = {
+        target
+        for game in snapshot.get("games", [])
+        if _text(game.get("draw_id")) == draw_id
+        and _text(game.get("stage")).upper() == "ROUND_ROBIN"
+        for target in [_safe_int((game.get("scoring") or {}).get("target"))]
+        if target is not None and target > 0
+    }
+    if len(round_robin_targets) == 1:
+        return next(iter(round_robin_targets))
+
+    raise ValueError(
+        "The configured round-robin scoring target is unavailable for this retirement."
+    )
+
+
 def _non_played_evidence(
     snapshot: dict[str, Any], payload: dict[str, Any], actor_email: str
 ) -> dict[str, Any]:
     game = _selected_game(snapshot, _text(payload.get("game_id"))) or {}
     scoring = dict(game.get("scoring") or {})
-    target = _safe_int(scoring.get("target"))
-    if target is None or target <= 0:
+    game_target = _safe_int(scoring.get("target"))
+    if game_target is None or game_target <= 0:
         raise ValueError(
             "The configured scoring target is unavailable for this non-played outcome."
         )
@@ -2711,8 +3230,8 @@ def _non_played_evidence(
     )
     score_payload = {
         "game_id": _text(game.get("id")),
-        "score_a": target if winner_team_id == team_a_id else 0,
-        "score_b": 0 if winner_team_id == team_a_id else target,
+        "score_a": game_target if winner_team_id == team_a_id else 0,
+        "score_b": 0 if winner_team_id == team_a_id else game_target,
         "unusual_score_acknowledgement": False,
     }
     score_evidence = _score_evidence(snapshot, score_payload)
@@ -2744,10 +3263,11 @@ def _non_played_evidence(
             )
         if _text(retiring_team.get("competition_status") or "ACTIVE").upper() == "RETIRED":
             raise ValueError("This team is already retired from the draw.")
+        round_robin_target = _round_robin_retirement_target(snapshot, draw)
         result["retirement"] = {
             "team_id": non_playing_team_id,
             "expected_team_updated_at": retiring_team.get("updated_at"),
-            "max_score": target,
+            "max_score": round_robin_target,
         }
     return result
 
@@ -2785,9 +3305,20 @@ def _operation_payload_base(action: str, expected: dict[str, Any], payload: dict
             )
             is True
         }
+    playoff_configuration: dict[str, Any] | None = None
+    if action == "generate_playoffs" and "playoff_configuration" in command_payload:
+        playoff_configuration = dict(
+            command_payload.pop("playoff_configuration") or {}
+        )
     result = {"action": action, "expected": dict(expected), "payload": command_payload}
     if operator_review is not None:
         result["operator_review"] = operator_review
+    if playoff_configuration is not None:
+        # The legacy command payload remains byte-for-byte compatible with the
+        # database wrapper's exact allowlist. The reviewed configuration is
+        # still durable and idempotency-bound beside it, while ``playoff_games``
+        # captures the exact bracket rows that the RPC must commit.
+        result["playoff_configuration"] = playoff_configuration
     return result
 
 
@@ -2874,7 +3405,11 @@ def execute_admin_tournament_day_live_command(
     if existing:
         request_json = existing.get("request_json") if isinstance(existing.get("request_json"), dict) else {}
         stored = request_json.get("payload") if isinstance(request_json.get("payload"), dict) else {}
-        stored_base = {key: stored.get(key) for key in base_payload}
+        stored_base = {
+            key: stored[key]
+            for key in OPERATION_REQUEST_BASE_KEYS
+            if key in stored
+        }
         if _canonical(stored_base) != _canonical(base_payload) or _text(existing.get("expected_state")) != expected_state:
             raise ValueError("This idempotency key was already used for a different tournament day request.")
         operation_payload = dict(stored)
@@ -2916,6 +3451,11 @@ def execute_admin_tournament_day_live_command(
                 draw,
                 str(tournament_id),
                 int(submitted_payload["advance_count"]),
+                (
+                    dict(submitted_payload.get("playoff_configuration") or {})
+                    if "playoff_configuration" in submitted_payload
+                    else None
+                ),
             )
             operation_payload["playoff_evidence"] = {
                 "source_draw_updated_at": draw.get("source_updated_at")

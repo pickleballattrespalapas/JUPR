@@ -31,22 +31,28 @@ import type {
   AdminTournamentDayGame,
   AdminTournamentDayOperation,
   AdminTournamentDayOption,
+  AdminTournamentDayPlayoffReview,
+  AdminTournamentDayPlayoffTemplate,
   AdminTournamentDayQueueEntry,
   AdminTournamentDayReadiness,
+  AdminTournamentDayRoundRobinStanding,
   AdminTournamentDayWorkspaceSnapshot
 } from "@/lib/adminTournamentDayOpsApi";
 import {
-  advanceCountSelection,
   dayActionConfirmation,
   dayRunAcceptsLiveCommands,
   dayRunHasStarted,
+  newlyReadyPlayoffNotice,
   oldestReadyQueue,
+  playoffTemplateRoundCodes,
   readyActiveDrawQueue,
+  readyPlayoffReviewDraws,
   retainedDayCommandStorageKey,
   tournamentDayMedalMatchKind,
   validateDayCorrectionDraft,
   validateDayScoreDraft,
   validateNonPlayedOutcomeDraft,
+  validatePlayoffReviewConfiguration,
   visibleServerQueue,
   workspaceScopeKey
 } from "@/lib/tournamentDayWorkspaceState.mjs";
@@ -131,6 +137,16 @@ type CourtActionEditor = {
   targetCourtId: string;
   expected: AdminTournamentDayCommandExpected;
   reviewedAssignmentVersion: string;
+};
+
+type PlayoffEditor = {
+  drawId: string;
+  reviewFingerprint: string;
+  templateCode: string;
+  seedTeamIds: string[];
+  roundScoring: Record<string, string>;
+  error: string;
+  expected: AdminTournamentDayCommandExpected;
 };
 
 const RECOVERY_STATUSES = new Set(["intent", "mutated", "recovery_required"]);
@@ -333,6 +349,131 @@ function drawActionLabel(action: ReturnType<typeof drawAction>): string {
   return "Activate draw";
 }
 
+function playoffRoundLabel(code: string): string {
+  const normalized = String(code || "").trim().toUpperCase();
+  const known: Record<string, string> = {
+    PLAY_IN: "Play-in",
+    QUARTERFINAL: "Quarterfinal",
+    QUARTERFINALS: "Quarterfinals",
+    QF: "Quarterfinals",
+    SEMIFINAL: "Semifinal",
+    SEMIFINALS: "Semifinals",
+    SF: "Semifinals",
+    FINAL: "Gold medal final",
+    GOLD: "Gold medal final",
+    BRONZE: "Bronze medal match"
+  };
+  return known[normalized] || statusLabel(normalized);
+}
+
+function playoffTemplateRoundLabel(template: AdminTournamentDayPlayoffTemplate, code: string): string {
+  const reviewedRound = (template.rounds || []).find((candidate) => (
+    playoffTemplateRoundCodes({
+      ...template,
+      applicable_rounds: [],
+      rounds: [candidate],
+      games: []
+    })[0] === code
+  ));
+  return typeof reviewedRound === "object" && reviewedRound?.label
+    ? reviewedRound.label
+    : playoffRoundLabel(code);
+}
+
+function standingLabel(standing: AdminTournamentDayRoundRobinStanding | undefined): string {
+  if (!standing) return "Team unavailable";
+  return standing.team_name || (standing.participant_names || []).filter(Boolean).join(" / ") || "Unnamed team";
+}
+
+function roundRobinPolicyDescription(draw: AdminTournamentDayDraw): string {
+  const policy = draw.round_robin_summary?.ranking_policy;
+  if (typeof policy === "string" && policy.trim()) return policy;
+  if (policy && typeof policy === "object" && policy.description) return policy.description;
+  return draw.round_robin_summary?.tie_break_policy
+    || "Standings use the tournament's authoritative tie-break policy.";
+}
+
+function eligibleStandings(draw: AdminTournamentDayDraw): AdminTournamentDayRoundRobinStanding[] {
+  const standings = draw.round_robin_summary?.standings || [];
+  const eligibleIds = new Set((draw.playoff_review?.eligible_team_ids || []).map(String));
+  if (eligibleIds.size) return standings.filter((standing) => eligibleIds.has(String(standing.team_id)));
+  return standings.filter((standing) => !standing.retired && String(standing.competition_status || "ACTIVE").toUpperCase() !== "RETIRED");
+}
+
+function playoffTemplate(draw: AdminTournamentDayDraw, code: string): AdminTournamentDayPlayoffTemplate | undefined {
+  return (draw.playoff_review?.templates || []).find((template) => template.code === code);
+}
+
+function seedDefaults(draw: AdminTournamentDayDraw, template: AdminTournamentDayPlayoffTemplate): string[] {
+  const review = draw.playoff_review;
+  const eligibleIds = new Set((review?.eligible_team_ids || eligibleStandings(draw).map((standing) => standing.team_id)).map(String));
+  const ordered = [
+    ...(template.default_seed_team_ids || []),
+    ...(review?.default_seed_team_ids || []),
+    ...eligibleStandings(draw).map((standing) => standing.team_id),
+    ...eligibleIds
+  ].map(String).filter((teamId, index, rows) => eligibleIds.has(teamId) && rows.indexOf(teamId) === index);
+  return ordered.slice(0, Number(template.advance_count) || 0);
+}
+
+function scoringDefaults(
+  review: AdminTournamentDayPlayoffReview,
+  template: AdminTournamentDayPlayoffTemplate,
+  current: Record<string, string> = {}
+): Record<string, string> {
+  const serverDefaults = review.default_round_scoring && typeof review.default_round_scoring === "object"
+    ? review.default_round_scoring
+    : {};
+  const templateDefaults = template.default_round_scoring || {};
+  const scalarDefault = typeof review.default_round_scoring === "string"
+    ? review.default_round_scoring
+    : review.default_scoring_format || review.scoring_formats[0]?.code || "";
+  const aliases: Record<string, string[]> = {
+    QF: ["QUARTERFINAL", "QUARTERFINALS", "PLAY_IN"],
+    SF: ["SEMIFINAL", "SEMIFINALS"],
+    FINAL: ["GOLD", "GOLD_MEDAL", "CHAMPIONSHIP"],
+    BRONZE: ["BRONZE_MEDAL", "THIRD_PLACE"]
+  };
+  return Object.fromEntries(playoffTemplateRoundCodes(template).map((roundCode) => [
+    roundCode,
+    current[roundCode]
+      || templateDefaults[roundCode]
+      || (aliases[roundCode] || []).map((alias) => templateDefaults[alias]).find(Boolean)
+      || serverDefaults[roundCode]
+      || (aliases[roundCode] || []).map((alias) => serverDefaults[alias]).find(Boolean)
+      || scalarDefault
+  ]));
+}
+
+function bracketSourceLabel(
+  source: unknown,
+  fallbackSeed: number | null | undefined,
+  standingsById: Map<string, AdminTournamentDayRoundRobinStanding>,
+  seedTeamIds: string[]
+): string {
+  if (fallbackSeed) {
+    const teamId = seedTeamIds[fallbackSeed - 1];
+    return `Seed ${fallbackSeed} · ${standingLabel(standingsById.get(teamId))}`;
+  }
+  if (typeof source === "string") return statusLabel(source);
+  if (typeof source === "number") {
+    const teamId = seedTeamIds[source - 1];
+    return `Seed ${source} · ${standingLabel(standingsById.get(teamId))}`;
+  }
+  if (!source || typeof source !== "object") return "Bracket source pending";
+  const value = source as Record<string, unknown>;
+  const seed = Number(value.seed ?? value.seed_number ?? value.seedNumber);
+  if (Number.isInteger(seed) && seed > 0) {
+    const teamId = seedTeamIds[seed - 1];
+    return `Seed ${seed} · ${standingLabel(standingsById.get(teamId))}`;
+  }
+  const winner = String(value.winnerOf ?? value.winner_of ?? "").trim();
+  if (winner) return `Winner of ${winner}`;
+  const loser = String(value.loserOf ?? value.loser_of ?? "").trim();
+  if (loser) return `Loser of ${loser}`;
+  return "Bracket source pending";
+}
+
 export default function TournamentDayWorkspacePanel({
   apiBase,
   clubId,
@@ -359,7 +500,7 @@ export default function TournamentDayWorkspacePanel({
   const [correctionEditor, setCorrectionEditor] = useState<CorrectionEditor | null>(null);
   const [outcomeEditor, setOutcomeEditor] = useState<OutcomeEditor | null>(null);
   const [courtActionEditor, setCourtActionEditor] = useState<CourtActionEditor | null>(null);
-  const [playoffAdvanceCounts, setPlayoffAdvanceCounts] = useState<Record<string, string>>({});
+  const [playoffEditor, setPlayoffEditor] = useState<PlayoffEditor | null>(null);
   const [pendingCommand, setPendingCommand] = useState<PendingDayCommand | null>(null);
   const [busyKey, setBusyKey] = useState("");
   const [loading, setLoading] = useState(false);
@@ -428,6 +569,14 @@ export default function TournamentDayWorkspacePanel({
     )),
     [snapshot]
   );
+  const playoffReadyDraws = useMemo(
+    () => readyPlayoffReviewDraws(snapshot),
+    [snapshot]
+  );
+  const blockedProgressionAlerts = useMemo(
+    () => (snapshot?.progression_alerts || []).filter((alert) => !alert.ready),
+    [snapshot]
+  );
 
   const replaceWorkspaceUrl = useCallback((next: {
     dayId?: string;
@@ -473,13 +622,14 @@ export default function TournamentDayWorkspacePanel({
       if (!snapshotRequest.isCurrent(generation) || options.signal?.aborted) return;
       assertWorkspaceSnapshotScope(payload, clubId, tournamentId, selectedDayId);
       const promotionNotice = promotedReservationNotice(snapshotRef.current, payload);
+      const progressionNotice = newlyReadyPlayoffNotice(snapshotRef.current, payload);
       snapshotRef.current = payload;
       setSnapshot(payload);
       setDayOptions(payload.day_scope.available_days || []);
       setLastRefresh(payload.generated_at || new Date().toISOString());
       const retained = readPendingCommand(clubId, tournamentId, selectedDayId);
       setPendingCommand(retained);
-      if (promotionNotice) setMessage(promotionNotice);
+      if (promotionNotice || progressionNotice) setMessage([promotionNotice, progressionNotice].filter(Boolean).join(" "));
       else if (!options.silent) setMessage("Authoritative tournament-day state loaded.");
     } catch (loadError) {
       if (!snapshotRequest.isCurrent(generation) || options.signal?.aborted) return;
@@ -665,7 +815,45 @@ export default function TournamentDayWorkspacePanel({
         setError("Court assignment controls closed because the queue or court board changed. Reopen the current matchup and review it again.");
       }
     }
-  }, [correctionEditor, courtActionEditor, outcomeEditor, scoreEditor, snapshot]);
+
+    if (playoffEditor) {
+      const draw = snapshot.draws.find((row) => row.id === playoffEditor.drawId);
+      const currentReviewFingerprint = String(draw?.playoff_review_fingerprint || "").trim();
+      const reviewedTemplateStillExists = Boolean(
+        draw?.playoff_review?.templates?.some(
+          (template) => template.code === playoffEditor.templateCode
+        )
+      );
+      const selectedDrawChanged = !draw
+        || !draw.round_robin_summary?.standings?.length
+        || !draw.playoff_review?.scoring_formats?.length
+        || !reviewedTemplateStillExists
+        || draw.version !== playoffEditor.expected.draw_version
+        || !playoffEditor.reviewFingerprint
+        || !currentReviewFingerprint
+        || currentReviewFingerprint !== playoffEditor.reviewFingerprint
+        || !readyPlayoffReviewDraws(snapshot).some((row) => row.id === playoffEditor.drawId);
+      if (selectedDrawChanged) {
+        setPlayoffEditor(null);
+        setError("Playoff review closed because the round-robin results or authoritative tournament-day state changed. Reopen the finished draw and inspect the refreshed qualifiers.");
+      } else if (expectedSnapshotChanged(playoffEditor.expected)) {
+        // Court and queue activity from other draws changes the full-day
+        // fingerprint frequently. Keep this still-current draw review open,
+        // but bind its final command to the newest authoritative day fence.
+        setPlayoffEditor((current) => current?.drawId === playoffEditor.drawId
+          ? {
+              ...current,
+              expected: {
+                ...current.expected,
+                day_run_version: snapshot.day_run.version,
+                state_fingerprint: snapshot.state_fingerprint,
+                queue_version: snapshot.queue_version
+              }
+            }
+          : current);
+      }
+    }
+  }, [correctionEditor, courtActionEditor, outcomeEditor, playoffEditor, scoreEditor, snapshot]);
 
   function persistPending(next: PendingDayCommand | null) {
     if (!selectedDayId) return;
@@ -729,6 +917,8 @@ export default function TournamentDayWorkspacePanel({
           ? "Matchup returned to its existing queue priority. Any reserved next match was promoted when a court opened."
         : command.request.action === "move_game_to_court"
           ? "Matchup moved to the selected open court."
+        : command.request.action === "generate_playoffs"
+          ? "Reviewed playoff structure, seeds, and round scoring were generated. The first eligible playoff matchups are now in the court queue."
         : command.request.action === "close_day"
           ? "Tournament day closed. Its court, queue, claim, and operation history remains preserved."
           : result.command.idempotent_replay
@@ -737,9 +927,8 @@ export default function TournamentDayWorkspacePanel({
             ? "The exact retained tournament-day request completed."
             : "The server committed the reviewed tournament-day operation.";
       const promotionNotice = promotedReservationNotice(snapshotRef.current, result.snapshot);
-      const finalCompletionText = promotionNotice
-        ? `${completionText} ${promotionNotice}`
-        : completionText;
+      const progressionNotice = newlyReadyPlayoffNotice(snapshotRef.current, result.snapshot);
+      const finalCompletionText = [completionText, promotionNotice, progressionNotice].filter(Boolean).join(" ");
       const completion = actionSuccess("Tournament-day operation complete", finalCompletionText);
       if (!actionRequest.isCurrent(generation)) return completion;
       persistPending(null);
@@ -763,6 +952,8 @@ export default function TournamentDayWorkspacePanel({
         replaceWorkspaceUrl({ courtId: "", gameId: "", panel: "board" });
       } else if (["assign_next_court", "assign_game_to_court", "reserve_game_for_court", "requeue_game", "move_game_to_court"].includes(command.request.action)) {
         setCourtActionEditor(null);
+      } else if (command.request.action === "generate_playoffs") {
+        setPlayoffEditor(null);
       }
       setMessage(finalCompletionText);
       return completion;
@@ -875,7 +1066,7 @@ export default function TournamentDayWorkspacePanel({
     setCorrectionEditor(null);
     setOutcomeEditor(null);
     setCourtActionEditor(null);
-    setPlayoffAdvanceCounts({});
+    setPlayoffEditor(null);
     setPendingCommand(null);
     setMessage(null);
     setError(null);
@@ -891,6 +1082,98 @@ export default function TournamentDayWorkspacePanel({
   function chooseQueueDraw(drawId: string) {
     setDrawFilter(drawId);
     replaceWorkspaceUrl({ drawId: drawId === "all" ? "" : drawId, panel: "queue" });
+  }
+
+  function openPlayoffReview(draw: AdminTournamentDayDraw) {
+    const review = draw.playoff_review;
+    const reviewFingerprint = String(draw.playoff_review_fingerprint || "").trim();
+    if (!review?.templates?.length || !review.scoring_formats?.length || !draw.round_robin_summary?.standings?.length) {
+      setError("The server has not supplied a complete playoff review for this finished draw. Reload full day before generating playoffs.");
+      return;
+    }
+    if (!reviewFingerprint) {
+      setError("The server has not supplied a current playoff review fingerprint. Reload the full day after the API deployment completes before generating playoffs.");
+      return;
+    }
+    if (!playoffReadyDraws.some((candidate) => candidate.id === draw.id)) {
+      setError("This draw is no longer ready for playoff review. Reload and inspect its current progression blockers.");
+      return;
+    }
+    const defaultAdvanceCount = Number(draw.readiness.generate_playoffs.default_advance_count);
+    const template = review.templates.find((candidate) => candidate.code === review.default_template_code)
+      || review.templates.find((candidate) => candidate.advance_count === defaultAdvanceCount)
+      || review.templates[0];
+    setScoreEditor(null);
+    setCorrectionEditor(null);
+    setOutcomeEditor(null);
+    setCourtActionEditor(null);
+    resultAction.reset();
+    setError(null);
+    setPlayoffEditor({
+      drawId: draw.id,
+      reviewFingerprint,
+      templateCode: template.code,
+      seedTeamIds: seedDefaults(draw, template),
+      roundScoring: scoringDefaults(review, template),
+      error: "",
+      expected: expectedVersions({ draw_version: draw.version })
+    });
+  }
+
+  function selectPlayoffTemplate(templateCode: string) {
+    if (!playoffEditor || !snapshot) return;
+    const draw = snapshot.draws.find((candidate) => candidate.id === playoffEditor.drawId);
+    const review = draw?.playoff_review;
+    const template = draw ? playoffTemplate(draw, templateCode) : undefined;
+    if (!draw || !review || !template) {
+      setPlayoffEditor({ ...playoffEditor, error: "That playoff structure is no longer available." });
+      return;
+    }
+    const eligibleIds = new Set((review.eligible_team_ids || []).map(String));
+    const seeds = [...playoffEditor.seedTeamIds, ...seedDefaults(draw, template)]
+      .filter((teamId, index, rows) => eligibleIds.has(teamId) && rows.indexOf(teamId) === index)
+      .slice(0, template.advance_count);
+    setPlayoffEditor({
+      ...playoffEditor,
+      templateCode,
+      seedTeamIds: seeds,
+      roundScoring: scoringDefaults(review, template, playoffEditor.roundScoring),
+      error: ""
+    });
+  }
+
+  async function generateReviewedPlayoffs() {
+    if (!playoffEditor || !snapshot) return;
+    const draw = snapshot.draws.find((candidate) => candidate.id === playoffEditor.drawId);
+    const review = draw?.playoff_review;
+    const configuration = {
+      template_code: playoffEditor.templateCode,
+      seed_team_ids: playoffEditor.seedTeamIds,
+      round_scoring: playoffEditor.roundScoring
+    };
+    const validation = validatePlayoffReviewConfiguration(review, configuration);
+    if (!draw || !review || !validation.ok) {
+      setPlayoffEditor({
+        ...playoffEditor,
+        error: validation.ok ? "Reload the finished draw before generating playoffs." : validation.message
+      });
+      return;
+    }
+    setPlayoffEditor({ ...playoffEditor, error: "" });
+    await resultAction.run(() => submitCommand(
+      "generate_playoffs",
+      draw.readiness.generate_playoffs.confirmation || dayActionConfirmation("generate_playoffs"),
+      {
+        draw_id: draw.id,
+        advance_count: validation.advanceCount,
+        playoff_configuration: {
+          template_code: playoffEditor.templateCode,
+          seed_team_ids: validation.seedTeamIds,
+          round_scoring: { ...validation.roundScoring }
+        }
+      },
+      playoffEditor.expected
+    ));
   }
 
   function openScore(game: AdminTournamentDayGame, courtId: string) {
@@ -1297,6 +1580,40 @@ export default function TournamentDayWorkspacePanel({
     ? (courtActionEditor.kind === "assign" ? assignmentCourtChoices : availableCourts)
       .find((court) => court.id === courtActionEditor.targetCourtId)
     : undefined;
+  const selectedPlayoffDraw = playoffEditor
+    ? snapshot?.draws.find((draw) => draw.id === playoffEditor.drawId)
+    : undefined;
+  const selectedPlayoffReview = selectedPlayoffDraw?.playoff_review || undefined;
+  const selectedPlayoffTemplate = selectedPlayoffDraw && playoffEditor
+    ? playoffTemplate(selectedPlayoffDraw, playoffEditor.templateCode)
+    : undefined;
+  const selectedPlayoffDefaultTemplateCode = selectedPlayoffDraw && selectedPlayoffReview
+    ? selectedPlayoffReview.default_template_code
+      || selectedPlayoffReview.templates.find((template) => template.advance_count === selectedPlayoffDraw.readiness.generate_playoffs.default_advance_count)?.code
+      || selectedPlayoffReview.templates[0]?.code
+      || ""
+    : "";
+  const selectedPlayoffStandings = selectedPlayoffDraw?.round_robin_summary?.standings || [];
+  const selectedPlayoffStandingsById = new Map(selectedPlayoffStandings.map((standing) => [String(standing.team_id), standing]));
+  const selectedPlayoffValidation = playoffEditor
+    ? validatePlayoffReviewConfiguration(selectedPlayoffReview, {
+        template_code: playoffEditor.templateCode,
+        seed_team_ids: playoffEditor.seedTeamIds,
+        round_scoring: playoffEditor.roundScoring
+      })
+    : null;
+  const playoffSeedsChanged = Boolean(
+    selectedPlayoffDraw
+      && selectedPlayoffTemplate
+      && playoffEditor
+      && seedDefaults(selectedPlayoffDraw, selectedPlayoffTemplate).join("\u0000") !== playoffEditor.seedTeamIds.join("\u0000")
+  );
+  const playoffScoringChanged = Boolean(
+    selectedPlayoffReview
+      && selectedPlayoffTemplate
+      && playoffEditor
+      && JSON.stringify(scoringDefaults(selectedPlayoffReview, selectedPlayoffTemplate)) !== JSON.stringify(playoffEditor.roundScoring)
+  );
   const resultWorking = resultAction.phase === "working" || Boolean(busyKey);
   const uncertainResult = resultAction.phase === "uncertain" && resultAction.completion?.status === "uncertain"
     ? resultAction.completion
@@ -1355,9 +1672,51 @@ export default function TournamentDayWorkspacePanel({
             }}
           >
             {panel === "board" ? "Court board" : panel === "queue" ? "Eligible queue" : panel === "draws" ? "Draws & progression" : "Corrections & recovery"}
+            {panel === "draws" && playoffReadyDraws.length ? (
+              <span className={styles.navBadge} aria-label={`${playoffReadyDraws.length} ready for playoff review`}>{playoffReadyDraws.length}</span>
+            ) : null}
           </button>
         ))}
       </nav>
+
+      {snapshot && (playoffReadyDraws.length || blockedProgressionAlerts.length) ? (
+        <section className={styles.playoffReadyBanner} aria-labelledby="playoff-ready-banner-title">
+          {playoffReadyDraws.length ? (
+            <div className={styles.playoffAlertRow}>
+              <div className={styles.playoffReadyBannerCopy} aria-live="polite">
+                <span className={styles.warningBadge}>Action ready</span>
+                <div>
+                  <h2 id="playoff-ready-banner-title">
+                    {playoffReadyDraws.length === 1 ? "Round robin complete" : `${playoffReadyDraws.length} round robins complete`}
+                  </h2>
+                  <p>{playoffReadyDraws.length === 1
+                    ? `${playoffReadyDraws[0].name} is ready for playoff review.`
+                    : "Inspect qualifiers, seeds, bracket structure, and scoring before generating each playoff."}</p>
+                </div>
+              </div>
+              <div className={styles.playoffReadyActions} aria-label="Draws ready for playoff review">
+                {playoffReadyDraws.map((draw) => (
+                  <button key={draw.id} type="button" className={styles.primaryButton} onClick={() => openPlayoffReview(draw)}>
+                    Review {draw.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : <h2 id="playoff-ready-banner-title" className={styles.visuallyHidden}>Playoff progression needs attention</h2>}
+          {blockedProgressionAlerts.map((alert) => (
+            <div className={styles.playoffAlertRow} key={alert.key}>
+              <div className={styles.playoffReadyBannerCopy} aria-live="polite">
+                <span className={styles.warningBadge}>Needs attention</span>
+                <div>
+                  <h3>Round robin complete — playoff review needs attention</h3>
+                  <p><strong>{alert.draw_name || "Finished draw"}:</strong> {alert.message || "This draw cannot progress yet."} {(alert.blockers || [])[0] ? blockerText((alert.blockers || [])[0]) : "Open progression to inspect the server blocker."}</p>
+                </div>
+              </div>
+              <button type="button" className={styles.secondaryButton} onClick={() => setPanel("draws")}>Open Draws &amp; progression</button>
+            </div>
+          ))}
+        </section>
+      ) : null}
 
       {!selectedDayId ? (
         <section className={styles.emptyState}>
@@ -1757,15 +2116,14 @@ export default function TournamentDayWorkspacePanel({
                 const assignmentReadiness = readinessOrBlocked(draw.readiness.assignments, "Court assignment evidence is unavailable.");
                 const playoffs = readinessOrBlocked(draw.readiness.generate_playoffs, "Playoff readiness is unavailable.");
                 const podium = readinessOrBlocked(draw.readiness.podium, "Podium readiness is unavailable.");
-                const selectedAdvanceCount = advanceCountSelection(
-                  draw.readiness.generate_playoffs.allowed_advance_counts,
-                  draw.readiness.generate_playoffs.default_advance_count,
-                  playoffAdvanceCounts[draw.id]
+                const playoffReady = playoffReadyDraws.some((candidate) => candidate.id === draw.id);
+                const completeReviewAvailable = Boolean(
+                  draw.round_robin_summary?.standings?.length
+                    && draw.playoff_review?.templates?.length
+                    && draw.playoff_review?.scoring_formats?.length
                 );
-                const reviewedAdvanceCount = selectedAdvanceCount ? Number(selectedAdvanceCount) : null;
-                const advanceCountHelpId = `advance-count-help-${draw.id}`;
                 return (
-                  <article key={draw.id} className={styles.drawCard}>
+                  <article key={draw.id} className={`${styles.drawCard} ${playoffReady ? styles.playoffReadyDraw : ""}`}>
                     <div className={styles.cardHeading}><h3>{draw.name}</h3><span className={String(draw.activation_state).toUpperCase() === "ACTIVE" ? styles.activeBadge : styles.neutralBadge}>{statusLabel(draw.activation_state || draw.state)}</span></div>
                     <p>{draw.finalized_games} of {draw.total_games} finalized · {draw.queued_games} queued · {draw.active_games} on court · {draw.held_games} held</p>
                     <h4>Court assignment evidence</h4><ReadinessBlockers readiness={assignmentReadiness} />
@@ -1782,32 +2140,26 @@ export default function TournamentDayWorkspacePanel({
                       onConfirm={(confirmationText) => submitCommand(action, confirmationText, { draw_id: draw.id }, { draw_version: draw.version })}
                     />
                     <hr />
-                    <h4>Progression</h4><p>Current stage: <strong>{statusLabel(draw.stage || "Not started")}</strong></p><ReadinessBlockers readiness={playoffs} />
-                    <label className={styles.field} htmlFor={`advance-count-${draw.id}`}>
-                      Advancing teams
-                      <select
-                        id={`advance-count-${draw.id}`}
-                        value={selectedAdvanceCount}
-                        aria-describedby={advanceCountHelpId}
-                        disabled={!dayActive || writesFrozen || Boolean(busyKey) || !draw.readiness.generate_playoffs.allowed_advance_counts.length}
-                        onChange={(event) => setPlayoffAdvanceCounts((current) => ({ ...current, [draw.id]: event.target.value }))}
-                      >
-                        <option value="">Choose advancing teams…</option>
-                        {draw.readiness.generate_playoffs.allowed_advance_counts.map((count) => <option key={count} value={count}>Top {count} teams</option>)}
-                      </select>
-                    </label>
-                    <p id={advanceCountHelpId} className={styles.muted}>No playoff format is assumed. Choose one of the server-reviewed values before confirmation.</p>
-                    <ConfirmAction
-                      triggerLabel="Generate playoffs"
-                      title={`Generate playoffs for ${draw.name}?`}
-                      description={reviewedAdvanceCount == null ? "Choose an advancing-team count before reviewing the bracket command." : `Generate a top-${reviewedAdvanceCount} bracket only inside this day fence after the server verifies every source result.`}
-                      confirmLabel="Yes, generate playoffs"
-                      confirmationText={playoffs.confirmation || dayActionConfirmation("generate_playoffs")}
-                      disabled={!dayActive || !runtimeWritesEnabled || !playoffs.ready || writesFrozen || reviewedAdvanceCount == null}
-                      disabledReason={!dayActive ? "The day must be active to generate playoffs." : writesFrozen ? "Resolve recovery first." : reviewedAdvanceCount == null ? "Choose a server-reviewed advancing-team count." : playoffs.blockers.map(blockerText).join(" ")}
-                      busy={Boolean(busyKey)}
-                      onConfirm={(confirmationText) => submitCommand("generate_playoffs", confirmationText, { draw_id: draw.id, advance_count: reviewedAdvanceCount as number }, { draw_version: draw.version })}
-                    />
+                    <div className={styles.progressionHeading}>
+                      <h4>Progression</h4>
+                      {playoffReady ? <span className={styles.warningBadge}>Playoff review ready</span> : null}
+                    </div>
+                    <p>Current stage: <strong>{statusLabel(draw.progression_status || draw.stage || "Not started")}</strong></p>
+                    <ReadinessBlockers readiness={playoffs} />
+                    <button
+                      type="button"
+                      className={playoffReady ? styles.primaryButton : styles.secondaryButton}
+                      disabled={!playoffReady || !completeReviewAvailable}
+                      aria-describedby={`playoff-review-help-${draw.id}`}
+                      onClick={() => openPlayoffReview(draw)}
+                    >
+                      Review playoff setup
+                    </button>
+                    <p id={`playoff-review-help-${draw.id}`} className={styles.muted}>{!completeReviewAvailable
+                      ? "The server has not supplied the standings and playoff options needed for review. Reload full day."
+                      : playoffReady
+                        ? "Inspect standings, qualifiers, structure, and scoring before one final generation action."
+                        : "This review opens when every round-robin result is finalized and the server marks progression ready."}</p>
                     <ReadinessBlockers readiness={podium} />
                     {podium.ready ? (
                       <Link className={styles.textLink} href={tournamentRouteHref("/admin/tournaments/live-operations/podium", { tournamentId, tournamentName: snapshot.tournament.name, dayId: selectedDayId, drawId: draw.id })}>Open Podium & awards</Link>
@@ -1842,6 +2194,216 @@ export default function TournamentDayWorkspacePanel({
                 onConfirm={(confirmationText) => submitCommand("close_day", confirmationText, {})}
               />
             </section>
+          ) : null}
+
+          {playoffEditor && selectedPlayoffDraw && selectedPlayoffReview && selectedPlayoffTemplate ? (
+            <InteractionDialog
+              open
+              phase={resultAction.phase}
+              size="xwide"
+              title={`Review playoffs · ${selectedPlayoffDraw.name}`}
+              description="Inspect the completed round robin, choose the qualifying teams and seeds, then review the bracket and scoring before generating it once."
+              dirty={playoffSeedsChanged || playoffScoringChanged || selectedPlayoffTemplate.code !== selectedPlayoffDefaultTemplateCode}
+              onRequestClose={() => setPlayoffEditor(null)}
+              actions={uncertainResult ? (
+                <button type="button" className={styles.primaryButton} onClick={() => void resultAction.recover(uncertainResult.onRecover)}>
+                  {uncertainResult.recoveryLabel}
+                </button>
+              ) : (
+                <>
+                  <button type="button" className={styles.secondaryButton} onClick={() => setPlayoffEditor(null)} disabled={resultWorking}>Close review</button>
+                  <button
+                    type="button"
+                    className={styles.primaryButton}
+                    disabled={
+                      resultWorking
+                      || !dayActive
+                      || !runtimeWritesEnabled
+                      || writesFrozen
+                      || !selectedPlayoffDraw.readiness.generate_playoffs.ready
+                      || !selectedPlayoffValidation?.ok
+                    }
+                    onClick={() => void generateReviewedPlayoffs()}
+                  >
+                    {resultWorking ? "Generating playoffs…" : "Generate reviewed playoffs"}
+                  </button>
+                </>
+              )}
+            >
+              <div className={styles.playoffReviewWorkspace}>
+                <section className={styles.playoffReviewSection} aria-labelledby="round-robin-review-heading">
+                  <div className={styles.playoffReviewHeading}>
+                    <div>
+                      <p className={styles.eyebrow}>1 · Results & qualifiers</p>
+                      <h3 id="round-robin-review-heading">Round-robin summary</h3>
+                    </div>
+                    <span className={styles.successBadge}>{selectedPlayoffStandings.length} teams inspected</span>
+                  </div>
+                  <p className={styles.muted}>{roundRobinPolicyDescription(selectedPlayoffDraw)}</p>
+                  <div className={styles.standingsTableWrap}>
+                    <table className={styles.standingsTable}>
+                      <caption>Completed round-robin standings and current playoff selections</caption>
+                      <thead>
+                        <tr><th scope="col">Rank</th><th scope="col">Team</th><th scope="col">W–L</th><th scope="col">PF</th><th scope="col">PA</th><th scope="col">+/−</th><th scope="col">Non-play</th><th scope="col">Status</th></tr>
+                      </thead>
+                      <tbody>
+                        {selectedPlayoffStandings.map((standing, index) => {
+                          const selectedSeed = playoffEditor.seedTeamIds.indexOf(String(standing.team_id));
+                          const retired = Boolean(standing.retired || String(standing.competition_status || "").toUpperCase() === "RETIRED");
+                          const primaryTeamLabel = standingLabel(standing);
+                          const participantLabel = (standing.participant_names || []).filter(Boolean).join(" / ");
+                          return (
+                            <tr
+                              key={standing.team_id}
+                              className={`${selectedSeed >= 0 ? styles.qualifierRow : ""} ${index === selectedPlayoffTemplate.advance_count - 1 ? styles.qualifierLine : ""} ${retired ? styles.retiredStanding : ""}`}
+                            >
+                              <td>{standing.seed || index + 1}</td>
+                              <th scope="row">
+                                <span>{primaryTeamLabel}</span>
+                                {participantLabel && participantLabel !== primaryTeamLabel ? <small>{participantLabel}</small> : null}
+                              </th>
+                              <td>{standing.wins}–{standing.losses}</td>
+                              <td>{standing.points_for}</td>
+                              <td>{standing.points_against}</td>
+                              <td>{standing.differential > 0 ? "+" : ""}{standing.differential}</td>
+                              <td>{standing.non_play_results || "—"}</td>
+                              <td>{retired ? "Retired · ineligible" : selectedSeed >= 0 ? `Playoff seed ${selectedSeed + 1}` : statusLabel(standing.competition_status || "Eligible")}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section className={styles.playoffReviewSection} aria-labelledby="playoff-structure-heading">
+                  <div className={styles.playoffReviewHeading}>
+                    <div>
+                      <p className={styles.eyebrow}>2 · Structure & scoring</p>
+                      <h3 id="playoff-structure-heading">Configure the playoff</h3>
+                    </div>
+                    <span className={styles.warningBadge}>Not generated yet</span>
+                  </div>
+                  <label className={styles.field}>
+                    Playoff structure
+                    <select
+                      data-autofocus
+                      value={playoffEditor.templateCode}
+                      disabled={resultWorking}
+                      onChange={(event) => selectPlayoffTemplate(event.target.value)}
+                    >
+                      {selectedPlayoffReview.templates.map((template) => (
+                        <option key={template.code} value={template.code}>{template.label} · {template.advance_count} teams</option>
+                      ))}
+                    </select>
+                  </label>
+                  {selectedPlayoffTemplate.description ? <p className={styles.muted}>{selectedPlayoffTemplate.description}</p> : null}
+
+                  <div className={styles.playoffSeedGrid}>
+                    {Array.from({ length: selectedPlayoffTemplate.advance_count }, (_, index) => (
+                      <label className={styles.field} key={`playoff-seed-${index + 1}`}>
+                        Seed {index + 1}
+                        <select
+                          value={playoffEditor.seedTeamIds[index] || ""}
+                          disabled={resultWorking}
+                          onChange={(event) => {
+                            const nextSeeds = [...playoffEditor.seedTeamIds];
+                            nextSeeds[index] = event.target.value;
+                            setPlayoffEditor({ ...playoffEditor, seedTeamIds: nextSeeds, error: "" });
+                          }}
+                        >
+                          <option value="">Choose eligible team…</option>
+                          {eligibleStandings(selectedPlayoffDraw).map((standing) => (
+                            <option key={standing.team_id} value={standing.team_id}>
+                              RR #{standing.seed} · {standingLabel(standing)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ))}
+                  </div>
+                  <div className={styles.playoffSeedActions}>
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      disabled={resultWorking || !playoffSeedsChanged}
+                      onClick={() => setPlayoffEditor({
+                        ...playoffEditor,
+                        seedTeamIds: seedDefaults(selectedPlayoffDraw, selectedPlayoffTemplate),
+                        error: ""
+                      })}
+                    >
+                      Reset to round-robin order
+                    </button>
+                  </div>
+                  {playoffSeedsChanged ? <p className={styles.playoffWarning}><strong>Seed override:</strong> These qualifiers or seeds differ from the authoritative round-robin order. Review every matchup below.</p> : null}
+
+                  <fieldset className={styles.roundScoringFieldset}>
+                    <legend>Scoring by playoff round</legend>
+                    <div className={styles.roundScoringGrid}>
+                      {playoffTemplateRoundCodes(selectedPlayoffTemplate).map((roundCode) => (
+                        <label className={styles.field} key={roundCode}>
+                          {playoffTemplateRoundLabel(selectedPlayoffTemplate, roundCode)}
+                          <select
+                            value={playoffEditor.roundScoring[roundCode] || ""}
+                            disabled={resultWorking}
+                            onChange={(event) => setPlayoffEditor({
+                              ...playoffEditor,
+                              roundScoring: { ...playoffEditor.roundScoring, [roundCode]: event.target.value },
+                              error: ""
+                            })}
+                          >
+                            <option value="">Choose scoring…</option>
+                            {selectedPlayoffReview.scoring_formats.map((format) => <option key={format.code} value={format.code}>{format.label}</option>)}
+                          </select>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                </section>
+
+                <section className={styles.playoffReviewSection} aria-labelledby="playoff-preview-heading">
+                  <div className={styles.playoffReviewHeading}>
+                    <div>
+                      <p className={styles.eyebrow}>3 · Review & generate</p>
+                      <h3 id="playoff-preview-heading">Bracket preview</h3>
+                    </div>
+                    <span className={styles.neutralBadge}>{selectedPlayoffTemplate.label}</span>
+                  </div>
+                  <div className={styles.bracketPreview}>
+                    {playoffTemplateRoundCodes(selectedPlayoffTemplate).map((roundCode) => {
+                      const roundGames = (selectedPlayoffTemplate.games || []).filter((game) => playoffTemplateRoundCodes({ ...selectedPlayoffTemplate, applicable_rounds: [], rounds: [], games: [game] })[0] === roundCode);
+                      return (
+                        <section key={roundCode} className={styles.bracketRound}>
+                          <h4>{playoffTemplateRoundLabel(selectedPlayoffTemplate, roundCode)}</h4>
+                          <p>{selectedPlayoffReview.scoring_formats.find((format) => format.code === playoffEditor.roundScoring[roundCode])?.label || "Scoring not selected"}</p>
+                          <ol>
+                            {roundGames.map((game) => {
+                              const gameValue = game as typeof game & Record<string, unknown>;
+                              return (
+                                <li key={game.code}>
+                                  <strong>{game.label || game.code}</strong>
+                                  <span>{bracketSourceLabel(game.team_a_source ?? gameValue.source_a, game.team_a_seed ?? (Number(gameValue.seed_a) || null), selectedPlayoffStandingsById, playoffEditor.seedTeamIds)}</span>
+                                  <span className={styles.bracketVersus}>vs</span>
+                                  <span>{bracketSourceLabel(game.team_b_source ?? gameValue.source_b, game.team_b_seed ?? (Number(gameValue.seed_b) || null), selectedPlayoffStandingsById, playoffEditor.seedTeamIds)}</span>
+                                </li>
+                              );
+                            })}
+                          </ol>
+                        </section>
+                      );
+                    })}
+                  </div>
+                  {playoffEditor.error ? <p role="alert" className={styles.playoffError}>{playoffEditor.error}</p> : null}
+                  {!selectedPlayoffValidation?.ok ? <p role="alert" className={styles.playoffError}>{selectedPlayoffValidation?.message || "Complete the playoff review before generation."}</p> : null}
+                  {!dayActive ? <p className={styles.playoffWarning}>The tournament day must be active before this reviewed playoff can be generated.</p> : null}
+                  {writesFrozen ? <p className={styles.playoffWarning}>Resolve the retained or recovery-required operation before generating this playoff.</p> : null}
+                  <p className={styles.muted}>The final action submits this exact template, seed order, and per-round scoring inside the reviewed draw and day versions. If authoritative state changes, this review closes instead of generating stale matchups.</p>
+                </section>
+              </div>
+            </InteractionDialog>
+          ) : playoffEditor ? (
+            <p role="alert" className={styles.notice}>The playoff review became unavailable. Close it and reload the finished draw before continuing.</p>
           ) : null}
 
           {courtActionEditor && selectedCourtActionGame ? (

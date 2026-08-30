@@ -5,14 +5,18 @@ import {
   dayActionConfirmation,
   dayRunAcceptsLiveCommands,
   dayRunHasStarted,
+  newlyReadyPlayoffNotice,
   oldestReadyQueue,
+  playoffTemplateRoundCodes,
   readyActiveDrawQueue,
+  readyPlayoffReviewDraws,
   resetFocusForDay,
   retainedDayCommandStorageKey,
   tournamentDayMedalMatchKind,
   validateDayCorrectionDraft,
   validateDayScoreDraft,
   validateNonPlayedOutcomeDraft,
+  validatePlayoffReviewConfiguration,
   visibleServerQueue,
   workspaceScopeKey
 } from "../lib/tournamentDayWorkspaceState.mjs";
@@ -49,6 +53,44 @@ assert.equal(
 assert.equal(advanceCountSelection([4], 5, undefined), "");
 assert.equal(advanceCountSelection([4, 5], null, "5"), "5");
 assert.equal(advanceCountSelection([4], null, "5"), "");
+
+const playoffTemplate = {
+  code: "TOP_4",
+  advance_count: 4,
+  rounds: [{ code: "SEMIFINAL" }, { code: "BRONZE" }, { code: "FINAL" }],
+  games: []
+};
+const playoffReview = {
+  eligible_team_ids: ["team-1", "team-2", "team-3", "team-4"],
+  templates: [playoffTemplate],
+  scoring_formats: [{ code: "GAME_TO_11" }, { code: "BEST_2_OF_3" }]
+};
+assert.deepEqual(
+  playoffTemplateRoundCodes(playoffTemplate),
+  ["SF", "BRONZE", "FINAL"],
+  "playoff scoring uses the canonical backend round keys"
+);
+assert.equal(validatePlayoffReviewConfiguration(playoffReview, {
+  template_code: "TOP_4",
+  seed_team_ids: ["team-1", "team-2", "team-3", "team-4"],
+  round_scoring: { SF: "GAME_TO_11", BRONZE: "GAME_TO_11", FINAL: "BEST_2_OF_3" }
+}).ok, true);
+assert.match(validatePlayoffReviewConfiguration(playoffReview, {
+  template_code: "TOP_4",
+  seed_team_ids: ["team-1", "team-1", "team-3", "team-4"],
+  round_scoring: { SF: "GAME_TO_11", BRONZE: "GAME_TO_11", FINAL: "BEST_2_OF_3" }
+}).message, /different team/);
+
+const beforePlayoffReady = { draws: [{ id: "draw-a", name: "Open", progression_status: "ROUND_ROBIN_IN_PROGRESS" }] };
+const afterPlayoffReady = {
+  draws: [{ id: "draw-a", name: "Open", progression_status: "READY_FOR_PLAYOFF_REVIEW" }],
+  progression_alerts: [{ draw_id: "draw-a", ready: true }]
+};
+assert.deepEqual(readyPlayoffReviewDraws(afterPlayoffReady).map((draw) => draw.id), ["draw-a"]);
+assert.equal(
+  newlyReadyPlayoffNotice(beforePlayoffReady, afterPlayoffReady),
+  "Round robin complete — Open is ready for playoff review."
+);
 
 const queue = [
   { game_id: "g-a-1", draw_id: "draw-a", position: 1 },

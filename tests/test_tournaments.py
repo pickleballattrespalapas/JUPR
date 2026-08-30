@@ -88,6 +88,65 @@ def test_retired_team_cannot_advance_to_playoffs():
         )
 
 
+def test_playoff_builder_applies_reviewed_seeds_and_per_round_scoring():
+    standings = [
+        {
+            "team_id": f"t{seed}",
+            "seed": seed,
+            "competition_status": "ACTIVE",
+        }
+        for seed in range(1, 5)
+    ]
+
+    games = build_playoff_games(
+        tournament_id="tour1",
+        advance_count=4,
+        standings=standings,
+        seed_team_ids=["t4", "t1", "t3", "t2"],
+        round_scoring={
+            "SF": "GAME_TO_15",
+            "BRONZE": "GAME_TO_11",
+            "FINAL": "BEST_2_OF_3",
+        },
+    )
+
+    semifinal = next(row for row in games if row["playoff_game_code"] == "P1")
+    final = next(row for row in games if row["playoff_game_code"] == "P3")
+    bronze = next(row for row in games if row["playoff_game_code"] == "P4")
+    assert semifinal["team_a_id"] == "t4"
+    assert semifinal["team_b_id"] == "t2"
+    assert semifinal["scoring_format"] == "GAME_TO_15"
+    assert final["scoring_format"] == "BEST_2_OF_3"
+    assert bronze["scoring_format"] == "GAME_TO_11"
+
+
+def test_playoff_builder_rejects_duplicate_reviewed_seed_or_missing_round_scoring():
+    standings = [
+        {
+            "team_id": f"t{seed}",
+            "seed": seed,
+            "competition_status": "ACTIVE",
+        }
+        for seed in range(1, 5)
+    ]
+
+    with pytest.raises(ValueError, match="more than one playoff seed"):
+        build_playoff_games(
+            tournament_id="tour1",
+            advance_count=4,
+            standings=standings,
+            seed_team_ids=["t1", "t1", "t3", "t4"],
+        )
+
+    with pytest.raises(ValueError, match="cover each applicable bracket round"):
+        build_playoff_games(
+            tournament_id="tour1",
+            advance_count=4,
+            standings=standings,
+            round_scoring={"SF": "GAME_TO_11", "FINAL": "GAME_TO_11"},
+        )
+
+
 def test_validate_podium_rejects_duplicate_teams():
     placements = [
         {"placement": 1, "team_id": "t1"},

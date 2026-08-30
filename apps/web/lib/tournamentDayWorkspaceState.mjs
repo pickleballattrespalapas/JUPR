@@ -122,6 +122,115 @@ export function advanceCountSelection(allowedCounts, defaultCount, currentSelect
   return "";
 }
 
+function drawIsReadyForPlayoffReview(draw) {
+  const progressionStatus = String(draw?.progression_status || draw?.status || "")
+    .trim()
+    .toUpperCase();
+  if (["PLAYOFFS_GENERATED", "PLAYOFF", "COMPLETE", "CLOSED"].includes(progressionStatus)) return false;
+  if (progressionStatus === "READY_FOR_PLAYOFF_REVIEW") return true;
+  return Boolean(draw?.round_robin_complete && draw?.readiness?.generate_playoffs?.ready);
+}
+
+export function readyPlayoffReviewDraws(snapshot) {
+  const draws = Array.isArray(snapshot?.draws) ? snapshot.draws : [];
+  const alerts = Array.isArray(snapshot?.progression_alerts) ? snapshot.progression_alerts : [];
+  const readyAlertDrawIds = new Set(
+    alerts
+      .filter((alert) => Boolean(alert?.ready))
+      .map((alert) => String(alert?.draw_id || ""))
+      .filter(Boolean)
+  );
+  return draws.filter((draw) => (
+    readyAlertDrawIds.has(String(draw?.id || "")) || drawIsReadyForPlayoffReview(draw)
+  ));
+}
+
+export function newlyReadyPlayoffNotice(previous, current) {
+  if (!previous || !current) return null;
+  const previousIds = new Set(readyPlayoffReviewDraws(previous).map((draw) => String(draw?.id || "")));
+  const newlyReady = readyPlayoffReviewDraws(current).filter((draw) => !previousIds.has(String(draw?.id || "")));
+  if (!newlyReady.length) return null;
+  if (newlyReady.length === 1) {
+    return `Round robin complete — ${String(newlyReady[0]?.name || "this draw")} is ready for playoff review.`;
+  }
+  return `${newlyReady.length} round robins are complete and ready for playoff review: ${newlyReady
+    .map((draw) => String(draw?.name || "Unnamed draw"))
+    .join(", ")}.`;
+}
+
+function roundCode(value) {
+  const normalized = String(typeof value === "string" ? value : value?.code || value?.round || "")
+    .trim()
+    .toUpperCase();
+  if (["QF", "QUARTERFINAL", "QUARTERFINALS", "PLAY_IN", "PLAY-IN"].includes(normalized)) return "QF";
+  if (["SF", "SEMIFINAL", "SEMIFINALS", "SEMI_FINAL", "SEMI-FINAL"].includes(normalized)) return "SF";
+  if (["FINAL", "GOLD", "GOLD_MEDAL", "CHAMPIONSHIP"].includes(normalized)) return "FINAL";
+  if (["BRONZE", "BRONZE_MEDAL", "THIRD_PLACE"].includes(normalized)) return "BRONZE";
+  return normalized;
+}
+
+export function playoffTemplateRoundCodes(template) {
+  const rounds = Array.isArray(template?.rounds) ? template.rounds : [];
+  const applicableRounds = Array.isArray(template?.applicable_rounds) ? template.applicable_rounds : [];
+  const games = Array.isArray(template?.games) ? template.games : [];
+  return [...new Set([
+    ...applicableRounds.map(roundCode),
+    ...rounds.map(roundCode),
+    ...games.map((game) => roundCode(game?.round || game?.playoff_round))
+  ].filter(Boolean))];
+}
+
+export function validatePlayoffReviewConfiguration(review, configuration) {
+  const templates = Array.isArray(review?.templates) ? review.templates : [];
+  const templateCode = String(configuration?.template_code || "");
+  const template = templates.find((candidate) => String(candidate?.code || "") === templateCode);
+  if (!template) return { ok: false, message: "Choose an available playoff structure." };
+
+  const advanceCount = Number(template?.advance_count);
+  if (!Number.isInteger(advanceCount) || advanceCount < 2) {
+    return { ok: false, message: "The selected playoff structure has no valid qualifier count." };
+  }
+  const seedTeamIds = Array.isArray(configuration?.seed_team_ids)
+    ? configuration.seed_team_ids.map((value) => String(value || "").trim())
+    : [];
+  if (seedTeamIds.length !== advanceCount || seedTeamIds.some((teamId) => !teamId)) {
+    return { ok: false, message: `Choose exactly ${advanceCount} seeded playoff teams.` };
+  }
+  if (new Set(seedTeamIds).size !== seedTeamIds.length) {
+    return { ok: false, message: "Each playoff seed must use a different team." };
+  }
+  const eligibleTeamIds = new Set(
+    (Array.isArray(review?.eligible_team_ids) ? review.eligible_team_ids : [])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  );
+  if (!eligibleTeamIds.size || seedTeamIds.some((teamId) => !eligibleTeamIds.has(teamId))) {
+    return { ok: false, message: "Every seeded team must still be eligible in the authoritative playoff review." };
+  }
+
+  const formats = new Set(
+    (Array.isArray(review?.scoring_formats) ? review.scoring_formats : [])
+      .map((format) => String(format?.code || "").trim())
+      .filter(Boolean)
+  );
+  const roundCodes = playoffTemplateRoundCodes(template);
+  if (!roundCodes.length) {
+    return { ok: false, message: "The selected playoff structure has no reviewable rounds." };
+  }
+  const roundScoring = configuration?.round_scoring && typeof configuration.round_scoring === "object"
+    ? configuration.round_scoring
+    : {};
+  const extraRound = Object.keys(roundScoring).find((code) => !roundCodes.includes(String(code)));
+  if (extraRound) {
+    return { ok: false, message: `Remove scoring for the unavailable ${String(extraRound).replaceAll("_", " ").toLowerCase()} round.` };
+  }
+  const invalidRound = roundCodes.find((code) => !formats.has(String(roundScoring[code] || "")));
+  if (invalidRound) {
+    return { ok: false, message: `Choose an available scoring format for ${invalidRound.replaceAll("_", " ").toLowerCase()}.` };
+  }
+  return { ok: true, template, advanceCount, seedTeamIds, roundScoring, roundCodes };
+}
+
 export function validateDayScoreDraft(scoreA, scoreB, scoring = null, unusualScoreAcknowledged = false) {
   const textA = String(scoreA ?? "").trim();
   const textB = String(scoreB ?? "").trim();

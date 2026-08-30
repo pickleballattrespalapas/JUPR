@@ -139,10 +139,13 @@ def test_day_console_renders_authoritative_courts_and_progression_controls() -> 
     assert "Progression" in panel
     assert "score_and_release" in panel
     assert "generate_playoffs" in panel
-    assert "allowed_advance_counts.map" in panel
-    assert "{ draw_id: draw.id, advance_count: reviewedAdvanceCount as number }" in panel
-    assert "Choose advancing teams" in panel
-    assert "No playoff format is assumed" in panel
+    assert "Review playoff setup" in panel
+    assert "Generate reviewed playoffs" in panel
+    assert "playoff_configuration" in panel
+    assert "seed_team_ids" in panel
+    assert "round_scoring" in panel
+    assert "Round-robin summary" in panel
+    assert "Bracket preview" in panel
     assert "Close tournament day" in panel
     assert 'submitCommand("close_day"' in panel
     assert "CLOSE TOURNAMENT DAY" in read_web(
@@ -359,3 +362,37 @@ def test_day_console_is_explicit_and_accessible_about_live_scope() -> None:
     assert "occupied ? assignment?.state : court.state" in panel
     assert 'id="day-score-error"' in panel
     assert 'aria-describedby={selectedScoreError ? "day-score-error" : undefined}' in panel
+
+
+def test_finished_round_robin_requires_one_stale_safe_playoff_review() -> None:
+    panel = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.tsx")
+    client = read_web("lib/adminTournamentDayOpsApi.ts")
+    state = read_web("lib/tournamentDayWorkspaceState.mjs")
+    css = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.module.css")
+
+    assert "progression_alerts" in client
+    assert "round_robin_summary" in client
+    assert "playoff_review" in client
+    assert "playoff_review_fingerprint" in client
+    assert "newlyReadyPlayoffNotice" in panel
+    assert "Round robin complete" in panel
+    assert "Round robin complete — playoff review needs attention" in panel
+    assert "Review playoff setup" in panel
+    assert 'size="xwide"' in panel
+    assert "Round-robin summary" in panel
+    assert "Reset to round-robin order" in panel
+    assert "Scoring by playoff round" in panel
+    assert "Bracket preview" in panel
+    assert "Generate reviewed playoffs" in panel
+    assert "playoff_configuration" in panel
+    assert "seed_team_ids" in panel
+    assert "round_scoring" in panel
+    assert "expectedSnapshotChanged(playoffEditor.expected)" in panel
+    assert "!playoffEditor.reviewFingerprint" in panel
+    assert "!currentReviewFingerprint" in panel
+    assert "currentReviewFingerprint !== playoffEditor.reviewFingerprint" in panel
+    assert "The server has not supplied a current playoff review fingerprint" in panel
+    assert "readyPlayoffReviewDraws" in state
+    assert "validatePlayoffReviewConfiguration" in state
+    assert ".playoffReadyBanner" in css
+    assert ".playoffReadyDraw" in css

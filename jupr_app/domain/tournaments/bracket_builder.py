@@ -334,7 +334,14 @@ def compute_podium_from_playoffs(games: list[dict[str, Any]]) -> list[dict[str, 
     ]
 
 
-def build_playoff_games(*, tournament_id: str, advance_count: int, standings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_playoff_games(
+    *,
+    tournament_id: str,
+    advance_count: int,
+    standings: list[dict[str, Any]],
+    seed_team_ids: list[str] | None = None,
+    round_scoring: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     template = PLAYOFF_TEMPLATES.get(int(advance_count))
     if not template:
         raise ValueError(f"Unsupported playoff advance count: {advance_count}")
@@ -348,9 +355,58 @@ def build_playoff_games(*, tournament_id: str, advance_count: int, standings: li
         raise ValueError(
             f"Playoff generation requires {advance_count} active teams; retired teams cannot advance."
         )
-    seed_map = {int(row["seed"]): row["team_id"] for row in eligible_standings}
-    return [
-        {
+    eligible_team_ids = [str(row["team_id"]) for row in eligible_standings]
+    if seed_team_ids is None:
+        seed_map = {
+            int(row["seed"]): row["team_id"] for row in eligible_standings
+        }
+    else:
+        reviewed_seed_team_ids = [str(team_id or "").strip() for team_id in seed_team_ids]
+        if len(reviewed_seed_team_ids) != int(advance_count):
+            raise ValueError(
+                f"Playoff generation requires exactly {advance_count} ordered seed teams."
+            )
+        if any(not team_id for team_id in reviewed_seed_team_ids):
+            raise ValueError("Every reviewed playoff seed requires a team.")
+        if len(set(reviewed_seed_team_ids)) != len(reviewed_seed_team_ids):
+            raise ValueError("A team cannot occupy more than one playoff seed.")
+        if not set(reviewed_seed_team_ids).issubset(set(eligible_team_ids)):
+            raise ValueError(
+                "Every reviewed playoff seed must be an active team in these standings."
+            )
+        seed_map = {
+            seed: team_id
+            for seed, team_id in enumerate(reviewed_seed_team_ids, start=1)
+        }
+
+    reviewed_round_scoring: dict[str, str] | None = None
+    if round_scoring is not None:
+        applicable_rounds = {
+            str(game["round"]).strip().upper() for game in template["games"]
+        }
+        reviewed_round_scoring = {
+            str(round_name).strip().upper(): str(format_code or "").strip().upper()
+            for round_name, format_code in round_scoring.items()
+        }
+        if set(reviewed_round_scoring) != applicable_rounds:
+            raise ValueError(
+                "Playoff round scoring must cover each applicable bracket round exactly."
+            )
+        supported_formats = {
+            "GAME_TO_11",
+            "GAME_TO_15",
+            "GAME_TO_21",
+            "BEST_2_OF_3",
+        }
+        if any(
+            format_code not in supported_formats
+            for format_code in reviewed_round_scoring.values()
+        ):
+            raise ValueError("A reviewed playoff round uses an unsupported scoring format.")
+
+    games: list[dict[str, Any]] = []
+    for game in template["games"]:
+        row = {
             "tournament_id": tournament_id,
             "stage": "PLAYOFF",
             "playoff_game_code": game["id"],
@@ -360,8 +416,12 @@ def build_playoff_games(*, tournament_id: str, advance_count: int, standings: li
             "team_a_source": game["teamA"],
             "team_b_source": game["teamB"],
         }
-        for game in template["games"]
-    ]
+        if reviewed_round_scoring is not None:
+            row["scoring_format"] = reviewed_round_scoring[
+                str(game["round"]).strip().upper()
+            ]
+        games.append(row)
+    return games
 
 
 def resolve_playoff_dependencies(games: list[dict[str, Any]]) -> list[dict[str, Any]]:

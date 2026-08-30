@@ -27,6 +27,7 @@ from jupr_app.domain.tournaments import (
     resolve_playoff_dependencies,
 )
 from jupr_app.domain.tournaments.score_policy import (
+    SUPPORTED_SCORING_FORMATS,
     require_tournament_score,
     resolve_tournament_scoring_format,
 )
@@ -284,7 +285,7 @@ def _podium_plan(*, teams: list[dict[str, Any]], games: list[dict[str, Any]]) ->
 
 
 def _score_game_projection(row: dict[str, Any]) -> dict[str, Any]:
-    return {
+    projection = {
         "id": str(row.get("id") or ""),
         "stage": str(row.get("stage") or "").upper(),
         "playoff_game_code": str(row.get("playoff_game_code") or "") or None,
@@ -299,6 +300,10 @@ def _score_game_projection(row: dict[str, Any]) -> dict[str, Any]:
         "loser_team_id": str(row.get("loser_team_id") or "") or None,
         "finalized": bool(row.get("finalized_at")),
     }
+    scoring_format = str(row.get("scoring_format") or "").strip().upper()
+    if scoring_format:
+        projection["scoring_format"] = scoring_format
+    return projection
 
 
 def _score_plan(*, games: list[dict[str, Any]], game_id: str, score_a: int, score_b: int) -> dict[str, Any]:
@@ -325,7 +330,29 @@ def _score_plan(*, games: list[dict[str, Any]], game_id: str, score_a: int, scor
     return {"game": _score_game_projection(after_target), "downstream_games": dependencies}
 
 
-def _snapshot_scoring_format(snapshot: dict[str, Any], draw_id: str) -> str:
+def _snapshot_scoring_format(
+    snapshot: dict[str, Any],
+    draw_id: str,
+    game_id: str,
+) -> str:
+    game = next(
+        (
+            row
+            for row in snapshot.get("games") or []
+            if str(row.get("id") or "") == str(game_id)
+        ),
+        None,
+    )
+    if not game:
+        raise ValueError("The reviewed game scoring authority is unavailable.")
+    game_format = str(game.get("scoring_format") or "").strip().upper()
+    if game_format:
+        if game_format not in SUPPORTED_SCORING_FORMATS:
+            raise ValueError(
+                "This playoff game's scoring format is unsupported. Review and "
+                "regenerate the bracket before recording a result."
+            )
+        return game_format
     draw = next(
         (row for row in snapshot.get("draws") or [] if str(row.get("id") or "") == str(draw_id)),
         None,
@@ -687,9 +714,9 @@ def _state_fingerprint(
             snapshot.get("draws") or [],
             ("id", "tournament_id", "registration_day_id", "event_option_id", "name", "status", "updated_at"),
         ),
-        # Score validation authority is event-scoped. Bind the reviewed scoring
-        # configuration into the draw fingerprint so an operator can never save
-        # against a format that changed after the board was loaded.
+        # Bind both legacy event-scoped scoring and frozen per-game playoff
+        # formats so an operator can never save against a format that changed
+        # after the board was loaded.
         "event_options": _sorted_projection(
             snapshot.get("event_options") or [],
             (
@@ -716,6 +743,7 @@ def _state_fingerprint(
                 "rr_slot_number",
                 "playoff_game_code",
                 "playoff_round",
+                "scoring_format",
                 "team_a_id",
                 "team_b_id",
                 "team_a_source",
@@ -1226,7 +1254,11 @@ def _build_command_evidence(
         score_review = require_tournament_score(
             int(payload.get("score_a") or 0),
             int(payload.get("score_b") or 0),
-            scoring_format=_snapshot_scoring_format(snapshot, draw_id),
+            scoring_format=_snapshot_scoring_format(
+                snapshot,
+                draw_id,
+                str(payload.get("game_id") or ""),
+            ),
             unusual_score_acknowledged=bool(
                 payload.get("unusual_score_acknowledged")
             ),
@@ -1316,7 +1348,11 @@ def _validate_command_evidence(
         expected_review = require_tournament_score(
             int(payload.get("score_a") or 0),
             int(payload.get("score_b") or 0),
-            scoring_format=_snapshot_scoring_format(snapshot, draw_id),
+            scoring_format=_snapshot_scoring_format(
+                snapshot,
+                draw_id,
+                str(payload.get("game_id") or ""),
+            ),
             unusual_score_acknowledged=bool(
                 payload.get("unusual_score_acknowledged")
             ),

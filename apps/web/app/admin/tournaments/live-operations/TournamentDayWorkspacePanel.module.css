@@ -114,6 +114,100 @@
   color: #1d4ed8;
 }
 
+.navBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  margin-left: 0.35rem;
+  border-radius: 999px;
+  padding: 0 0.25rem;
+  background: #fbbf24;
+  color: #422006;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.playoffReadyBanner {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+  border: 1px solid #f59e0b;
+  border-radius: 14px;
+  padding: 0.65rem 0.75rem;
+  background: linear-gradient(100deg, #fffbeb 0%, #fef3c7 100%);
+  box-shadow: 0 4px 14px rgb(146 64 14 / 10%);
+}
+
+.playoffAlertRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.playoffAlertRow + .playoffAlertRow {
+  border-top: 1px solid #fcd34d;
+  padding-top: 0.6rem;
+}
+
+.playoffReadyBannerCopy {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.playoffReadyBannerCopy > div {
+  min-width: 0;
+}
+
+.playoffReadyBanner h2,
+.playoffReadyBanner h3,
+.playoffReadyBanner p {
+  margin: 0;
+}
+
+.playoffReadyBanner h2,
+.playoffReadyBanner h3 {
+  color: #78350f;
+  font-size: 1rem;
+}
+
+.playoffReadyBanner p {
+  margin-top: 0.12rem;
+  color: #713f12;
+  font-size: 0.9rem;
+}
+
+.playoffReadyActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.playoffReadyActions button,
+.playoffAlertRow > button {
+  flex: 0 0 auto;
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .secondaryButton {
   background: #fff;
   color: #0f172a;
@@ -672,11 +766,234 @@
   gap: 0.65rem;
 }
 
+.playoffReadyDraw {
+  border: 2px solid #f59e0b;
+  background: linear-gradient(145deg, #fff 0%, #fffbeb 100%);
+  box-shadow: 0 6px 18px rgb(146 64 14 / 12%);
+}
+
+.progressionHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.progressionHeading h4 {
+  margin: 0;
+}
+
 .drawCard hr {
   width: 100%;
   margin: 0.2rem 0;
   border: 0;
   border-top: 1px solid #dbe3ef;
+}
+
+.playoffReviewWorkspace {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.playoffReviewSection {
+  min-width: 0;
+  border: 1px solid #dbe3ef;
+  border-radius: 14px;
+  padding: 0.9rem;
+  background: #f8fafc;
+}
+
+.playoffReviewSection h3,
+.playoffReviewSection h4,
+.playoffReviewSection p {
+  margin-top: 0;
+}
+
+.playoffReviewHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+  margin-bottom: 0.55rem;
+}
+
+.playoffReviewHeading h3 {
+  margin-bottom: 0;
+}
+
+.standingsTableWrap {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.standingsTable {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  color: #0f172a;
+  font-size: 0.88rem;
+}
+
+.standingsTable caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.standingsTable th,
+.standingsTable td {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0.55rem 0.65rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.standingsTable thead th {
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.standingsTable tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.standingsTable tbody th span,
+.standingsTable tbody th small {
+  display: block;
+}
+
+.standingsTable tbody th small {
+  margin-top: 0.15rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.standingsTable .qualifierRow > * {
+  background: #ecfdf5;
+}
+
+.standingsTable .qualifierLine > * {
+  border-bottom: 3px solid #16a34a;
+}
+
+.standingsTable .retiredStanding > * {
+  background: #f8fafc;
+  color: #64748b;
+  text-decoration-color: #94a3b8;
+}
+
+.playoffSeedGrid,
+.roundScoringGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  gap: 0.65rem;
+  margin-top: 0.8rem;
+}
+
+.playoffSeedActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.6rem;
+}
+
+.roundScoringFieldset {
+  min-width: 0;
+  margin: 0.9rem 0 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: #fff;
+}
+
+.roundScoringFieldset legend {
+  padding: 0 0.3rem;
+  color: #0f172a;
+  font-weight: 850;
+}
+
+.roundScoringGrid {
+  margin-top: 0;
+}
+
+.playoffWarning,
+.playoffError {
+  margin: 0.75rem 0 0 !important;
+  border-left: 4px solid #f59e0b;
+  padding: 0.55rem 0.65rem;
+  background: #fffbeb;
+  color: #78350f;
+}
+
+.playoffError {
+  border-left-color: #dc2626;
+  background: #fef2f2;
+  color: #991b1b;
+  font-weight: 750;
+}
+
+.bracketPreview {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.bracketRound {
+  min-width: 0;
+  border-left: 4px solid #2563eb;
+  border-radius: 10px;
+  padding: 0.7rem;
+  background: #eff6ff;
+}
+
+.bracketRound h4,
+.bracketRound > p {
+  margin: 0;
+}
+
+.bracketRound > p {
+  color: #475569;
+  font-size: 0.82rem;
+}
+
+.bracketRound ol {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bracketRound li {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.35fr) minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  border: 1px solid #bfdbfe;
+  border-radius: 9px;
+  padding: 0.55rem;
+  background: #fff;
+}
+
+.bracketRound li span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.bracketVersus {
+  color: #64748b;
+  font-size: 0.76rem;
+  font-weight: 850;
+  text-transform: uppercase;
 }
 
 .blockers {
@@ -841,6 +1158,27 @@
   .scoreConfirmation > label {
     grid-column: auto;
   }
+
+  .playoffAlertRow,
+  .playoffReadyBannerCopy {
+    align-items: flex-start;
+  }
+
+  .playoffAlertRow {
+    display: grid;
+  }
+
+  .playoffReadyActions {
+    justify-content: flex-start;
+  }
+
+  .bracketRound li {
+    grid-template-columns: 1fr;
+  }
+
+  .bracketVersus {
+    padding-left: 0.35rem;
+  }
 }
 
 @media (max-width: 640px) {
@@ -860,7 +1198,9 @@
 
   .viewNav button,
   .buttonRow > button,
-  .scopeStatus > button {
+  .scopeStatus > button,
+  .playoffReadyActions button,
+  .playoffAlertRow > button {
     width: 100%;
   }
 

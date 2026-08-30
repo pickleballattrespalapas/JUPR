@@ -30,11 +30,27 @@ class AdminTournamentDayLiveExpected(BaseModel):
     queue_entry_version: str | int | None = None
 
 
+class AdminTournamentDayLivePlayoffConfiguration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    template_code: Literal[
+        "SINGLE_ELIMINATION_4",
+        "SINGLE_ELIMINATION_5",
+        "SINGLE_ELIMINATION_6",
+    ]
+    seed_team_ids: list[str] = Field(min_length=4, max_length=6)
+    round_scoring: dict[
+        str,
+        Literal["GAME_TO_11", "GAME_TO_15", "GAME_TO_21", "BEST_2_OF_3"],
+    ]
+
+
 class AdminTournamentDayLivePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     draw_id: str | None = Field(default=None, max_length=160)
     advance_count: int | None = Field(default=None, ge=4, le=6)
+    playoff_configuration: AdminTournamentDayLivePlayoffConfiguration | None = None
     game_id: str | None = Field(default=None, max_length=160)
     court_id: str | None = Field(default=None, max_length=160)
     score_a: int | None = None
