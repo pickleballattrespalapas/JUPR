@@ -1475,13 +1475,14 @@ def test_completed_round_robin_projects_playoff_review_and_operator_alert() -> N
     assert first_standing["team_id"] == "team-1"
     assert first_standing["team_name"] == "Player 1 / Player 2"
     assert first_standing["participant_names"] == ["Player 1", "Player 2"]
+    assert draw["round_robin_summary"]["tiebreak_explanations"] == []
     assert draw["round_robin_summary"]["ranking_policy"] == {
-        "description": "Rank active teams by wins, point differential, points scored, exact two-team head-to-head, then original team number. Retired teams remain visible after active teams and cannot advance.",
+        "description": "Rank active teams by wins. When teams are tied on wins, compare their record against the other tied teams first. If head-to-head does not fully separate them, resolve the remaining tie by point differential, then total points scored, then original team number. Retired teams remain visible after active teams and cannot advance.",
         "criteria": [
             "WINS",
+            "HEAD_TO_HEAD",
             "POINT_DIFFERENTIAL",
             "POINTS_FOR",
-            "TWO_TEAM_HEAD_TO_HEAD",
             "TEAM_NUMBER",
         ],
         "retired_teams_eligible": False,
@@ -1551,6 +1552,52 @@ def test_completed_round_robin_projects_playoff_review_and_operator_alert() -> N
         != original_review_fingerprint
     )
 
+    three_way_tie_tables = deepcopy(tables)
+    three_way_tie_tables["tournament_games"][1].update(
+        {
+            "score_a": 7,
+            "score_b": 11,
+            "winner_team_id": "team-3",
+            "loser_team_id": "team-1",
+            "updated_at": "rr-2-v2",
+        }
+    )
+    three_way_tie_snapshot = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(three_way_tie_tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+    three_way_tie_draw = three_way_tie_snapshot["draws"][0]
+    assert [
+        row["team_id"]
+        for row in three_way_tie_draw["round_robin_summary"]["standings"]
+    ][:3] == ["team-3", "team-1", "team-2"]
+    assert three_way_tie_draw["round_robin_summary"][
+        "tiebreak_explanations"
+    ] == [
+        {
+            "title": "Three-way tie at 2\u20131",
+            "summary": "Head-to-head did not fully separate these teams. Point differential completed the order: Player 5 / Player 6 \u2192 Player 1 / Player 2 \u2192 Player 3 / Player 4.",
+            "steps": [
+                {
+                    "criterion": "HEAD_TO_HEAD",
+                    "outcome": "UNRESOLVED",
+                    "detail": "Head-to-head mini-table: Player 1 / Player 2 1\u20131; Player 3 / Player 4 1\u20131; Player 5 / Player 6 1\u20131. Head-to-head did not separate these teams.",
+                },
+                {
+                    "criterion": "POINT_DIFFERENTIAL",
+                    "outcome": "RESOLVED",
+                    "detail": "Point differential for the remaining tied teams: Player 5 / Player 6 +6; Player 1 / Player 2 +5; Player 3 / Player 4 +1. Point differential resolved the remaining tie.",
+                },
+            ],
+        }
+    ]
+    assert (
+        three_way_tie_draw["playoff_review_fingerprint"]
+        != original_review_fingerprint
+    )
+
     changed_scoring_tables = deepcopy(tables)
     changed_scoring_tables["tournament_event_options"][0][
         "scoring_default"
@@ -1588,6 +1635,64 @@ def test_completed_round_robin_projects_playoff_review_and_operator_alert() -> N
         "PLAYOFF_REVIEW_BLOCKED"
     )
     assert blocked_snapshot["progression_alerts"][0]["ready"] is False
+
+
+def test_incomplete_head_to_head_audit_names_missing_matchups() -> None:
+    teams = [
+        {"id": "team-1", "team_number": 1},
+        {"id": "team-2", "team_number": 2},
+        {"id": "team-3", "team_number": 3},
+        {"id": "team-4", "team_number": 4},
+    ]
+    games = [
+        {
+            "team_a_id": "team-1",
+            "team_b_id": "team-2",
+            "score_a": 11,
+            "score_b": 9,
+        },
+        {
+            "team_a_id": "team-2",
+            "team_b_id": "team-4",
+            "score_a": 11,
+            "score_b": 0,
+        },
+        {
+            "team_a_id": "team-3",
+            "team_b_id": "team-4",
+            "score_a": 11,
+            "score_b": 7,
+        },
+    ]
+    result = day_live.compute_round_robin_standings_with_tiebreaks(teams, games)
+    names = {
+        "team-1": "Alpha / Ace",
+        "team-2": "Bravo / Birch",
+        "team-3": "Charlie / Cedar",
+        "team-4": "Delta / Dogwood",
+    }
+    standings = [
+        {**row, "team_name": names[row["team_id"]]}
+        for row in result["standings"]
+    ]
+
+    explanations = day_live._round_robin_tiebreak_explanations(
+        result["tiebreaks"],
+        standings,
+        games,
+    )
+
+    assert explanations[0]["summary"] == (
+        "A complete head-to-head comparison was unavailable, so point "
+        "differential completed the order: Bravo / Birch \u2192 Charlie / Cedar "
+        "\u2192 Alpha / Ace."
+    )
+    assert explanations[0]["steps"][0]["detail"] == (
+        "Available head-to-head records: Alpha / Ace 1\u20130; Bravo / Birch "
+        "0\u20131; Charlie / Cedar 0\u20130. The complete comparison was unavailable "
+        "because these matchups had no scored result: Alpha / Ace vs Charlie / "
+        "Cedar and Bravo / Birch vs Charlie / Cedar. Head-to-head was not applied."
+    )
 
 
 def test_playoff_scoring_override_is_authoritative_for_game_review() -> None:

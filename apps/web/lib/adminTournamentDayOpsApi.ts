@@ -150,6 +150,18 @@ export type AdminTournamentDayRoundRobinStanding = {
   eligible_for_playoffs?: boolean;
 };
 
+export type AdminTournamentDayTiebreakExplanationStep = {
+  criterion: string;
+  outcome: string;
+  detail: string;
+};
+
+export type AdminTournamentDayTiebreakExplanation = {
+  title: string;
+  summary: string;
+  steps: AdminTournamentDayTiebreakExplanationStep[];
+};
+
 export type AdminTournamentDayPlayoffTemplateRound = {
   code: string;
   label: string;
@@ -241,6 +253,7 @@ export type AdminTournamentDayDraw = {
     ranking_criteria?: string[];
     retired_teams_eligible?: boolean;
     tie_break_policy?: string | null;
+    tiebreak_explanations?: AdminTournamentDayTiebreakExplanation[];
   } | null;
   playoff_review?: AdminTournamentDayPlayoffReview | null;
 };

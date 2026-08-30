@@ -822,6 +822,98 @@
   margin-bottom: 0;
 }
 
+.tiebreakAudit {
+  margin: 0 0 0.75rem;
+  border: 1px solid #93c5fd;
+  border-radius: 12px;
+  padding: 0.7rem;
+  background: #eff6ff;
+  color: #172554;
+}
+
+.tiebreakAuditHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.tiebreakAuditHeading h4,
+.tiebreakAuditHeading p,
+.tiebreakAuditItem h5,
+.tiebreakAuditItem p {
+  margin: 0;
+}
+
+.tiebreakAuditHeading h4 {
+  font-size: 0.96rem;
+}
+
+.tiebreakAuditHeading p {
+  margin-top: 0.12rem;
+  color: #1e3a8a;
+  font-size: 0.82rem;
+}
+
+.tiebreakAuditList {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tiebreakAuditItem {
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 0.6rem 0.65rem;
+  background: #fff;
+}
+
+.tiebreakAuditItem h5 {
+  color: #0f172a;
+  font-size: 0.9rem;
+}
+
+.tiebreakAuditItem > p {
+  margin-top: 0.16rem;
+  color: #334155;
+  font-size: 0.84rem;
+}
+
+.tiebreakSteps {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  color: #334155;
+  font-size: 0.8rem;
+}
+
+.tiebreakSteps li {
+  padding-left: 0.1rem;
+}
+
+.tiebreakStepHeading {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-right: 0.35rem;
+}
+
+.tiebreakOutcome {
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  padding: 0.05rem 0.35rem;
+  background: #dbeafe;
+  color: #1e40af;
+  font-size: 0.67rem;
+  font-weight: 850;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .standingsTableWrap {
   min-width: 0;
   overflow-x: auto;
@@ -1194,6 +1286,10 @@
 
   .resultModeSwitch {
     width: 100%;
+  }
+
+  .tiebreakAuditHeading {
+    display: grid;
   }
 
   .viewNav button,
