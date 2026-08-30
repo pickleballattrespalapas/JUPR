@@ -1,6 +1,7 @@
 import pytest
 
 from jupr_app.domain.tournaments import (
+    build_playoff_games,
     build_round_robin_games,
     compute_podium_from_rr,
     compute_round_robin_standings,
@@ -64,6 +65,27 @@ def test_round_robin_podium_from_standings():
     podium = compute_podium_from_rr(teams, games)
 
     assert [row["team_id"] for row in podium] == ["t1", "t2", "t3"]
+
+
+def test_retired_team_cannot_advance_to_playoffs():
+    standings = [
+        {"team_id": "t1", "seed": 1, "competition_status": "ACTIVE"},
+        {"team_id": "t2", "seed": 2, "competition_status": "ACTIVE"},
+        {"team_id": "t3", "seed": 3, "competition_status": "ACTIVE"},
+        {
+            "team_id": "t4",
+            "seed": 4,
+            "competition_status": "RETIRED",
+            "retired": True,
+        },
+    ]
+
+    with pytest.raises(ValueError, match="requires 4 active teams"):
+        build_playoff_games(
+            tournament_id="tour1",
+            advance_count=4,
+            standings=standings,
+        )
 
 
 def test_validate_podium_rejects_duplicate_teams():

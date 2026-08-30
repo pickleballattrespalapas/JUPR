@@ -41,7 +41,7 @@ class AdminTournamentDayLivePayload(BaseModel):
     score_b: int | None = None
     unusual_score_acknowledgement: bool | None = None
     result_type: Literal["FORFEIT", "NO_SHOW", "RETIREMENT"] | None = None
-    winner_team_id: str | None = Field(default=None, max_length=160)
+    non_playing_team_id: str | None = Field(default=None, max_length=160)
     result_note: str | None = Field(default=None, max_length=500)
 
 

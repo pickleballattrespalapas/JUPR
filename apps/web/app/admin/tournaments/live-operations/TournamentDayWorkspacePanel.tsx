@@ -116,7 +116,7 @@ type CorrectionEditor = {
 type OutcomeEditor = {
   gameId: string;
   resultType: "FORFEIT" | "NO_SHOW" | "RETIREMENT";
-  winnerTeamId: string;
+  nonPlayingTeamId: string;
   resultNote: string;
   error: string;
   expected: AdminTournamentDayCommandExpected;
@@ -716,7 +716,9 @@ export default function TournamentDayWorkspacePanel({
         : command.request.action === "correct_completed_score"
           ? "Completed score corrected. The authoritative day result and all reviewed versions were refreshed."
         : command.request.action === "record_non_played_result"
-          ? "Non-played outcome recorded and resources released. Any matchup reserved for this court was promoted automatically; all other games remain queued."
+          ? command.request.payload.result_type === "RETIREMENT"
+            ? "Retirement recorded. The team was removed from remaining play, its remaining games were forfeited, standings were recalculated, and previously played rating scores were preserved."
+            : "Non-played outcome recorded and resources released. Any matchup reserved for this court was promoted automatically; all other games remain queued."
         : command.request.action === "assign_next_court"
           ? "Matchup assigned to the next authoritative open court."
         : command.request.action === "assign_game_to_court"
@@ -967,7 +969,7 @@ export default function TournamentDayWorkspacePanel({
     setOutcomeEditor({
       gameId: game.id,
       resultType: "NO_SHOW",
-      winnerTeamId: "",
+      nonPlayingTeamId: "",
       resultNote: "",
       error: "",
       expected: expectedVersions({
@@ -1177,7 +1179,7 @@ export default function TournamentDayWorkspacePanel({
     const game = gamesById.get(outcomeEditor.gameId);
     const validation = validateNonPlayedOutcomeDraft(
       outcomeEditor.resultType,
-      outcomeEditor.winnerTeamId,
+      outcomeEditor.nonPlayingTeamId,
       outcomeEditor.resultNote
     );
     if (!validation.ok) {
@@ -1195,7 +1197,7 @@ export default function TournamentDayWorkspacePanel({
       {
         game_id: game.id,
         result_type: validation.resultType,
-        winner_team_id: validation.winnerTeamId,
+        non_playing_team_id: validation.nonPlayingTeamId,
         result_note: validation.resultNote
       },
       outcomeEditor.expected
@@ -1263,10 +1265,30 @@ export default function TournamentDayWorkspacePanel({
   const selectedOutcomeValidation = outcomeEditor
     ? validateNonPlayedOutcomeDraft(
         outcomeEditor.resultType,
-        outcomeEditor.winnerTeamId,
+        outcomeEditor.nonPlayingTeamId,
         outcomeEditor.resultNote
       )
     : null;
+  const selectedOutcomeNonPlayingSide = selectedOutcomeValidation?.ok
+    ? selectedOutcomeValidation.nonPlayingTeamId === selectedOutcomeGame?.team_a.team_id
+      ? selectedOutcomeGame.team_a
+      : selectedOutcomeGame?.team_b
+    : undefined;
+  const selectedOutcomeWinningSide = selectedOutcomeValidation?.ok
+    ? selectedOutcomeValidation.nonPlayingTeamId === selectedOutcomeGame?.team_a.team_id
+      ? selectedOutcomeGame?.team_b
+      : selectedOutcomeGame?.team_a
+    : undefined;
+  const nonPlayingTeamLabel = outcomeEditor?.resultType === "RETIREMENT"
+    ? "Team that retired"
+    : outcomeEditor?.resultType === "FORFEIT"
+      ? "Team that forfeited"
+      : "Team that did not show";
+  const nonPlayingTeamPlaceholder = outcomeEditor?.resultType === "RETIREMENT"
+    ? "Choose retiring team…"
+    : outcomeEditor?.resultType === "FORFEIT"
+      ? "Choose forfeiting team…"
+      : "Choose absent team…";
   const selectedCourtActionGame = courtActionEditor ? gamesById.get(courtActionEditor.gameId) : undefined;
   const selectedCourtActionSource = courtActionEditor?.sourceCourtId
     ? snapshot?.courts.find((court) => court.id === courtActionEditor.sourceCourtId)
@@ -2038,7 +2060,7 @@ export default function TournamentDayWorkspacePanel({
                   <p><strong>{matchupLabel(selectedOutcomeGame)}</strong></p>
                 </div>
               )}
-              dirty={Boolean(outcomeEditor.winnerTeamId || outcomeEditor.resultNote.trim())}
+              dirty={Boolean(outcomeEditor.nonPlayingTeamId || outcomeEditor.resultNote.trim())}
               onRequestClose={() => setOutcomeEditor(null)}
               actions={uncertainResult ? (
                 <button
@@ -2098,23 +2120,23 @@ export default function TournamentDayWorkspacePanel({
                     </select>
                   </label>
                   <label>
-                    Winning team
+                    {nonPlayingTeamLabel}
                     <select
-                      value={outcomeEditor.winnerTeamId}
+                      value={outcomeEditor.nonPlayingTeamId}
                       disabled={resultWorking}
                       onChange={(event) => {
                         resultAction.reset();
-                        setOutcomeEditor({ ...outcomeEditor, winnerTeamId: event.target.value, error: "" });
+                        setOutcomeEditor({ ...outcomeEditor, nonPlayingTeamId: event.target.value, error: "" });
                       }}
                     >
-                      <option value="">Choose winner…</option>
+                      <option value="">{nonPlayingTeamPlaceholder}</option>
                       <option value={selectedOutcomeGame.team_a.team_id || ""}>{sideLabel(selectedOutcomeGame.team_a)}</option>
                       <option value={selectedOutcomeGame.team_b.team_id || ""}>{sideLabel(selectedOutcomeGame.team_b)}</option>
                     </select>
                   </label>
                 </div>
                 <label className={styles.field}>
-                  Operator note
+                  Operator note <span className={styles.muted}>(optional)</span>
                   <textarea
                     value={outcomeEditor.resultNote}
                     maxLength={500}
@@ -2129,12 +2151,14 @@ export default function TournamentDayWorkspacePanel({
                 {outcomeEditor.error ? <p role="alert" className={styles.errorText}>{outcomeEditor.error}</p> : null}
                 {selectedOutcomeValidation?.ok ? (
                   <div className={styles.scoreConfirmation} aria-label="Live non-play result preview">
-                    <p><strong>{statusLabel(selectedOutcomeValidation.resultType)}</strong> · Winner: <strong>{selectedOutcomeValidation.winnerTeamId === selectedOutcomeGame.team_a.team_id ? sideLabel(selectedOutcomeGame.team_a) : sideLabel(selectedOutcomeGame.team_b)}</strong></p>
-                    <p>{selectedOutcomeValidation.resultNote}</p>
-                    <p>This records a non-played result, releases any court and participant claims, resolves progression, keeps the next matchup queued for operator assignment, and excludes the synthetic progression score from rating publication.</p>
+                    <p><strong>{statusLabel(selectedOutcomeValidation.resultType)}</strong> · <strong>{selectedOutcomeNonPlayingSide ? sideLabel(selectedOutcomeNonPlayingSide) : "Selected team"}</strong> {selectedOutcomeValidation.resultType === "RETIREMENT" ? "retired" : selectedOutcomeValidation.resultType === "FORFEIT" ? "forfeited" : "did not show"}. <strong>{selectedOutcomeWinningSide ? sideLabel(selectedOutcomeWinningSide) : "The opposing team"}</strong> receives this game.</p>
+                    {selectedOutcomeValidation.resultNote ? <p>{selectedOutcomeValidation.resultNote}</p> : null}
+                    <p>{selectedOutcomeValidation.resultType === "RETIREMENT"
+                      ? "This removes the retired team from remaining play, records its remaining games as non-rated max-score losses, and recalculates every round-robin game as a max-score standings loss. Previously played scores remain unchanged for player ratings."
+                      : "This records a non-played max-score result, releases any court and participant claims, resolves progression, keeps the next matchup queued for operator assignment, and excludes the synthetic score from rating publication."}</p>
                   </div>
                 ) : !outcomeEditor.error ? (
-                  <p className={styles.muted}>{selectedOutcomeValidation?.message || "Choose an outcome, winner, and operator note."}</p>
+                  <p className={styles.muted}>{selectedOutcomeValidation?.message || "Choose an outcome and the team responsible for the non-play result. The operator note is optional."}</p>
                 ) : null}
                 <ActionFeedback
                   phase={resultAction.phase}

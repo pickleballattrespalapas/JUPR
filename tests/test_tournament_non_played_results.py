@@ -116,3 +116,88 @@ def test_non_played_results_are_excluded_from_official_rating_payloads() -> None
 
     assert [row["tournament_game_id"] for row in payloads] == ["played-1"]
     assert all(row["tournament_game_id"] != "no-show-1" for row in payloads)
+
+
+def test_retirement_overrides_all_standings_games_but_preserves_played_rating_score() -> None:
+    teams = [
+        {"id": "t1", "team_number": 1},
+        {
+            "id": "t2",
+            "team_number": 2,
+            "competition_status": "RETIRED",
+            "retirement_max_score": 15,
+        },
+        {"id": "t3", "team_number": 3},
+        {"id": "t4", "team_number": 4},
+    ]
+    games = [
+        {
+            "id": "played-before-retirement",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "t1",
+            "team_b_id": "t2",
+            "score_a": 7,
+            "score_b": 15,
+            "winner_team_id": "t2",
+            "finalized_at": "2026-08-30T12:00:00Z",
+            "result_type": "PLAYED",
+        },
+        {
+            "id": "remaining-1",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "t2",
+            "team_b_id": "t3",
+            "score_a": 0,
+            "score_b": 15,
+            "winner_team_id": "t3",
+            "finalized_at": "2026-08-30T12:30:00Z",
+            "result_type": "RETIREMENT",
+        },
+        {
+            "id": "remaining-2",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "t4",
+            "team_b_id": "t2",
+            "score_a": 15,
+            "score_b": 0,
+            "winner_team_id": "t4",
+            "finalized_at": "2026-08-30T12:30:00Z",
+            "result_type": "RETIREMENT",
+        },
+    ]
+
+    standings = compute_round_robin_standings(teams, games)
+    rows = {row["team_id"]: row for row in standings}
+
+    assert rows["t2"] == {
+        "team_id": "t2",
+        "team_number": 2,
+        "wins": 0,
+        "losses": 3,
+        "points_for": 0,
+        "points_against": 45,
+        "differential": -45,
+        "competition_status": "RETIRED",
+        "retired": True,
+        "seed": 4,
+    }
+    assert rows["t1"]["wins"] == 1
+    assert rows["t1"]["points_for"] == 15
+
+    payloads = _build_official_match_payloads(
+        tournament={"id": "tour-1", "name": "Summer Classic"},
+        draw={"id": "draw-1", "name": "Open"},
+        event_option={"id": "event-1", "division_name": "Open"},
+        teams=[
+            {"id": "t1", "player1_id": 1, "player2_id": 2},
+            {"id": "t2", "player1_id": 3, "player2_id": 4},
+            {"id": "t3", "player1_id": 5, "player2_id": 6},
+            {"id": "t4", "player1_id": 7, "player2_id": 8},
+        ],
+        games=games,
+    )
+    assert [row["tournament_game_id"] for row in payloads] == [
+        "played-before-retirement"
+    ]
+    assert payloads[0]["score_t1"] == 7
+    assert payloads[0]["score_t2"] == 15

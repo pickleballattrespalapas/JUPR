@@ -269,6 +269,8 @@ def build_public_tournament_results(
                 "points_for": row.get("points_for"),
                 "points_against": row.get("points_against"),
                 "differential": row.get("differential"),
+                "competition_status": row.get("competition_status"),
+                "retired": bool(row.get("retired")),
             }
             for row in compute_round_robin_standings(draw_teams, rr_games)
         ]
@@ -345,6 +347,10 @@ def build_public_tournament_results(
                         "team_number": _integer(row.get("team_number")),
                         "seed": _integer(row.get("seed")),
                         "name": team_names.get(str(row.get("id") or ""), "Team"),
+                        "competition_status": _text(
+                            row.get("competition_status") or "ACTIVE",
+                            limit=40,
+                        ).upper(),
                     }
                     for row in draw_teams
                 ],

@@ -46,6 +46,7 @@ export type AdminTournamentDaySide = {
   team_id?: string | null;
   name: string;
   participant_names: string[];
+  competition_status?: "ACTIVE" | "RETIRED";
 };
 
 export type AdminTournamentDayGame = {
@@ -248,7 +249,7 @@ export type AdminTournamentDayCommandPayload = {
   score_b?: number;
   unusual_score_acknowledgement?: boolean;
   result_type?: "FORFEIT" | "NO_SHOW" | "RETIREMENT";
-  winner_team_id?: string;
+  non_playing_team_id?: string;
   result_note?: string;
 };
 

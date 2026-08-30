@@ -84,8 +84,8 @@ export function validateDayCorrectionDraft(
 ): ReturnType<typeof validateDayScoreDraft>;
 export function validateNonPlayedOutcomeDraft(
   resultType: unknown,
-  winnerTeamId: unknown,
+  nonPlayingTeamId: unknown,
   resultNote: unknown
 ):
-  | { ok: true; resultType: "FORFEIT" | "NO_SHOW" | "RETIREMENT"; winnerTeamId: string; resultNote: string }
+  | { ok: true; resultType: "FORFEIT" | "NO_SHOW" | "RETIREMENT"; nonPlayingTeamId: string; resultNote: string }
   | { ok: false; message: string };

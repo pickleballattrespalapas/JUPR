@@ -2023,7 +2023,7 @@ def test_non_played_result_uses_atomic_queue_cas_and_progression_evidence(monkey
     after["summary"]["completed_games"] = 1
     supabase = FakeSupabase()
     state = _install_command_harness(monkeypatch, supabase, (before, after))
-    supabase.rpc_handlers["admin_record_non_played_tournament_day_game_cas"] = lambda _params: {
+    supabase.rpc_handlers["admin_record_tournament_day_non_played_result_cas"] = lambda _params: {
         "ok": True,
         "non_played_result": True,
         "rating_publish_eligible": False,
@@ -2034,7 +2034,7 @@ def test_non_played_result_uses_atomic_queue_cas_and_progression_evidence(monkey
         payload={
             "game_id": "game-a",
             "result_type": "NO_SHOW",
-            "winner_team_id": "team-a1",
+            "non_playing_team_id": "team-a2",
             "result_note": "Bravo did not report by the published grace deadline.",
         },
         game_version="game-a-v1",
@@ -2043,18 +2043,124 @@ def test_non_played_result_uses_atomic_queue_cas_and_progression_evidence(monkey
     result = _execute(supabase, request)
 
     assert [name for name, _params in supabase.rpc_calls] == [
-        "admin_record_non_played_tournament_day_game_cas"
+        "admin_record_tournament_day_non_played_result_cas"
     ]
     params = supabase.rpc_calls[0][1]
     assert params["p_expected_queue_entry_version"] == 6
     assert params["p_expected_court_version"] is None
     assert params["p_result_type"] == "NO_SHOW"
+    assert params["p_non_playing_team_id"] == "team-a2"
+    assert params["p_winner_team_id"] == "team-a1"
+    assert params["p_expected_team_updated_at"] is None
+    assert params["p_retirement_max_score"] is None
     assert params["p_game_patch"]["score_a"] == 11
     assert params["p_game_patch"]["score_b"] == 0
     assert params["p_dependency_updates"] == []
     guarded_payload = state["runner_calls"][0]["payload"]
     assert guarded_payload["score_evidence"]["outcome"]["rating_publish_eligible"] is False
     assert result["snapshot"]["games"][0]["result_type"] == "NO_SHOW"
+
+
+def test_retirement_selects_losing_team_allows_blank_note_and_carries_team_cas(
+    monkeypatch,
+) -> None:
+    before = _workspace_snapshot()
+    before["draws"][0]["team_rows"] = [
+        {
+            "id": "team-a1",
+            "team_number": 1,
+            "competition_status": "ACTIVE",
+            "updated_at": "team-a1-v1",
+        },
+        {
+            "id": "team-a2",
+            "team_number": 2,
+            "competition_status": "ACTIVE",
+            "updated_at": "team-a2-v1",
+        },
+    ]
+    before["games"] = [
+        {
+            "id": "game-a",
+            "draw_id": "draw-a",
+            "state": "ON_COURT",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "team_a": {
+                "team_id": "team-a1",
+                "name": "Alpha",
+                "participant_names": [],
+            },
+            "team_b": {
+                "team_id": "team-a2",
+                "name": "Bravo",
+                "participant_names": [],
+            },
+            "scoring": {
+                "format": "GAME_TO_11",
+                "target": 11,
+                "win_by_two": True,
+            },
+            "version": "game-a-v1",
+            "queue_entry_version": "6",
+            "court_id": "court-row-1",
+        }
+    ]
+    before["courts"][0]["state"] = "ON_COURT"
+    before["courts"][0]["current_assignment"] = {
+        "game_id": "game-a",
+        "version": "6",
+    }
+    after = deepcopy(before)
+    after["games"][0].update(
+        {
+            "state": "COMPLETED",
+            "score_a": 11,
+            "score_b": 0,
+            "winner_team_id": "team-a1",
+            "loser_team_id": "team-a2",
+            "result_type": "RETIREMENT",
+        }
+    )
+    supabase = FakeSupabase()
+    state = _install_command_harness(monkeypatch, supabase, (before, after))
+    supabase.rpc_handlers[
+        "admin_record_tournament_day_non_played_result_cas"
+    ] = lambda _params: {
+        "ok": True,
+        "non_played_result": True,
+        "team_retired": True,
+    }
+    request = _request(
+        "record_non_played_result",
+        before,
+        payload={
+            "game_id": "game-a",
+            "result_type": "RETIREMENT",
+            "non_playing_team_id": "team-a2",
+        },
+        game_version="game-a-v1",
+        queue_entry_version="6",
+        court_version="2",
+    )
+
+    result = _execute(supabase, request)
+
+    params = supabase.rpc_calls[0][1]
+    assert params["p_non_playing_team_id"] == "team-a2"
+    assert params["p_winner_team_id"] == "team-a1"
+    assert params["p_result_note"] == ""
+    assert params["p_expected_team_updated_at"] == "team-a2-v1"
+    assert params["p_retirement_max_score"] == 11
+    evidence = state["runner_calls"][0]["payload"]["score_evidence"]
+    assert evidence["outcome"]["non_playing_team_id"] == "team-a2"
+    assert evidence["retirement"] == {
+        "team_id": "team-a2",
+        "expected_team_updated_at": "team-a2-v1",
+        "max_score": 11,
+    }
+    assert result["snapshot"]["games"][0]["result_type"] == "RETIREMENT"
 
 
 def test_score_evidence_resolves_only_the_selected_draw_dependencies() -> None:

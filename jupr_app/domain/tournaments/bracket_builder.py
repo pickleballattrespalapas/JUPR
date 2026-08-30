@@ -88,6 +88,8 @@ PLAYOFF_TEMPLATES: dict[int, dict[str, Any]] = {
 class TeamStanding:
     team_id: str
     team_number: int
+    competition_status: str = "ACTIVE"
+    retirement_max_score: int | None = None
     wins: int = 0
     losses: int = 0
     points_for: int = 0
@@ -96,6 +98,10 @@ class TeamStanding:
     @property
     def differential(self) -> int:
         return self.points_for - self.points_against
+
+    @property
+    def retired(self) -> bool:
+        return self.competition_status == "RETIRED"
 
 
 def _load_rr6_template() -> dict[str, Any]:
@@ -196,8 +202,48 @@ def build_round_robin_games(*, tournament_id: str, team_ids_by_number: dict[int,
 
 
 def compute_round_robin_standings(teams: list[dict[str, Any]], games: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    standings = {t["id"]: TeamStanding(team_id=t["id"], team_number=int(t["team_number"])) for t in teams}
+    standings = {
+        t["id"]: TeamStanding(
+            team_id=t["id"],
+            team_number=int(t["team_number"]),
+            competition_status=str(t.get("competition_status") or "ACTIVE").upper(),
+            retirement_max_score=(
+                int(t["retirement_max_score"])
+                if t.get("retirement_max_score") not in (None, "")
+                else None
+            ),
+        )
+        for t in teams
+    }
     for game in games:
+        team_a, team_b = standings.get(game.get("team_a_id")), standings.get(game.get("team_b_id"))
+        if not team_a or not team_b:
+            continue
+        if team_a.retired or team_b.retired:
+            # A retirement is a standings-only override. Preserve any played
+            # score on the game for rating publication, but calculate every
+            # round-robin meeting involving a retired side as a max-score
+            # loss. When both sides have retired, both receive a loss; there
+            # is intentionally no artificial win between inactive teams.
+            configured_targets = [
+                standing.retirement_max_score
+                for standing in (team_a, team_b)
+                if standing.retired and standing.retirement_max_score
+            ]
+            max_score = max(configured_targets or [11])
+            if team_a.retired:
+                team_a.losses += 1
+                team_a.points_against += max_score
+            else:
+                team_a.wins += 1
+                team_a.points_for += max_score
+            if team_b.retired:
+                team_b.losses += 1
+                team_b.points_against += max_score
+            else:
+                team_b.wins += 1
+                team_b.points_for += max_score
+            continue
         score_a, score_b = game.get("score_a"), game.get("score_b")
         if score_a is None or score_b is None:
             continue
@@ -206,9 +252,6 @@ def compute_round_robin_standings(teams: list[dict[str, Any]], games: list[dict[
         except Exception:
             continue
         if score_a == 0 and score_b == 0:
-            continue
-        team_a, team_b = standings.get(game.get("team_a_id")), standings.get(game.get("team_b_id"))
-        if not team_a or not team_b:
             continue
         team_a.points_for += score_a
         team_a.points_against += score_b
@@ -221,14 +264,20 @@ def compute_round_robin_standings(teams: list[dict[str, Any]], games: list[dict[
             team_b.wins += 1
             team_a.losses += 1
 
-    standings_list = sorted(list(standings.values()), key=lambda s: (-s.wins, -s.differential, -s.points_for, s.team_number))
-    grouped: dict[tuple[int, int, int], list[TeamStanding]] = {}
+    standings_list = sorted(
+        standings.values(),
+        key=lambda s: (s.retired, -s.wins, -s.differential, -s.points_for, s.team_number),
+    )
+    grouped: dict[tuple[bool, int, int, int], list[TeamStanding]] = {}
     for standing in standings_list:
-        grouped.setdefault((standing.wins, standing.differential, standing.points_for), []).append(standing)
+        grouped.setdefault(
+            (standing.retired, standing.wins, standing.differential, standing.points_for),
+            [],
+        ).append(standing)
 
     resolved: list[TeamStanding] = []
     for group in grouped.values():
-        if len(group) == 2:
+        if len(group) == 2 and not group[0].retired:
             winner = _head_to_head_winner(group[0].team_id, group[1].team_id, games)
             if winner == group[0].team_id:
                 resolved.extend([group[0], group[1]])
@@ -247,6 +296,8 @@ def compute_round_robin_standings(teams: list[dict[str, Any]], games: list[dict[
             "points_for": standing.points_for,
             "points_against": standing.points_against,
             "differential": standing.differential,
+            "competition_status": standing.competition_status,
+            "retired": standing.retired,
             "seed": seed,
         }
         for seed, standing in enumerate(resolved, start=1)
@@ -254,7 +305,11 @@ def compute_round_robin_standings(teams: list[dict[str, Any]], games: list[dict[
 
 
 def compute_podium_from_rr(teams: list[dict[str, Any]], games: list[dict[str, Any]], *, max_placements: int = 3) -> list[dict[str, Any]]:
-    standings = compute_round_robin_standings(teams, games)
+    standings = [
+        row
+        for row in compute_round_robin_standings(teams, games)
+        if not row.get("retired")
+    ]
     return [
         {"placement": idx, "team_id": row["team_id"], "seed": row.get("seed")}
         for idx, row in enumerate(standings[: max(0, max_placements)], start=1)
@@ -283,7 +338,17 @@ def build_playoff_games(*, tournament_id: str, advance_count: int, standings: li
     template = PLAYOFF_TEMPLATES.get(int(advance_count))
     if not template:
         raise ValueError(f"Unsupported playoff advance count: {advance_count}")
-    seed_map = {int(row["seed"]): row["team_id"] for row in standings}
+    eligible_standings = [
+        row
+        for row in standings
+        if not row.get("retired")
+        and str(row.get("competition_status") or "ACTIVE").upper() != "RETIRED"
+    ]
+    if len(eligible_standings) < int(advance_count):
+        raise ValueError(
+            f"Playoff generation requires {advance_count} active teams; retired teams cannot advance."
+        )
+    seed_map = {int(row["seed"]): row["team_id"] for row in eligible_standings}
     return [
         {
             "tournament_id": tournament_id,
