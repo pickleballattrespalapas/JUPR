@@ -484,6 +484,8 @@ def _game_payload(row: dict[str, Any]) -> dict[str, Any]:
         "registration_day_id": _clean_text(row.get("registration_day_id"), limit=120) or None,
         "event_option_id": _clean_text(row.get("event_option_id"), limit=120) or None,
         "stage": _clean_text(row.get("stage"), limit=80),
+        "scoring_format": _clean_text(row.get("scoring_format"), limit=80).upper()
+        or None,
         "rr_round_number": _safe_int(row.get("rr_round_number")),
         "rr_slot_number": _safe_int(row.get("rr_slot_number")),
         "team_a_id": _clean_text(row.get("team_a_id"), limit=120) or None,

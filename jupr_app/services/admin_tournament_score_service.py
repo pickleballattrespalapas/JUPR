@@ -7,6 +7,7 @@ import os
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.tournaments import finalize_game, resolve_playoff_dependencies
 from jupr_app.domain.tournaments.score_policy import (
+    SUPPORTED_SCORING_FORMATS,
     require_tournament_score,
     resolve_tournament_scoring_format,
 )
@@ -89,6 +90,23 @@ def _fetch_event_scoring(
             "This game's configured event scoring format is unavailable; score save was refused."
         )
     return rows[0]
+
+
+def _game_scoring_format(
+    game: dict[str, Any],
+    event: dict[str, Any],
+) -> str:
+    """Prefer a reviewed game's frozen format, with event fallback for legacy rows."""
+
+    game_format = str(game.get("scoring_format") or "").strip().upper()
+    if not game_format:
+        return resolve_tournament_scoring_format(event)
+    if game_format not in SUPPORTED_SCORING_FORMATS:
+        raise ValueError(
+            "This playoff game's scoring format is unsupported. Review and regenerate "
+            "the bracket before recording a result."
+        )
+    return game_format
 
 
 def _games_for_draw(supabase: Any, *, tournament_id: str, draw_id: str | None) -> list[dict[str, Any]]:
@@ -283,7 +301,7 @@ def update_admin_tournament_game_score(
     score_review = require_tournament_score(
         next_score_a,
         next_score_b,
-        scoring_format=resolve_tournament_scoring_format(event),
+        scoring_format=_game_scoring_format(before, event),
         unusual_score_acknowledged=bool(unusual_score_acknowledged),
     )
     updated_fields = {

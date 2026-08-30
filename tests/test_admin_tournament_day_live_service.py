@@ -691,6 +691,28 @@ def test_snapshot_is_day_scoped_multi_draw_human_readable_and_stable() -> None:
     assert first["state_fingerprint"] == second["state_fingerprint"]
     assert first["queue_version"] == "0"
 
+    reordered_events = snapshot_tables()
+    reordered_events["tournament_event_options"].reverse()
+    reordered = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(reordered_events),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+    assert reordered["state_fingerprint"] == first["state_fingerprint"]
+
+    changed_scoring = snapshot_tables()
+    changed_scoring["tournament_event_options"][0]["scoring_default"] = (
+        "GAME_TO_15"
+    )
+    rescored = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(changed_scoring),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+    assert rescored["state_fingerprint"] != first["state_fingerprint"]
+
 
 def test_check_in_waiver_and_payment_are_informational_to_live_day() -> None:
     baseline_tables = snapshot_tables()
@@ -1341,6 +1363,456 @@ def test_snapshot_excludes_only_the_current_guarded_intent_from_preflight() -> N
         blocker["code"] == "OPERATION_UNSETTLED"
         for blocker in internal["draws"][0]["readiness"]["generate_playoffs"]["blockers"]
     )
+
+
+def test_completed_round_robin_projects_playoff_review_and_operator_alert() -> None:
+    tables = snapshot_tables()
+    tables["tournament_event_options"] = [tables["tournament_event_options"][0]]
+    tables["tournament_event_options"][0]["scoring_default"] = "GAME_TO_11"
+    tables["tournament_event_draws"] = [tables["tournament_event_draws"][0]]
+    tables["tournament_teams"] = [
+        {
+            "id": f"team-{team_number}",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-a",
+            "registration_day_id": "day-1",
+            "event_option_id": "event-a",
+            "team_number": team_number,
+            "player1_id": team_number * 2 - 1,
+            "player2_id": team_number * 2,
+            "competition_status": "ACTIVE",
+            "updated_at": f"team-{team_number}-v1",
+        }
+        for team_number in range(1, 5)
+    ]
+    games: list[dict] = []
+    for game_number, (team_a, team_b, score_a, score_b) in enumerate(
+        [
+            (1, 2, 11, 5),
+            (1, 3, 11, 7),
+            (1, 4, 11, 8),
+            (2, 3, 11, 6),
+            (2, 4, 11, 9),
+            (3, 4, 11, 4),
+        ],
+        start=1,
+    ):
+        games.append(
+            {
+                "id": f"rr-{game_number}",
+                "tournament_id": "tour-1",
+                "draw_id": "draw-a",
+                "registration_day_id": "day-1",
+                "event_option_id": "event-a",
+                "stage": "ROUND_ROBIN",
+                "rr_round_number": (game_number + 1) // 2,
+                "rr_slot_number": 1 if game_number % 2 else 2,
+                "team_a_id": f"team-{team_a}",
+                "team_b_id": f"team-{team_b}",
+                "score_a": score_a,
+                "score_b": score_b,
+                "winner_team_id": f"team-{team_a}",
+                "loser_team_id": f"team-{team_b}",
+                "finalized_at": "2026-08-17T09:00:00Z",
+                "updated_at": f"rr-{game_number}-v1",
+            }
+        )
+    tables["tournament_games"] = games
+    tables["tournament_day_live_runs"] = [
+        {
+            "id": "run-1",
+            "club_id": "club-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "state": "ACTIVE",
+            "version": 1,
+            "queue_version": 6,
+        }
+    ]
+    tables["tournament_day_live_draws"] = [
+        {
+            "id": "day-draw-a",
+            "run_id": "run-1",
+            "tournament_id": "tour-1",
+            "registration_day_id": "day-1",
+            "draw_id": "draw-a",
+            "state": "ACTIVE",
+            "source_draw_updated_at": "2026-08-17T08:00:00Z",
+            "version": 1,
+        }
+    ]
+    tables["tournament_day_live_queue"] = [
+        {
+            "id": f"queue-{game_number}",
+            "run_id": "run-1",
+            "draw_id": "draw-a",
+            "game_id": game["id"],
+            "team_a_id": game["team_a_id"],
+            "team_b_id": game["team_b_id"],
+            "state": "COMPLETED",
+            "priority": game_number,
+            "version": 1,
+            "released_at": "2026-08-17T09:01:00Z",
+            "completed_at": "2026-08-17T09:01:00Z",
+        }
+        for game_number, game in enumerate(games, start=1)
+    ]
+
+    snapshot = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+
+    draw = snapshot["draws"][0]
+    assert draw["round_robin_complete"] is True
+    assert draw["progression_status"] == "READY_FOR_PLAYOFF_REVIEW"
+    assert len(draw["playoff_review_fingerprint"]) == 64
+    int(draw["playoff_review_fingerprint"], 16)
+    original_review_fingerprint = draw["playoff_review_fingerprint"]
+    first_standing = draw["round_robin_summary"]["standings"][0]
+    assert first_standing["team_id"] == "team-1"
+    assert first_standing["team_name"] == "Player 1 / Player 2"
+    assert first_standing["participant_names"] == ["Player 1", "Player 2"]
+    assert draw["round_robin_summary"]["ranking_policy"] == {
+        "description": "Rank active teams by wins, point differential, points scored, exact two-team head-to-head, then original team number. Retired teams remain visible after active teams and cannot advance.",
+        "criteria": [
+            "WINS",
+            "POINT_DIFFERENTIAL",
+            "POINTS_FOR",
+            "TWO_TEAM_HEAD_TO_HEAD",
+            "TEAM_NUMBER",
+        ],
+        "retired_teams_eligible": False,
+    }
+    assert draw["playoff_review"]["eligible_team_ids"] == [
+        "team-1",
+        "team-2",
+        "team-3",
+        "team-4",
+    ]
+    template = draw["playoff_review"]["templates"][0]
+    assert template["code"] == "SINGLE_ELIMINATION_4"
+    assert template["rounds"] == [
+        {"code": "SF", "label": "Semifinals", "game_codes": ["P1", "P2"]},
+        {
+            "code": "BRONZE",
+            "label": "Bronze medal match",
+            "game_codes": ["P4"],
+        },
+        {
+            "code": "FINAL",
+            "label": "Gold medal final",
+            "game_codes": ["P3"],
+        },
+    ]
+    assert template["games"][0]["team_a_source"] == {"seed": 1}
+    assert template["default_round_scoring"] == {
+        "SF": "GAME_TO_11",
+        "BRONZE": "GAME_TO_11",
+        "FINAL": "GAME_TO_11",
+    }
+    five_team_template = day_live._playoff_template_review(
+        5,
+        default_format="GAME_TO_11",
+        eligible_team_ids=[f"team-{number}" for number in range(1, 6)],
+    )
+    assert five_team_template["rounds"][0]["label"] == "Play-in"
+    alert = snapshot["progression_alerts"][0]
+    assert alert["key"] == "draw:draw-a:round_robin_complete"
+    assert alert["kind"] == "PLAYOFF_REVIEW_READY"
+    assert alert["draw_id"] == "draw-a"
+    assert alert["ready"] is True
+
+    changed_ranking_tables = deepcopy(tables)
+    changed_ranking_tables["tournament_games"][0].update(
+        {
+            "score_a": 5,
+            "score_b": 11,
+            "winner_team_id": "team-2",
+            "loser_team_id": "team-1",
+            "updated_at": "rr-1-v2",
+        }
+    )
+    changed_ranking_snapshot = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(changed_ranking_tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+    changed_ranking_draw = changed_ranking_snapshot["draws"][0]
+    assert changed_ranking_draw["version"] == draw["version"]
+    assert changed_ranking_draw["round_robin_summary"]["standings"][0][
+        "team_id"
+    ] == "team-2"
+    assert (
+        changed_ranking_draw["playoff_review_fingerprint"]
+        != original_review_fingerprint
+    )
+
+    changed_scoring_tables = deepcopy(tables)
+    changed_scoring_tables["tournament_event_options"][0][
+        "scoring_default"
+    ] = "GAME_TO_15"
+    changed_scoring_snapshot = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(changed_scoring_tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+    changed_scoring_draw = changed_scoring_snapshot["draws"][0]
+    assert changed_scoring_draw["version"] == draw["version"]
+    assert changed_scoring_draw["playoff_review"]["default_scoring_format"] == (
+        "GAME_TO_15"
+    )
+    assert (
+        changed_scoring_draw["playoff_review_fingerprint"]
+        != original_review_fingerprint
+    )
+
+    tables["tournament_event_options"][0].pop("scoring_default")
+    blocked_snapshot = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+    blocked_draw = blocked_snapshot["draws"][0]
+    assert blocked_draw["progression_status"] == "PROGRESSION_BLOCKED"
+    assert any(
+        blocker["code"] == "PLAYOFF_SCORING_UNAVAILABLE"
+        for blocker in blocked_draw["readiness"]["generate_playoffs"]["blockers"]
+    )
+    assert blocked_snapshot["progression_alerts"][0]["kind"] == (
+        "PLAYOFF_REVIEW_BLOCKED"
+    )
+    assert blocked_snapshot["progression_alerts"][0]["ready"] is False
+
+
+def test_playoff_scoring_override_is_authoritative_for_game_review() -> None:
+    scoring = day_live._game_scoring(
+        {"scoring_default": "GAME_TO_11"},
+        {"scoring_format": "BEST_2_OF_3"},
+    )
+
+    assert scoring["format"] == "BEST_2_OF_3"
+    assert scoring["target"] == 2
+    assert scoring["best_of_three_score_semantics"] == "games_won_2_0_or_2_1"
+
+
+def test_generate_playoff_configuration_is_durable_outside_legacy_rpc_payload() -> None:
+    configuration = {
+        "template_code": "SINGLE_ELIMINATION_4",
+        "seed_team_ids": ["team-1", "team-2", "team-3", "team-4"],
+        "round_scoring": {
+            "SF": "GAME_TO_15",
+            "BRONZE": "GAME_TO_11",
+            "FINAL": "BEST_2_OF_3",
+        },
+    }
+
+    operation_payload = day_live._operation_payload_base(
+        "generate_playoffs",
+        {"state_fingerprint": "a" * 64, "day_run_version": 1},
+        {
+            "draw_id": "draw-a",
+            "advance_count": 4,
+            "playoff_configuration": configuration,
+        },
+    )
+
+    assert operation_payload["payload"] == {
+        "draw_id": "draw-a",
+        "advance_count": 4,
+    }
+    assert operation_payload["playoff_configuration"] == configuration
+
+
+def test_custom_playoff_request_rejects_legacy_retry_with_same_idempotency_key(
+    monkeypatch,
+) -> None:
+    snapshot = _workspace_snapshot()
+    supabase = FakeSupabase()
+    configuration = {
+        "template_code": "SINGLE_ELIMINATION_4",
+        "seed_team_ids": ["team-1", "team-2", "team-3", "team-4"],
+        "round_scoring": {
+            "SF": "GAME_TO_15",
+            "BRONZE": "GAME_TO_11",
+            "FINAL": "BEST_2_OF_3",
+        },
+    }
+    snapshot["draws"][0]["playoff_review"] = {
+        "eligible_team_ids": list(configuration["seed_team_ids"]),
+        "templates": [
+            day_live._playoff_template_review(
+                4,
+                default_format="GAME_TO_11",
+                eligible_team_ids=list(configuration["seed_team_ids"]),
+            )
+        ],
+    }
+    _install_command_harness(monkeypatch, supabase, snapshot)
+    playoff_row_calls: list[dict] = []
+
+    def playoff_rows(*args, **kwargs):
+        reviewed_configuration = (
+            kwargs.get("playoff_configuration")
+            if "playoff_configuration" in kwargs
+            else args[4]
+        )
+        playoff_row_calls.append(deepcopy(reviewed_configuration))
+        return [
+            {
+                "id": "playoff-1",
+                "draw_id": "draw-a",
+                "stage": "PLAYOFF",
+                "playoff_game_code": "P1",
+            }
+        ]
+
+    monkeypatch.setattr(day_live, "_playoff_rows", playoff_rows)
+    supabase.rpc_handlers["admin_generate_tournament_day_playoffs_cas"] = (
+        lambda _params: {"ok": True, "inserted_game_ids": ["playoff-1"]}
+    )
+    stored_operation: dict | None = None
+    stored_result: dict | None = None
+    runner_calls: list[dict] = []
+
+    def existing_operation(*_args, **_kwargs):
+        return deepcopy(stored_operation)
+
+    def guarded(**kwargs):
+        nonlocal stored_operation, stored_result
+        runner_calls.append(kwargs)
+        if stored_operation is not None:
+            raise AssertionError("A conflicting retry must not reach the guarded runner.")
+        assert str(kwargs["current_state"]()) == str(kwargs["expected_state"])
+        kwargs["preflight"]()
+        mutation_result = dict(kwargs["mutate"]() or {})
+        stored_operation = {
+            "expected_state": kwargs["expected_state"],
+            "request_json": {"payload": deepcopy(kwargs["payload"])},
+        }
+        stored_result = {
+            "ok": True,
+            "operation_key": "operation-1",
+            "request_fingerprint": "request-fingerprint-1",
+            "client_idempotency_key": kwargs["idempotency_key"],
+            "status": "completed",
+            "idempotent_replay": False,
+            **mutation_result,
+        }
+        return deepcopy(stored_result)
+
+    monkeypatch.setattr(
+        day_live,
+        "get_tournament_admin_operation_record_by_idempotency_key",
+        existing_operation,
+    )
+    monkeypatch.setattr(day_live, "run_tournament_admin_guarded_operation", guarded)
+    key = str(uuid.uuid4())
+    custom_request = _request(
+        "generate_playoffs",
+        snapshot,
+        payload={
+            "draw_id": "draw-a",
+            "advance_count": 4,
+            "playoff_configuration": configuration,
+        },
+        key=key,
+        draw_version="3",
+    )
+
+    first = _execute(supabase, custom_request)
+
+    legacy_retry = deepcopy(custom_request)
+    del legacy_retry["payload"]["playoff_configuration"]
+
+    with pytest.raises(ValueError, match="already used for a different"):
+        _execute(supabase, legacy_retry)
+
+    assert first["operation"]["idempotent_replay"] is False
+    assert len(runner_calls) == 1
+    assert playoff_row_calls == [configuration]
+    assert stored_operation is not None
+    stored_payload = stored_operation["request_json"]["payload"]
+    assert stored_payload["payload"] == {
+        "draw_id": "draw-a",
+        "advance_count": 4,
+    }
+    assert stored_payload["playoff_configuration"] == configuration
+    assert [name for name, _params in supabase.rpc_calls] == [
+        "admin_generate_tournament_day_playoffs_cas"
+    ]
+    assert supabase.table_writes == []
+
+
+def test_playoff_configuration_rejects_duplicate_ineligible_and_incomplete_review() -> None:
+    eligible_team_ids = ["team-1", "team-2", "team-3", "team-4"]
+    draw = {
+        "playoff_review": {
+            "eligible_team_ids": eligible_team_ids,
+            "templates": [
+                day_live._playoff_template_review(
+                    4,
+                    default_format="GAME_TO_11",
+                    eligible_team_ids=eligible_team_ids,
+                )
+            ],
+        }
+    }
+    base = {
+        "template_code": "SINGLE_ELIMINATION_4",
+        "seed_team_ids": eligible_team_ids,
+        "round_scoring": {
+            "SF": "GAME_TO_11",
+            "BRONZE": "GAME_TO_11",
+            "FINAL": "GAME_TO_15",
+        },
+    }
+
+    assert day_live._validate_playoff_configuration(draw, 4, base) == base
+
+    with pytest.raises(ValueError, match="more than one playoff seed"):
+        day_live._validate_playoff_configuration(
+            draw,
+            4,
+            {**base, "seed_team_ids": ["team-1", "team-1", "team-3", "team-4"]},
+        )
+    with pytest.raises(ValueError, match="active, non-retired team"):
+        day_live._validate_playoff_configuration(
+            draw,
+            4,
+            {**base, "seed_team_ids": ["team-1", "team-2", "team-3", "retired-team"]},
+        )
+    with pytest.raises(ValueError, match="every applicable playoff round"):
+        day_live._validate_playoff_configuration(
+            draw,
+            4,
+            {**base, "round_scoring": {"SF": "GAME_TO_11", "FINAL": "GAME_TO_15"}},
+        )
+    with pytest.raises(ValueError, match="exact canonical round"):
+        day_live._validate_playoff_configuration(
+            draw,
+            4,
+            {
+                **base,
+                "round_scoring": {
+                    "sf": "GAME_TO_11",
+                    "SF": "GAME_TO_11",
+                    "BRONZE": "GAME_TO_11",
+                    "FINAL": "GAME_TO_15",
+                },
+            },
+        )
+    with pytest.raises(ValueError, match="exact canonical IDs"):
+        day_live._validate_playoff_configuration(
+            draw,
+            4,
+            {**base, "seed_team_ids": [" team-1", "team-2", "team-3", "team-4"]},
+        )
 
 
 def test_activate_day_initializes_only_the_day_run_and_courts(monkeypatch) -> None:
@@ -2163,6 +2635,164 @@ def test_retirement_selects_losing_team_allows_blank_note_and_carries_team_cas(
     assert result["snapshot"]["games"][0]["result_type"] == "RETIREMENT"
 
 
+def test_playoff_retirement_keeps_round_robin_target_separate_from_game_format(
+    monkeypatch,
+) -> None:
+    before = _workspace_snapshot()
+    before["draws"][0].update(
+        {
+            "source_updated_at": "draw-a-v1",
+            "source_game_versions": [
+                {"id": "rr-game", "updated_at": "rr-game-v1"},
+                {"id": "playoff-game", "updated_at": "playoff-game-v1"},
+            ],
+            "team_rows": [
+                {
+                    "id": "team-a1",
+                    "team_number": 1,
+                    "competition_status": "ACTIVE",
+                    "updated_at": "team-a1-v1",
+                },
+                {
+                    "id": "team-a2",
+                    "team_number": 2,
+                    "competition_status": "ACTIVE",
+                    "updated_at": "team-a2-v1",
+                },
+            ],
+            "playoff_review": {
+                "default_scoring_format": "GAME_TO_11",
+            },
+        }
+    )
+    before["games"] = [
+        {
+            "id": "rr-game",
+            "draw_id": "draw-a",
+            "state": "COMPLETED",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "team_a": {
+                "team_id": "team-a1",
+                "name": "Alpha",
+                "participant_names": [],
+            },
+            "team_b": {
+                "team_id": "team-a2",
+                "name": "Bravo",
+                "participant_names": [],
+            },
+            "score_a": 11,
+            "score_b": 7,
+            "winner_team_id": "team-a1",
+            "loser_team_id": "team-a2",
+            "finalized_at": "2026-08-17T09:30:00Z",
+            "scoring": {
+                "format": "GAME_TO_11",
+                "target": 11,
+                "win_by_two": True,
+            },
+            "version": "rr-game-v1",
+            "queue_entry_version": "5",
+            "court_id": None,
+        },
+        {
+            "id": "playoff-game",
+            "draw_id": "draw-a",
+            "state": "ON_COURT",
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P1",
+            "playoff_round": "FINAL",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "team_a_source": {"seed": 1},
+            "team_b_source": {"seed": 2},
+            "team_a": {
+                "team_id": "team-a1",
+                "name": "Alpha",
+                "participant_names": [],
+            },
+            "team_b": {
+                "team_id": "team-a2",
+                "name": "Bravo",
+                "participant_names": [],
+            },
+            "scoring_format": "BEST_2_OF_3",
+            "scoring": {
+                "format": "BEST_2_OF_3",
+                "target": 2,
+                "win_by_two": False,
+                "best_of_three_score_semantics": "games_won_2_0_or_2_1",
+            },
+            "version": "playoff-game-v1",
+            "queue_entry_version": "6",
+            "court_id": "court-row-1",
+        },
+    ]
+    before["courts"][0]["state"] = "ON_COURT"
+    before["courts"][0]["current_assignment"] = {
+        "game_id": "playoff-game",
+        "version": "6",
+    }
+    after = deepcopy(before)
+    after["games"][0].update(
+        {
+            "score_a": 11,
+            "score_b": 0,
+            "winner_team_id": "team-a1",
+            "loser_team_id": "team-a2",
+            "result_type": "RETIREMENT",
+        }
+    )
+    after["games"][1].update(
+        {
+            "state": "COMPLETED",
+            "score_a": 2,
+            "score_b": 0,
+            "winner_team_id": "team-a1",
+            "loser_team_id": "team-a2",
+            "result_type": "RETIREMENT",
+        }
+    )
+    supabase = FakeSupabase()
+    state = _install_command_harness(monkeypatch, supabase, (before, after))
+    supabase.rpc_handlers[
+        "admin_record_tournament_day_non_played_result_cas"
+    ] = lambda _params: {
+        "ok": True,
+        "non_played_result": True,
+        "team_retired": True,
+    }
+    request = _request(
+        "record_non_played_result",
+        before,
+        payload={
+            "game_id": "playoff-game",
+            "result_type": "RETIREMENT",
+            "non_playing_team_id": "team-a2",
+        },
+        game_version="playoff-game-v1",
+        queue_entry_version="6",
+        court_version="2",
+    )
+
+    result = _execute(supabase, request)
+
+    params = supabase.rpc_calls[0][1]
+    assert params["p_game_patch"]["score_a"] == 2
+    assert params["p_game_patch"]["score_b"] == 0
+    assert params["p_retirement_max_score"] == 11
+    evidence = state["runner_calls"][0]["payload"]["score_evidence"]
+    assert evidence["score_review"]["scoring_format"] == "BEST_2_OF_3"
+    assert evidence["score_review"]["target"] is None
+    assert evidence["retirement"]["max_score"] == 11
+    assert result["snapshot"]["games"][0]["score_a"] == 11
+    assert result["snapshot"]["games"][0]["score_b"] == 0
+    assert result["snapshot"]["games"][1]["score_a"] == 2
+    assert result["snapshot"]["games"][1]["score_b"] == 0
+
+
 def test_score_evidence_resolves_only_the_selected_draw_dependencies() -> None:
     snapshot = _workspace_snapshot()
     snapshot["draws"][0].update(
@@ -2453,6 +3083,20 @@ def test_playoff_builder_preserves_team_numbers_and_exact_day_event_scope() -> N
             "event_option_id": "event-a",
             # UUID/text sort order intentionally differs from team_number.
             "team_rows": team_rows,
+            "playoff_review": {
+                "templates": [
+                    day_live._playoff_template_review(
+                        4,
+                        default_format="GAME_TO_11",
+                        eligible_team_ids=[
+                            "z-team",
+                            "a-team",
+                            "m-team",
+                            "b-team",
+                        ],
+                    )
+                ]
+            },
         },
         "tour-1",
         advance_count=4,
@@ -2462,6 +3106,7 @@ def test_playoff_builder_preserves_team_numbers_and_exact_day_event_scope() -> N
     assert all(row["registration_day_id"] == "day-1" for row in rows)
     assert all(row["event_option_id"] == "event-a" for row in rows)
     assert all(row["draw_id"] == "draw-a" for row in rows)
+    assert all(row["scoring_format"] == "GAME_TO_11" for row in rows)
     semifinal = next(row for row in rows if row["playoff_game_code"] == "P1")
     assert semifinal["team_a_id"] == "z-team"
     assert semifinal["team_b_id"] == "b-team"

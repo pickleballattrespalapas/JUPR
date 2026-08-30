@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { AdminTournamentDayWorkspaceSnapshot } from "../lib/adminTournamentDayOpsApi";
 
 const tournamentId = "tournament-1";
 const drawId = "draw-1";
@@ -256,6 +257,78 @@ function dayReadiness(ready: boolean, confirmation: string, message = "") {
   };
 }
 
+const playoffStandings = [
+  { seed: 1, team_id: "playoff-team-a", team_name: "Avery Patel / Jordan Lee", participant_names: ["Avery Patel", "Jordan Lee"], wins: 5, losses: 0, points_for: 55, points_against: 31, differential: 24, non_play_results: 0, competition_status: "ACTIVE", retired: false },
+  { seed: 2, team_id: "playoff-team-b", team_name: "Morgan Diaz / Riley Smith", participant_names: ["Morgan Diaz", "Riley Smith"], wins: 4, losses: 1, points_for: 52, points_against: 37, differential: 15, non_play_results: 0, competition_status: "ACTIVE", retired: false },
+  { seed: 3, team_id: "playoff-team-c", team_name: "Taylor Reed / Casey Brooks", participant_names: ["Taylor Reed", "Casey Brooks"], wins: 3, losses: 2, points_for: 48, points_against: 42, differential: 6, non_play_results: 0, competition_status: "ACTIVE", retired: false },
+  { seed: 4, team_id: "playoff-team-d", team_name: "Jamie Flores / Skyler Moore", participant_names: ["Jamie Flores", "Skyler Moore"], wins: 2, losses: 3, points_for: 43, points_against: 47, differential: -4, non_play_results: 1, competition_status: "ACTIVE", retired: false },
+  { seed: 5, team_id: "playoff-team-e", team_name: "Nora Williams / Sofia Kim", participant_names: ["Nora Williams", "Sofia Kim"], wins: 1, losses: 4, points_for: 38, points_against: 52, differential: -14, non_play_results: 0, competition_status: "ACTIVE", retired: false },
+  { seed: 6, team_id: "playoff-team-f", team_name: "Emma Davis / Mia Johnson", participant_names: ["Emma Davis", "Mia Johnson"], wins: 0, losses: 5, points_for: 29, points_against: 55, differential: -26, non_play_results: 0, competition_status: "ACTIVE", retired: false },
+  { seed: 7, team_id: "playoff-team-retired", team_name: "Retired Test Team", participant_names: ["Retired Player", "Withdrawn Player"], wins: 0, losses: 5, points_for: 0, points_against: 55, differential: -55, non_play_results: 5, competition_status: "RETIRED", retired: true }
+];
+
+const playoffTemplates = [
+  {
+    code: "SINGLE_ELIMINATION_4",
+    advance_count: 4,
+    label: "4-team semifinals",
+    description: "Seeds 1–4 play semifinals, followed by gold and bronze medal matches.",
+    rounds: [
+      { code: "SF", label: "Semifinals", game_codes: ["P1", "P2"] },
+      { code: "BRONZE", label: "Bronze medal match", game_codes: ["P4"] },
+      { code: "FINAL", label: "Gold medal final", game_codes: ["P3"] }
+    ],
+    games: [
+      { code: "P1", label: "Semifinal 1", round: "SF", team_a_source: { seed: 1 }, team_b_source: { seed: 4 } },
+      { code: "P2", label: "Semifinal 2", round: "SF", team_a_source: { seed: 2 }, team_b_source: { seed: 3 } },
+      { code: "P3", label: "Gold Medal Match", round: "FINAL", team_a_source: { winnerOf: "P1" }, team_b_source: { winnerOf: "P2" } },
+      { code: "P4", label: "Bronze Medal Match", round: "BRONZE", team_a_source: { loserOf: "P1" }, team_b_source: { loserOf: "P2" } }
+    ],
+    default_round_scoring: { SF: "GAME_TO_11", BRONZE: "GAME_TO_11", FINAL: "GAME_TO_11" }
+  },
+  {
+    code: "SINGLE_ELIMINATION_5",
+    advance_count: 5,
+    label: "5-team play-in and semifinals",
+    description: "Seeds 4 and 5 play in before the semifinals and medal matches.",
+    rounds: [
+      { code: "QF", label: "Play-in", game_codes: ["P1"] },
+      { code: "SF", label: "Semifinals", game_codes: ["P2", "P3"] },
+      { code: "BRONZE", label: "Bronze medal match", game_codes: ["P5"] },
+      { code: "FINAL", label: "Gold medal final", game_codes: ["P4"] }
+    ],
+    games: [
+      { code: "P1", label: "Play-in", round: "QF", team_a_source: { seed: 4 }, team_b_source: { seed: 5 } },
+      { code: "P2", label: "Semifinal 1", round: "SF", team_a_source: { seed: 1 }, team_b_source: { winnerOf: "P1" } },
+      { code: "P3", label: "Semifinal 2", round: "SF", team_a_source: { seed: 2 }, team_b_source: { seed: 3 } },
+      { code: "P4", label: "Gold Medal Match", round: "FINAL", team_a_source: { winnerOf: "P2" }, team_b_source: { winnerOf: "P3" } },
+      { code: "P5", label: "Bronze Medal Match", round: "BRONZE", team_a_source: { loserOf: "P2" }, team_b_source: { loserOf: "P3" } }
+    ],
+    default_round_scoring: { QF: "GAME_TO_11", SF: "GAME_TO_11", BRONZE: "GAME_TO_11", FINAL: "GAME_TO_11" }
+  },
+  {
+    code: "SINGLE_ELIMINATION_6",
+    advance_count: 6,
+    label: "6-team quarterfinals and semifinals",
+    description: "Seeds 1 and 2 receive byes while seeds 3–6 play quarterfinals.",
+    rounds: [
+      { code: "QF", label: "Quarterfinals", game_codes: ["P1", "P2"] },
+      { code: "SF", label: "Semifinals", game_codes: ["P3", "P4"] },
+      { code: "BRONZE", label: "Bronze medal match", game_codes: ["P6"] },
+      { code: "FINAL", label: "Gold medal final", game_codes: ["P5"] }
+    ],
+    games: [
+      { code: "P1", label: "Quarterfinal 1", round: "QF", team_a_source: { seed: 4 }, team_b_source: { seed: 5 } },
+      { code: "P2", label: "Quarterfinal 2", round: "QF", team_a_source: { seed: 3 }, team_b_source: { seed: 6 } },
+      { code: "P3", label: "Semifinal 1", round: "SF", team_a_source: { seed: 1 }, team_b_source: { winnerOf: "P1" } },
+      { code: "P4", label: "Semifinal 2", round: "SF", team_a_source: { seed: 2 }, team_b_source: { winnerOf: "P2" } },
+      { code: "P5", label: "Gold Medal Match", round: "FINAL", team_a_source: { winnerOf: "P3" }, team_b_source: { winnerOf: "P4" } },
+      { code: "P6", label: "Bronze Medal Match", round: "BRONZE", team_a_source: { loserOf: "P3" }, team_b_source: { loserOf: "P4" } }
+    ],
+    default_round_scoring: { QF: "GAME_TO_11", SF: "GAME_TO_11", BRONZE: "GAME_TO_11", FINAL: "GAME_TO_11" }
+  }
+];
+
 function dayWorkspaceSnapshot() {
   const dayGames = [
     dayGame({ id: "day-game-a", drawId, drawName: "Manual Acceptance Draw", round: "Round 1", slot: "Match 1", teamA: ["Mateo Rivera", "Liam Chen"], teamB: ["Caleb Nguyen", "Diego Alvarez"], courtId: "day-court-1" }),
@@ -329,11 +402,36 @@ function dayWorkspaceSnapshot() {
         activation_state: "ACTIVE",
         version: "4",
         stage: "Round robin complete",
+        round_robin_complete: true,
+        progression_status: "READY_FOR_PLAYOFF_REVIEW",
+        playoff_review_fingerprint: "1".repeat(64),
         total_games: 6,
         finalized_games: 6,
         queued_games: 1,
         active_games: 0,
         held_games: 1,
+        round_robin_summary: {
+          standings: playoffStandings,
+          ranking_policy: {
+            description: "Rank active teams by wins, point differential, points scored, head-to-head, then original team number.",
+            criteria: ["WINS", "POINT_DIFFERENTIAL", "POINTS_FOR", "TWO_TEAM_HEAD_TO_HEAD", "TEAM_NUMBER"],
+            retired_teams_eligible: false
+          }
+        },
+        playoff_review: {
+          eligible_team_ids: playoffStandings.filter((standing) => !standing.retired).map((standing) => standing.team_id),
+          default_seed_team_ids: playoffStandings.slice(0, 4).map((standing) => standing.team_id),
+          templates: playoffTemplates,
+          default_template_code: "SINGLE_ELIMINATION_4",
+          scoring_formats: [
+            { code: "GAME_TO_11", label: "Game to 11" },
+            { code: "GAME_TO_15", label: "Game to 15" },
+            { code: "GAME_TO_21", label: "Game to 21" },
+            { code: "BEST_2_OF_3", label: "Best 2 of 3 games" }
+          ],
+          default_round_scoring: { SF: "GAME_TO_11", BRONZE: "GAME_TO_11", FINAL: "GAME_TO_11" },
+          default_scoring_format: "GAME_TO_11"
+        },
         readiness: {
           activate: dayReadiness(false, "ACTIVATE DRAW", "This draw is already active."),
           pause: dayReadiness(true, "PAUSE DRAW"),
@@ -371,6 +469,15 @@ function dayWorkspaceSnapshot() {
     blocked_games: [
       { game_id: "day-game-blocked", draw_id: drawId, state: "BLOCKED", reason: "Participant already assigned", note: null, held_at: null, version: "blocked-v1", blockers: [{ code: "PLAYER_ALREADY_CLAIMED", message: "One participant is already assigned to another court." }] }
     ],
+    progression_alerts: [{
+      key: `draw:${secondDrawId}:round_robin_complete`,
+      kind: "PLAYOFF_REVIEW_READY",
+      draw_id: secondDrawId,
+      draw_name: "Open Division Draw",
+      message: "Review standings, qualifiers, bracket structure, and round scoring before generating playoffs.",
+      ready: true,
+      blockers: []
+    }],
     operations: [] as Array<{
       operation_key: string;
       client_idempotency_key: string;
@@ -391,7 +498,7 @@ function dayWorkspaceSnapshot() {
 }
 
 async function installMockApi(page: Page) {
-  let currentDaySnapshot = dayWorkspaceSnapshot();
+  let currentDaySnapshot = dayWorkspaceSnapshot() as unknown as AdminTournamentDayWorkspaceSnapshot;
   const checkInUpdates = new Map<string, {
     attendanceStatus: "EXPECTED" | "CHECKED_IN" | "ABSENT";
     waiverVerified: boolean;
@@ -458,6 +565,11 @@ async function installMockApi(page: Page) {
         payload: {
           draw_id?: string;
           advance_count?: number;
+          playoff_configuration?: {
+            template_code: string;
+            seed_team_ids: string[];
+            round_scoring: Record<string, string>;
+          };
           game_id?: string;
           court_id?: string;
           score_a?: number;
@@ -817,7 +929,7 @@ test("legacy draw route opens a clean tabbed day workspace", async ({ page }) =>
   await expect(page.getByRole("tabpanel", { name: "Court board" })).toHaveCount(0);
   await expect(page.getByRole("tabpanel", { name: "Eligible queue" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Pause draw" })).toHaveCount(2);
-  await expect(page.getByRole("button", { name: "Generate playoffs" })).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Review playoff setup" })).toHaveCount(2);
 
   await page.getByRole("tab", { name: "Court board" }).click();
   await expect(page).toHaveURL(/panel=board/);
@@ -853,30 +965,53 @@ test("legacy draw route opens a clean tabbed day workspace", async ({ page }) =>
   await expect(page.getByText("Operator hold awaiting participant arrival")).toBeVisible();
   await expect(page.getByText("One participant is already assigned to another court.")).toBeVisible();
   await expect(page.getByRole("tabpanel", { name: "Court board" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Generate playoffs" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Review playoff setup" })).toHaveCount(0);
 
   await page.reload();
   await expect(page.getByRole("region", { name: "Tournament day scope" }).getByLabel("Tournament day")).toHaveValue(dayId);
   await expect(page.getByRole("tabpanel", { name: "Eligible queue" })).toBeVisible();
 });
 
-test("playoff generation requires an explicit server-reviewed advance count", async ({ page }) => {
+test("completed round robin opens a reviewed playoff setup with exact seeds and round scoring", async ({ page }) => {
   const commands: Array<Record<string, unknown>> = [];
   page.on("request", (request) => {
     if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
     commands.push(request.postDataJSON() as Record<string, unknown>);
   });
   await page.goto(`/admin/tournaments/live-operations?${selectedQuery}&panel=draws`);
+
+  await expect(page.getByRole("heading", { name: "Round robin complete" })).toBeVisible();
+  await expect(page.getByText("Open Division Draw is ready for playoff review.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review Open Division Draw" })).toBeVisible();
+  await expect(page.getByLabel("1 ready for playoff review")).toBeVisible();
+
   const drawCard = page.getByRole("heading", { name: "Open Division Draw", level: 3 }).locator("xpath=ancestor::article[1]");
-  const advanceCount = drawCard.getByLabel("Advancing teams");
-  await expect(advanceCount).toHaveValue("");
-  await expect(drawCard.getByRole("button", { name: "Generate playoffs" })).toBeDisabled();
-  await advanceCount.selectOption("5");
-  await expect(drawCard.getByRole("button", { name: "Generate playoffs" })).toBeEnabled();
-  await drawCard.getByRole("button", { name: "Generate playoffs" }).click();
+  await expect(drawCard).toContainText("Playoff review ready");
+  await drawCard.getByRole("button", { name: "Review playoff setup" }).click();
+
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByRole("heading", { name: "Generate playoffs for Open Division Draw?" })).toBeVisible();
-  await dialog.getByRole("button", { name: "Yes, generate playoffs" }).click();
+  await expect(dialog.getByRole("heading", { name: "Review playoffs · Open Division Draw" })).toBeVisible();
+  const standings = dialog.getByRole("table", { name: "Completed round-robin standings and current playoff selections" });
+  await expect(standings).toContainText("Avery Patel / Jordan Lee");
+  await expect(standings).toContainText("5–0");
+  await expect(standings).toContainText("Retired Test Team");
+  await expect(standings).toContainText("Retired · ineligible");
+
+  await dialog.getByLabel("Playoff structure").selectOption("SINGLE_ELIMINATION_5");
+  await expect(dialog.getByLabel("Seed 5")).toHaveValue("playoff-team-e");
+  await dialog.getByLabel("Seed 1").selectOption("playoff-team-f");
+  await expect(dialog.getByText("Seed override:")).toBeVisible();
+  await dialog.getByLabel("Bronze medal match").selectOption("GAME_TO_15");
+  await dialog.getByLabel("Gold medal final").selectOption("BEST_2_OF_3");
+
+  const bracketPreview = dialog.getByRole("heading", { name: "Bracket preview" }).locator("xpath=ancestor::section[1]");
+  await expect(bracketPreview).toBeVisible();
+  await expect(bracketPreview.getByRole("heading", { name: "Play-in" })).toBeVisible();
+  await expect(bracketPreview.getByText("Seed 4 · Jamie Flores / Skyler Moore")).toBeVisible();
+  await expect(bracketPreview.getByText("Seed 5 · Nora Williams / Sofia Kim")).toBeVisible();
+  await expect(bracketPreview.getByText("Best 2 of 3 games")).toBeVisible();
+
+  await dialog.getByRole("button", { name: "Generate reviewed playoffs" }).click();
   await expect.poll(() => commands.length).toBe(1);
   expect(commands[0]).toMatchObject({
     action: "generate_playoffs",
@@ -886,9 +1021,107 @@ test("playoff generation requires an explicit server-reviewed advance count", as
       state_fingerprint: "d".repeat(64),
       queue_version: "11",
       draw_version: "4"
-    },
-    payload: { draw_id: secondDrawId, advance_count: 5 }
+    }
   });
+  expect(commands[0].payload).toEqual({
+    draw_id: secondDrawId,
+    advance_count: 5,
+    playoff_configuration: {
+      template_code: "SINGLE_ELIMINATION_5",
+      seed_team_ids: ["playoff-team-f", "playoff-team-b", "playoff-team-c", "playoff-team-d", "playoff-team-e"],
+      round_scoring: {
+        QF: "GAME_TO_11",
+        SF: "GAME_TO_11",
+        BRONZE: "GAME_TO_15",
+        FINAL: "BEST_2_OF_3"
+      }
+    }
+  });
+});
+
+test("default playoff review stays open across unrelated day activity and generates in two clicks", async ({ page }) => {
+  const initial = dayWorkspaceSnapshot() as unknown as AdminTournamentDayWorkspaceSnapshot;
+  const refreshed = structuredClone(initial);
+  refreshed.day_run.version = "8";
+  refreshed.state_fingerprint = "e".repeat(64);
+  refreshed.queue_version = "12";
+  let snapshotReads = 0;
+  await page.route(
+    new RegExp(`/tournament-live/tournaments/${tournamentId}/days/${dayId}/snapshot$`),
+    async (route) => {
+      snapshotReads += 1;
+      await route.fulfill({ json: snapshotReads === 1 ? initial : refreshed });
+    }
+  );
+  const commands: Array<Record<string, unknown>> = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
+    commands.push(request.postDataJSON() as Record<string, unknown>);
+  });
+
+  await page.goto(`/admin/tournaments/live-operations?${selectedQuery}&panel=board`);
+  await page.getByRole("button", { name: "Review Open Division Draw" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Review playoffs · Open Division Draw" })).toBeVisible();
+
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect.poll(() => snapshotReads).toBeGreaterThan(1);
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Generate reviewed playoffs" }).click();
+
+  await expect.poll(() => commands.length).toBe(1);
+  expect(commands[0]).toMatchObject({
+    action: "generate_playoffs",
+    expected: {
+      day_run_version: "8",
+      state_fingerprint: "e".repeat(64),
+      queue_version: "12",
+      draw_version: "4"
+    },
+    payload: {
+      draw_id: secondDrawId,
+      advance_count: 4,
+      playoff_configuration: {
+        template_code: "SINGLE_ELIMINATION_4",
+        seed_team_ids: ["playoff-team-a", "playoff-team-b", "playoff-team-c", "playoff-team-d"],
+        round_scoring: { SF: "GAME_TO_11", BRONZE: "GAME_TO_11", FINAL: "GAME_TO_11" }
+      }
+    }
+  });
+});
+
+test("playoff review closes when standings change without a day-draw version bump", async ({ page }) => {
+  const initial = dayWorkspaceSnapshot() as unknown as AdminTournamentDayWorkspaceSnapshot;
+  const refreshed = structuredClone(initial);
+  const refreshedDraw = refreshed.draws.find((draw) => draw.id === secondDrawId);
+  if (!refreshedDraw?.round_robin_summary?.standings?.length) {
+    throw new Error("Ready playoff draw fixture is missing standings.");
+  }
+  const [previousFirst, previousSecond] = refreshedDraw.round_robin_summary.standings;
+  refreshedDraw.round_robin_summary.standings[0] = { ...previousSecond, seed: 1 };
+  refreshedDraw.round_robin_summary.standings[1] = { ...previousFirst, seed: 2 };
+  refreshedDraw.playoff_review_fingerprint = "2".repeat(64);
+  refreshed.state_fingerprint = "c".repeat(64);
+  let snapshotReads = 0;
+  await page.route(
+    new RegExp(`/tournament-live/tournaments/${tournamentId}/days/${dayId}/snapshot$`),
+    async (route) => {
+      snapshotReads += 1;
+      await route.fulfill({ json: snapshotReads === 1 ? initial : refreshed });
+    }
+  );
+
+  await page.goto(`/admin/tournaments/live-operations?${selectedQuery}&panel=board`);
+  await page.getByRole("button", { name: "Review Open Division Draw" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect.poll(() => snapshotReads).toBeGreaterThan(1);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByText(
+    "Playoff review closed because the round-robin results or authoritative tournament-day state changed. Reopen the finished draw and inspect the refreshed qualifiers."
+  )).toBeVisible();
+  expect(refreshedDraw.version).toBe("4");
 });
 
 test("legacy score route retains day context and focuses the unified queue", async ({ page }) => {

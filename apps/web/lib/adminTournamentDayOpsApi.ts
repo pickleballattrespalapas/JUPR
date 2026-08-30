@@ -80,6 +80,7 @@ export type AdminTournamentDayGame = {
   version: string;
   queue_entry_version?: string;
   court_id?: string | null;
+  reserved_court_id?: string | null;
   blockers: AdminTournamentDayBlockerValue[];
   correction_readiness: AdminTournamentDayReadiness;
 };
@@ -132,6 +133,67 @@ export type AdminTournamentDayHeldEntry = {
   blockers: AdminTournamentDayBlockerValue[];
 };
 
+export type AdminTournamentDayRoundRobinStanding = {
+  seed: number;
+  team_id: string;
+  team_number?: number;
+  team_name: string;
+  participant_names: string[];
+  wins: number;
+  losses: number;
+  points_for: number;
+  points_against: number;
+  differential: number;
+  non_play_results?: number;
+  competition_status?: string | null;
+  retired?: boolean;
+  eligible_for_playoffs?: boolean;
+};
+
+export type AdminTournamentDayPlayoffTemplateRound = {
+  code: string;
+  label: string;
+  game_codes?: string[];
+};
+
+export type AdminTournamentDayPlayoffTemplateGame = {
+  code: string;
+  round?: string | null;
+  label?: string | null;
+  team_a_source?: unknown;
+  team_b_source?: unknown;
+  team_a_seed?: number | null;
+  team_b_seed?: number | null;
+};
+
+export type AdminTournamentDayPlayoffTemplate = {
+  code: string;
+  advance_count: number;
+  label: string;
+  description?: string | null;
+  applicable_rounds?: string[];
+  rounds: Array<AdminTournamentDayPlayoffTemplateRound | string>;
+  games: AdminTournamentDayPlayoffTemplateGame[];
+  default_seed_team_ids?: string[];
+  default_round_scoring?: Record<string, string>;
+};
+
+export type AdminTournamentDayPlayoffScoringFormat = {
+  code: "GAME_TO_11" | "GAME_TO_15" | "GAME_TO_21" | "BEST_2_OF_3" | string;
+  label: string;
+  target?: number;
+};
+
+export type AdminTournamentDayPlayoffReview = {
+  eligible_team_ids: string[];
+  default_seed_team_ids: string[];
+  templates: AdminTournamentDayPlayoffTemplate[];
+  default_template_code?: string | null;
+  scoring_formats: AdminTournamentDayPlayoffScoringFormat[];
+  default_round_scoring?: Record<string, string> | string | null;
+  default_scoring_format?: string | null;
+};
+
 export type AdminTournamentDayDraw = {
   id: string;
   name: string;
@@ -139,6 +201,10 @@ export type AdminTournamentDayDraw = {
   activation_state: string;
   version: string;
   stage?: string | null;
+  round_robin_complete?: boolean;
+  progression_status?: string | null;
+  playoff_review_fingerprint?: string | null;
+  status?: string | null;
   total_games: number;
   finalized_games: number;
   queued_games: number;
@@ -162,6 +228,35 @@ export type AdminTournamentDayDraw = {
     podium_href?: string | null;
     review_href?: string | null;
   };
+  round_robin_summary?: {
+    complete?: boolean;
+    total_games?: number;
+    finalized_games?: number;
+    standings: AdminTournamentDayRoundRobinStanding[];
+    ranking_policy?: {
+      description?: string | null;
+      criteria?: string[];
+      retired_teams_eligible?: boolean;
+    } | string | null;
+    ranking_criteria?: string[];
+    retired_teams_eligible?: boolean;
+    tie_break_policy?: string | null;
+  } | null;
+  playoff_review?: AdminTournamentDayPlayoffReview | null;
+};
+
+export type AdminTournamentDayProgressionAlert = {
+  key: string;
+  kind: string;
+  draw_id: string;
+  draw_name: string;
+  message: string;
+  ready: boolean;
+  blockers: AdminTournamentDayBlockerValue[];
+  status?: string | null;
+  severity?: string | null;
+  title?: string | null;
+  review_href?: string | null;
 };
 
 export type AdminTournamentDayOperation = {
@@ -219,6 +314,7 @@ export type AdminTournamentDayWorkspaceSnapshot = {
   held_games: AdminTournamentDayHeldEntry[];
   blocked_games: AdminTournamentDayHeldEntry[];
   operations: AdminTournamentDayOperation[];
+  progression_alerts?: AdminTournamentDayProgressionAlert[];
   readiness: {
     activate_day: AdminTournamentDayReadiness;
     auto_fill_courts: AdminTournamentDayReadiness;
@@ -243,6 +339,11 @@ export type AdminTournamentDayCommandExpected = {
 export type AdminTournamentDayCommandPayload = {
   draw_id?: string;
   advance_count?: number;
+  playoff_configuration?: {
+    template_code: string;
+    seed_team_ids: string[];
+    round_scoring: Record<string, string>;
+  };
   game_id?: string;
   court_id?: string;
   score_a?: number;

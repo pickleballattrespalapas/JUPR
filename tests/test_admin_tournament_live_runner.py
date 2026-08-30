@@ -546,6 +546,71 @@ def test_score_command_is_stale_safe_audited_and_exactly_idempotent(monkeypatch)
     assert operation["audit_evidence"]["completion_present"] is True
 
 
+def test_playoff_score_uses_frozen_game_format_before_event_default(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    tables["tournament_games"][0].update(
+        {
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P3",
+            "playoff_round": "FINAL",
+            "scoring_format": "BEST_2_OF_3",
+        }
+    )
+    # This remains the fallback for legacy games, but must not override the
+    # reviewed per-game playoff format.
+    tables["tournament_event_options"][0]["scoring_default"] = "GAME_TO_11"
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    result = _execute_score(
+        supabase,
+        _command(snapshot, score_a=2, score_b=1),
+    )
+
+    assert result["game"]["scoring_format"] == "BEST_2_OF_3"
+    assert tables["tournament_games"][0]["score_review_json"] == {
+        "status": "ordinary",
+        "scoring_format": "BEST_2_OF_3",
+        "target": None,
+        "win_by_two": False,
+        "score_a": 2,
+        "score_b": 1,
+        "reasons": [],
+        "acknowledgement_required": False,
+        "acknowledged": False,
+        "accepted": True,
+    }
+
+
+def test_live_fingerprint_binds_frozen_game_scoring_format(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    tables["tournament_games"][0]["scoring_format"] = "GAME_TO_15"
+    supabase = FakeSupabase(tables)
+    before = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    tables["tournament_games"][0]["scoring_format"] = "BEST_2_OF_3"
+    after = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    assert before["state_fingerprint"] != after["state_fingerprint"]
+
+
 def test_score_command_binds_all_post_lock_game_versions_before_rpc(monkeypatch) -> None:
     _enable_live(monkeypatch)
     tables = live_tables()
