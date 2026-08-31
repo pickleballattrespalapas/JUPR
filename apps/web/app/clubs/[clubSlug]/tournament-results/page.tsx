@@ -48,8 +48,38 @@ function scoreText(game: PublicTournamentGameResult): string {
   return game.state === "FINAL" ? "Final" : game.state.toLowerCase();
 }
 
+function tiebreakCriterionLabel(criterion: string): string {
+  const labels: Record<string, string> = {
+    WINS: "Wins",
+    HEAD_TO_HEAD: "Head-to-head",
+    POINT_DIFFERENTIAL: "Point differential",
+    POINTS_FOR: "Total points scored",
+    TEAM_NUMBER: "Original team number"
+  };
+  const normalized = String(criterion || "").trim().toUpperCase();
+  return labels[normalized] || normalized.replaceAll("_", " ").toLowerCase();
+}
+
+function tiebreakOutcomeLabel(outcome: string, detail: string): string {
+  if (/not applied/i.test(detail)) return "Not applied";
+  const labels: Record<string, string> = {
+    RESOLVED: "Resolved",
+    PARTIAL: "Partially resolved",
+    PARTIALLY_RESOLVED: "Partially resolved",
+    UNRESOLVED: "Still tied",
+    NOT_APPLIED: "Not applied",
+    SKIPPED: "Not applied",
+    FALLBACK: "Final fallback"
+  };
+  const normalized = String(outcome || "").trim().toUpperCase();
+  return labels[normalized] || normalized.replaceAll("_", " ").toLowerCase();
+}
+
 function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
   const badge = stateColors[draw.state] || stateColors.SCHEDULED;
+  const tiebreakExplanations = draw.tiebreak_explanations || [];
+  const rankingPolicyDescription = draw.ranking_policy?.description?.trim() || null;
+  const rankingCriteria = draw.ranking_policy?.criteria || [];
   return (
     <article style={{ ...cardStyle, marginBottom: "1rem" }}>
       <div
@@ -101,32 +131,126 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
       ) : null}
 
       {draw.standings.length ? (
-        <section style={{ overflowX: "auto" }}>
+        <section>
           <h3>Standings</h3>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                {['Rank', 'Team / player', 'W', 'L', 'PF', 'PA', '+/−'].map((label) => (
-                  <th key={label} scope="col" style={{ textAlign: label === 'Team / player' ? 'left' : 'right', padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>{label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {draw.standings.map((row) => (
-                <tr key={row.public_team_key}>
-                  <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.rank ?? "—"}</td>
-                  <th scope="row" style={{ textAlign: "left", padding: "0.45rem" }}>
-                    {row.team_name}{row.retired ? " · Retired" : ""}
-                  </th>
-                  <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.wins ?? 0}</td>
-                  <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.losses ?? 0}</td>
-                  <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.points_for ?? 0}</td>
-                  <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.points_against ?? 0}</td>
-                  <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.differential ?? 0}</td>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  {['Rank', 'Team / player', 'W', 'L', 'PF', 'PA', '+/−'].map((label) => (
+                    <th key={label} scope="col" style={{ textAlign: label === 'Team / player' ? 'left' : 'right', padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>{label}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {draw.standings.map((row) => (
+                  <tr key={row.public_team_key}>
+                    <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.rank ?? "—"}</td>
+                    <th scope="row" style={{ textAlign: "left", padding: "0.45rem" }}>
+                      {row.team_name}{row.retired ? " · Retired" : ""}
+                    </th>
+                    <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.wins ?? 0}</td>
+                    <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.losses ?? 0}</td>
+                    <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.points_for ?? 0}</td>
+                    <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.points_against ?? 0}</td>
+                    <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.differential ?? 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {tiebreakExplanations.length ? (
+            <details
+              data-testid="public-tiebreak-explanation"
+              aria-label={`How tied teams were ranked in ${draw.name}`}
+              style={{
+                marginTop: "0.75rem",
+                border: "1px solid #bfdbfe",
+                borderRadius: "10px",
+                background: "#eff6ff",
+                color: "#172554",
+                minWidth: 0
+              }}
+            >
+              <summary
+                style={{
+                  cursor: "pointer",
+                  padding: "0.7rem 0.8rem",
+                  fontWeight: 800,
+                  overflowWrap: "anywhere"
+                }}
+              >
+                How tied teams were ranked
+                <span
+                  style={{
+                    marginLeft: "0.45rem",
+                    color: "#1d4ed8",
+                    fontSize: "0.78rem",
+                    whiteSpace: "nowrap"
+                  }}
+                >
+                  {draw.round_robin_complete ? "Final" : "Provisional"} · {tiebreakExplanations.length} {tiebreakExplanations.length === 1 ? "tie" : "ties"}
+                </span>
+              </summary>
+              <div style={{ padding: "0 0.8rem 0.75rem" }}>
+                {rankingPolicyDescription ? (
+                  <p style={{ margin: "0 0 0.35rem", color: "#334155", fontSize: "0.82rem" }}>
+                    {rankingPolicyDescription}
+                  </p>
+                ) : null}
+                {rankingCriteria.length ? (
+                  <p style={{ margin: "0 0 0.35rem", color: "#334155", fontSize: "0.82rem" }}>
+                    <strong>Rule order:</strong> {rankingCriteria.map(tiebreakCriterionLabel).join(" → ")}
+                  </p>
+                ) : null}
+                <p style={{ margin: "0 0 0.15rem", color: "#334155", fontSize: "0.82rem", fontWeight: 700 }}>
+                  {draw.round_robin_complete
+                    ? "Final round-robin order."
+                    : "Provisional — this order may change until round-robin play is complete."}
+                </p>
+                {tiebreakExplanations.map((explanation, explanationIndex) => (
+                  <article
+                    key={`${explanation.title}:${explanationIndex}`}
+                    style={{
+                      paddingTop: "0.65rem",
+                      borderTop: "1px solid #bfdbfe",
+                      overflowWrap: "anywhere"
+                    }}
+                  >
+                    <h4 style={{ margin: 0, color: "#0f172a", fontSize: "0.95rem" }}>{explanation.title}</h4>
+                    <p style={{ margin: "0.2rem 0 0", color: "#334155", fontSize: "0.86rem" }}>{explanation.summary}</p>
+                    <ol
+                      aria-label={`Tie-break steps for ${explanation.title} in ${draw.name}`}
+                      style={{ margin: "0.5rem 0 0", paddingLeft: "1.25rem", color: "#334155", fontSize: "0.82rem" }}
+                    >
+                      {(explanation.steps || []).map((step, stepIndex) => (
+                        <li key={`${step.criterion}:${stepIndex}`} style={{ marginTop: stepIndex ? "0.35rem" : 0 }}>
+                          <span style={{ display: "flex", alignItems: "center", gap: "0.35rem", flexWrap: "wrap", marginBottom: "0.1rem" }}>
+                            <strong>{tiebreakCriterionLabel(step.criterion)}</strong>
+                            <span
+                              style={{
+                                border: "1px solid #bfdbfe",
+                                borderRadius: "999px",
+                                padding: "0.05rem 0.35rem",
+                                background: "#dbeafe",
+                                color: "#1e40af",
+                                fontSize: "0.68rem",
+                                fontWeight: 800,
+                                textTransform: "uppercase"
+                              }}
+                            >
+                              {tiebreakOutcomeLabel(step.outcome, step.detail)}
+                            </span>
+                          </span>
+                          <span>{step.detail}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </article>
+                ))}
+              </div>
+            </details>
+          ) : null}
         </section>
       ) : null}
 
