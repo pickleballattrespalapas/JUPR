@@ -37,6 +37,13 @@ export default function PublicPlayHub({ params }: Props) {
           </p>
           <strong>Open Ladder Generator →</strong>
         </Link>
+        <Link href={`${base}/team-match-generator`} style={cardStyle}>
+          <h2 style={{ marginTop: 0 }}>Team Match Generator</h2>
+          <p style={{ color: "#475569" }}>
+            Build four-player teams, schedule every team matchup, and run women&apos;s, men&apos;s, and mixed doubles games with live team standings.
+          </p>
+          <strong>Open Team Match Generator →</strong>
+        </Link>
       </div>
     </section>
   );
