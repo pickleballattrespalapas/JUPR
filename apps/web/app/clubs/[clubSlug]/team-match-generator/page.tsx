@@ -11,10 +11,10 @@ export default function TeamMatchGeneratorPage({ params }: Props) {
       </p>
       <h1 style={{ marginTop: 0 }}>Team Match Generator</h1>
       <p style={{ color: "#334155", maxWidth: "900px" }}>
-        Build four-player teams with two women and two men, generate a full team round robin, enter scores, and track match and game standings.
+        Build four-player teams with two women and two men, then open a dedicated live session page that guides the event through one team matchup and one score submission at a time.
       </p>
       <p style={{ color: "#475569", maxWidth: "900px" }}>
-        Every team matchup uses four regulation games in this order: women&apos;s doubles, men&apos;s doubles, mixed doubles 1, and mixed doubles 2. This public tool is unrated and does not publish official matches.
+        Women&apos;s Doubles and Men&apos;s Doubles are played first. Each team then chooses its mixed pairings by player name. A 2–2 regulation tie automatically advances to a DreamBreaker. This public tool is unrated and does not publish official matches.
       </p>
       <p>
         <Link href={`/clubs/${params.clubSlug}/play`}>← Back to Play tools</Link>
