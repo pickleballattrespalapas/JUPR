@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 
 import pytest
@@ -123,6 +124,73 @@ def _results_storage() -> dict:
     return storage
 
 
+def _three_way_tie_storage() -> dict:
+    storage = _results_storage()
+    storage["players"].append(
+        {
+            "id": 12,
+            "club_id": "club-1",
+            "name": "Casey Counter",
+            "email": "casey-private@example.com",
+        }
+    )
+    storage["tournament_teams"].append(
+        {
+            "id": "team-private-c",
+            "tournament_id": "t1",
+            "draw_id": "draw-private-id",
+            "team_number": 3,
+            "player1_id": 12,
+        }
+    )
+    storage["tournament_games"] = [
+        {
+            "id": "game-private-a-b",
+            "tournament_id": "t1",
+            "draw_id": "draw-private-id",
+            "stage": "ROUND_ROBIN",
+            "rr_round_number": 1,
+            "rr_slot_number": 1,
+            "team_a_id": "team-private-a",
+            "team_b_id": "team-private-b",
+            "score_a": 11,
+            "score_b": 9,
+            "winner_team_id": "team-private-a",
+            "finalized_at": "2026-09-01T16:00:00Z",
+        },
+        {
+            "id": "game-private-b-c",
+            "tournament_id": "t1",
+            "draw_id": "draw-private-id",
+            "stage": "ROUND_ROBIN",
+            "rr_round_number": 2,
+            "rr_slot_number": 1,
+            "team_a_id": "team-private-b",
+            "team_b_id": "team-private-c",
+            "score_a": 11,
+            "score_b": 7,
+            "winner_team_id": "team-private-b",
+            "finalized_at": "2026-09-01T17:00:00Z",
+        },
+        {
+            "id": "game-private-c-a",
+            "tournament_id": "t1",
+            "draw_id": "draw-private-id",
+            "stage": "ROUND_ROBIN",
+            "rr_round_number": 3,
+            "rr_slot_number": 1,
+            "team_a_id": "team-private-c",
+            "team_b_id": "team-private-a",
+            "score_a": 11,
+            "score_b": 5,
+            "winner_team_id": "team-private-c",
+            "finalized_at": "2026-09-01T18:00:00Z",
+        },
+    ]
+    storage["tournament_podium"] = []
+    return storage
+
+
 def _add_tournament(
     storage: dict,
     *,
@@ -216,6 +284,15 @@ def test_standard_results_include_multi_day_scores_bracket_standings_and_medals(
     assert [day["label"] for day in draw["scheduled_days"]] == ["Saturday", "Sunday"]
     assert draw["state"] == "COMPLETE"
     assert draw["standings"][0]["team_name"] == "Alex Ace"
+    assert draw["round_robin_complete"] is True
+    assert draw["tiebreak_explanations"] == []
+    assert draw["ranking_policy"]["criteria"] == [
+        "WINS",
+        "HEAD_TO_HEAD",
+        "POINT_DIFFERENTIAL",
+        "POINTS_FOR",
+        "TEAM_NUMBER",
+    ]
     assert draw["scores"][0]["score_a"] == 15
     assert draw["bracket"][0]["outcome_label"] == "Walkover"
     assert draw["bracket"][0]["state"] == "FINAL"
@@ -239,6 +316,214 @@ def test_standard_results_include_multi_day_scores_bracket_standings_and_medals(
         "podium-private-id",
     ):
         assert private_value not in serialized
+
+
+def test_public_results_explain_three_way_cycle_through_points_scored() -> None:
+    payload = build_public_tournament_results(
+        FakeSupabase(_three_way_tie_storage()),
+        club_id="club-1",
+        tournament_id="t1",
+    )
+
+    draw = payload["draws"][0]
+    assert draw["round_robin_complete"] is True
+    assert [row["team_name"] for row in draw["standings"]] == [
+        "Blair Backhand",
+        "Casey Counter",
+        "Alex Ace",
+    ]
+    assert draw["tiebreak_explanations"] == [
+        {
+            "title": "Three-way tie at 1\u20131",
+            "summary": (
+                "Head-to-head did not fully separate these teams. Total points "
+                "scored completed the order: Blair Backhand \u2192 Casey Counter "
+                "\u2192 Alex Ace."
+            ),
+            "steps": [
+                {
+                    "criterion": "HEAD_TO_HEAD",
+                    "outcome": "UNRESOLVED",
+                    "detail": (
+                        "Head-to-head mini-table: Alex Ace 1\u20131; Blair Backhand "
+                        "1\u20131; Casey Counter 1\u20131. Head-to-head did not "
+                        "separate these teams."
+                    ),
+                },
+                {
+                    "criterion": "POINT_DIFFERENTIAL",
+                    "outcome": "PARTIALLY_RESOLVED",
+                    "detail": (
+                        "Point differential for the remaining tied teams: Blair "
+                        "Backhand +2; Casey Counter +2; Alex Ace -4. Point "
+                        "differential separated some teams, but Blair Backhand and "
+                        "Casey Counter remained tied."
+                    ),
+                },
+                {
+                    "criterion": "POINTS_FOR",
+                    "outcome": "RESOLVED",
+                    "detail": (
+                        "Total points scored for the remaining tied teams: Blair "
+                        "Backhand 20; Casey Counter 18. Total points scored resolved "
+                        "the remaining tie."
+                    ),
+                },
+            ],
+        }
+    ]
+
+    serialized = json.dumps(payload)
+    for private_value in (
+        "alex-private@example.com",
+        "blair-private@example.com",
+        "casey-private@example.com",
+        "draw-private-id",
+        "team-private-a",
+        "team-private-b",
+        "team-private-c",
+        "game-private-a-b",
+    ):
+        assert private_value not in serialized
+
+
+def test_incomplete_tie_ignores_unfinalized_draft_scores_and_names_missing_games() -> None:
+    storage = _three_way_tie_storage()
+    storage["players"].append(
+        {"id": 13, "club_id": "club-1", "name": "Delta Dink"}
+    )
+    storage["tournament_teams"].append(
+        {
+            "id": "team-private-d",
+            "tournament_id": "t1",
+            "draw_id": "draw-private-id",
+            "team_number": 4,
+            "player1_id": 13,
+        }
+    )
+    storage["tournament_games"] = [
+        storage["tournament_games"][0],
+        {
+            "id": "game-private-b-d",
+            "tournament_id": "t1",
+            "draw_id": "draw-private-id",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-private-b",
+            "team_b_id": "team-private-d",
+            "score_a": 11,
+            "score_b": 0,
+            "winner_team_id": "team-private-b",
+            "finalized_at": "2026-09-01T17:00:00Z",
+        },
+        {
+            "id": "game-private-c-d",
+            "tournament_id": "t1",
+            "draw_id": "draw-private-id",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-private-c",
+            "team_b_id": "team-private-d",
+            "score_a": 11,
+            "score_b": 7,
+            "winner_team_id": "team-private-c",
+            "finalized_at": "2026-09-01T18:00:00Z",
+        },
+        {
+            "id": "game-private-a-c-draft",
+            "tournament_id": "t1",
+            "draw_id": "draw-private-id",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-private-a",
+            "team_b_id": "team-private-c",
+            "score_a": 76,
+            "score_b": 0,
+            "winner_team_id": "team-private-a",
+            "finalized_at": None,
+        },
+        {
+            "id": "game-private-b-c-draft",
+            "tournament_id": "t1",
+            "draw_id": "draw-private-id",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-private-b",
+            "team_b_id": "team-private-c",
+            "score_a": 75,
+            "score_b": 0,
+            "winner_team_id": "team-private-b",
+            "finalized_at": None,
+        },
+    ]
+
+    draw = build_public_tournament_results(
+        FakeSupabase(storage), club_id="club-1", tournament_id="t1"
+    )["draws"][0]
+
+    assert draw["round_robin_complete"] is False
+    assert [row["team_name"] for row in draw["standings"][:3]] == [
+        "Blair Backhand",
+        "Casey Counter",
+        "Alex Ace",
+    ]
+    explanation = draw["tiebreak_explanations"][0]
+    assert explanation["title"] == "Three-way tie at 1 wins"
+    assert explanation["summary"] == (
+        "A complete head-to-head comparison was unavailable, so point "
+        "differential completed the order: Blair Backhand \u2192 Casey Counter "
+        "\u2192 Alex Ace."
+    )
+    assert explanation["steps"][0]["detail"] == (
+        "Available head-to-head records: Alex Ace 1\u20130; Blair Backhand 0\u20131; "
+        "Casey Counter 0\u20130. The complete comparison was unavailable because "
+        "these matchups had no scored result: Alex Ace vs Casey Counter and "
+        "Blair Backhand vs Casey Counter. Head-to-head was not applied."
+    )
+    serialized = json.dumps(draw)
+    standings_by_name = {row["team_name"]: row for row in draw["standings"]}
+    assert standings_by_name["Alex Ace"]["points_for"] == 11
+    assert standings_by_name["Alex Ace"]["points_against"] == 9
+    assert standings_by_name["Blair Backhand"]["points_for"] == 20
+    assert standings_by_name["Blair Backhand"]["points_against"] == 11
+    assert standings_by_name["Casey Counter"]["points_for"] == 11
+    assert standings_by_name["Casey Counter"]["points_against"] == 7
+    assert len(draw["scores"]) == 3
+    assert "game-private-a-c-draft" not in serialized
+    assert "game-private-b-c-draft" not in serialized
+    assert "team-private-d" not in serialized
+
+
+def test_round_robin_completion_suppresses_unstarted_ties_and_resolves_retirement() -> None:
+    unstarted = _results_storage()
+    round_robin = unstarted["tournament_games"][0]
+    round_robin.update(
+        {
+            "score_a": None,
+            "score_b": None,
+            "winner_team_id": None,
+            "finalized_at": None,
+        }
+    )
+
+    unstarted_draw = build_public_tournament_results(
+        FakeSupabase(unstarted), club_id="club-1", tournament_id="t1"
+    )["draws"][0]
+    assert unstarted_draw["round_robin_complete"] is False
+    assert unstarted_draw["tiebreak_explanations"] == []
+
+    retired = deepcopy(unstarted)
+    retired["tournament_teams"][1].update(
+        {
+            "competition_status": "RETIRED",
+            "retirement_max_score": 15,
+        }
+    )
+    retired_draw = build_public_tournament_results(
+        FakeSupabase(retired), club_id="club-1", tournament_id="t1"
+    )["draws"][0]
+    assert retired_draw["round_robin_complete"] is True
+    assert retired_draw["standings"][0]["wins"] == 1
+    assert retired_draw["standings"][0]["points_for"] == 15
+    assert retired_draw["standings"][1]["retired"] is True
+    assert retired_draw["standings"][1]["points_against"] == 15
+    assert retired_draw["tiebreak_explanations"] == []
 
 
 require_api_dependency("fastapi")

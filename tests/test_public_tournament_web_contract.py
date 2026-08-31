@@ -41,8 +41,41 @@ def test_standard_results_page_renders_all_patron_result_surfaces() -> None:
     assert 'active="results"' in page
     assert "public_game_key" in api
     assert "public_draw_key" in api
+    assert "PublicTournamentTiebreakExplanation" in api
+    assert "tiebreak_explanations?: PublicTournamentTiebreakExplanation[]" in api
+    assert "round_robin_complete?: boolean" in api
+    assert "ranking_policy?:" in api
+    assert "description?: string | null" in api
+    assert "criteria?: string[]" in api
+    assert "retired_teams_eligible?: boolean" in api
+    assert "team_ids" not in api
+    assert "final_team_ids" not in api
     assert "admin_notes" not in api
     assert "email" not in api
+
+
+def test_public_tiebreak_explanation_is_compact_collapsed_and_server_authored() -> None:
+    page = read("app/clubs/[clubSlug]/tournament-results/page.tsx")
+
+    assert 'data-testid="public-tiebreak-explanation"' in page
+    assert "How tied teams were ranked" in page
+    assert "<details" in page
+    assert "<summary" in page
+    assert "<details open" not in page
+    assert "explanation.title" in page
+    assert "explanation.summary" in page
+    assert "step.detail" in page
+    assert "tiebreakCriterionLabel" in page
+    assert "tiebreakOutcomeLabel" in page
+    assert 'tiebreakOutcomeLabel(step.outcome, step.detail)' in page
+    assert 'aria-label={`How tied teams were ranked in ${draw.name}`}' in page
+    assert 'aria-label={`Tie-break steps for ${explanation.title} in ${draw.name}`}' in page
+    assert "rankingPolicyDescription" in page
+    assert "rankingCriteria.map(tiebreakCriterionLabel)" in page
+    assert "Final round-robin order." in page
+    assert "Provisional — this order may change until round-robin play is complete." in page
+    assert page.index("<table") < page.index("<details")
+    assert page.index("<details") < page.index("Playoff bracket")
 
 
 def test_current_public_draws_render_as_url_backed_tabs() -> None:

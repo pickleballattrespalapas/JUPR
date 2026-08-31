@@ -10,7 +10,11 @@ from jupr_app.domain.tournament_registration_repo import (
 from jupr_app.domain.tournament_public_references import (
     build_public_tournament_reference,
 )
-from jupr_app.domain.tournaments import compute_round_robin_standings
+from jupr_app.domain.tournaments import compute_round_robin_standings_with_tiebreaks
+from jupr_app.services.tournament_round_robin_tiebreak_service import (
+    build_round_robin_tiebreak_explanations,
+    round_robin_ranking_policy,
+)
 
 
 MEDAL_LABELS = {1: "Gold", 2: "Silver", 3: "Bronze"}
@@ -162,6 +166,25 @@ def _draw_public_state(games: list[dict[str, Any]], podium: list[dict[str, Any]]
     return "READY"
 
 
+def _round_robin_game_is_resolved(
+    game: dict[str, Any],
+    *,
+    retired_team_ids: set[str],
+) -> bool:
+    """Keep draft scores private while retaining retirement standings overrides."""
+
+    if _game_public_state(game) == "FINAL":
+        return True
+    return bool(
+        retired_team_ids.intersection(
+            {
+                str(game.get("team_a_id") or ""),
+                str(game.get("team_b_id") or ""),
+            }
+        )
+    )
+
+
 def build_public_tournament_results(
     supabase: Any,
     *,
@@ -255,6 +278,31 @@ def build_public_tournament_results(
             for row in draw_games
             if str(row.get("stage") or "").upper() == "ROUND_ROBIN"
         ]
+        retired_team_ids = {
+            str(row.get("id") or "")
+            for row in draw_teams
+            if str(row.get("competition_status") or "ACTIVE").upper()
+            == "RETIRED"
+        }
+        resolved_rr_games = [
+            row
+            for row in rr_games
+            if _round_robin_game_is_resolved(
+                row,
+                retired_team_ids=retired_team_ids,
+            )
+        ]
+        round_robin_result = compute_round_robin_standings_with_tiebreaks(
+            draw_teams,
+            resolved_rr_games,
+        )
+        named_standings = [
+            {
+                **row,
+                "team_name": team_names.get(str(row.get("team_id") or ""), "Team"),
+            }
+            for row in list(round_robin_result.get("standings") or [])
+        ]
         standings = [
             {
                 "public_team_key": build_public_tournament_reference(
@@ -272,8 +320,17 @@ def build_public_tournament_results(
                 "competition_status": row.get("competition_status"),
                 "retired": bool(row.get("retired")),
             }
-            for row in compute_round_robin_standings(draw_teams, rr_games)
+            for row in named_standings
         ]
+        tiebreak_explanations = (
+            build_round_robin_tiebreak_explanations(
+                list(round_robin_result.get("tiebreaks") or []),
+                named_standings,
+                resolved_rr_games,
+            )
+            if resolved_rr_games
+            else []
+        )
         public_games = [
             {
                 "public_game_key": build_public_tournament_reference(
@@ -355,6 +412,10 @@ def build_public_tournament_results(
                     for row in draw_teams
                 ],
                 "standings": standings,
+                "round_robin_complete": bool(rr_games)
+                and len(resolved_rr_games) == len(rr_games),
+                "ranking_policy": round_robin_ranking_policy(),
+                "tiebreak_explanations": tiebreak_explanations,
                 # Keep the completed-score feed and bracket mutually exclusive:
                 # playoff rows belong in the bracket (including upcoming games),
                 # while this feed is a history of finalized non-playoff results.

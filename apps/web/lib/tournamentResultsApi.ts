@@ -33,10 +33,28 @@ export type PublicTournamentGameResult = {
   finalized_at?: string | null;
 };
 
+export type PublicTournamentTiebreakExplanationStep = {
+  criterion: string;
+  outcome: string;
+  detail: string;
+};
+
+export type PublicTournamentTiebreakExplanation = {
+  title: string;
+  summary: string;
+  steps: PublicTournamentTiebreakExplanationStep[];
+};
+
 export type PublicTournamentDrawResult = {
   public_draw_key: string;
   name: string;
   state: "SCHEDULED" | "READY" | "LIVE" | "COMPLETE";
+  round_robin_complete?: boolean;
+  ranking_policy?: {
+    description?: string | null;
+    criteria?: string[];
+    retired_teams_eligible?: boolean;
+  } | null;
   event_family_label: string;
   division_name: string;
   event_type?: string | null;
@@ -63,6 +81,7 @@ export type PublicTournamentDrawResult = {
     competition_status?: string | null;
     retired?: boolean;
   }>;
+  tiebreak_explanations?: PublicTournamentTiebreakExplanation[];
   scores: PublicTournamentGameResult[];
   bracket: PublicTournamentGameResult[];
   podium: Array<{
