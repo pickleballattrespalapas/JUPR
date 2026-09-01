@@ -123,6 +123,8 @@ def apply_bulk_match_edits(
     #  - player ids for last_game_at recompute
     select_cols = [
         "id",
+        "context_type",
+        "tournament_game_id",
         "league",
         "date",
         "week_tag",
@@ -149,6 +151,21 @@ def apply_bulk_match_edits(
     missing = [mid for mid in ids if mid not in before_by_id]
     if missing:
         raise ValueError(f"Some match IDs were not found for this club_id: {missing[:10]}")
+    tournament_linked_ids = sorted(
+        mid
+        for mid, row in before_by_id.items()
+        if (
+            row.get("tournament_game_id") not in (None, "")
+            or str(row.get("context_type") or "").strip().casefold()
+            == "tournament_game"
+        )
+    )
+    if tournament_linked_ids:
+        raise ValueError(
+            "Official tournament matches cannot be edited from the generic "
+            "Match Log. Use Tournament Manager correction and recovery tools "
+            f"for match IDs {tournament_linked_ids[:10]}."
+        )
 
     affected_leagues: Set[str] = set()
     affected_players: Set[int] = set()

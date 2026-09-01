@@ -131,6 +131,65 @@ def test_reconcile_nine_team_partial_draw_preserves_finalized_game_and_adds_miss
     assert len(pairs) == 36
 
 
+def test_reconcile_counts_and_returns_parent_matchups_only_when_series_children_exist(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("JUPR_ENV", "test")
+    tables = _tables()
+    parent = tables["tournament_games"][0]
+    parent.update(
+        {
+            "scoring_format": "BEST_2_OF_3",
+            "parent_result_only": True,
+            "score_a": 2,
+            "score_b": 0,
+            "winner_team_id": parent["team_a_id"],
+            "loser_team_id": parent["team_b_id"],
+            "finalized_at": UPDATED,
+        }
+    )
+    child_ids = {"series-game-1", "series-game-2"}
+    tables["tournament_games"].extend(
+        [
+            {
+                **parent,
+                "id": child_id,
+                "stage": "SERIES_GAME",
+                "series_parent_game_id": parent["id"],
+                "series_game_number": game_number,
+                "scoring_format": "GAME_TO_11",
+                "parent_result_only": False,
+                "score_a": 11,
+                "score_b": 7 + game_number,
+                "updated_at": f"2026-08-25T12:00:0{game_number}Z",
+            }
+            for game_number, child_id in enumerate(sorted(child_ids), start=1)
+        ]
+    )
+
+    result = reconcile_admin_tournament_round_robin_games(
+        FakeSupabase(tables),
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+        actor_email="director@example.com",
+        actor_role="club_owner",
+        confirmation_text="RECONCILE GAMES",
+        expected_draw_updated_at=UPDATED,
+        expected_team_versions=_team_versions(tables),
+        allow_non_atomic_test_adapter=True,
+    )
+
+    assert result["preserved_game_count"] == 21
+    assert result["preserved_finalized_game_count"] == 1
+    assert result["inserted_game_count"] == 15
+    assert result["game_count"] == 36
+    assert len(result["games"]) == 36
+    assert not any(row.get("stage") == "SERIES_GAME" for row in result["games"])
+    assert child_ids.issubset({str(row["id"]) for row in tables["tournament_games"]})
+
+
 def test_reconcile_refuses_official_match_dependency(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
     monkeypatch.setenv("JUPR_ENV", "test")

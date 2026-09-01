@@ -145,6 +145,55 @@ def _game_public_state(game: dict[str, Any]) -> str:
     return "PENDING"
 
 
+def _is_series_game_child(game: dict[str, Any]) -> bool:
+    return bool(_text(game.get("series_parent_game_id"))) or (
+        _text(game.get("stage"), limit=40).upper() == "SERIES_GAME"
+    )
+
+
+def _series_game_scores_by_parent(
+    games: list[dict[str, Any]],
+) -> dict[str, list[dict[str, int]]]:
+    """Project finalized series children without exposing child identities."""
+
+    grouped: dict[str, dict[int, dict[str, int]]] = {}
+    for game in sorted(
+        games,
+        key=lambda row: (
+            _integer(row.get("series_game_number")) or 1_000_000,
+            str(row.get("id") or ""),
+        ),
+    ):
+        parent_id = _text(game.get("series_parent_game_id"), limit=120)
+        game_number = _integer(game.get("series_game_number"))
+        score_a = _integer(game.get("score_a"))
+        score_b = _integer(game.get("score_b"))
+        if (
+            not parent_id
+            or game_number is None
+            or game_number < 1
+            or game_number > 3
+            or score_a is None
+            or score_a < 0
+            or score_b is None
+            or score_b < 0
+            or _game_public_state(game) != "FINAL"
+        ):
+            continue
+        grouped.setdefault(parent_id, {}).setdefault(
+            game_number,
+            {
+                "game_number": game_number,
+                "score_a": score_a,
+                "score_b": score_b,
+            },
+        )
+    return {
+        parent_id: [scores[number] for number in sorted(scores)]
+        for parent_id, scores in grouped.items()
+    }
+
+
 def _non_played_outcome_label(game: dict[str, Any]) -> str | None:
     raw = _text(
         game.get("outcome_type")
@@ -267,6 +316,8 @@ def build_public_tournament_results(
             key=lambda row: (_integer(row.get("team_number")) or 0, str(row.get("id") or "")),
         )
         draw_games = [row for row in games if str(row.get("draw_id") or "") == draw_id]
+        series_game_scores = _series_game_scores_by_parent(draw_games)
+        matchup_games = [row for row in draw_games if not _is_series_game_child(row)]
         draw_podium = [
             row for row in podium_rows if str(row.get("draw_id") or "") == draw_id
         ]
@@ -275,7 +326,7 @@ def build_public_tournament_results(
         }
         rr_games = [
             row
-            for row in draw_games
+            for row in matchup_games
             if str(row.get("stage") or "").upper() == "ROUND_ROBIN"
         ]
         retired_team_ids = {
@@ -356,9 +407,14 @@ def build_public_tournament_results(
                 "outcome_label": _non_played_outcome_label(row),
                 "state": _game_public_state(row),
                 "finalized_at": _json_safe(row.get("finalized_at")),
+                "game_scores": (
+                    series_game_scores.get(str(row.get("id") or ""), [])
+                    if _game_public_state(row) == "FINAL"
+                    else []
+                ),
             }
             for row in sorted(
-                draw_games,
+                matchup_games,
                 key=lambda row: (
                     0 if str(row.get("stage") or "").upper() == "ROUND_ROBIN" else 1,
                     _integer(row.get("rr_round_number")) or 0,
@@ -382,7 +438,7 @@ def build_public_tournament_results(
                     source_id=draw_id,
                 ),
                 "name": _text(draw.get("name") or "Tournament draw"),
-                "state": _draw_public_state(draw_games, draw_podium),
+                "state": _draw_public_state(matchup_games, draw_podium),
                 "event_family_label": _text(event.get("event_family_label") or "Event"),
                 "division_name": _text(event.get("division_name") or event.get("label") or "Division"),
                 "event_type": _text(event.get("event_type"), limit=40),

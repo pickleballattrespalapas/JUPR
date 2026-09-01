@@ -49,6 +49,19 @@ export type AdminTournamentDaySide = {
   competition_status?: "ACTIVE" | "RETIRED";
 };
 
+export type AdminTournamentDayGameScoreInput = {
+  game_number: 1 | 2 | 3;
+  score_a: number;
+  score_b: number;
+};
+
+export type AdminTournamentDayGameScore = AdminTournamentDayGameScoreInput & {
+  id?: string | null;
+  winner_team_id?: string | null;
+  score_review?: Record<string, unknown>;
+  updated_at?: string | null;
+};
+
 export type AdminTournamentDayGame = {
   id: string;
   draw_id: string;
@@ -63,10 +76,14 @@ export type AdminTournamentDayGame = {
   team_b: AdminTournamentDaySide;
   score_a?: number | null;
   score_b?: number | null;
+  game_scores?: AdminTournamentDayGameScore[];
   scoring: {
     format?: "GAME_TO_11" | "GAME_TO_15" | "GAME_TO_21" | "BEST_2_OF_3" | null;
     target?: number | null;
     win_by_two?: boolean | null;
+    individual_game_format?: "GAME_TO_11" | "GAME_TO_15" | "GAME_TO_21" | null;
+    individual_game_target?: number | null;
+    individual_game_win_by_two?: boolean | null;
     best_of_three_score_semantics?: string | null;
     blocker?: string | null;
   };
@@ -361,6 +378,7 @@ export type AdminTournamentDayCommandPayload = {
   court_id?: string;
   score_a?: number;
   score_b?: number;
+  game_scores?: AdminTournamentDayGameScoreInput[];
   unusual_score_acknowledgement?: boolean;
   result_type?: "FORFEIT" | "NO_SHOW" | "RETIREMENT";
   non_playing_team_id?: string;

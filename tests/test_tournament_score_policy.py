@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from jupr_app.domain.tournaments.score_policy import (
+    require_best_of_three_game_scores,
     require_tournament_score,
     resolve_tournament_scoring_format,
     review_tournament_score,
@@ -52,3 +53,69 @@ def test_scoring_override_wins_over_event_default():
 def test_best_of_three_semantics_are_games_won_not_points():
     with pytest.raises(ValueError, match="games won"):
         require_tournament_score(11, 7, scoring_format="BEST_2_OF_3")
+
+
+@pytest.mark.parametrize(
+    ("game_scores", "expected_series"),
+    [
+        (
+            [
+                {"game_number": 1, "score_a": 11, "score_b": 7},
+                {"game_number": 2, "score_a": 15, "score_b": 13},
+            ],
+            (2, 0),
+        ),
+        (
+            [
+                {"game_number": 1, "score_a": 11, "score_b": 8},
+                {"game_number": 2, "score_a": 7, "score_b": 11},
+                {"game_number": 3, "score_a": 12, "score_b": 10},
+            ],
+            (2, 1),
+        ),
+    ],
+)
+def test_best_of_three_preserves_and_derives_individual_games(
+    game_scores, expected_series
+):
+    review = require_best_of_three_game_scores(game_scores)
+
+    assert (review["score_a"], review["score_b"]) == expected_series
+    assert review["individual_game_format"] == "GAME_TO_11"
+    assert [row["game_number"] for row in review["game_scores"]] == list(
+        range(1, len(game_scores) + 1)
+    )
+
+
+@pytest.mark.parametrize(
+    ("game_scores", "message"),
+    [
+        (
+            [
+                {"game_number": 1, "score_a": 11, "score_b": 8},
+                {"game_number": 2, "score_a": 7, "score_b": 11},
+            ],
+            "deciding third game",
+        ),
+        (
+            [
+                {"game_number": 1, "score_a": 11, "score_b": 8},
+                {"game_number": 2, "score_a": 11, "score_b": 7},
+                {"game_number": 3, "score_a": 11, "score_b": 9},
+            ],
+            "cannot be recorded",
+        ),
+        (
+            [
+                {"game_number": 1, "score_a": 11, "score_b": 10},
+                {"game_number": 2, "score_a": 11, "score_b": 7},
+            ],
+            "two-point winning margin",
+        ),
+    ],
+)
+def test_best_of_three_rejects_incomplete_or_impossible_game_rows(
+    game_scores, message
+):
+    with pytest.raises(ValueError, match=message):
+        require_best_of_three_game_scores(game_scores)

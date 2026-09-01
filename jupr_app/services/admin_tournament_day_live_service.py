@@ -25,8 +25,10 @@ from jupr_app.domain.tournaments import (
     resolve_playoff_dependencies,
 )
 from jupr_app.domain.tournaments.score_policy import (
+    BEST_OF_THREE_GAME_FORMAT,
     GAME_TARGETS,
     SUPPORTED_SCORING_FORMATS,
+    require_best_of_three_game_scores,
     require_tournament_score,
     resolve_tournament_scoring_format,
 )
@@ -219,6 +221,9 @@ def _game_scoring(
             "format": None,
             "target": None,
             "win_by_two": None,
+            "individual_game_format": None,
+            "individual_game_target": None,
+            "individual_game_win_by_two": None,
             "best_of_three_score_semantics": None,
             "blocker": str(exc),
         }
@@ -226,8 +231,21 @@ def _game_scoring(
         "format": format_code,
         "target": GAME_TARGETS.get(format_code, 2),
         "win_by_two": format_code != "BEST_2_OF_3",
+        "individual_game_format": (
+            BEST_OF_THREE_GAME_FORMAT if format_code == "BEST_2_OF_3" else None
+        ),
+        "individual_game_target": (
+            GAME_TARGETS[BEST_OF_THREE_GAME_FORMAT]
+            if format_code == "BEST_2_OF_3"
+            else None
+        ),
+        "individual_game_win_by_two": (
+            True if format_code == "BEST_2_OF_3" else None
+        ),
         "best_of_three_score_semantics": (
-            "games_won_2_0_or_2_1" if format_code == "BEST_2_OF_3" else None
+            "individual_game_points_with_derived_series_result"
+            if format_code == "BEST_2_OF_3"
+            else None
         ),
         "blocker": None,
     }
@@ -239,6 +257,8 @@ def _score_review(
     score_b: int,
     *,
     acknowledged: bool,
+    game_scores: Any = None,
+    synthetic_non_play: bool = False,
 ) -> dict[str, Any]:
     scoring = dict(game.get("scoring") or {})
     # Compatibility for retained commands/snapshots created before scoring
@@ -251,12 +271,106 @@ def _score_review(
         if "scoring" in game
         else "GAME_TO_11"
     )
+    if format_code == "BEST_2_OF_3":
+        if synthetic_non_play:
+            if game_scores not in (None, []):
+                raise ValueError(
+                    "A non-played best-of-three result cannot include played game scores."
+                )
+            return require_tournament_score(
+                score_a,
+                score_b,
+                scoring_format=format_code,
+                unusual_score_acknowledged=acknowledged,
+            )
+        review = require_best_of_three_game_scores(
+            game_scores,
+            unusual_score_acknowledged=acknowledged,
+        )
+        if int(review["score_a"]) != int(score_a) or int(review["score_b"]) != int(
+            score_b
+        ):
+            raise ValueError(
+                "The submitted series result does not match the individual game scores."
+            )
+        return review
+    if game_scores not in (None, []):
+        raise ValueError(
+            "Individual game rows are only accepted for a Best 2 of 3 matchup."
+        )
     return require_tournament_score(
         score_a,
         score_b,
         scoring_format=format_code,
         unusual_score_acknowledged=acknowledged,
     )
+
+
+def _require_incomplete_best_of_three_game_scores(
+    game_scores: Any,
+    *,
+    unusual_score_acknowledged: bool = False,
+) -> list[dict[str, Any]]:
+    """Normalize real games completed before a best-of-three retirement.
+
+    A retirement can interrupt a series after either one game or two split
+    games. Once either side has two wins, the series is a played result and
+    must use the ordinary score command instead of the non-play command.
+    """
+
+    if not isinstance(game_scores, list) or len(game_scores) not in {1, 2}:
+        raise ValueError(
+            "A mid-series Best 2 of 3 retirement requires one completed game "
+            "or two split completed games."
+        )
+
+    normalized: list[dict[str, Any]] = []
+    wins_a = 0
+    wins_b = 0
+    for expected_number, raw in enumerate(game_scores, start=1):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Game {expected_number} must include both team scores.")
+        try:
+            game_number = int(raw.get("game_number"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Game {expected_number} must use its consecutive game number."
+            ) from exc
+        if game_number != expected_number:
+            raise ValueError(
+                "Best-of-three game numbers must be consecutive starting at 1."
+            )
+        try:
+            game_review = require_tournament_score(
+                raw.get("score_a"),
+                raw.get("score_b"),
+                scoring_format=BEST_OF_THREE_GAME_FORMAT,
+                unusual_score_acknowledged=unusual_score_acknowledged,
+            )
+        except ValueError as exc:
+            raise ValueError(f"Game {game_number}: {exc}") from exc
+
+        score_a = int(game_review["score_a"])
+        score_b = int(game_review["score_b"])
+        if score_a > score_b:
+            wins_a += 1
+        else:
+            wins_b += 1
+        normalized.append(
+            {
+                "game_number": game_number,
+                "score_a": score_a,
+                "score_b": score_b,
+                "score_review": game_review,
+            }
+        )
+
+    if max(wins_a, wins_b) >= 2:
+        raise ValueError(
+            "A team already won two games, so this Best 2 of 3 is complete and "
+            "must be recorded as a played result."
+        )
+    return normalized
 
 
 def _blocker(code: str, message: str, **extra: Any) -> dict[str, Any]:
@@ -670,7 +784,7 @@ def build_admin_tournament_day_live_snapshot(
         and _text(row.get("draw_id")) in draw_ids
     ]
     teams_by_id = {_text(row.get("id")): row for row in teams}
-    all_draw_games = sorted(
+    all_stored_draw_games = sorted(
         [
             row
             for row in (
@@ -690,6 +804,32 @@ def build_admin_tournament_day_live_snapshot(
         ],
         key=_game_sort_key,
     )
+    series_game_rows = [
+        row
+        for row in all_stored_draw_games
+        if _text(row.get("stage")).upper() == "SERIES_GAME"
+        and _text(row.get("series_parent_game_id"))
+    ]
+    all_draw_games = [
+        row
+        for row in all_stored_draw_games
+        if not (
+            _text(row.get("stage")).upper() == "SERIES_GAME"
+            and _text(row.get("series_parent_game_id"))
+        )
+    ]
+    series_games_by_parent: dict[str, list[dict[str, Any]]] = {}
+    for row in series_game_rows:
+        series_games_by_parent.setdefault(
+            _text(row.get("series_parent_game_id")), []
+        ).append(row)
+    for rows in series_games_by_parent.values():
+        rows.sort(
+            key=lambda row: (
+                _safe_int(row.get("series_game_number"), 1_000_000),
+                _text(row.get("id")),
+            )
+        )
     games = [
         row
         for row in all_draw_games
@@ -702,7 +842,11 @@ def build_admin_tournament_day_live_snapshot(
         )
     ]
     game_ids = sorted(
-        {_text(row.get("id")) for row in all_draw_games if _text(row.get("id"))}
+        {
+            _text(row.get("id"))
+            for row in all_stored_draw_games
+            if _text(row.get("id"))
+        }
     )
     published_matches = [
         row
@@ -721,7 +865,8 @@ def build_admin_tournament_day_live_snapshot(
         _text(row.get("tournament_game_id")) for row in published_matches
     }
     draw_by_game_id = {
-        _text(row.get("id")): _text(row.get("draw_id")) for row in all_draw_games
+        _text(row.get("id")): _text(row.get("draw_id"))
+        for row in all_stored_draw_games
     }
     published_draw_ids = {
         draw_by_game_id[game_id]
@@ -1143,6 +1288,25 @@ def build_admin_tournament_day_live_snapshot(
                 "team_b": _side(team_b, players),
                 "score_a": _safe_int(game.get("score_a")),
                 "score_b": _safe_int(game.get("score_b")),
+                "game_scores": [
+                    {
+                        "id": _text(series_game.get("id")) or None,
+                        "game_number": _safe_int(
+                            series_game.get("series_game_number")
+                        ),
+                        "score_a": _safe_int(series_game.get("score_a")),
+                        "score_b": _safe_int(series_game.get("score_b")),
+                        "winner_team_id": _text(
+                            series_game.get("winner_team_id")
+                        )
+                        or None,
+                        "score_review": dict(
+                            series_game.get("score_review_json") or {}
+                        ),
+                        "updated_at": series_game.get("updated_at"),
+                    }
+                    for series_game in series_games_by_parent.get(game_id, [])
+                ],
                 "scoring_format": _text(game.get("scoring_format")).upper()
                 or None,
                 "scoring": scoring,
@@ -1196,6 +1360,11 @@ def build_admin_tournament_day_live_snapshot(
         day_draw = day_draw_by_draw.get(draw_id)
         activation_state = _text((day_draw or {}).get("state") or "INACTIVE").upper()
         draw_games = [row for row in games if _text(row.get("draw_id")) == draw_id]
+        stored_draw_games = [
+            row
+            for row in all_stored_draw_games
+            if _text(row.get("draw_id")) == draw_id
+        ]
         foreign_day_games = [
             row
             for row in all_draw_games
@@ -1653,7 +1822,7 @@ def build_admin_tournament_day_live_snapshot(
         review_fingerprint = build_admin_tournament_podium_review_fingerprint(
             draw=draw,
             teams=draw_teams,
-            games=draw_games,
+            games=stored_draw_games,
             podium=draw_podium,
         )
         podium_review = find_current_admin_tournament_podium_review(
@@ -1787,7 +1956,13 @@ def build_admin_tournament_day_live_snapshot(
                     key=lambda row: (row.get("team_number") or 1_000_000, row["id"]),
                 ),
                 "source_game_versions": sorted(
-                    [{"id": _text(row.get("id")), "updated_at": _text(row.get("updated_at"))} for row in draw_games],
+                    [
+                        {
+                            "id": _text(row.get("id")),
+                            "updated_at": _text(row.get("updated_at")),
+                        }
+                        for row in stored_draw_games
+                    ],
                     key=lambda row: row["id"],
                 ),
                 "readiness": {
@@ -2251,6 +2426,20 @@ def build_admin_tournament_day_live_snapshot(
             }
             for row in games
         ],
+        "series_games": [
+            {
+                "id": row.get("id"),
+                "series_parent_game_id": row.get("series_parent_game_id"),
+                "series_game_number": row.get("series_game_number"),
+                "score_a": row.get("score_a"),
+                "score_b": row.get("score_b"),
+                "winner_team_id": row.get("winner_team_id"),
+                "loser_team_id": row.get("loser_team_id"),
+                "score_review_json": row.get("score_review_json") or {},
+                "updated_at": row.get("updated_at"),
+            }
+            for row in series_game_rows
+        ],
         "official_matches": [
             {
                 "id": row.get("id"),
@@ -2517,8 +2706,18 @@ def _normalize_request(request: dict[str, Any]) -> tuple[str, str, str, dict[str
         "game_id", "score_a", "score_b"
     }:
         payload["unusual_score_acknowledgement"] = False
+    if action in {"score_and_release", "correct_completed_score"} and set(payload) == {
+        "game_id", "score_a", "score_b", "game_scores"
+    }:
+        payload["unusual_score_acknowledgement"] = False
     if action == "record_non_played_result" and "result_note" not in payload:
         payload["result_note"] = ""
+    if (
+        action == "record_non_played_result"
+        and "game_scores" in payload
+        and "unusual_score_acknowledgement" not in payload
+    ):
+        payload["unusual_score_acknowledgement"] = False
     payload_keys = {
         "activate_day": set(),
         "auto_fill_courts": set(),
@@ -2543,6 +2742,16 @@ def _normalize_request(request: dict[str, Any]) -> tuple[str, str, str, dict[str
         },
     }[action]
     accepted_payload_keys = [payload_keys]
+    if action in {"score_and_release", "correct_completed_score"}:
+        accepted_payload_keys.append({*payload_keys, "game_scores"})
+    if action == "record_non_played_result":
+        accepted_payload_keys.append(
+            {
+                *payload_keys,
+                "game_scores",
+                "unusual_score_acknowledgement",
+            }
+        )
     if action == "generate_playoffs":
         accepted_payload_keys.append(
             {"draw_id", "advance_count", "playoff_configuration"}
@@ -2891,6 +3100,7 @@ def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], 
             score_a,
             score_b,
             acknowledged=payload.get("unusual_score_acknowledgement") is True,
+            game_scores=payload.get("game_scores"),
         )
         if action == "correct_completed_score":
             if not game.get("correction_readiness", {}).get("ready"):
@@ -2948,6 +3158,23 @@ def _preflight(snapshot: dict[str, Any], action: str, expected: dict[str, Any], 
         result_type = _text(payload.get("result_type")).upper()
         if result_type not in NON_PLAYED_RESULT_TYPES:
             raise ValueError("Choose forfeit, no-show, or retirement.")
+        if "game_scores" in payload:
+            if result_type != "RETIREMENT":
+                raise ValueError(
+                    "Completed individual games can only be preserved for a "
+                    "Best 2 of 3 retirement."
+                )
+            if _text((game.get("scoring") or {}).get("format")).upper() != "BEST_2_OF_3":
+                raise ValueError(
+                    "Completed individual games are only accepted for a Best 2 "
+                    "of 3 matchup."
+                )
+            _require_incomplete_best_of_three_game_scores(
+                payload.get("game_scores"),
+                unusual_score_acknowledged=(
+                    payload.get("unusual_score_acknowledgement") is True
+                ),
+            )
         team_ids = {
             _text((game.get("team_a") or {}).get("team_id")),
             _text((game.get("team_b") or {}).get("team_id")),
@@ -3110,20 +3337,27 @@ def _playoff_rows(
 
 
 def _score_evidence(
-    snapshot: dict[str, Any], payload: dict[str, Any]
+    snapshot: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    synthetic_non_play: bool = False,
 ) -> dict[str, Any]:
     game_id = _text(payload.get("game_id"))
     game = _selected_game(snapshot, game_id) or {}
     team_a_id = _text(game.get("team_a_id") or (game.get("team_a") or {}).get("team_id"))
     team_b_id = _text(game.get("team_b_id") or (game.get("team_b") or {}).get("team_id"))
-    score_a = int(payload["score_a"])
-    score_b = int(payload["score_b"])
+    submitted_score_a = int(payload["score_a"])
+    submitted_score_b = int(payload["score_b"])
     score_review = _score_review(
         game,
-        score_a,
-        score_b,
+        submitted_score_a,
+        submitted_score_b,
         acknowledged=payload.get("unusual_score_acknowledgement") is True,
+        game_scores=payload.get("game_scores"),
+        synthetic_non_play=synthetic_non_play,
     )
+    score_a = int(score_review["score_a"])
+    score_b = int(score_review["score_b"])
     raw_game = {
         "id": game_id,
         "team_a_id": team_a_id or None,
@@ -3232,6 +3466,7 @@ def _non_played_evidence(
 ) -> dict[str, Any]:
     game = _selected_game(snapshot, _text(payload.get("game_id"))) or {}
     scoring = dict(game.get("scoring") or {})
+    result_type = _text(payload.get("result_type")).upper()
     game_target = _safe_int(scoring.get("target"))
     if game_target is None or game_target <= 0:
         raise ValueError(
@@ -3249,11 +3484,37 @@ def _non_played_evidence(
         "score_b": 0 if winner_team_id == team_a_id else game_target,
         "unusual_score_acknowledgement": False,
     }
-    score_evidence = _score_evidence(snapshot, score_payload)
+    score_evidence = _score_evidence(
+        snapshot,
+        score_payload,
+        synthetic_non_play=True,
+    )
+    if "game_scores" in payload:
+        if result_type != "RETIREMENT":
+            raise ValueError(
+                "Completed individual games can only be preserved for a Best 2 "
+                "of 3 retirement."
+            )
+        if _text(scoring.get("format")).upper() != "BEST_2_OF_3":
+            raise ValueError(
+                "Completed individual games are only accepted for a Best 2 of 3 "
+                "matchup."
+            )
+        completed_games = _require_incomplete_best_of_three_game_scores(
+            payload.get("game_scores"),
+            unusual_score_acknowledged=(
+                payload.get("unusual_score_acknowledgement") is True
+            ),
+        )
+        score_evidence["score_review"] = {
+            **dict(score_evidence.get("score_review") or {}),
+            "retirement_completed_games_preserved": True,
+            "game_scores": completed_games,
+        }
     result = {
         **score_evidence,
         "outcome": {
-            "result_type": _text(payload.get("result_type")).upper(),
+            "result_type": result_type,
             "non_playing_team_id": non_playing_team_id,
             "winner_team_id": winner_team_id,
             "result_note": _text(payload.get("result_note")),
@@ -3262,7 +3523,7 @@ def _non_played_evidence(
             "rating_publish_eligible": False,
         },
     }
-    if _text(payload.get("result_type")).upper() == "RETIREMENT":
+    if result_type == "RETIREMENT":
         draw = _selected_draw(snapshot, _text(game.get("draw_id")))
         retiring_team = next(
             (
@@ -3318,7 +3579,16 @@ def _operation_payload_base(action: str, expected: dict[str, Any], payload: dict
             "unusual_score_acknowledgement": command_payload.pop(
                 "unusual_score_acknowledgement", False
             )
-            is True
+            is True,
+            "game_scores": list(command_payload.pop("game_scores", []) or []),
+        }
+    elif action == "record_non_played_result" and "game_scores" in command_payload:
+        operator_review = {
+            "unusual_score_acknowledgement": command_payload.pop(
+                "unusual_score_acknowledgement", False
+            )
+            is True,
+            "game_scores": list(command_payload.pop("game_scores") or []),
         }
     playoff_configuration: dict[str, Any] | None = None
     if action == "generate_playoffs" and "playoff_configuration" in command_payload:

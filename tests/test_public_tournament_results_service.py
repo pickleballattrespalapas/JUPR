@@ -318,6 +318,105 @@ def test_standard_results_include_multi_day_scores_bracket_standings_and_medals(
         assert private_value not in serialized
 
 
+def test_best_of_three_children_are_nested_in_parent_results_without_leaking() -> None:
+    storage = _results_storage()
+    round_robin = storage["tournament_games"][0]
+    playoff = storage["tournament_games"][1]
+    round_robin.update(
+        {
+            "score_a": 2,
+            "score_b": 0,
+            "scoring_format": "BEST_2_OF_3",
+        }
+    )
+    playoff.update(
+        {
+            "score_a": 2,
+            "score_b": 1,
+            "winner_team_id": "team-private-a",
+            "outcome_type": None,
+            "scoring_format": "BEST_2_OF_3",
+        }
+    )
+
+    def series_game(
+        child_id: str,
+        parent_id: str,
+        game_number: int,
+        score_a: int,
+        score_b: int,
+        *,
+        finalized: bool = True,
+    ) -> dict:
+        return {
+            "id": child_id,
+            "tournament_id": "t1",
+            "draw_id": "draw-private-id",
+            "stage": "SERIES_GAME",
+            "series_parent_game_id": parent_id,
+            "series_game_number": game_number,
+            "team_a_id": "team-private-a",
+            "team_b_id": "team-private-b",
+            "score_a": score_a,
+            "score_b": score_b,
+            "winner_team_id": (
+                "team-private-a" if score_a > score_b else "team-private-b"
+            ),
+            "finalized_at": "2026-09-02T16:00:00Z" if finalized else None,
+            "admin_notes": f"private child note {child_id}",
+        }
+
+    # Deliberately store children out of order. The unfinished third RR game
+    # must remain private just like every other draft score.
+    storage["tournament_games"].extend(
+        [
+            series_game("private-playoff-game-3", playoff["id"], 3, 11, 8),
+            series_game("private-rr-game-2", round_robin["id"], 2, 11, 5),
+            series_game("private-playoff-game-1", playoff["id"], 1, 11, 7),
+            series_game("private-rr-game-1", round_robin["id"], 1, 11, 9),
+            series_game("private-playoff-game-2", playoff["id"], 2, 8, 11),
+            series_game(
+                "private-rr-draft-game-3",
+                round_robin["id"],
+                3,
+                987,
+                0,
+                finalized=False,
+            ),
+        ]
+    )
+
+    draw = build_public_tournament_results(
+        FakeSupabase(storage), club_id="club-1", tournament_id="t1"
+    )["draws"][0]
+
+    assert draw["state"] == "COMPLETE"
+    assert draw["round_robin_complete"] is True
+    assert len(draw["scores"]) == 1
+    assert len(draw["bracket"]) == 1
+    assert draw["scores"][0]["stage"] == "ROUND_ROBIN"
+    assert draw["scores"][0]["score_a"] == 2
+    assert draw["scores"][0]["score_b"] == 0
+    assert draw["scores"][0]["game_scores"] == [
+        {"game_number": 1, "score_a": 11, "score_b": 9},
+        {"game_number": 2, "score_a": 11, "score_b": 5},
+    ]
+    assert draw["bracket"][0]["stage"] == "PLAYOFF"
+    assert draw["bracket"][0]["score_a"] == 2
+    assert draw["bracket"][0]["score_b"] == 1
+    assert draw["bracket"][0]["game_scores"] == [
+        {"game_number": 1, "score_a": 11, "score_b": 7},
+        {"game_number": 2, "score_a": 8, "score_b": 11},
+        {"game_number": 3, "score_a": 11, "score_b": 8},
+    ]
+
+    serialized = json.dumps(draw)
+    assert "SERIES_GAME" not in serialized
+    assert "private-playoff-game-1" not in serialized
+    assert "private child note" not in serialized
+    assert "987" not in serialized
+
+
 def test_public_results_explain_three_way_cycle_through_points_scored() -> None:
     payload = build_public_tournament_results(
         FakeSupabase(_three_way_tie_storage()),

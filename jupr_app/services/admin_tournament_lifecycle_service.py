@@ -189,7 +189,540 @@ def _is_rating_publish_eligible(game: dict[str, Any]) -> bool:
     """Exclude non-played outcomes from official rating publication."""
 
     result_type = str(game.get("result_type") or "PLAYED").strip().upper()
-    return result_type == "PLAYED" and game.get("rating_publish_eligible") is not False
+    return (
+        result_type == "PLAYED"
+        and game.get("rating_publish_eligible") is not False
+        and not _enabled(game.get("parent_result_only"), default=False)
+    )
+
+
+def _tournament_game_scoring_format(game: dict[str, Any]) -> str:
+    score_review = game.get("score_review_json")
+    reviewed_format = (
+        score_review.get("scoring_format")
+        if isinstance(score_review, dict)
+        else None
+    )
+    return str(reviewed_format or game.get("scoring_format") or "").strip().upper()
+
+
+def _competition_game_sort_key(game: dict[str, Any]) -> tuple[Any, ...]:
+    stage = str(game.get("stage") or "").strip().upper()
+    stage_rank = {"ROUND_ROBIN": 0, "PLAYOFF": 1}.get(stage, 2)
+    return (
+        stage_rank,
+        int(_safe_int(game.get("rr_round_number")) or 0),
+        int(_safe_int(game.get("rr_slot_number")) or 0),
+        str(game.get("playoff_game_code") or ""),
+        str(game.get("created_at") or ""),
+        str(game.get("id") or ""),
+    )
+
+
+def _series_validation_error(
+    code: str,
+    message: str,
+    *,
+    parent_game_id: str = "",
+    child_game_id: str = "",
+) -> dict[str, str]:
+    return {
+        "code": str(code),
+        "message": str(message),
+        "parent_game_id": str(parent_game_id),
+        "child_game_id": str(child_game_id),
+    }
+
+
+def build_tournament_rating_game_plan(
+    games: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Separate competition results from canonical rating-game leaves.
+
+    A finalized best-two-of-three matchup remains one aggregate competition
+    row for standings and bracket progression.  Its finalized ``SERIES_GAME``
+    children are the only rating evidence.  A retirement may preserve one or
+    two completed children while the parent becomes a synthetic tournament
+    loss; those children remain rated but are never marked as series-clinching.
+    This validator intentionally fails closed: incomplete, orphaned, or
+    internally inconsistent series children are reported and never returned
+    as publishable rating games.
+    """
+
+    rows = [dict(row) for row in games]
+    child_rows = [
+        row
+        for row in rows
+        if str(row.get("series_parent_game_id") or "")
+        or str(row.get("stage") or "").strip().upper() == "SERIES_GAME"
+    ]
+    competition_games = [row for row in rows if row not in child_rows]
+    competition_game_ids = {
+        str(row.get("id") or "")
+        for row in competition_games
+        if str(row.get("id") or "")
+    }
+    children_by_parent: dict[str, list[dict[str, Any]]] = {}
+    errors: list[dict[str, str]] = []
+    preinvalid_parent_ids: set[str] = set()
+
+    for child in child_rows:
+        child_id = str(child.get("id") or "")
+        parent_id = str(child.get("series_parent_game_id") or "")
+        if not child_id:
+            if parent_id:
+                preinvalid_parent_ids.add(parent_id)
+            errors.append(
+                _series_validation_error(
+                    "SERIES_GAME_ID_MISSING",
+                    "A series game is missing its canonical tournament game id.",
+                    parent_game_id=parent_id,
+                )
+            )
+        if not parent_id:
+            errors.append(
+                _series_validation_error(
+                    "SERIES_GAME_PARENT_MISSING",
+                    f"Series game {child_id or '[missing id]'} has no parent matchup.",
+                    child_game_id=child_id,
+                )
+            )
+            continue
+        children_by_parent.setdefault(parent_id, []).append(child)
+
+    rating_entries: list[tuple[dict[str, Any], int, dict[str, Any]]] = []
+    invalid_parent_ids: set[str] = set()
+
+    for parent in competition_games:
+        parent_id = str(parent.get("id") or "")
+        scoring_format = _tournament_game_scoring_format(parent)
+        result_type = str(parent.get("result_type") or "PLAYED").strip().upper()
+        finalized = parent.get("finalized_at") not in (None, "")
+        parent_result_only = _enabled(
+            parent.get("parent_result_only"), default=False
+        )
+        is_finalized_best_of_three = (
+            scoring_format == "BEST_2_OF_3"
+            and result_type == "PLAYED"
+            and finalized
+        )
+        series_children = children_by_parent.get(parent_id, [])
+        parent_review = (
+            parent.get("score_review_json")
+            if isinstance(parent.get("score_review_json"), dict)
+            else {}
+        )
+        is_retirement_with_played_games = (
+            scoring_format == "BEST_2_OF_3"
+            and result_type == "RETIREMENT"
+            and finalized
+            and not parent_result_only
+            and parent_review.get("retirement_completed_games_preserved") is True
+        )
+
+        if is_finalized_best_of_three and not parent_result_only:
+            parent_score_a = _safe_int(parent.get("score_a"))
+            parent_score_b = _safe_int(parent.get("score_b"))
+            reviewed_game_scores = (
+                parent_review.get("game_scores")
+                if isinstance(parent_review, dict)
+                else None
+            )
+            looks_like_legacy_aggregate = (
+                not series_children
+                and not (
+                    isinstance(reviewed_game_scores, list)
+                    and len(reviewed_game_scores) in {2, 3}
+                )
+                and parent_score_a is not None
+                and parent_score_b is not None
+                and max(parent_score_a, parent_score_b) == 2
+                and min(parent_score_a, parent_score_b) in {0, 1}
+            )
+            if looks_like_legacy_aggregate:
+                errors.append(
+                    _series_validation_error(
+                        "BEST_OF_THREE_INDIVIDUAL_GAME_DETAIL_REQUIRED",
+                        f"Finalized best-two-of-three matchup {parent_id} stores only the aggregate series result. Its individual game scores cannot be inferred; enter or reconcile the original game-by-game scores before official rating publication.",
+                        parent_game_id=parent_id,
+                    )
+                )
+                invalid_parent_ids.add(parent_id)
+                continue
+            errors.append(
+                _series_validation_error(
+                    "BEST_OF_THREE_PARENT_NOT_AGGREGATE",
+                    f"Finalized best-two-of-three matchup {parent_id} is not marked as an aggregate-only result.",
+                    parent_game_id=parent_id,
+                )
+            )
+            invalid_parent_ids.add(parent_id)
+            continue
+        if parent_result_only and scoring_format != "BEST_2_OF_3":
+            errors.append(
+                _series_validation_error(
+                    "PARENT_RESULT_ONLY_FORMAT_INVALID",
+                    f"Aggregate-only matchup {parent_id} is not a best-two-of-three result.",
+                    parent_game_id=parent_id,
+                )
+            )
+            invalid_parent_ids.add(parent_id)
+            continue
+        if parent_result_only and not is_finalized_best_of_three:
+            errors.append(
+                _series_validation_error(
+                    "BEST_OF_THREE_PARENT_NOT_FINALIZED",
+                    f"Aggregate-only best-two-of-three matchup {parent_id} is not a finalized played result.",
+                    parent_game_id=parent_id,
+                )
+            )
+            invalid_parent_ids.add(parent_id)
+            continue
+
+        if not parent_result_only and not is_retirement_with_played_games:
+            if series_children:
+                errors.append(
+                    _series_validation_error(
+                        "SERIES_GAME_PARENT_INVALID",
+                        f"Matchup {parent_id} has series children but is not an aggregate-only best-two-of-three parent.",
+                        parent_game_id=parent_id,
+                    )
+                )
+                invalid_parent_ids.add(parent_id)
+            elif scoring_format == "BEST_2_OF_3":
+                # An unfinished series parent is operational schedule state,
+                # never a one-game rating source.  Once finalized, the branch
+                # above requires it to become aggregate-only with children.
+                continue
+            elif _is_rating_publish_eligible(parent):
+                rating_entries.append((parent, 0, parent))
+            continue
+
+        if not series_children:
+            errors.append(
+                _series_validation_error(
+                    "BEST_OF_THREE_SERIES_GAMES_MISSING",
+                    f"Finalized best-two-of-three matchup {parent_id} has no rating-game children.",
+                    parent_game_id=parent_id,
+                )
+            )
+            invalid_parent_ids.add(parent_id)
+            continue
+
+        numbered_children: list[tuple[int, dict[str, Any]]] = []
+        parent_errors_before = len(errors)
+        for child in series_children:
+            child_id = str(child.get("id") or "")
+            game_number = _safe_int(child.get("series_game_number"))
+            if (
+                str(child.get("stage") or "").strip().upper() != "SERIES_GAME"
+                or game_number is None
+                or game_number < 1
+                or game_number > 3
+            ):
+                errors.append(
+                    _series_validation_error(
+                        "SERIES_GAME_IDENTITY_INVALID",
+                        f"Series child {child_id or '[missing id]'} needs stage SERIES_GAME and a game number from 1 to 3.",
+                        parent_game_id=parent_id,
+                        child_game_id=child_id,
+                    )
+                )
+                continue
+            for field in (
+                "tournament_id",
+                "draw_id",
+                "registration_day_id",
+                "event_option_id",
+                "team_a_id",
+                "team_b_id",
+            ):
+                if str(child.get(field) or "") != str(parent.get(field) or ""):
+                    errors.append(
+                        _series_validation_error(
+                            "SERIES_GAME_SCOPE_MISMATCH",
+                            f"Series child {child_id or '[missing id]'} does not match its parent {field}.",
+                            parent_game_id=parent_id,
+                            child_game_id=child_id,
+                        )
+                    )
+                    break
+            if _tournament_game_scoring_format(child) != "GAME_TO_11":
+                errors.append(
+                    _series_validation_error(
+                        "SERIES_GAME_FORMAT_INVALID",
+                        f"Series child {child_id or '[missing id]'} must be a game to 11.",
+                        parent_game_id=parent_id,
+                        child_game_id=child_id,
+                    )
+                )
+            score_a = _safe_int(child.get("score_a"))
+            score_b = _safe_int(child.get("score_b"))
+            score_review = child.get("score_review_json")
+            if (
+                not isinstance(score_review, dict)
+                or score_review.get("accepted") is not True
+                or str(score_review.get("scoring_format") or "").strip().upper()
+                != "GAME_TO_11"
+                or _safe_int(score_review.get("score_a")) != score_a
+                or _safe_int(score_review.get("score_b")) != score_b
+            ):
+                errors.append(
+                    _series_validation_error(
+                        "SERIES_GAME_REVIEW_INVALID",
+                        f"Series child {child_id or '[missing id]'} does not have accepted score-review evidence for its stored score.",
+                        parent_game_id=parent_id,
+                        child_game_id=child_id,
+                    )
+                )
+            expected_winner = ""
+            expected_loser = ""
+            if score_a is not None and score_b is not None and score_a != score_b:
+                expected_winner = str(
+                    parent.get("team_a_id")
+                    if score_a > score_b
+                    else parent.get("team_b_id")
+                    or ""
+                )
+                expected_loser = str(
+                    parent.get("team_b_id")
+                    if score_a > score_b
+                    else parent.get("team_a_id")
+                    or ""
+                )
+            if (
+                not _is_rating_publish_eligible(child)
+                or child.get("finalized_at") in (None, "")
+                or score_a is None
+                or score_b is None
+                or score_a < 0
+                or score_b < 0
+                or score_a == score_b
+                or max(score_a, score_b) < 11
+                or abs(score_a - score_b) < 2
+                or str(child.get("winner_team_id") or "") != expected_winner
+                or str(child.get("loser_team_id") or "") != expected_loser
+            ):
+                errors.append(
+                    _series_validation_error(
+                        "SERIES_GAME_RESULT_INVALID",
+                        f"Series child {child_id or '[missing id]'} is not a finalized, non-tied played game with valid winner evidence.",
+                        parent_game_id=parent_id,
+                        child_game_id=child_id,
+                    )
+                )
+            numbered_children.append((int(game_number), child))
+
+        numbered_children.sort(
+            key=lambda item: (item[0], str(item[1].get("id") or ""))
+        )
+        numbers = [number for number, _child in numbered_children]
+        allowed_game_counts = (
+            {1, 2} if is_retirement_with_played_games else {2, 3}
+        )
+        if (
+            numbers != list(range(1, len(numbered_children) + 1))
+            or len(numbers) not in allowed_game_counts
+        ):
+            errors.append(
+                _series_validation_error(
+                    "SERIES_GAME_SEQUENCE_INVALID",
+                    (
+                        f"Retired best-two-of-three matchup {parent_id} needs one or two uniquely numbered, contiguous completed games."
+                        if is_retirement_with_played_games
+                        else f"Best-two-of-three matchup {parent_id} needs exactly two or three uniquely numbered, contiguous games."
+                    ),
+                    parent_game_id=parent_id,
+                )
+            )
+        reviewed_games = (
+            parent_review.get("game_scores")
+            if isinstance(parent_review, dict)
+            else None
+        )
+        if (
+            not isinstance(parent_review, dict)
+            or parent_review.get("accepted") is not True
+            or str(parent_review.get("scoring_format") or "").strip().upper()
+            != "BEST_2_OF_3"
+            or _safe_int(parent_review.get("score_a")) != _safe_int(parent.get("score_a"))
+            or _safe_int(parent_review.get("score_b")) != _safe_int(parent.get("score_b"))
+            or not isinstance(reviewed_games, list)
+            or len(reviewed_games) != len(numbered_children)
+            or (
+                is_retirement_with_played_games
+                and (
+                    parent_review.get("retirement_completed_games_preserved")
+                    is not True
+                    or parent_review.get("synthetic_progression_score") is not True
+                    or parent_review.get("rating_publish_eligible") is not False
+                    or str(parent_review.get("non_playing_team_id") or "")
+                    != str(parent.get("loser_team_id") or "")
+                )
+            )
+        ):
+            errors.append(
+                _series_validation_error(
+                    "BEST_OF_THREE_REVIEW_INVALID",
+                    f"Best-two-of-three matchup {parent_id} does not have accepted individual-game review evidence for its aggregate result.",
+                    parent_game_id=parent_id,
+                )
+            )
+        else:
+            for game_number, child in numbered_children:
+                reviewed_game = reviewed_games[game_number - 1]
+                if (
+                    not isinstance(reviewed_game, dict)
+                    or _safe_int(reviewed_game.get("game_number")) != game_number
+                    or _safe_int(reviewed_game.get("score_a"))
+                    != _safe_int(child.get("score_a"))
+                    or _safe_int(reviewed_game.get("score_b"))
+                    != _safe_int(child.get("score_b"))
+                    or reviewed_game.get("score_review")
+                    != child.get("score_review_json")
+                ):
+                    errors.append(
+                        _series_validation_error(
+                            "SERIES_GAME_REVIEW_MISMATCH",
+                            f"Series child {str(child.get('id') or '[missing id]')} does not match its parent review evidence.",
+                            parent_game_id=parent_id,
+                            child_game_id=str(child.get("id") or ""),
+                        )
+                    )
+
+        wins_a = 0
+        wins_b = 0
+        clinched_early = False
+        for index, (_number, child) in enumerate(numbered_children):
+            if clinched_early:
+                errors.append(
+                    _series_validation_error(
+                        "SERIES_GAME_AFTER_CLINCH",
+                        f"Best-two-of-three matchup {parent_id} contains a game after the series was clinched.",
+                        parent_game_id=parent_id,
+                        child_game_id=str(child.get("id") or ""),
+                    )
+                )
+                break
+            score_a = _safe_int(child.get("score_a"))
+            score_b = _safe_int(child.get("score_b"))
+            if score_a is not None and score_b is not None:
+                if score_a > score_b:
+                    wins_a += 1
+                elif score_b > score_a:
+                    wins_b += 1
+            clinched_early = (wins_a == 2 or wins_b == 2) and index < len(
+                numbered_children
+            ) - 1
+
+        parent_score_a = _safe_int(parent.get("score_a"))
+        parent_score_b = _safe_int(parent.get("score_b"))
+        expected_parent_winner = str(
+            parent.get("team_a_id") if wins_a > wins_b else parent.get("team_b_id") or ""
+        )
+        expected_parent_loser = str(
+            parent.get("team_b_id") if wins_a > wins_b else parent.get("team_a_id") or ""
+        )
+        if is_retirement_with_played_games:
+            non_playing_team_id = str(
+                parent_review.get("non_playing_team_id") or ""
+            )
+            parent_winner = str(parent.get("winner_team_id") or "")
+            parent_loser = str(parent.get("loser_team_id") or "")
+            parent_team_a = str(parent.get("team_a_id") or "")
+            parent_team_b = str(parent.get("team_b_id") or "")
+            retirement_invalid = (
+                max(wins_a, wins_b) >= 2
+                or parent_score_a is None
+                or parent_score_b is None
+                or parent_score_a < 0
+                or parent_score_b < 0
+                or parent_score_a == parent_score_b
+                or parent_loser != non_playing_team_id
+                or parent_loser not in {parent_team_a, parent_team_b}
+                or parent_winner not in {parent_team_a, parent_team_b}
+                or parent_winner == parent_loser
+                or (
+                    parent_score_a > parent_score_b
+                    and parent_winner != parent_team_a
+                )
+                or (
+                    parent_score_b > parent_score_a
+                    and parent_winner != parent_team_b
+                )
+            )
+        else:
+            retirement_invalid = False
+        if retirement_invalid or (
+            not is_retirement_with_played_games
+            and (
+                max(wins_a, wins_b) != 2
+                or min(wins_a, wins_b) not in {0, 1}
+                or parent_score_a != wins_a
+                or parent_score_b != wins_b
+                or str(parent.get("winner_team_id") or "")
+                != expected_parent_winner
+                or str(parent.get("loser_team_id") or "")
+                != expected_parent_loser
+            )
+        ):
+            errors.append(
+                _series_validation_error(
+                    (
+                        "RETIREMENT_SERIES_EVIDENCE_INVALID"
+                        if is_retirement_with_played_games
+                        else "BEST_OF_THREE_AGGREGATE_MISMATCH"
+                    ),
+                    (
+                        f"Retired best-two-of-three matchup {parent_id} has malformed synthetic outcome or completed-game evidence."
+                        if is_retirement_with_played_games
+                        else f"Best-two-of-three matchup {parent_id} does not match its individual game winners."
+                    ),
+                    parent_game_id=parent_id,
+                )
+            )
+
+        if len(errors) != parent_errors_before or parent_id in preinvalid_parent_ids:
+            invalid_parent_ids.add(parent_id)
+            continue
+        for index, (game_number, child) in enumerate(numbered_children):
+            rating_child = dict(child)
+            rating_child["_series_parent_game"] = dict(parent)
+            rating_child["_series_clinching"] = (
+                not is_retirement_with_played_games
+                and index == len(numbered_children) - 1
+            )
+            rating_child["_series_game_number"] = game_number
+            rating_entries.append((parent, game_number, rating_child))
+
+    for parent_id, series_children in children_by_parent.items():
+        if parent_id in competition_game_ids:
+            continue
+        for child in series_children:
+            errors.append(
+                _series_validation_error(
+                    "SERIES_GAME_PARENT_NOT_FOUND",
+                    f"Series child {str(child.get('id') or '[missing id]')} references an unknown or non-parent matchup.",
+                    parent_game_id=parent_id,
+                    child_game_id=str(child.get("id") or ""),
+                )
+            )
+
+    rating_entries.sort(
+        key=lambda item: (
+            _competition_game_sort_key(item[0]),
+            item[1],
+            str(item[2].get("id") or ""),
+        )
+    )
+    return {
+        "competition_games": sorted(
+            competition_games, key=_competition_game_sort_key
+        ),
+        "rating_games": [entry[2] for entry in rating_entries],
+        "errors": errors,
+        "invalid_parent_game_ids": sorted(invalid_parent_ids),
+    }
 
 
 def _match_exclusion_target_ids(operation: dict[str, Any]) -> set[str]:
@@ -1302,17 +1835,52 @@ def build_admin_tournament_lifecycle(
             for row in badge_rows_all
             if str(row.get("context_id") or "").startswith(context_prefix)
         ]
+        rating_game_plan = build_tournament_rating_game_plan(draw_games)
+        competition_games = list(rating_game_plan["competition_games"])
+        series_errors = list(rating_game_plan["errors"])
         draw_core_blockers, draw_counts = _draw_core_blockers(
             draw_id=draw_id,
             draw_name=draw_name,
             teams=draw_teams,
-            games=draw_games,
+            games=competition_games,
             podium=draw_podium,
             review=review,
             expected_awards=expected_awards,
             award_rows=award_rows,
             awards_available=awards_available,
         )
+        if series_errors:
+            missing_legacy_details = [
+                row
+                for row in series_errors
+                if str(row.get("code") or "")
+                == "BEST_OF_THREE_INDIVIDUAL_GAME_DETAIL_REQUIRED"
+            ]
+            if missing_legacy_details:
+                draw_core_blockers.append(
+                    _blocker(
+                        "BEST_OF_THREE_INDIVIDUAL_GAME_DETAIL_REQUIRED",
+                        f"{draw_name} has {len(missing_legacy_details)} finalized best-two-of-three matchup(s) that store only aggregate series results. Individual game scores cannot be reconstructed; reconcile the original game-by-game scores before official rating publication.",
+                        scope="draw",
+                        draw_id=draw_id,
+                        entity_type="tournament_game",
+                        count=len(missing_legacy_details),
+                    )
+                )
+            other_series_errors = [
+                row for row in series_errors if row not in missing_legacy_details
+            ]
+            if other_series_errors:
+                draw_core_blockers.append(
+                    _blocker(
+                        "BEST_OF_THREE_RATING_SOURCE_INVALID",
+                        f"{draw_name} has {len(other_series_errors)} invalid best-two-of-three rating-source condition(s). Correct or reconcile its individual game rows before official publication.",
+                        scope="draw",
+                        draw_id=draw_id,
+                        entity_type="tournament_game",
+                        count=len(other_series_errors),
+                    )
+                )
         core_blockers_by_draw[draw_id] = draw_core_blockers
         all_core_blockers.extend(draw_core_blockers)
 
@@ -1320,8 +1888,8 @@ def build_admin_tournament_lifecycle(
         draw_game_id_set = set(draw_game_ids)
         rating_publish_game_ids = [
             str(row.get("id") or "")
-            for row in draw_games
-            if row.get("id") and _is_rating_publish_eligible(row)
+            for row in rating_game_plan["rating_games"]
+            if row.get("id")
         ]
         rating_publish_game_id_set = set(rating_publish_game_ids)
         draw_matches = [
@@ -1431,7 +1999,9 @@ def build_admin_tournament_lifecycle(
                 }
             )
         rr_games = [
-            row for row in draw_games if str(row.get("stage") or "").upper() == "ROUND_ROBIN"
+            row
+            for row in competition_games
+            if str(row.get("stage") or "").upper() == "ROUND_ROBIN"
         ]
         try:
             standings = compute_round_robin_standings(draw_teams, rr_games) if draw_teams else []

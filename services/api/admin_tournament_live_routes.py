@@ -26,6 +26,12 @@ class AdminTournamentLiveRowVersion(BaseModel):
     updated_at: str = Field(min_length=1, max_length=120)
 
 
+class AdminTournamentLiveGameScore(BaseModel):
+    game_number: int = Field(ge=1, le=3)
+    score_a: int = Field(ge=0)
+    score_b: int = Field(ge=0)
+
+
 class AdminTournamentLiveCommandRequest(BaseModel):
     command: str = Field(min_length=1, max_length=80)
     expected_state_fingerprint: str = Field(min_length=64, max_length=64)
@@ -38,6 +44,11 @@ class AdminTournamentLiveCommandRequest(BaseModel):
     game_id: str | None = Field(default=None, max_length=160)
     score_a: int | None = None
     score_b: int | None = None
+    game_scores: list[AdminTournamentLiveGameScore] | None = Field(
+        default=None,
+        min_length=2,
+        max_length=3,
+    )
     unusual_score_acknowledged: bool = False
     advance_count: int | None = None
     playoff_winner_bonus_elo: float | None = None

@@ -10,6 +10,7 @@ import type {
   AdminTournamentDraw,
   AdminTournamentLifecycleDraw,
   AdminTournamentLifecycleReadiness,
+  AdminTournamentLiveGameScore,
   AdminTournamentLiveOperation,
   AdminTournamentLiveReadiness,
   AdminTournamentLiveSnapshotResponse,
@@ -17,6 +18,10 @@ import type {
   AdminTournamentOpsTeam,
   AdminTournamentWriteResponse
 } from "@/lib/adminTournamentApi";
+import {
+  validateBestOfThreeCorrectionDraft,
+  validateBestOfThreeGameScores
+} from "@/lib/tournamentDayWorkspaceState.mjs";
 import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 import { drawOperationalStatus, isInactiveTournamentDraw } from "@/lib/tournamentDrawOperationalStatus.mjs";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
@@ -47,6 +52,12 @@ type Props = {
 };
 type LiveCommand = "save_score" | "generate_round_robin" | "generate_playoffs" | "generate_podium" | "award_podium" | "publish_official_matches";
 type ReviewedRowVersion = { id: string; updated_at: string };
+type LiveGameScore = AdminTournamentLiveGameScore;
+type LiveGameScoreDraft = {
+  game_number: 1 | 2 | 3;
+  score_a: string;
+  score_b: string;
+};
 type LiveCommandBody = {
   command: LiveCommand;
   expected_state_fingerprint: string;
@@ -59,6 +70,7 @@ type LiveCommandBody = {
   game_id?: string;
   score_a?: number;
   score_b?: number;
+  game_scores?: LiveGameScore[];
   unusual_score_acknowledged?: boolean;
   advance_count?: number;
   playoff_winner_bonus_elo?: number;
@@ -83,6 +95,14 @@ const CONFIRMATIONS: Record<LiveCommand, string> = {
 const ACTIVE_OPERATION_STATUSES: ReadonlySet<string> = new Set(["intent", "mutated", "recovery_required"]);
 const NON_PLAYED_RESULT_TYPES: ReadonlySet<string> = new Set(["FORFEIT", "NO_SHOW", "RETIREMENT"]);
 
+function emptyBestOfThreeDraft(): LiveGameScoreDraft[] {
+  return [1, 2, 3].map((gameNumber) => ({
+    game_number: gameNumber as 1 | 2 | 3,
+    score_a: "",
+    score_b: ""
+  }));
+}
+
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
 }
@@ -101,6 +121,147 @@ function numericValue(value: unknown): number | null {
   if (value == null || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function scoringFormat(
+  game: Record<string, unknown> | null,
+  snapshot: AdminTournamentLiveSnapshotResponse | null = null
+): string {
+  const frozen = String(game?.scoring_format || "").trim().toUpperCase();
+  if (frozen) return frozen;
+  const draw = (snapshot?.draws || []).find((row) => (
+    String(row.id || "") === String(game?.draw_id || snapshot?.draw_id || "")
+  ));
+  const event = (snapshot?.event_options || []).find((row) => (
+    String(row.id || "") === String(draw?.event_option_id || game?.event_option_id || "")
+  ));
+  return String(
+    event?.scoring_override
+    || event?.division_scoring
+    || event?.scoring_default
+    || ""
+  ).trim().toUpperCase();
+}
+
+function isBestOfThree(
+  game: Record<string, unknown> | null,
+  snapshot: AdminTournamentLiveSnapshotResponse | null = null
+): boolean {
+  return scoringFormat(game, snapshot) === "BEST_2_OF_3";
+}
+
+function storedGameScores(game: Record<string, unknown> | null): LiveGameScore[] {
+  const direct = game?.game_scores;
+  const review = game?.score_review_json;
+  const nested = review && typeof review === "object" && !Array.isArray(review)
+    ? (review as Record<string, unknown>).game_scores
+    : null;
+  const rows = Array.isArray(direct) ? direct : Array.isArray(nested) ? nested : [];
+  return rows.flatMap((row) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return [];
+    const item = row as Record<string, unknown>;
+    const gameNumber = Number(item.game_number);
+    const scoreA = Number(item.score_a);
+    const scoreB = Number(item.score_b);
+    if (![1, 2, 3].includes(gameNumber) || !Number.isInteger(scoreA) || !Number.isInteger(scoreB)) return [];
+    return [{
+      game_number: gameNumber as 1 | 2 | 3,
+      score_a: scoreA,
+      score_b: scoreB
+    }];
+  }).sort((left, right) => left.game_number - right.game_number);
+}
+
+function bestOfThreeDraft(game: Record<string, unknown> | null): LiveGameScoreDraft[] {
+  const stored = new Map(storedGameScores(game).map((row) => [row.game_number, row]));
+  return emptyBestOfThreeDraft().map((draft) => {
+    const current = stored.get(draft.game_number);
+    return current
+      ? { ...draft, score_a: String(current.score_a), score_b: String(current.score_b) }
+      : draft;
+  });
+}
+
+function showBestOfThreeGameThree(gameScores: readonly LiveGameScoreDraft[]): boolean {
+  const first = gameScores.find((row) => row.game_number === 1);
+  const second = gameScores.find((row) => row.game_number === 2);
+  const third = gameScores.find((row) => row.game_number === 3);
+  if (String(third?.score_a || "").trim() || String(third?.score_b || "").trim()) return true;
+  if (!first?.score_a.trim() || !first.score_b.trim() || !second?.score_a.trim() || !second.score_b.trim()) return false;
+  const firstA = Number(first.score_a);
+  const firstB = Number(first.score_b);
+  const secondA = Number(second.score_a);
+  const secondB = Number(second.score_b);
+  if (![firstA, firstB, secondA, secondB].every(Number.isFinite)) return false;
+  return (firstA > firstB) !== (secondA > secondB);
+}
+
+function gameScoresSummary(gameScores: readonly LiveGameScore[]): string {
+  return gameScores.map((row) => `Game ${row.game_number}: ${row.score_a}–${row.score_b}`).join(" · ");
+}
+
+function BestOfThreeScoreEntry({
+  gameScores,
+  teamA,
+  teamB,
+  onChange
+}: {
+  gameScores: readonly LiveGameScoreDraft[];
+  teamA: string;
+  teamB: string;
+  onChange: (gameNumber: 1 | 2 | 3, side: "score_a" | "score_b", value: string) => void;
+}) {
+  const visibleGames = showBestOfThreeGameThree(gameScores) ? [1, 2, 3] : [1, 2];
+  return (
+    <fieldset className={styles.seriesScoreEntry}>
+      <legend>Individual game scores</legend>
+      <p className={styles.muted}>Each game is saved separately for ratings. The 2–0 or 2–1 series result is derived automatically.</p>
+      <div className={styles.seriesGameGrid}>
+        {visibleGames.map((gameNumber) => {
+          const score = gameScores.find((row) => row.game_number === gameNumber) || emptyBestOfThreeDraft()[gameNumber - 1];
+          return (
+            <fieldset key={gameNumber} className={styles.seriesGameCard}>
+              <legend>Game {gameNumber}</legend>
+              <div className={styles.seriesScoreInputs}>
+                <label htmlFor={`tournament-live-game-${gameNumber}-team-a-score`}>
+                  {teamA} score
+                  <input
+                    id={`tournament-live-game-${gameNumber}-team-a-score`}
+                    value={score.score_a}
+                    onChange={(event) => onChange(gameNumber as 1 | 2 | 3, "score_a", event.target.value)}
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    className={styles.input}
+                  />
+                </label>
+                <span aria-hidden="true">–</span>
+                <label htmlFor={`tournament-live-game-${gameNumber}-team-b-score`}>
+                  {teamB} score
+                  <input
+                    id={`tournament-live-game-${gameNumber}-team-b-score`}
+                    value={score.score_b}
+                    onChange={(event) => onChange(gameNumber as 1 | 2 | 3, "score_b", event.target.value)}
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    className={styles.input}
+                  />
+                </label>
+              </div>
+            </fieldset>
+          );
+        })}
+      </div>
+      <p className={styles.seriesDecision} aria-live="polite">
+        {visibleGames.length === 3
+          ? "The teams split Games 1 and 2. Enter the deciding Game 3."
+          : "Game 3 appears only if the teams split the first two games."}
+      </p>
+    </fieldset>
+  );
 }
 
 function isScored(game: Record<string, unknown>): boolean {
@@ -249,6 +410,7 @@ export default function TournamentLivePanel({
   const [scoreGameId, setScoreGameId] = useState("");
   const [scoreA, setScoreA] = useState("");
   const [scoreB, setScoreB] = useState("");
+  const [seriesGameScores, setSeriesGameScores] = useState<LiveGameScoreDraft[]>(emptyBestOfThreeDraft);
   const [unusualScoreAcknowledged, setUnusualScoreAcknowledged] = useState(false);
   const [roundFilter, setRoundFilter] = useState("all");
   const [gameStatusFilter, setGameStatusFilter] = useState("all");
@@ -311,7 +473,7 @@ export default function TournamentLivePanel({
     boardRequest.invalidate(); actionRequest.invalidate();
     setBusy(false); setNotice(null);
     setDraws([]); setDrawLifecycle([]); setSelectedDrawId(initialDrawId || ""); setSnapshot(null);
-    setScoreGameId(""); setScoreA(""); setScoreB(""); setUnusualScoreAcknowledged(false); setScoreConfirmation(false); setPendingCommand(null); setLastResult(null);
+    setScoreGameId(""); setScoreA(""); setScoreB(""); setSeriesGameScores(emptyBestOfThreeDraft()); setUnusualScoreAcknowledged(false); setScoreConfirmation(false); setPendingCommand(null); setLastResult(null);
   }
 
   function seedScoreEditor(nextSnapshot: AdminTournamentLiveSnapshotResponse | null) {
@@ -322,6 +484,7 @@ export default function TournamentLivePanel({
     setScoreGameId(target ? String(target.id || "") : "");
     setScoreA(target?.score_a == null ? "" : String(target.score_a));
     setScoreB(target?.score_b == null ? "" : String(target.score_b));
+    setSeriesGameScores(bestOfThreeDraft(target));
     setUnusualScoreAcknowledged(false);
     setScoreConfirmation(false);
   }
@@ -465,6 +628,19 @@ export default function TournamentLivePanel({
     setScoreGameId(String(game.id || ""));
     setScoreA(game.score_a == null ? "" : String(game.score_a));
     setScoreB(game.score_b == null ? "" : String(game.score_b));
+    setSeriesGameScores(bestOfThreeDraft(game));
+    setUnusualScoreAcknowledged(false);
+    setScoreConfirmation(false);
+  }
+
+  function updateSeriesGameScore(
+    gameNumber: 1 | 2 | 3,
+    side: "score_a" | "score_b",
+    value: string
+  ) {
+    setSeriesGameScores((current) => current.map((row) => (
+      row.game_number === gameNumber ? { ...row, [side]: value } : row
+    )));
     setUnusualScoreAcknowledged(false);
     setScoreConfirmation(false);
   }
@@ -608,7 +784,8 @@ export default function TournamentLivePanel({
       }
       body.expected_team_versions = teamVersions;
       if (command !== "generate_round_robin") {
-        const gameVersions = versionRows(snapshot.games);
+        const reviewedGameRows = snapshot.source_game_versions || [];
+        const gameVersions = versionRows(reviewedGameRows);
         if (!gameVersions?.length) {
           setNotice({ tone: "error", text: "The reviewed game version set is incomplete. Reload before submitting." });
           throw new Error("The reviewed game version set is incomplete. Reload before submitting.");
@@ -627,6 +804,28 @@ export default function TournamentLivePanel({
     return executePending(pending, false);
   }
 
+  function validateSelectedBestOfThreeScore() {
+    const scoring = {
+      format: "BEST_2_OF_3",
+      target: 2,
+      individual_game_format: "GAME_TO_11",
+      individual_game_target: 11,
+      individual_game_win_by_two: true
+    };
+    return selectedGame && isScored(selectedGame)
+      ? validateBestOfThreeCorrectionDraft(
+        seriesGameScores,
+        storedGameScores(selectedGame),
+        scoring,
+        unusualScoreAcknowledged
+      )
+      : validateBestOfThreeGameScores(
+        seriesGameScores,
+        scoring,
+        unusualScoreAcknowledged
+      );
+  }
+
   function saveScore(confirmationText: string) {
     if (!selectedGame) {
       setNotice({ tone: "error", text: "Select a game before saving a score." });
@@ -635,6 +834,25 @@ export default function TournamentLivePanel({
     if (isNonPlayedGame(selectedGame)) {
       setNotice({ tone: "error", text: "This game has a non-played outcome and cannot be changed through ordinary score entry." });
       throw new Error("This game has a non-played outcome and cannot be changed through ordinary score entry.");
+    }
+    if (isBestOfThree(selectedGame, snapshot)) {
+      const validation = validateSelectedBestOfThreeScore();
+      if (!validation.ok) {
+        setNotice({ tone: "error", text: validation.message });
+        throw new Error(validation.message);
+      }
+      if (validation.acknowledgementRequired) {
+        const message = "Review the unusual individual game score and check the acknowledgement before saving.";
+        setNotice({ tone: "error", text: message });
+        throw new Error(message);
+      }
+      return submitCommand("save_score", confirmationText, {
+        game_id: String(selectedGame.id || ""),
+        score_a: validation.scoreA,
+        score_b: validation.scoreB,
+        game_scores: validation.gameScores,
+        unusual_score_acknowledged: unusualScoreAcknowledged
+      });
     }
     if (!scoreA.trim() || !scoreB.trim()) {
       setNotice({ tone: "error", text: "Enter both team scores before saving." });
@@ -662,6 +880,25 @@ export default function TournamentLivePanel({
     if (isNonPlayedGame(selectedGame)) {
       setScoreConfirmation(false);
       setNotice({ tone: "error", text: "This game has a non-played outcome and cannot be changed through ordinary score entry." });
+      return;
+    }
+    if (isBestOfThree(selectedGame, snapshot)) {
+      const validation = validateSelectedBestOfThreeScore();
+      if (!validation.ok) {
+        setScoreConfirmation(false);
+        setNotice({ tone: "error", text: validation.message });
+        return;
+      }
+      if (validation.acknowledgementRequired) {
+        setScoreConfirmation(false);
+        setNotice({
+          tone: "error",
+          text: "Review the unusual individual game score and check the acknowledgement before continuing."
+        });
+        return;
+      }
+      setNotice(null);
+      setScoreConfirmation(true);
       return;
     }
     if (!scoreA.trim() || !scoreB.trim()) {
@@ -692,7 +929,7 @@ export default function TournamentLivePanel({
         .map((row) => ({ id: String(row.id || ""), updated_at: String(row.updated_at || "") }))
         .sort((left, right) => left.id.localeCompare(right.id));
     const expectedTeamVersions = versionRows(reviewedSnapshot.teams);
-    const expectedGameVersions = versionRows(reviewedSnapshot.games);
+    const expectedGameVersions = versionRows(reviewedSnapshot.source_game_versions || []);
     if (!reviewedDraw?.updated_at || expectedTeamVersions.some((row) => !row.id || !row.updated_at) || expectedGameVersions.some((row) => !row.id || !row.updated_at)) {
       throw new Error("The reviewed draw, team, or game versions are incomplete. Reload before reviewing the podium.");
     }
@@ -993,7 +1230,9 @@ export default function TournamentLivePanel({
   const totalGames = counts?.games ?? sortedGames.length;
   const finalizedGames = counts?.finalized_games ?? sortedGames.filter(isScored).length;
   const openGames = counts?.open_games ?? Math.max(0, totalGames - finalizedGames);
-  const ratingPublishEligibleGames = counts?.rating_publish_eligible_games ?? totalGames;
+  const ratingPublishEligibleGames = counts?.rating_publish_eligible_games
+    ?? snapshot?.publication_rating_game_ids?.length
+    ?? totalGames;
   const duplicatePublications = counts?.duplicate_publications ?? counts?.duplicate_official_links ?? 0;
   const uncertainOperations = counts?.uncertain_operations ?? counts?.recovery_required_operations ?? 0;
   const podiumEntryCount = counts?.podium_entries ?? (lifecycle?.draws || []).reduce((total, draw) => total + draw.podium.length, 0);
@@ -1002,7 +1241,9 @@ export default function TournamentLivePanel({
   const selectedTotalGames = selectedDrawCounts?.games ?? sortedGames.length;
   const selectedFinalizedGames = selectedDrawCounts?.finalized_games ?? sortedGames.filter(isScored).length;
   const selectedOpenGames = selectedDrawCounts?.open_games ?? Math.max(0, selectedTotalGames - selectedFinalizedGames);
-  const selectedRatingPublishEligibleGames = selectedDrawCounts?.rating_publish_eligible_games ?? selectedTotalGames;
+  const selectedRatingPublishEligibleGames = selectedDrawCounts?.rating_publish_eligible_games
+    ?? snapshot?.publication_rating_game_ids?.length
+    ?? selectedTotalGames;
   const currentPodiumReview = Boolean(
     selectedLifecycleDraw?.review_evidence
       && (selectedLifecycleDraw.review_evidence.current ?? selectedLifecycleDraw.review_evidence.reviewed)
@@ -1036,6 +1277,23 @@ export default function TournamentLivePanel({
   const tournamentStatus = String(
     lifecycle?.tournament?.status || selectedTournament?.status || ""
   ).toUpperCase();
+  const selectedGameIsBestOfThree = isBestOfThree(selectedGame, snapshot);
+  const selectedSeriesPreview = selectedGameIsBestOfThree
+    ? validateBestOfThreeGameScores(
+      seriesGameScores,
+      {
+        format: "BEST_2_OF_3",
+        target: 2,
+        individual_game_format: "GAME_TO_11",
+        individual_game_target: 11,
+        individual_game_win_by_two: true
+      },
+      unusualScoreAcknowledged
+    )
+    : null;
+  const proposedScoreA = selectedSeriesPreview?.ok ? String(selectedSeriesPreview.scoreA) : scoreA;
+  const proposedScoreB = selectedSeriesPreview?.ok ? String(selectedSeriesPreview.scoreB) : scoreB;
+  const proposedSeriesGames = selectedSeriesPreview?.ok ? selectedSeriesPreview.gameScores : [];
 
   const gameCards = (games: Array<Record<string, unknown>>, editable: boolean) => (
     <div className={`${styles.gameCards} ${styles.mobileGames}`}>
@@ -1052,7 +1310,11 @@ export default function TournamentLivePanel({
             {nonPlayed ? (
               <p className={styles.resultLine}><strong>{resultTypeLabel(game)} — not played.</strong> Winner: {winner}. {shortValue(game.result_note)}</p>
             ) : (
-              <p className={styles.resultLine}>{isScored(game) ? `${shortValue(game.score_a)}–${shortValue(game.score_b)}` : "Score pending"}</p>
+              <p className={styles.resultLine}>
+                {isScored(game)
+                  ? `${shortValue(game.score_a)}–${shortValue(game.score_b)}${isBestOfThree(game, snapshot) ? ` series${storedGameScores(game).length ? ` · ${gameScoresSummary(storedGameScores(game))}` : ""}` : ""}`
+                  : "Score pending"}
+              </p>
             )}
             {editable && !nonPlayed ? <button type="button" className={styles.secondaryButton} onClick={() => selectScoreGame(game)}>{isScored(game) ? "Correct score" : "Enter score"}</button> : null}
             {editable && nonPlayed ? <p className={styles.muted}>Locked here. Review or change non-played outcomes in the guarded Day Workspace.</p> : null}
@@ -1101,13 +1363,22 @@ export default function TournamentLivePanel({
       <CommandBlockers readiness={scoreReadiness} />
       {selectedGame ? (
         <>
-          <div className={styles.scorecard}>
-            <div><span>Team A</span><strong>{teamLabel(teamsById.get(String(selectedGame.team_a_id || "")), snapshot)}</strong></div>
-            <label htmlFor="score-a">Team A score<input id="score-a" value={scoreA} onChange={(event) => { setScoreA(event.target.value); setUnusualScoreAcknowledged(false); setScoreConfirmation(false); }} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
-            <div className={styles.versus}>vs</div>
-            <label htmlFor="score-b">Team B score<input id="score-b" value={scoreB} onChange={(event) => { setScoreB(event.target.value); setUnusualScoreAcknowledged(false); setScoreConfirmation(false); }} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
-            <div><span>Team B</span><strong>{teamLabel(teamsById.get(String(selectedGame.team_b_id || "")), snapshot)}</strong></div>
-          </div>
+          {selectedGameIsBestOfThree ? (
+            <BestOfThreeScoreEntry
+              gameScores={seriesGameScores}
+              teamA={teamLabel(teamsById.get(String(selectedGame.team_a_id || "")), snapshot)}
+              teamB={teamLabel(teamsById.get(String(selectedGame.team_b_id || "")), snapshot)}
+              onChange={updateSeriesGameScore}
+            />
+          ) : (
+            <div className={styles.scorecard}>
+              <div><span>Team A</span><strong>{teamLabel(teamsById.get(String(selectedGame.team_a_id || "")), snapshot)}</strong></div>
+              <label htmlFor="score-a">Team A score<input id="score-a" value={scoreA} onChange={(event) => { setScoreA(event.target.value); setUnusualScoreAcknowledged(false); setScoreConfirmation(false); }} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
+              <div className={styles.versus}>vs</div>
+              <label htmlFor="score-b">Team B score<input id="score-b" value={scoreB} onChange={(event) => { setScoreB(event.target.value); setUnusualScoreAcknowledged(false); setScoreConfirmation(false); }} type="number" min={0} step={1} inputMode="numeric" className={styles.input} /></label>
+              <div><span>Team B</span><strong>{teamLabel(teamsById.get(String(selectedGame.team_b_id || "")), snapshot)}</strong></div>
+            </div>
+          )}
           <label className={styles.muted} style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", marginTop: "0.75rem" }}>
             <input
               type="checkbox"
@@ -1119,13 +1390,19 @@ export default function TournamentLivePanel({
             />
             I reviewed this score and confirm it is intentional if the server classifies it as unusual.
           </label>
-          {isScored(selectedGame) ? <p><strong>Before correction:</strong> {shortValue(selectedGame.score_a)}–{shortValue(selectedGame.score_b)} · <strong>After correction:</strong> {scoreA || "—"}–{scoreB || "—"}</p> : null}
+          {isScored(selectedGame) ? (
+            <p>
+              <strong>Before correction:</strong> {shortValue(selectedGame.score_a)}–{shortValue(selectedGame.score_b)}{selectedGameIsBestOfThree ? ` series · ${gameScoresSummary(storedGameScores(selectedGame))}` : ""}
+              {" · "}<strong>After correction:</strong> {proposedScoreA || "—"}–{proposedScoreB || "—"}{selectedGameIsBestOfThree && proposedSeriesGames.length ? ` series · ${gameScoresSummary(proposedSeriesGames)}` : ""}
+            </p>
+          ) : null}
           {!scoreConfirmation ? <button type="button" className={styles.primaryButton} onClick={validateScoreDraft} disabled={!scoreReadiness.ready || busy}>Review score</button> : (
             <section className={styles.confirmationCard} aria-label="Score confirmation">
               <div className={styles.headingRow}><div><p className={styles.eyebrow}>Score review</p><h3>{gameLabel(selectedGame)}</h3></div><button type="button" className={styles.secondaryButton} onClick={() => setScoreConfirmation(false)}>Edit score</button></div>
-              <p className={styles.matchup}>{teamLabel(teamsById.get(String(selectedGame.team_a_id || "")), snapshot)} <strong>{scoreA}</strong> – <strong>{scoreB}</strong> {teamLabel(teamsById.get(String(selectedGame.team_b_id || "")), snapshot)}</p>
-              <p><strong>Proposed winner:</strong> {Number(scoreA) > Number(scoreB) ? teamLabel(teamsById.get(String(selectedGame.team_a_id || "")), snapshot) : teamLabel(teamsById.get(String(selectedGame.team_b_id || "")), snapshot)}</p>
-              <ConfirmAction triggerLabel="Confirm & save" title="Confirm this exact tournament score?" description={`${matchupLabel(selectedGame, teamsById, snapshot)}. Save ${scoreA}–${scoreB}.`} confirmLabel="Confirm & save" confirmationText={scoreReadiness.confirmation || CONFIRMATIONS.save_score} disabled={!scoreReadiness.ready} busy={busy} onConfirm={async (confirmationText) => { const completion = await saveScore(confirmationText); setScoreConfirmation(false); return completion; }} />
+              <p className={styles.matchup}>{teamLabel(teamsById.get(String(selectedGame.team_a_id || "")), snapshot)} <strong>{proposedScoreA}</strong> – <strong>{proposedScoreB}</strong> {teamLabel(teamsById.get(String(selectedGame.team_b_id || "")), snapshot)}</p>
+              {selectedGameIsBestOfThree && proposedSeriesGames.length ? <p><strong>Individual games:</strong> {gameScoresSummary(proposedSeriesGames)}</p> : null}
+              <p><strong>Proposed winner:</strong> {Number(proposedScoreA) > Number(proposedScoreB) ? teamLabel(teamsById.get(String(selectedGame.team_a_id || "")), snapshot) : teamLabel(teamsById.get(String(selectedGame.team_b_id || "")), snapshot)}</p>
+              <ConfirmAction triggerLabel="Confirm & save" title="Confirm this exact tournament score?" description={`${matchupLabel(selectedGame, teamsById, snapshot)}. Save ${proposedScoreA}–${proposedScoreB}${selectedGameIsBestOfThree ? ` series (${gameScoresSummary(proposedSeriesGames)})` : ""}.`} confirmLabel="Confirm & save" confirmationText={scoreReadiness.confirmation || CONFIRMATIONS.save_score} disabled={!scoreReadiness.ready} busy={busy} onConfirm={async (confirmationText) => { const completion = await saveScore(confirmationText); setScoreConfirmation(false); return completion; }} />
             </section>
           )}
         </>
@@ -1253,7 +1530,7 @@ export default function TournamentLivePanel({
         <>
           <article className={styles.card}><div className={styles.headingRow}><div><h2>{view === "corrections" ? "Scored games with current results" : "Round and court matchups"}</h2><p className={styles.muted}>{view === "corrections" ? "Choose a finalized game to review its before/after correction." : "Choose a matchup for inline score entry."}</p></div><div className={styles.filterRow}><label>Round<select className={styles.input} value={roundFilter} onChange={(event) => setRoundFilter(event.target.value)}><option value="all">All rounds</option>{roundOptions.map((round) => <option key={round} value={round}>{round}</option>)}</select></label><label>Status<select className={styles.input} value={gameStatusFilter} onChange={(event) => setGameStatusFilter(event.target.value)}><option value="all">All games</option><option value="open">Open</option><option value="final">Final</option></select></label></div></div>{gameCards(view === "corrections" ? filteredGames.filter(isScored) : filteredGames, true)}</article>
           {scoreWorkspace}
-          {view === "corrections" ? <article className={styles.card}><h2>Correction boundaries</h2><p>Match Log corrections are for official published matches. Tournament draw corrections occur here before or after publication, and the server preserves replay and rating safety.</p><p className={styles.linkRow}><Link href={tournamentRouteHref("/admin/tournaments/live-operations/check-in", routeContext)}>Review substitution attendance</Link><Link href="/admin/match-log">Open Match Log</Link><Link href="/admin/replay-history">Open replay evidence</Link></p><p><strong>Forfeit or substitution:</strong> record attendance/substitution evidence first, then use the supported draw command or Match Log recovery path. Do not disguise either as an ordinary score correction.</p></article> : null}
+          {view === "corrections" ? <article className={styles.card}><h2>Correction boundaries</h2><p>Tournament draw scores can be corrected here only before official publication. Once linked rated matches exist, both Tournament Live and generic Match Log source edits fail closed; inspect the evidence and use the documented tournament publication recovery and reconciliation workflow.</p><p className={styles.linkRow}><Link href={tournamentRouteHref("/admin/tournaments/live-operations/check-in", routeContext)}>Review substitution attendance</Link><Link href="/admin/match-log">Inspect linked Match Log evidence</Link><Link href="/admin/replay-history">Inspect replay evidence</Link></p><p><strong>Forfeit or substitution:</strong> record attendance/substitution evidence first, then use the supported draw command or tournament recovery path. Do not disguise either as an ordinary score correction.</p></article> : null}
           {view === "corrections" ? operationEvidence : null}
         </>
       ) : null}

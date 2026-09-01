@@ -254,9 +254,7 @@ export function validateDayScoreDraft(scoreA, scoreB, scoring = null, unusualSco
   if (!legacyScoringSnapshot && !["GAME_TO_11", "GAME_TO_15", "GAME_TO_21", "BEST_2_OF_3"].includes(format)) {
     impossibleReasons.push("Configured scoring format is unavailable.");
   } else if (format === "BEST_2_OF_3") {
-    if (!((winner === 2 && loser === 0) || (winner === 2 && loser === 1))) {
-      impossibleReasons.push("BEST_2_OF_3 stores games won; the final must be 2–0 or 2–1.");
-    }
+    impossibleReasons.push("Enter the individual Game 1, Game 2, and, when needed, Game 3 scores for BEST_2_OF_3.");
   } else {
     const target = Number(scoring?.target ?? ({ GAME_TO_11: 11, GAME_TO_15: 15, GAME_TO_21: 21 })[format]);
     if (![11, 15, 21].includes(target)) {
@@ -287,6 +285,236 @@ export function validateDayScoreDraft(scoreA, scoreB, scoring = null, unusualSco
     acknowledgementRequired: unusual && !unusualScoreAcknowledged,
     scoringFormat: format
   };
+}
+
+function bestOfThreeIndividualScoring(scoring) {
+  return {
+    format: String(scoring?.individual_game_format || "GAME_TO_11").trim().toUpperCase(),
+    target: Number(scoring?.individual_game_target ?? 11),
+    win_by_two: scoring?.individual_game_win_by_two ?? true
+  };
+}
+
+function bestOfThreeDraftRows(gameScores) {
+  const rows = Array.isArray(gameScores) ? gameScores : [];
+  const byNumber = new Map();
+  for (const row of rows) {
+    const gameNumber = Number(row?.game_number);
+    if (![1, 2, 3].includes(gameNumber)) {
+      return { ok: false, message: "Best-of-three game numbers must be 1, 2, or 3." };
+    }
+    if (byNumber.has(gameNumber)) {
+      return { ok: false, message: `Game ${gameNumber} appears more than once.` };
+    }
+    byNumber.set(gameNumber, row);
+  }
+  return { ok: true, byNumber };
+}
+
+function validateBestOfThreeGame(row, gameNumber, scoring, unusualScoreAcknowledged) {
+  const scoreA = String(row?.score_a ?? "").trim();
+  const scoreB = String(row?.score_b ?? "").trim();
+  if (!scoreA || !scoreB) {
+    return { ok: false, message: `Enter both scores for Game ${gameNumber}.` };
+  }
+  const validation = validateDayScoreDraft(
+    scoreA,
+    scoreB,
+    bestOfThreeIndividualScoring(scoring),
+    unusualScoreAcknowledged
+  );
+  if (!validation.ok) {
+    return { ...validation, message: `Game ${gameNumber}: ${validation.message}` };
+  }
+  return {
+    ...validation,
+    gameScore: {
+      game_number: gameNumber,
+      score_a: validation.scoreA,
+      score_b: validation.scoreB
+    }
+  };
+}
+
+export function validateBestOfThreeGameScores(
+  gameScores,
+  scoring = null,
+  unusualScoreAcknowledged = false
+) {
+  const draft = bestOfThreeDraftRows(gameScores);
+  if (!draft.ok) return draft;
+
+  const validatedGames = [];
+  const unusualReasons = [];
+  for (const gameNumber of [1, 2]) {
+    const validation = validateBestOfThreeGame(
+      draft.byNumber.get(gameNumber),
+      gameNumber,
+      scoring,
+      unusualScoreAcknowledged
+    );
+    if (!validation.ok) return validation;
+    validatedGames.push(validation.gameScore);
+    unusualReasons.push(...validation.reasons.map((reason) => `Game ${gameNumber}: ${reason}`));
+  }
+
+  const firstWinner = validatedGames[0].score_a > validatedGames[0].score_b ? "A" : "B";
+  const secondWinner = validatedGames[1].score_a > validatedGames[1].score_b ? "A" : "B";
+  const thirdRow = draft.byNumber.get(3);
+  const thirdHasScore = Boolean(
+    String(thirdRow?.score_a ?? "").trim() || String(thirdRow?.score_b ?? "").trim()
+  );
+  if (firstWinner === secondWinner) {
+    if (thirdHasScore) {
+      return {
+        ok: false,
+        message: "Game 3 must stay empty because the series was won in the first two games."
+      };
+    }
+  } else {
+    if (!thirdHasScore) {
+      return { ok: false, message: "Enter Game 3 because the series is tied 1–1." };
+    }
+    const validation = validateBestOfThreeGame(
+      thirdRow,
+      3,
+      scoring,
+      unusualScoreAcknowledged
+    );
+    if (!validation.ok) return validation;
+    validatedGames.push(validation.gameScore);
+    unusualReasons.push(...validation.reasons.map((reason) => `Game 3: ${reason}`));
+  }
+
+  const scoreA = validatedGames.filter((game) => game.score_a > game.score_b).length;
+  const scoreB = validatedGames.length - scoreA;
+  const unusual = unusualReasons.length > 0;
+  return {
+    ok: true,
+    scoreA,
+    scoreB,
+    gameScores: validatedGames,
+    unusual,
+    reasons: unusualReasons,
+    acknowledgementRequired: unusual && !unusualScoreAcknowledged,
+    scoringFormat: "BEST_2_OF_3"
+  };
+}
+
+export function validateBestOfThreeRetirementGameScores(
+  gameScores,
+  scoring = null,
+  unusualScoreAcknowledged = false
+) {
+  const draft = bestOfThreeDraftRows(gameScores);
+  if (!draft.ok) return draft;
+
+  const hasInput = (gameNumber) => {
+    const row = draft.byNumber.get(gameNumber);
+    return Boolean(
+      String(row?.score_a ?? "").trim() || String(row?.score_b ?? "").trim()
+    );
+  };
+  const hasCompleteInput = (gameNumber) => {
+    const row = draft.byNumber.get(gameNumber);
+    return Boolean(
+      String(row?.score_a ?? "").trim() && String(row?.score_b ?? "").trim()
+    );
+  };
+
+  if (hasInput(3)) {
+    return {
+      ok: false,
+      message: "A completed Game 3 finishes the series. Record it as a played score instead of a retirement."
+    };
+  }
+  if (hasInput(1) && !hasCompleteInput(1)) {
+    return { ok: false, message: "Enter both scores for completed Game 1." };
+  }
+  if (hasInput(2) && !hasCompleteInput(2)) {
+    return { ok: false, message: "Enter both scores for completed Game 2." };
+  }
+  if (hasInput(2) && !hasCompleteInput(1)) {
+    return { ok: false, message: "Enter completed Game 1 before Game 2." };
+  }
+  if (!hasInput(1)) {
+    return {
+      ok: true,
+      gameScores: [],
+      unusual: false,
+      reasons: [],
+      acknowledgementRequired: false,
+      scoringFormat: "BEST_2_OF_3"
+    };
+  }
+
+  const validatedGames = [];
+  const unusualReasons = [];
+  const first = validateBestOfThreeGame(
+    draft.byNumber.get(1),
+    1,
+    scoring,
+    unusualScoreAcknowledged
+  );
+  if (!first.ok) return first;
+  validatedGames.push(first.gameScore);
+  unusualReasons.push(...first.reasons.map((reason) => `Game 1: ${reason}`));
+
+  if (hasInput(2)) {
+    const second = validateBestOfThreeGame(
+      draft.byNumber.get(2),
+      2,
+      scoring,
+      unusualScoreAcknowledged
+    );
+    if (!second.ok) return second;
+    const firstWinner = first.gameScore.score_a > first.gameScore.score_b ? "A" : "B";
+    const secondWinner = second.gameScore.score_a > second.gameScore.score_b ? "A" : "B";
+    if (firstWinner === secondWinner) {
+      return {
+        ok: false,
+        message: "One team already won Games 1 and 2. Record the completed 2–0 series as a played score instead of a retirement."
+      };
+    }
+    validatedGames.push(second.gameScore);
+    unusualReasons.push(...second.reasons.map((reason) => `Game 2: ${reason}`));
+  }
+
+  const unusual = unusualReasons.length > 0;
+  return {
+    ok: true,
+    gameScores: validatedGames,
+    unusual,
+    reasons: unusualReasons,
+    acknowledgementRequired: unusual && !unusualScoreAcknowledged,
+    scoringFormat: "BEST_2_OF_3"
+  };
+}
+
+export function validateBestOfThreeCorrectionDraft(
+  gameScores,
+  currentGameScores,
+  scoring = null,
+  unusualScoreAcknowledged = false
+) {
+  const result = validateBestOfThreeGameScores(
+    gameScores,
+    scoring,
+    unusualScoreAcknowledged
+  );
+  if (!result.ok) return result;
+  const current = (Array.isArray(currentGameScores) ? currentGameScores : [])
+    .map((game) => ({
+      game_number: Number(game?.game_number),
+      score_a: Number(game?.score_a),
+      score_b: Number(game?.score_b)
+    }))
+    .filter((game) => [1, 2, 3].includes(game.game_number))
+    .sort((left, right) => left.game_number - right.game_number);
+  if (JSON.stringify(result.gameScores) === JSON.stringify(current)) {
+    return { ok: false, message: "Enter a changed individual game score before review." };
+  }
+  return result;
 }
 
 export function validateDayCorrectionDraft(scoreA, scoreB, currentScoreA, currentScoreB, scoring = null, unusualScoreAcknowledged = false) {

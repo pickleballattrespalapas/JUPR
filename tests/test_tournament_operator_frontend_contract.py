@@ -132,7 +132,7 @@ def test_live_runner_is_human_readable_and_validates_before_confirmation() -> No
         "After correction",
         "Recent operations and reconciliation",
         "Technical operation evidence",
-        "Match Log corrections are for official published matches",
+        "Tournament draw scores can be corrected here only before official publication",
     ):
         assert phrase in panel
     assert "validateScoreDraft" in panel
@@ -190,6 +190,10 @@ def test_local_browser_fixture_covers_operator_safety_story_at_desktop_widths() 
     assert "9–9" in spec or "9-9" in spec
     assert "Confirm & save" in spec
     assert "Corrections & recovery" in spec
+    assert "Best-of-three score entry records every rating game" in spec
+    assert "BEST_2_OF_3" in spec
+    assert "game_scores" in spec
+    assert 'name: "Game 3"' in spec
     assert "Publish official matches" in spec
     assert "Complete tournament" in spec
     assert "1280" in spec

@@ -44,4 +44,13 @@ def canonical_dup_key(row: dict, club_id: str) -> str:
     week = str(row.get("week_tag", "") or "").strip()
     mtype = str(row.get("match_type", "") or "").strip()
 
-    return f"{club_id}|{league}|{week}|{mtype}|{teamA[0]}-{teamA[1]}|{teamB[0]}-{teamB[1]}|{s1}-{s2}"
+    key = f"{club_id}|{league}|{week}|{mtype}|{teamA[0]}-{teamA[1]}|{teamB[0]}-{teamB[1]}|{s1}-{s2}"
+
+    # Each official tournament-game id is a distinct canonical rating event.
+    # A best-two-of-three series can legitimately contain the same players and
+    # the same final score more than once, so the generic Match Log scanner must
+    # not collapse those child games merely because their visible facts match.
+    tournament_game_id = str(row.get("tournament_game_id") or "").strip()
+    if tournament_game_id:
+        return f"{key}|tournament_game:{tournament_game_id}"
+    return key

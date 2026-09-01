@@ -45,6 +45,14 @@ class AdminTournamentDayLivePlayoffConfiguration(BaseModel):
     ]
 
 
+class AdminTournamentDayLiveGameScore(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    game_number: int = Field(ge=1, le=3)
+    score_a: int = Field(ge=0)
+    score_b: int = Field(ge=0)
+
+
 class AdminTournamentDayLivePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -55,6 +63,11 @@ class AdminTournamentDayLivePayload(BaseModel):
     court_id: str | None = Field(default=None, max_length=160)
     score_a: int | None = None
     score_b: int | None = None
+    game_scores: list[AdminTournamentDayLiveGameScore] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=3,
+    )
     unusual_score_acknowledgement: bool | None = None
     result_type: Literal["FORFEIT", "NO_SHOW", "RETIREMENT"] | None = None
     non_playing_team_id: str | None = Field(default=None, max_length=160)

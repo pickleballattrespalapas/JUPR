@@ -326,7 +326,66 @@ def test_admin_tournament_ops_snapshot_contract(monkeypatch):
     assert payload["draws"][0]["id"] == "draw_1"
     assert payload["teams"][0]["team_number"] == 1
     assert payload["games"][0]["winner_team_id"] == "team_1"
+    assert payload["source_game_versions"] == [
+        {"id": "game_1", "draw_id": "draw_1", "updated_at": ""}
+    ]
     assert payload["podium"][0]["award_label"] == "Gold"
+
+
+def test_admin_tournament_ops_snapshot_hides_series_children_but_fences_them(monkeypatch):
+    tables = tournament_tables()
+    tables["tournament_games"][0].update(
+        {
+            "scoring_format": "BEST_2_OF_3",
+            "parent_result_only": True,
+            "updated_at": "2026-04-10T12:00:00Z",
+        }
+    )
+    tables["tournament_games"].append(
+        {
+            "id": "game_1_g1",
+            "tournament_id": "tour_1",
+            "draw_id": "draw_1",
+            "stage": "SERIES_GAME",
+            "series_parent_game_id": "game_1",
+            "series_game_number": 1,
+            "scoring_format": "GAME_TO_11",
+            "score_team1": 11,
+            "score_team2": 7,
+            "winner_team_id": "team_1",
+            "status": "complete",
+            "updated_at": "2026-04-10T12:00:00.000001Z",
+        }
+    )
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).get(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/ops?draw_id=draw_1",
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [row["id"] for row in payload["games"]] == ["game_1"]
+    assert payload["summary"]["games"] == 1
+    assert payload["summary"]["completed_games"] == 1
+    assert payload["source_game_versions"] == [
+        {
+            "id": "game_1",
+            "draw_id": "draw_1",
+            "updated_at": "2026-04-10T12:00:00Z",
+        },
+        {
+            "id": "game_1_g1",
+            "draw_id": "draw_1",
+            "updated_at": "2026-04-10T12:00:00.000001Z",
+        },
+    ]
 
 
 def test_admin_tournament_registration_update_contract(monkeypatch):

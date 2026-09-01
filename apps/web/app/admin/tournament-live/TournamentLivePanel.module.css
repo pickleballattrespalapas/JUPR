@@ -409,6 +409,68 @@
   overflow-wrap: anywhere;
 }
 
+.seriesScoreEntry {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.9rem 0;
+  padding: 1rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  background: #eff6ff;
+}
+
+.seriesScoreEntry > legend,
+.seriesGameCard > legend {
+  padding: 0 0.35rem;
+  color: #0f172a;
+  font-weight: 850;
+}
+
+.seriesScoreEntry > p {
+  margin: 0;
+}
+
+.seriesGameGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 0.75rem;
+}
+
+.seriesGameCard {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid #93c5fd;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.seriesScoreInputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: 0.55rem;
+}
+
+.seriesScoreInputs label {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  color: #475569;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.seriesScoreInputs > span {
+  padding-bottom: 0.7rem;
+  color: #64748b;
+  font-weight: 900;
+}
+
+.seriesDecision {
+  color: #1e3a8a;
+  font-weight: 700;
+}
+
 .versus {
   padding-bottom: 0.7rem;
   color: #64748b;

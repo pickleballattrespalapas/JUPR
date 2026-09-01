@@ -337,11 +337,46 @@ function dayWorkspaceSnapshot() {
     dayGame({ id: "day-game-held", drawId: secondDrawId, drawName: "Open Division Draw", round: "Round 2", slot: "Match 2", teamA: ["Taylor Reed", "Casey Brooks"], teamB: ["Jamie Flores", "Skyler Moore"] }),
     dayGame({ id: "day-game-blocked", drawId, drawName: "Manual Acceptance Draw", round: "Round 3", slot: "Match 1", teamA: ["Quinn Parker", "Alexis Bell"], teamB: ["Cameron Price", "Robin Ward"] }),
     {
+      ...dayGame({ id: "day-game-bo3", drawId: secondDrawId, drawName: "Open Division Draw", round: "Final", slot: "P5", teamA: ["Nora Williams", "Sofia Kim"], teamB: ["Taylor Reed", "Casey Brooks"], courtId: "day-court-10", stage: "PLAYOFF", playoffRound: "Final", playoffGameCode: "P5" }),
+      scoring: {
+        format: "BEST_2_OF_3",
+        target: 2,
+        win_by_two: false,
+        individual_game_format: "GAME_TO_11",
+        individual_game_target: 11,
+        individual_game_win_by_two: true,
+        best_of_three_score_semantics: "individual_game_points_with_derived_series_result"
+      },
+      game_scores: [] as Array<{ game_number: 1 | 2 | 3; score_a: number; score_b: number }>
+    },
+    {
       ...dayGame({ id: "day-game-completed", drawId: secondDrawId, drawName: "Open Division Draw", round: "Round 3", slot: "Match 2", teamA: ["Avery Patel", "Jordan Lee"], teamB: ["Morgan Diaz", "Riley Smith"] }),
       state: "COMPLETED",
       score_a: 11,
       score_b: 7,
       winner_name: "Avery Patel / Jordan Lee",
+      correction_readiness: dayReadiness(true, "CORRECT COMPLETED SCORE")
+    },
+    {
+      ...dayGame({ id: "day-game-bo3-completed", drawId: secondDrawId, drawName: "Open Division Draw", round: "Semifinal", slot: "P2", teamA: ["Emma Davis", "Mia Johnson"], teamB: ["Jamie Flores", "Skyler Moore"], stage: "PLAYOFF", playoffRound: "SF", playoffGameCode: "P2" }),
+      state: "COMPLETED",
+      scoring: {
+        format: "BEST_2_OF_3",
+        target: 2,
+        win_by_two: false,
+        individual_game_format: "GAME_TO_11",
+        individual_game_target: 11,
+        individual_game_win_by_two: true,
+        best_of_three_score_semantics: "individual_game_points_with_derived_series_result"
+      },
+      score_a: 2,
+      score_b: 1,
+      game_scores: [
+        { game_number: 1 as const, score_a: 11, score_b: 7 },
+        { game_number: 2 as const, score_a: 8, score_b: 11 },
+        { game_number: 3 as const, score_a: 12, score_b: 10 }
+      ],
+      winner_name: "Emma Davis / Mia Johnson",
       correction_readiness: dayReadiness(true, "CORRECT COMPLETED SCORE")
     }
   ];
@@ -367,12 +402,12 @@ function dayWorkspaceSnapshot() {
     generated_at: "2026-08-17T09:05:00Z",
     summary: {
       courts: 10,
-      available_courts: 9,
+      available_courts: 8,
       active_draws: 2,
       eligible_games: 2,
       reserved_games: 0,
       held_games: 1,
-      completed_games: 4
+      completed_games: 5
     },
     draws: [
       {
@@ -463,13 +498,13 @@ function dayWorkspaceSnapshot() {
       id: `day-court-${index + 1}`,
       label: `Court ${index + 1}`,
       position: index + 1,
-      state: index === 0 ? "ON_COURT" : "AVAILABLE",
+      state: index === 0 || index === 9 ? "ON_COURT" : "AVAILABLE",
       version: `court-${index + 1}-v2`,
-      current_assignment: index === 0 ? {
-        id: "assignment-a",
-        game_id: "day-game-a",
+      current_assignment: index === 0 || index === 9 ? {
+        id: index === 0 ? "assignment-a" : "assignment-bo3",
+        game_id: index === 0 ? "day-game-a" : "day-game-bo3",
         state: "ON_COURT",
-        version: "assignment-v5",
+        version: index === 0 ? "assignment-v5" : "assignment-bo3-v1",
         assigned_at: "2026-08-17T09:01:00Z",
         started_at: "2026-08-17T09:02:00Z" as string | null
       } : null,
@@ -592,6 +627,8 @@ async function installMockApi(page: Page) {
           court_id?: string;
           score_a?: number;
           score_b?: number;
+          game_scores?: Array<{ game_number: 1 | 2 | 3; score_a: number; score_b: number }>;
+          unusual_score_acknowledgement?: boolean;
           result_type?: "FORFEIT" | "NO_SHOW" | "RETIREMENT";
           non_playing_team_id?: string;
           result_note?: string;
@@ -711,13 +748,15 @@ async function installMockApi(page: Page) {
         if (completedGame) {
           completedGame.score_a = command.payload.score_a ?? null;
           completedGame.score_b = command.payload.score_b ?? null;
+          completedGame.game_scores = command.payload.game_scores ?? [];
           completedGame.winner_name = Number(command.payload.score_a) > Number(command.payload.score_b)
             ? completedGame.team_a.name
             : completedGame.team_b.name;
           completedGame.state = "COMPLETED";
           completedGame.version = `${completedGame.id}-v2`;
         }
-        const releasedCourt = refreshed.courts[0];
+        const releasedCourt = refreshed.courts.find((court) => court.current_assignment?.game_id === command.payload.game_id);
+        if (!releasedCourt) throw new Error("Mocked scored game has no current court assignment.");
         const reservation = releasedCourt.next_assignment;
         if (reservation) {
           releasedCourt.current_assignment = {
@@ -748,15 +787,19 @@ async function installMockApi(page: Page) {
         if (completedGame) {
           completedGame.result_type = command.payload.result_type ?? "NO_SHOW";
           completedGame.result_note = command.payload.result_note ?? null;
+          completedGame.game_scores = command.payload.game_scores ?? [];
           completedGame.winner_name = command.payload.non_playing_team_id === completedGame.team_a.team_id
             ? completedGame.team_b.name
             : completedGame.team_a.name;
           completedGame.state = "COMPLETED";
           completedGame.version = `${completedGame.id}-v2`;
         }
-        refreshed.courts[0].current_assignment = null;
-        refreshed.courts[0].state = "AVAILABLE";
-        refreshed.summary.available_courts += 1;
+        const releasedCourt = refreshed.courts.find((court) => court.current_assignment?.game_id === command.payload.game_id);
+        if (releasedCourt) {
+          releasedCourt.current_assignment = null;
+          releasedCourt.state = "AVAILABLE";
+          refreshed.summary.available_courts += 1;
+        }
         refreshed.summary.completed_games += 1;
       }
       if (command.action === "correct_completed_score") {
@@ -764,6 +807,7 @@ async function installMockApi(page: Page) {
         if (correctedGame) {
           correctedGame.score_a = command.payload.score_a ?? null;
           correctedGame.score_b = command.payload.score_b ?? null;
+          correctedGame.game_scores = command.payload.game_scores ?? [];
           correctedGame.winner_name = Number(command.payload.score_a) > Number(command.payload.score_b)
             ? correctedGame.team_a.name
             : correctedGame.team_b.name;
@@ -1368,6 +1412,97 @@ test("Score entry saves in two clicks with a live preview and the exact day fenc
   await expect(releasedCourt).toContainText("Available for a queued matchup.");
 });
 
+test("Best-of-three score entry records every rating game and derives the series result", async ({ page }) => {
+  const commands: Array<Record<string, unknown>> = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
+    commands.push(request.postDataJSON() as Record<string, unknown>);
+  });
+  await page.goto(`/admin/tournaments/live-operations?${selectedQuery}`);
+  await page.getByRole("button", { name: /Enter score for Nora Williams \/ Sofia Kim vs Taylor Reed \/ Casey Brooks on Court 10/ }).click();
+  const scoreDialog = page.getByRole("dialog", { name: /Enter result · Court 10/ });
+  const gameOne = scoreDialog.getByRole("region", { name: "Game 1" });
+  const gameTwo = scoreDialog.getByRole("region", { name: "Game 2" });
+  await expect(gameOne.getByLabel("Nora Williams / Sofia Kim score")).toBeFocused();
+  await expect(scoreDialog.getByRole("region", { name: "Game 3" })).toHaveCount(0);
+
+  await gameOne.getByLabel("Nora Williams / Sofia Kim score").fill("11");
+  await gameOne.getByLabel("Taylor Reed / Casey Brooks score").fill("8");
+  await gameTwo.getByLabel("Nora Williams / Sofia Kim score").fill("9");
+  await gameTwo.getByLabel("Taylor Reed / Casey Brooks score").fill("11");
+
+  const gameThree = scoreDialog.getByRole("region", { name: "Game 3" });
+  await expect(gameThree).toBeVisible();
+  await expect(scoreDialog.getByText("The series is tied 1–1. Enter the deciding Game 3 scores.")).toBeVisible();
+  await gameThree.getByLabel("Nora Williams / Sofia Kim score").fill("15");
+  await expect(scoreDialog.getByText("Enter both scores for Game 3.")).toBeVisible();
+  await gameThree.getByLabel("Taylor Reed / Casey Brooks score").fill("13");
+  await expect(scoreDialog.getByText(/Rating games:/)).toContainText("Game 1: 11–8 · Game 2: 9–11 · Game 3: 15–13");
+
+  const saveSeries = scoreDialog.getByRole("button", { name: "Save 2–1 series & release Court 10" });
+  await expect(saveSeries).toBeEnabled();
+  await saveSeries.click();
+  await expect(scoreDialog).toHaveCount(0);
+  await expect.poll(() => commands.length).toBe(1);
+  expect((commands[0] as { payload: unknown }).payload).toEqual({
+    game_id: "day-game-bo3",
+    score_a: 2,
+    score_b: 1,
+    game_scores: [
+      { game_number: 1, score_a: 11, score_b: 8 },
+      { game_number: 2, score_a: 9, score_b: 11 },
+      { game_number: 3, score_a: 15, score_b: 13 }
+    ],
+    unusual_score_acknowledgement: false
+  });
+  const releasedCourt = page.getByRole("heading", { name: "Court 10", exact: true }).locator("xpath=ancestor::article[1]");
+  await expect(releasedCourt).toContainText("Available for a queued matchup.");
+});
+
+test("Best-of-three retirement preserves completed split games for ratings", async ({ page }) => {
+  const commands: Array<Record<string, unknown>> = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
+    commands.push(request.postDataJSON() as Record<string, unknown>);
+  });
+  await page.goto(`/admin/tournaments/live-operations?${selectedQuery}`);
+  await page.getByRole("button", { name: /Enter score for Nora Williams \/ Sofia Kim vs Taylor Reed \/ Casey Brooks on Court 10/ }).click();
+  let resultDialog = page.getByRole("dialog", { name: /Enter result · Court 10/ });
+  await resultDialog.getByRole("button", { name: "Non-play result" }).click();
+  resultDialog = page.getByRole("dialog", { name: /Enter result · Court 10/ });
+
+  await resultDialog.getByLabel("Outcome").selectOption("RETIREMENT");
+  await resultDialog.getByLabel("Team that retired").selectOption("day-game-bo3-team-b");
+  const gameOne = resultDialog.getByRole("region", { name: "Game 1" });
+  const gameTwo = resultDialog.getByRole("region", { name: "Game 2" });
+  await gameOne.getByLabel("Nora Williams / Sofia Kim score").fill("11");
+  await gameOne.getByLabel("Taylor Reed / Casey Brooks score").fill("8");
+  await gameTwo.getByLabel("Nora Williams / Sofia Kim score").fill("9");
+  await gameTwo.getByLabel("Taylor Reed / Casey Brooks score").fill("11");
+  await expect(resultDialog.getByText(/Completed rating games:/)).toContainText(
+    "Game 1: 11–8 · Game 2: 9–11"
+  );
+
+  const saveRetirement = resultDialog.getByRole("button", { name: "Record retirement & release Court 10" });
+  await expect(saveRetirement).toBeEnabled();
+  await saveRetirement.click();
+  await expect.poll(() => commands.length).toBe(1);
+  expect(commands[0]).toMatchObject({
+    action: "record_non_played_result",
+    payload: {
+      game_id: "day-game-bo3",
+      result_type: "RETIREMENT",
+      non_playing_team_id: "day-game-bo3-team-b",
+      result_note: "",
+      game_scores: [
+        { game_number: 1, score_a: 11, score_b: 8 },
+        { game_number: 2, score_a: 9, score_b: 11 }
+      ],
+      unusual_score_acknowledgement: false
+    }
+  });
+});
+
 test("The score dialog records a non-play result without leaving the court board", async ({ page }) => {
   const commands: Array<Record<string, unknown>> = [];
   page.on("request", (request) => {
@@ -1411,6 +1546,12 @@ test("The score dialog records a non-play result without leaving the court board
       result_note: ""
     }
   });
+  expect((commands[0] as { payload: unknown }).payload).toEqual({
+    game_id: "day-game-a",
+    result_type: "NO_SHOW",
+    non_playing_team_id: "day-game-a-team-a",
+    result_note: ""
+  });
   const releasedCourt = page.getByRole("heading", { name: "Court 1", exact: true }).locator("xpath=ancestor::article[1]");
   await expect(releasedCourt).toContainText("Available for a queued matchup.");
 });
@@ -1451,6 +1592,39 @@ test("Corrections & recovery submits an exact versioned day correction with befo
   });
   await expect(page.getByRole("heading", { name: "Recent day operations and recovery evidence" })).toBeVisible();
   await expect(page.getByText("Technical operation evidence").first()).toBeVisible();
+});
+
+test("Best-of-three correction preloads and submits changed individual rating games", async ({ page }) => {
+  const commands: Array<Record<string, unknown>> = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !request.url().endsWith(`/days/${dayId}/commands`)) return;
+    commands.push(request.postDataJSON() as Record<string, unknown>);
+  });
+  await page.goto(`/admin/tournaments/live-operations/corrections?${selectedQuery}`);
+  await page.getByRole("button", { name: "Correct completed score for Emma Davis / Mia Johnson vs Jamie Flores / Skyler Moore" }).click();
+  await expect(page.getByText("Game 1: 11–7 · Game 2: 8–11 · Game 3: 12–10").first()).toBeVisible();
+
+  const gameThree = page.getByRole("region", { name: "Game 3" });
+  await gameThree.getByLabel("Emma Davis / Mia Johnson score").fill("14");
+  await gameThree.getByLabel("Jamie Flores / Skyler Moore score").fill("12");
+  await page.getByRole("button", { name: "Review correction" }).click();
+  await expect(page.getByText(/Corrected rating games:/)).toContainText("Game 3: 14–12");
+  await page.getByRole("button", { name: "Confirm correction" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "Confirm & save correction" }).click();
+
+  await expect.poll(() => commands.length).toBe(1);
+  expect((commands[0] as { payload: unknown }).payload).toEqual({
+    game_id: "day-game-bo3-completed",
+    score_a: 2,
+    score_b: 1,
+    game_scores: [
+      { game_number: 1, score_a: 11, score_b: 7 },
+      { game_number: 2, score_a: 8, score_b: 11 },
+      { game_number: 3, score_a: 14, score_b: 12 }
+    ],
+    unusual_score_acknowledgement: false
+  });
 });
 
 test("Publish and completion remain blocked even when runtime writes are available", async ({ page }) => {

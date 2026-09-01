@@ -133,6 +133,18 @@ def _is_unstarted(game: dict[str, Any]) -> bool:
     )
 
 
+def _is_series_game_child(game: dict[str, Any]) -> bool:
+    return bool(str(game.get("series_parent_game_id") or "").strip()) or (
+        str(game.get("stage") or "").strip().upper() == "SERIES_GAME"
+    )
+
+
+def _competition_games(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recovery proves the matchup schedule, not rating-only game leaves."""
+
+    return [dict(row) for row in games if not _is_series_game_child(row)]
+
+
 def _is_complete_result(game: dict[str, Any]) -> bool:
     if _is_unstarted(game):
         return True
@@ -278,11 +290,12 @@ def _reconcile_schedule(
     )
     if not _versions_match(teams, payload.get("expected_team_versions")):
         return None
-    games = _strict_rows(
+    all_games = _strict_rows(
         supabase,
         "tournament_games",
         filters=(("tournament_id", tournament_id), ("draw_id", draw_id)),
     )
+    games = _competition_games(all_games)
     if not _exact_round_robin(teams=teams, games=games):
         return None
     if not _draw_dependencies_clear(
@@ -290,7 +303,7 @@ def _reconcile_schedule(
         club_id=club_id,
         tournament_id=tournament_id,
         draw_id=draw_id,
-        games=games,
+        games=all_games,
     ):
         return None
 

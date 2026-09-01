@@ -121,6 +121,18 @@ def _games_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[
         raise RuntimeError("Could not verify whether this draw already has games; game generation was refused.") from exc
 
 
+def _is_series_game_child(game: dict[str, Any]) -> bool:
+    return bool(str(game.get("series_parent_game_id") or "").strip()) or (
+        str(game.get("stage") or "").strip().upper() == "SERIES_GAME"
+    )
+
+
+def _competition_games(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return scheduled matchups, never their rating-only series leaves."""
+
+    return [dict(row) for row in games if not _is_series_game_child(row)]
+
+
 def _rows_for_draw(
     supabase: Any,
     table_name: str,
@@ -1129,11 +1141,12 @@ def reconcile_admin_tournament_round_robin_games(
         raise ValueError(
             "Team numbers must be contiguous from 1 through the draw size before reconciling games."
         )
-    existing_games = _games_for_draw(
+    all_existing_games = _games_for_draw(
         supabase,
         tournament_id=clean_tournament_id,
         draw_id=clean_draw_id,
     )
+    existing_games = _competition_games(all_existing_games)
     finalized_count = _validate_reconcilable_round_robin_games(
         teams=teams,
         games=existing_games,
@@ -1143,16 +1156,16 @@ def reconcile_admin_tournament_round_robin_games(
         club_id=str(club_id),
         tournament_id=clean_tournament_id,
         draw_id=clean_draw_id,
-        games=existing_games,
+        games=all_existing_games,
     )
     reviewed_game_versions = _require_reviewed_row_versions(
-        existing_games,
+        all_existing_games,
         [
             {
                 "id": str(row.get("id") or ""),
                 "updated_at": str(row.get("updated_at") or ""),
             }
-            for row in existing_games
+            for row in all_existing_games
         ],
         label="partial game set",
         atomic=atomic,
@@ -1202,8 +1215,11 @@ def reconcile_admin_tournament_round_robin_games(
         inserted = _safe_rows(
             supabase.table("tournament_games").insert(missing_rows).execute()
         )
-        authoritative_rows = [*existing_games, *(inserted or missing_rows)]
-    games = [_game_payload(row) for row in authoritative_rows]
+        authoritative_rows = [*all_existing_games, *(inserted or missing_rows)]
+    games = [
+        _game_payload(row)
+        for row in _competition_games(authoritative_rows)
+    ]
     audit_payload = build_activity_payload(
         club_id=str(club_id),
         actor_email=str(actor_email or ""),

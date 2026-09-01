@@ -25,6 +25,13 @@ def test_day_ops_transport_is_typed_and_isolated_from_the_draw_client() -> None:
     assert "AdminTournamentDayCourt" in client
     assert "AdminTournamentDayQueueEntry" in client
     assert "AdminTournamentDayGame" in client
+    assert "AdminTournamentDayGameScoreInput" in client
+    assert "AdminTournamentDayGameScore" in client
+    assert "game_scores?: AdminTournamentDayGameScore[]" in client
+    assert "game_scores?: AdminTournamentDayGameScoreInput[]" in client
+    assert "individual_game_format?" in client
+    assert "individual_game_target?" in client
+    assert "individual_game_win_by_two?" in client
     assert "AdminTournamentDayCommandAction" in client
     for action in (
         "activate_day",
@@ -153,7 +160,7 @@ def test_day_console_renders_authoritative_courts_and_progression_controls() -> 
     )
     assert "Review score" not in panel
     assert "Confirm this score and release the court?" not in panel
-    assert "Save ${selectedScoreValidation.scoreA}–${selectedScoreValidation.scoreB} & release ${selectedScoreCourt.label}" in panel
+    assert 'selectedScoreIsBestOfThree ? " series" : ""' in panel
     assert "InteractionDialog" in panel
     assert 'title={`Enter result · ${selectedScoreCourt.label}`}' in panel
     assert "Inline score and release" not in panel
@@ -167,9 +174,19 @@ def test_day_console_renders_authoritative_courts_and_progression_controls() -> 
     assert "non_playing_team_id" in panel
     assert "Operator note" in panel and "(optional)" in panel
     assert "Previously played scores remain unchanged for player ratings" in panel
+    assert "Completed games before retirement (optional)" in panel
+    assert "validateBestOfThreeRetirementGameScores" in panel
+    assert 'mode="retirement"' in panel
+    assert "Completed rating games" in panel
+    assert "game_scores: retirementGameScores" in panel
     assert "synthetic progression" in panel
     assert "Unusual score" in panel
     assert "unusual_score_acknowledgement" in panel
+    assert "BestOfThreeScoreFields" in panel
+    assert "Individual game scores" in panel
+    assert "Game 3 appears only if the teams split the first two games" in panel
+    assert 'aria-live="polite"' in panel
+    assert "game_scores: validatedGameScores" in panel
     assert "draw.readiness.assignments" in panel
     assert "Court assignment evidence" in panel
     assert "entry.note ||" in panel
@@ -242,6 +259,9 @@ def test_day_console_corrects_only_server_authorized_completed_scores() -> None:
     assert "Correct completed score" in panel
     assert "Before correction" in panel
     assert "After correction" in panel
+    assert "validateBestOfThreeCorrectionDraft" in panel
+    assert "Corrected individual games" in panel
+    assert "game_scores: selectedCorrectionValidatedGames" in panel
     assert "CORRECT COMPLETED SCORE" in state
     assert 'submitCommand(\n                          "correct_completed_score"' in panel
     assert "expected: expectedVersions({ draw_version: draw.version, game_version: game.version })" in panel
@@ -258,6 +278,9 @@ def test_day_score_outcome_and_correction_editors_are_version_fenced_and_isolate
 
     assert panel.count("expected: AdminTournamentDayCommandExpected") >= 3
     assert "reviewedGame: ReviewedGameTruth" in panel
+    assert "gameScores: string" in panel
+    assert "gameScores: JSON.stringify(normalizedGameScores(game.game_scores))" in panel
+    assert "current.gameScores === reviewed.gameScores" in panel
     assert "reviewedAssignmentVersion" in panel
     assert "reviewedGameStillCurrent" in panel
     assert "expectedSnapshotChanged" in panel
@@ -278,6 +301,9 @@ def test_day_score_outcome_and_correction_editors_are_version_fenced_and_isolate
 def test_day_result_dialog_submits_directly_and_retains_uncertain_recovery() -> None:
     panel = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.tsx")
     css = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.module.css")
+    non_play_submit = panel[
+        panel.index("async function saveOutcome") : panel.index("if (sessionLoading)")
+    ]
 
     assert 'id="day-score-entry-form"' in panel
     assert 'void saveScore()' in panel
@@ -288,6 +314,10 @@ def test_day_result_dialog_submits_directly_and_retains_uncertain_recovery() -> 
     assert 'className={`${styles.notice} ${styles.statusToast}`}' in panel
     assert ".statusToast" in css
     assert 'setPanelFocus("queue")' not in panel
+    assert "score_a:" not in non_play_submit
+    assert "score_b:" not in non_play_submit
+    assert "game_scores: retirementGameScores" in non_play_submit
+    assert "unusual_score_acknowledgement: outcomeEditor.unusualScoreAcknowledged" in non_play_submit
 
 
 def test_day_snapshot_identity_is_checked_for_club_tournament_and_day() -> None:
@@ -362,6 +392,9 @@ def test_day_console_is_explicit_and_accessible_about_live_scope() -> None:
     assert "occupied ? assignment?.state : court.state" in panel
     assert 'id="day-score-error"' in panel
     assert 'aria-describedby={selectedScoreError ? "day-score-error" : undefined}' in panel
+    assert 'id={`${idPrefix}-game-${score.game_number}-score-a`}' in panel
+    assert 'id={`${idPrefix}-game-${score.game_number}-score-b`}' in panel
+    assert "aria-labelledby={`${idPrefix}-game-${score.game_number}-title`}" in panel
 
 
 def test_finished_round_robin_requires_one_stale_safe_playoff_review() -> None:

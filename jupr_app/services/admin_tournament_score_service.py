@@ -8,6 +8,7 @@ from jupr_app.domain.admin_activity_log import build_activity_payload, write_adm
 from jupr_app.domain.tournaments import finalize_game, resolve_playoff_dependencies
 from jupr_app.domain.tournaments.score_policy import (
     SUPPORTED_SCORING_FORMATS,
+    require_best_of_three_game_scores,
     require_tournament_score,
     resolve_tournament_scoring_format,
 )
@@ -204,6 +205,7 @@ def update_admin_tournament_game_score(
     game_id: str,
     score_a: Any,
     score_b: Any,
+    game_scores: list[dict[str, Any]] | None = None,
     unusual_score_acknowledged: bool = False,
     actor_email: str,
     actor_role: str,
@@ -280,7 +282,9 @@ def update_admin_tournament_game_score(
         game_ids=game_ids,
     ):
         raise ValueError(
-            "This draw already has official Match Log rows. Correct published results through Match Log and Replay History."
+            "This draw already has official rated matches. Linked tournament source results are immutable; "
+            "stop and use the documented tournament publication recovery and reconciliation workflow. "
+            "Do not edit or exclude the linked Match Log rows."
         )
 
     next_score_a = _safe_int(score_a)
@@ -298,12 +302,36 @@ def update_admin_tournament_game_score(
         tournament_id=clean_tournament_id,
         event_option_id=str(before.get("event_option_id") or (draw or {}).get("event_option_id") or ""),
     )
-    score_review = require_tournament_score(
-        next_score_a,
-        next_score_b,
-        scoring_format=_game_scoring_format(before, event),
-        unusual_score_acknowledged=bool(unusual_score_acknowledged),
-    )
+    scoring_format = _game_scoring_format(before, event)
+    if scoring_format == "BEST_2_OF_3":
+        if game_scores is None:
+            raise ValueError(
+                "BEST_2_OF_3 requires the individual Game 1, Game 2, and, when needed, Game 3 scores."
+            )
+        score_review = require_best_of_three_game_scores(
+            game_scores,
+            unusual_score_acknowledged=bool(unusual_score_acknowledged),
+        )
+        if (
+            next_score_a != int(score_review["score_a"])
+            or next_score_b != int(score_review["score_b"])
+        ):
+            raise ValueError(
+                "The best-of-three aggregate must match the individual game winners."
+            )
+        next_score_a = int(score_review["score_a"])
+        next_score_b = int(score_review["score_b"])
+    else:
+        if game_scores is not None:
+            raise ValueError(
+                "Individual game scores are accepted only for BEST_2_OF_3 matchups."
+            )
+        score_review = require_tournament_score(
+            next_score_a,
+            next_score_b,
+            scoring_format=scoring_format,
+            unusual_score_acknowledged=bool(unusual_score_acknowledged),
+        )
     updated_fields = {
         **finalize_game({**before, "score_a": next_score_a, "score_b": next_score_b}),
         "result_type": "PLAYED",

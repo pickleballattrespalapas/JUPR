@@ -129,6 +129,8 @@ def test_day_live_routes_use_one_day_scoped_nested_command_envelope() -> None:
     assert "game_id" in source
     assert "court_id" in source
     assert "score_a" in source and "score_b" in source
+    assert "class AdminTournamentDayLiveGameScore" in source
+    assert "game_scores: list[AdminTournamentDayLiveGameScore]" in source
     assert "non_playing_team_id" in source
     assert "winner_team_id" not in source
     assert '"generate_playoffs"' in source
@@ -345,6 +347,130 @@ def test_day_live_route_accepts_exact_completed_score_correction_envelope(
 
     assert response.status_code == 200, response.text
     assert calls == [request]
+
+
+def test_day_live_route_accepts_individual_best_of_three_game_scores(
+    monkeypatch,
+) -> None:
+    supabase = FakeSupabase({"admin_activity_log": []})
+    calls: list[dict] = []
+
+    def fake_execute(_supabase, **kwargs):
+        calls.append(kwargs["request"])
+        return {
+            "command": {"action": kwargs["request"]["action"]},
+            "operation": {"status": "completed"},
+            "snapshot": {"ok": True, "state_fingerprint": "b" * 64},
+        }
+
+    monkeypatch.setattr(
+        "services.api.admin_tournament_day_live_routes.execute_admin_tournament_day_live_command",
+        fake_execute,
+    )
+    request = _request(
+        "score_and_release",
+        payload={
+            "game_id": "playoff-sf-1",
+            "score_a": 2,
+            "score_b": 1,
+            "game_scores": [
+                {"game_number": 1, "score_a": 11, "score_b": 7},
+                {"game_number": 2, "score_a": 8, "score_b": 11},
+                {"game_number": 3, "score_a": 15, "score_b": 13},
+            ],
+        },
+    )
+    request["expected"].update(
+        {
+            "queue_version": 4,
+            "game_version": "playoff-sf-1-v1",
+            "queue_entry_version": 3,
+            "court_version": 2,
+        }
+    )
+
+    response = _client(monkeypatch, supabase).post(
+        f"{DAY_PREFIX}/commands",
+        headers={"Authorization": "Bearer local"},
+        json=request,
+    )
+
+    assert response.status_code == 200, response.text
+    assert calls == [request]
+
+
+def test_day_live_route_accepts_one_completed_game_for_mid_series_retirement(
+    monkeypatch,
+) -> None:
+    supabase = FakeSupabase({"admin_activity_log": []})
+    calls: list[dict] = []
+
+    def fake_execute(_supabase, **kwargs):
+        calls.append(kwargs["request"])
+        return {
+            "command": {"action": kwargs["request"]["action"]},
+            "operation": {"status": "completed"},
+            "snapshot": {"ok": True, "state_fingerprint": "b" * 64},
+        }
+
+    monkeypatch.setattr(
+        "services.api.admin_tournament_day_live_routes.execute_admin_tournament_day_live_command",
+        fake_execute,
+    )
+    request = _request(
+        "record_non_played_result",
+        payload={
+            "game_id": "playoff-sf-1",
+            "result_type": "RETIREMENT",
+            "non_playing_team_id": "team-b",
+            "game_scores": [
+                {"game_number": 1, "score_a": 11, "score_b": 7},
+            ],
+        },
+    )
+    request["expected"].update(
+        {
+            "queue_version": 4,
+            "game_version": "playoff-sf-1-v1",
+            "queue_entry_version": 3,
+            "court_version": 2,
+        }
+    )
+
+    response = _client(monkeypatch, supabase).post(
+        f"{DAY_PREFIX}/commands",
+        headers={"Authorization": "Bearer local"},
+        json=request,
+    )
+
+    assert response.status_code == 200, response.text
+    assert calls == [request]
+
+
+def test_day_live_route_rejects_malformed_best_of_three_game_scores(
+    monkeypatch,
+) -> None:
+    supabase = FakeSupabase({"admin_activity_log": []})
+    request = _request(
+        "score_and_release",
+        payload={
+            "game_id": "playoff-sf-1",
+            "score_a": 2,
+            "score_b": 0,
+            "game_scores": [
+                {"game_number": 0, "score_a": 11, "score_b": 7},
+                {"game_number": 2, "score_a": 11, "score_b": 8},
+            ],
+        },
+    )
+
+    response = _client(monkeypatch, supabase).post(
+        f"{DAY_PREFIX}/commands",
+        headers={"Authorization": "Bearer local"},
+        json=request,
+    )
+
+    assert response.status_code == 422
 
 
 def test_day_live_route_accepts_reviewed_playoff_configuration(

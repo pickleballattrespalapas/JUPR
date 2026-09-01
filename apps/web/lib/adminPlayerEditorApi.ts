@@ -83,6 +83,7 @@ export type AdminPlayerMergePreview = {
   target_player?: { id: number; name: string };
   match_reference_counts?: Record<string, number>;
   collision_match_ids?: number[];
+  official_tournament_match_ids?: number[];
   league_rating_plan?: {
     source_rows?: Array<Record<string, unknown>>;
     target_rows?: Array<Record<string, unknown>>;

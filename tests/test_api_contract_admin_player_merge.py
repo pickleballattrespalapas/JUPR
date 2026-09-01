@@ -184,6 +184,25 @@ def test_admin_player_merge_preview_blocks_match_collision(monkeypatch):
     assert response.json()["collision_match_ids"] == [11]
 
 
+def test_admin_player_merge_preview_blocks_immutable_tournament_projection(monkeypatch):
+    tables = merge_tables()
+    tables["matches"][0]["tournament_game_id"] = "game-official-1"
+    supabase = FakeSupabase(tables)
+    _install_env(monkeypatch, supabase)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/players/editor/merge/preview",
+        headers={"Authorization": "Bearer local"},
+        json={"source_player_id": 1, "target_player_id": 2},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["can_merge"] is False
+    assert payload["official_tournament_match_ids"] == [11]
+    assert "authoritative tournament participant" in payload["warnings"][0]
+
+
 def test_admin_player_merge_preview_treats_inactive_at_as_inactive(monkeypatch):
     tables = merge_tables()
     tables["players"][0]["inactive_at"] = "2026-07-01T00:00:00+00:00"

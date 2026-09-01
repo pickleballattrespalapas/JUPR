@@ -17,6 +17,8 @@ def test_dedicated_live_routes_do_not_reuse_jupr_live_session_surface() -> None:
     assert "install_admin_tournament_live_routes" in installer
     assert "live_sessions" not in routes
     assert "admin_jupr_live" not in routes
+    assert "class AdminTournamentLiveGameScore(BaseModel)" in routes
+    assert "game_scores: list[AdminTournamentLiveGameScore]" in routes
 
 
 def test_python_service_reuses_tournament_domain_authority_and_draw_lock() -> None:
@@ -87,6 +89,15 @@ def test_responsive_runner_retains_exact_request_and_exposes_audit_evidence() ->
     assert "expected_draw_updated_at" in panel
     assert "expected_team_versions" in panel
     assert "expected_source_game_versions" in panel
+    assert "snapshot.source_game_versions" in panel
+    assert "game_scores?: LiveGameScore[]" in panel
+    assert "validateBestOfThreeGameScores" in panel
+    assert "Individual game scores" in panel
+    assert "tournament-live-game-${gameNumber}-team-a-score" in panel
+    assert "source_game_versions" in _read("apps/web/lib/adminTournamentApi.ts")
+    assert "publication_rating_game_ids" in _read(
+        "apps/web/lib/adminTournamentApi.ts"
+    )
     assert "/tournaments/admin/ops/tournaments" not in panel
     assert "const lockedTournamentId = initialTournamentId;" in panel
     assert "Refresh available draws" in panel

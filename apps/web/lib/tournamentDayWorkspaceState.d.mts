@@ -131,6 +131,52 @@ export function validateDayScoreDraft(
 ):
   | { ok: true; scoreA: number; scoreB: number; unusual: boolean; reasons: string[]; acknowledgementRequired: boolean; scoringFormat: string }
   | { ok: false; message: string; impossible?: boolean; reasons?: string[] };
+export type BestOfThreeGameScoreDraft = {
+  game_number: 1 | 2 | 3;
+  score_a: string | number;
+  score_b: string | number;
+};
+export type BestOfThreeGameScore = {
+  game_number: 1 | 2 | 3;
+  score_a: number;
+  score_b: number;
+};
+export function validateBestOfThreeGameScores(
+  gameScores: readonly BestOfThreeGameScoreDraft[],
+  scoring?: Record<string, unknown> | null,
+  unusualScoreAcknowledged?: boolean
+):
+  | {
+      ok: true;
+      scoreA: number;
+      scoreB: number;
+      gameScores: BestOfThreeGameScore[];
+      unusual: boolean;
+      reasons: string[];
+      acknowledgementRequired: boolean;
+      scoringFormat: "BEST_2_OF_3";
+    }
+  | { ok: false; message: string; impossible?: boolean; reasons?: string[] };
+export function validateBestOfThreeRetirementGameScores(
+  gameScores: readonly BestOfThreeGameScoreDraft[],
+  scoring?: Record<string, unknown> | null,
+  unusualScoreAcknowledged?: boolean
+):
+  | {
+      ok: true;
+      gameScores: BestOfThreeGameScore[];
+      unusual: boolean;
+      reasons: string[];
+      acknowledgementRequired: boolean;
+      scoringFormat: "BEST_2_OF_3";
+    }
+  | { ok: false; message: string; impossible?: boolean; reasons?: string[] };
+export function validateBestOfThreeCorrectionDraft(
+  gameScores: readonly BestOfThreeGameScoreDraft[],
+  currentGameScores: readonly BestOfThreeGameScore[],
+  scoring?: Record<string, unknown> | null,
+  unusualScoreAcknowledged?: boolean
+): ReturnType<typeof validateBestOfThreeGameScores>;
 export function validateDayCorrectionDraft(
   scoreA: string | number,
   scoreB: string | number,

@@ -11,6 +11,7 @@ GAME_TARGETS = {
     "GAME_TO_15": 15,
     "GAME_TO_21": 21,
 }
+BEST_OF_THREE_GAME_FORMAT = "GAME_TO_11"
 
 
 def resolve_tournament_scoring_format(event: dict[str, Any] | None) -> str:
@@ -43,8 +44,11 @@ def review_tournament_score(
     GAME_TO_* uses a win-by-two target. A score above the target with a margin
     greater than two is structurally recordable (and often a fat-finger), so it
     requires an explicit acknowledgement rather than silently passing. Very
-    long win-by-two deuce scores are also acknowledged. BEST_2_OF_3 stores
-    games won, not individual game points, so its only finals are 2-0 and 2-1.
+    long win-by-two deuce scores are also acknowledged. BEST_2_OF_3 is the
+    derived parent result used by standings and bracket progression, so its
+    only aggregate finals are 2-0 and 2-1. Played best-of-three results must
+    additionally pass ``require_best_of_three_game_scores`` so every real game
+    is preserved for ratings.
     """
 
     try:
@@ -134,10 +138,127 @@ def require_tournament_score(
     return review
 
 
+def review_best_of_three_game_scores(
+    game_scores: Any,
+    *,
+    unusual_score_acknowledged: bool = False,
+) -> dict[str, Any]:
+    """Validate the individual games in a best-two-of-three matchup.
+
+    The parent tournament game keeps the derived 2-0 or 2-1 series result for
+    standings and bracket progression.  Each row here is a real game to 11,
+    win by two, and is preserved independently for rating publication.
+    """
+
+    if not isinstance(game_scores, list) or len(game_scores) not in {2, 3}:
+        raise ValueError(
+            "Best 2 of 3 requires two games for a 2-0 finish or three games for a 2-1 finish."
+        )
+
+    normalized: list[dict[str, Any]] = []
+    wins_a = 0
+    wins_b = 0
+    unusual_reasons: list[str] = []
+    for expected_number, raw in enumerate(game_scores, start=1):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Game {expected_number} must include both team scores.")
+        try:
+            game_number = int(raw.get("game_number"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Game {expected_number} must use its consecutive game number."
+            ) from exc
+        if game_number != expected_number:
+            raise ValueError("Best-of-three game numbers must be consecutive starting at 1.")
+        if wins_a == 2 or wins_b == 2:
+            raise ValueError("A third game cannot be recorded after a team has won the first two games.")
+        try:
+            game_review = review_tournament_score(
+                raw.get("score_a"),
+                raw.get("score_b"),
+                scoring_format=BEST_OF_THREE_GAME_FORMAT,
+                unusual_score_acknowledged=unusual_score_acknowledged,
+            )
+        except ValueError as exc:
+            raise ValueError(f"Game {game_number}: {exc}") from exc
+        if game_review["status"] == "impossible":
+            raise ValueError(
+                f"Game {game_number}: " + " ".join(game_review["reasons"])
+            )
+        if game_review["status"] == "unusual":
+            unusual_reasons.extend(
+                f"Game {game_number}: {reason}"
+                for reason in game_review.get("reasons") or []
+            )
+        score_a = int(game_review["score_a"])
+        score_b = int(game_review["score_b"])
+        if score_a > score_b:
+            wins_a += 1
+            winner_side = "A"
+        else:
+            wins_b += 1
+            winner_side = "B"
+        normalized.append(
+            {
+                "game_number": game_number,
+                "score_a": score_a,
+                "score_b": score_b,
+                "winner_side": winner_side,
+                "score_review": game_review,
+            }
+        )
+
+    if max(wins_a, wins_b) != 2:
+        raise ValueError(
+            "Best 2 of 3 is incomplete. Enter the deciding third game after the teams split Games 1 and 2."
+        )
+    if len(normalized) != wins_a + wins_b:
+        raise ValueError("Best-of-three game rows do not match the derived series result.")
+
+    status = "unusual" if unusual_reasons else "ordinary"
+    acknowledged = bool(unusual_score_acknowledged)
+    return {
+        "status": status,
+        "scoring_format": "BEST_2_OF_3",
+        "target": 2,
+        "win_by_two": False,
+        "individual_game_format": BEST_OF_THREE_GAME_FORMAT,
+        "individual_game_target": GAME_TARGETS[BEST_OF_THREE_GAME_FORMAT],
+        "individual_game_win_by_two": True,
+        "score_a": wins_a,
+        "score_b": wins_b,
+        "game_scores": normalized,
+        "reasons": unusual_reasons,
+        "acknowledgement_required": status == "unusual",
+        "acknowledged": acknowledged if status == "unusual" else False,
+        "accepted": status == "ordinary" or (status == "unusual" and acknowledged),
+    }
+
+
+def require_best_of_three_game_scores(
+    game_scores: Any,
+    *,
+    unusual_score_acknowledged: bool = False,
+) -> dict[str, Any]:
+    review = review_best_of_three_game_scores(
+        game_scores,
+        unusual_score_acknowledged=unusual_score_acknowledged,
+    )
+    if not review["accepted"]:
+        raise ValueError(
+            "Unusual tournament score requires explicit acknowledgement: "
+            + " ".join(review["reasons"])
+        )
+    return review
+
+
 __all__ = [
+    "BEST_OF_THREE_GAME_FORMAT",
     "GAME_TARGETS",
     "SUPPORTED_SCORING_FORMATS",
+    "require_best_of_three_game_scores",
     "require_tournament_score",
     "resolve_tournament_scoring_format",
+    "review_best_of_three_game_scores",
     "review_tournament_score",
 ]

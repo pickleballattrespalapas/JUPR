@@ -13,6 +13,9 @@ import {
   resetFocusForDay,
   retainedDayCommandStorageKey,
   tournamentDayMedalMatchKind,
+  validateBestOfThreeCorrectionDraft,
+  validateBestOfThreeGameScores,
+  validateBestOfThreeRetirementGameScores,
   validateDayCorrectionDraft,
   validateDayScoreDraft,
   validateNonPlayedOutcomeDraft,
@@ -220,8 +223,150 @@ assert.equal(
 assert.equal(
   validateDayScoreDraft("1", "0", { format: "BEST_2_OF_3", target: 2 }).ok,
   false,
-  "BEST_2_OF_3 uses games won and cannot finish 1-0"
+  "BEST_2_OF_3 must use its individual-game validator"
 );
+const straightGames = [
+  { game_number: 1, score_a: "11", score_b: "7" },
+  { game_number: 2, score_a: "15", score_b: "13" },
+  { game_number: 3, score_a: "", score_b: "" }
+];
+assert.deepEqual(validateBestOfThreeGameScores(straightGames), {
+  ok: true,
+  scoreA: 2,
+  scoreB: 0,
+  gameScores: [
+    { game_number: 1, score_a: 11, score_b: 7 },
+    { game_number: 2, score_a: 15, score_b: 13 }
+  ],
+  unusual: false,
+  reasons: [],
+  acknowledgementRequired: false,
+  scoringFormat: "BEST_2_OF_3"
+});
+const splitGames = [
+  { game_number: 1, score_a: "11", score_b: "8" },
+  { game_number: 2, score_a: "9", score_b: "11" },
+  { game_number: 3, score_a: "12", score_b: "10" }
+];
+assert.deepEqual(validateBestOfThreeGameScores(splitGames), {
+  ok: true,
+  scoreA: 2,
+  scoreB: 1,
+  gameScores: [
+    { game_number: 1, score_a: 11, score_b: 8 },
+    { game_number: 2, score_a: 9, score_b: 11 },
+    { game_number: 3, score_a: 12, score_b: 10 }
+  ],
+  unusual: false,
+  reasons: [],
+  acknowledgementRequired: false,
+  scoringFormat: "BEST_2_OF_3"
+});
+assert.deepEqual(
+  validateBestOfThreeGameScores(splitGames.slice(0, 2)),
+  { ok: false, message: "Enter Game 3 because the series is tied 1–1." }
+);
+assert.match(
+  validateBestOfThreeGameScores([
+    { game_number: 1, score_a: "11", score_b: "11" },
+    { game_number: 2, score_a: "11", score_b: "7" }
+  ]).message,
+  /^Game 1:/
+);
+const unusualSeries = validateBestOfThreeGameScores([
+  { game_number: 1, score_a: "76", score_b: "11" },
+  { game_number: 2, score_a: "11", score_b: "4" }
+]);
+assert.equal(unusualSeries.ok, true);
+assert.equal(unusualSeries.acknowledgementRequired, true);
+assert.equal(validateBestOfThreeGameScores([
+  { game_number: 1, score_a: "76", score_b: "11" },
+  { game_number: 2, score_a: "11", score_b: "4" }
+], null, true).acknowledgementRequired, false);
+assert.deepEqual(
+  validateBestOfThreeGameScores([
+    ...splitGames.slice(0, 2),
+    { game_number: 3, score_a: "11", score_b: "" }
+  ]),
+  { ok: false, message: "Enter both scores for Game 3." }
+);
+assert.equal(validateBestOfThreeGameScores(
+  [
+    { game_number: 1, score_a: "15", score_b: "13" },
+    { game_number: 2, score_a: "15", score_b: "8" }
+  ],
+  {
+    individual_game_format: "GAME_TO_15",
+    individual_game_target: 15,
+    individual_game_win_by_two: true
+  }
+).ok, true);
+assert.deepEqual(
+  validateBestOfThreeGameScores([
+    ...straightGames.slice(0, 2),
+    { game_number: 3, score_a: "11", score_b: "4" }
+  ]),
+  { ok: false, message: "Game 3 must stay empty because the series was won in the first two games." }
+);
+assert.deepEqual(
+  validateBestOfThreeCorrectionDraft(splitGames, [
+    { game_number: 1, score_a: 11, score_b: 8 },
+    { game_number: 2, score_a: 9, score_b: 11 },
+    { game_number: 3, score_a: 12, score_b: 10 }
+  ]),
+  { ok: false, message: "Enter a changed individual game score before review." }
+);
+assert.equal(
+  validateBestOfThreeCorrectionDraft(
+    splitGames.map((game) => game.game_number === 3 ? { ...game, score_a: "14", score_b: "12" } : game),
+    [
+      { game_number: 1, score_a: 11, score_b: 8 },
+      { game_number: 2, score_a: 9, score_b: 11 },
+      { game_number: 3, score_a: 12, score_b: 10 }
+    ]
+  ).ok,
+  true
+);
+const retirementBeforePlay = validateBestOfThreeRetirementGameScores([
+  { game_number: 1, score_a: "", score_b: "" },
+  { game_number: 2, score_a: "", score_b: "" },
+  { game_number: 3, score_a: "", score_b: "" }
+]);
+assert.equal(retirementBeforePlay.ok, true);
+assert.deepEqual(retirementBeforePlay.gameScores, []);
+const retirementAfterOne = validateBestOfThreeRetirementGameScores([
+  { game_number: 1, score_a: "11", score_b: "7" },
+  { game_number: 2, score_a: "", score_b: "" }
+]);
+assert.equal(retirementAfterOne.ok, true);
+assert.deepEqual(retirementAfterOne.gameScores, [
+  { game_number: 1, score_a: 11, score_b: 7 }
+]);
+const retirementAfterSplit = validateBestOfThreeRetirementGameScores(splitGames.slice(0, 2));
+assert.equal(retirementAfterSplit.ok, true);
+assert.deepEqual(retirementAfterSplit.gameScores, [
+  { game_number: 1, score_a: 11, score_b: 8 },
+  { game_number: 2, score_a: 9, score_b: 11 }
+]);
+assert.match(
+  validateBestOfThreeRetirementGameScores(straightGames.slice(0, 2)).message,
+  /already won Games 1 and 2/
+);
+assert.deepEqual(
+  validateBestOfThreeRetirementGameScores([
+    { game_number: 1, score_a: "11", score_b: "7" },
+    { game_number: 2, score_a: "8", score_b: "" }
+  ]),
+  { ok: false, message: "Enter both scores for completed Game 2." }
+);
+const unusualRetirementGame = validateBestOfThreeRetirementGameScores([
+  { game_number: 1, score_a: "76", score_b: "11" }
+]);
+assert.equal(unusualRetirementGame.ok, true);
+assert.equal(unusualRetirementGame.acknowledgementRequired, true);
+assert.equal(validateBestOfThreeRetirementGameScores([
+  { game_number: 1, score_a: "76", score_b: "11" }
+], null, true).acknowledgementRequired, false);
 assert.equal(validateNonPlayedOutcomeDraft("NO_SHOW", "team-a", "Opponent absent").ok, true);
 assert.deepEqual(validateNonPlayedOutcomeDraft("RETIREMENT", "team-b", ""), {
   ok: true,
