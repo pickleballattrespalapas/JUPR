@@ -304,6 +304,9 @@ def test_day_result_dialog_submits_directly_and_retains_uncertain_recovery() -> 
     non_play_submit = panel[
         panel.index("async function saveOutcome") : panel.index("if (sessionLoading)")
     ]
+    reconcile = panel[
+        panel.index("async function reconcileOperation") : panel.index("function selectDay")
+    ]
 
     assert 'id="day-score-entry-form"' in panel
     assert 'void saveScore()' in panel
@@ -318,6 +321,9 @@ def test_day_result_dialog_submits_directly_and_retains_uncertain_recovery() -> 
     assert "score_b:" not in non_play_submit
     assert "game_scores: retirementGameScores" in non_play_submit
     assert "unusual_score_acknowledgement: outcomeEditor.unusualScoreAcknowledged" in non_play_submit
+    assert "operation.client_idempotency_key" in reconcile
+    assert "persistPending(null)" in reconcile
+    assert reconcile.index("persistPending(null)") < reconcile.index("setSnapshot(result.snapshot)")
 
 
 def test_day_snapshot_identity_is_checked_for_club_tournament_and_day() -> None:
