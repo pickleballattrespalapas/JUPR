@@ -745,6 +745,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
             <div>Source social links<br /><strong>{mergePreview.social_identity_counts?.source_linked ?? 0}</strong></div>
           </div>
           {mergePreview.collision_match_ids?.length ? <p style={{ color: "#b91c1c" }}>Blocked by match collision(s): {mergePreview.collision_match_ids.join(", ")}</p> : null}
+          {mergePreview.official_tournament_match_ids?.length ? <p style={{ color: "#b91c1c" }}>Blocked by immutable official tournament match(es): {mergePreview.official_tournament_match_ids.join(", ")}. Correct the authoritative tournament participant before merging.</p> : null}
           {mergePreview.league_rating_plan?.conflicts?.length ? <p style={{ color: "#92400e" }}>League conflicts: {mergePreview.league_rating_plan.conflicts.join(", ")}</p> : null}
           {mergePreview.warnings?.length ? <ul style={{ color: "#92400e" }}>{mergePreview.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
           <p>

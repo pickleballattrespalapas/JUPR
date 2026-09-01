@@ -48,6 +48,16 @@ function scoreText(game: PublicTournamentGameResult): string {
   return game.state === "FINAL" ? "Final" : game.state.toLowerCase();
 }
 
+function seriesGameScoresText(game: PublicTournamentGameResult): string | null {
+  const scores = [...(game.game_scores || [])].sort(
+    (left, right) => left.game_number - right.game_number
+  );
+  if (!scores.length) return null;
+  return scores
+    .map((score) => `Game ${score.game_number}: ${score.score_a}–${score.score_b}`)
+    .join(" · ");
+}
+
 function tiebreakCriterionLabel(criterion: string): string {
   const labels: Record<string, string> = {
     WINS: "Wins",
@@ -263,6 +273,11 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
                 <strong>{gameTitle(game)}</strong>
                 <p style={{ margin: "0.4rem 0" }}>{game.team_a_name} vs. {game.team_b_name}</p>
                 <p style={{ margin: 0, fontWeight: 800 }}>{scoreText(game)}</p>
+                {seriesGameScoresText(game) ? (
+                  <p style={{ margin: "0.25rem 0 0", color: "#475569", fontSize: "0.85rem" }}>
+                    {seriesGameScoresText(game)}
+                  </p>
+                ) : null}
               </article>
             ))}
           </div>
@@ -276,7 +291,14 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
             {draw.scores.map((game) => (
               <div key={game.public_game_key} style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", borderBottom: "1px solid #e2e8f0", paddingBottom: "0.5rem" }}>
                 <span><strong>{gameTitle(game)}</strong> · {game.team_a_name} vs. {game.team_b_name}</span>
-                <strong>{scoreText(game)}</strong>
+                <span style={{ textAlign: "right" }}>
+                  <strong>{scoreText(game)}</strong>
+                  {seriesGameScoresText(game) ? (
+                    <small style={{ display: "block", marginTop: "0.2rem", color: "#475569" }}>
+                      {seriesGameScoresText(game)}
+                    </small>
+                  ) : null}
+                </span>
               </div>
             ))}
           </div>

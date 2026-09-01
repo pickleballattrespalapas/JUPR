@@ -714,6 +714,94 @@ def test_snapshot_is_day_scoped_multi_draw_human_readable_and_stable() -> None:
     assert rescored["state_fingerprint"] != first["state_fingerprint"]
 
 
+def test_snapshot_nests_best_of_three_rating_games_under_the_matchup() -> None:
+    tables = snapshot_tables()
+    parent = next(row for row in tables["tournament_games"] if row["id"] == "game-a")
+    parent.update(
+        {
+            "score_a": 2,
+            "score_b": 1,
+            "winner_team_id": "team-a1",
+            "loser_team_id": "team-a2",
+            "finalized_at": "2026-08-17T10:00:00Z",
+            "scoring_format": "BEST_2_OF_3",
+            "parent_result_only": True,
+        }
+    )
+    tables["tournament_games"].extend(
+        [
+            {
+                **{
+                    key: parent.get(key)
+                    for key in (
+                        "tournament_id",
+                        "draw_id",
+                        "registration_day_id",
+                        "event_option_id",
+                        "team_a_id",
+                        "team_b_id",
+                    )
+                },
+                "id": f"game-a-series-{game_number}",
+                "stage": "SERIES_GAME",
+                "series_parent_game_id": "game-a",
+                "series_game_number": game_number,
+                "score_a": score_a,
+                "score_b": score_b,
+                "winner_team_id": (
+                    "team-a1" if score_a > score_b else "team-a2"
+                ),
+                "loser_team_id": (
+                    "team-a2" if score_a > score_b else "team-a1"
+                ),
+                "finalized_at": f"2026-08-17T09:59:59.00000{game_number}Z",
+                "scoring_format": "GAME_TO_11",
+                "score_review_json": {
+                    "accepted": True,
+                    "scoring_format": "GAME_TO_11",
+                },
+                "updated_at": f"series-v{game_number}",
+            }
+            for game_number, score_a, score_b in (
+                (1, 11, 7),
+                (2, 8, 11),
+                (3, 15, 13),
+            )
+        ]
+    )
+
+    snapshot = build_admin_tournament_day_live_snapshot(
+        FakeSupabase(tables),
+        club_id="club-1",
+        tournament_id="tour-1",
+        registration_day_id="day-1",
+    )
+
+    assert len(snapshot["games"]) == 2
+    projected = next(row for row in snapshot["games"] if row["id"] == "game-a")
+    assert [
+        {
+            "game_number": row["game_number"],
+            "score_a": row["score_a"],
+            "score_b": row["score_b"],
+        }
+        for row in projected["game_scores"]
+    ] == [
+        {"game_number": 1, "score_a": 11, "score_b": 7},
+        {"game_number": 2, "score_a": 8, "score_b": 11},
+        {"game_number": 3, "score_a": 15, "score_b": 13},
+    ]
+    assert all(row["stage"] != "SERIES_GAME" for row in snapshot["games"])
+    draw = next(row for row in snapshot["draws"] if row["id"] == "draw-a")
+    assert [row["id"] for row in draw["source_game_versions"]] == [
+        "game-a",
+        "game-a-series-1",
+        "game-a-series-2",
+        "game-a-series-3",
+    ]
+    assert len(snapshot["state_fingerprint"]) == 64
+
+
 def test_check_in_waiver_and_payment_are_informational_to_live_day() -> None:
     baseline_tables = snapshot_tables()
     informational_tables = deepcopy(baseline_tables)
@@ -1703,7 +1791,12 @@ def test_playoff_scoring_override_is_authoritative_for_game_review() -> None:
 
     assert scoring["format"] == "BEST_2_OF_3"
     assert scoring["target"] == 2
-    assert scoring["best_of_three_score_semantics"] == "games_won_2_0_or_2_1"
+    assert scoring["best_of_three_score_semantics"] == (
+        "individual_game_points_with_derived_series_result"
+    )
+    assert scoring["individual_game_format"] == "GAME_TO_11"
+    assert scoring["individual_game_target"] == 11
+    assert scoring["individual_game_win_by_two"] is True
 
 
 def test_generate_playoff_configuration_is_durable_outside_legacy_rpc_payload() -> None:
@@ -2505,6 +2598,163 @@ def test_score_release_leaves_the_next_matchup_queued(monkeypatch) -> None:
     assert result["snapshot"]["summary"]["completed_games"] == 1
 
 
+def test_best_of_three_score_release_persists_each_game_in_review_evidence(
+    monkeypatch,
+) -> None:
+    before = _workspace_snapshot()
+    before["courts"][0].update(
+        {
+            "state": "ON_COURT",
+            "current_assignment": {
+                "id": "queue-a",
+                "game_id": "game-a",
+                "state": "ON_COURT",
+                "version": "5",
+            },
+        }
+    )
+    before["games"] = [
+        {
+            "id": "game-a",
+            "draw_id": "draw-a",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "team_a": {"team_id": "team-a1"},
+            "team_b": {"team_id": "team-a2"},
+            "scoring": {
+                "format": "BEST_2_OF_3",
+                "target": 2,
+                "win_by_two": False,
+                "individual_game_format": "GAME_TO_11",
+                "individual_game_target": 11,
+                "individual_game_win_by_two": True,
+            },
+            "version": "game-a-v1",
+        }
+    ]
+    after = deepcopy(before)
+    after["courts"][0].update(
+        {"state": "AVAILABLE", "current_assignment": None}
+    )
+    after["games"][0].update(
+        {
+            "score_a": 2,
+            "score_b": 1,
+            "winner_team_id": "team-a1",
+            "loser_team_id": "team-a2",
+            "game_scores": [
+                {"game_number": 1, "score_a": 11, "score_b": 7},
+                {"game_number": 2, "score_a": 8, "score_b": 11},
+                {"game_number": 3, "score_a": 15, "score_b": 13},
+            ],
+        }
+    )
+    supabase = FakeSupabase()
+    state = _install_command_harness(monkeypatch, supabase, (before, after))
+    supabase.rpc_handlers[
+        "admin_score_release_tournament_day_game_cas"
+    ] = lambda _params: {
+        "ok": True,
+        "completed_game_id": "game-a",
+        "released_court_id": "court-row-1",
+        "assignments": [],
+    }
+    game_scores = [
+        {"game_number": 1, "score_a": 11, "score_b": 7},
+        {"game_number": 2, "score_a": 8, "score_b": 11},
+        {"game_number": 3, "score_a": 15, "score_b": 13},
+    ]
+    request = _request(
+        "score_and_release",
+        before,
+        payload={
+            "game_id": "game-a",
+            "score_a": 2,
+            "score_b": 1,
+            "game_scores": game_scores,
+        },
+        draw_version="3",
+        game_version="game-a-v1",
+        court_version="2",
+    )
+
+    _execute(supabase, request)
+
+    params = supabase.rpc_calls[0][1]
+    assert params["p_game_patch"]["score_a"] == 2
+    assert params["p_game_patch"]["score_b"] == 1
+    evidence = state["runner_calls"][0]["payload"]["score_evidence"]
+    assert evidence["score_review"]["score_a"] == 2
+    assert evidence["score_review"]["score_b"] == 1
+    assert [
+        {
+            "game_number": row["game_number"],
+            "score_a": row["score_a"],
+            "score_b": row["score_b"],
+        }
+        for row in evidence["score_review"]["game_scores"]
+    ] == game_scores
+    assert state["runner_calls"][0]["payload"]["payload"] == {
+        "game_id": "game-a",
+        "score_a": 2,
+        "score_b": 1,
+    }
+    assert state["runner_calls"][0]["payload"]["operator_review"][
+        "game_scores"
+    ] == game_scores
+
+
+def test_best_of_three_series_result_must_match_individual_games(monkeypatch) -> None:
+    snapshot = _workspace_snapshot()
+    snapshot["courts"][0].update(
+        {
+            "state": "ON_COURT",
+            "current_assignment": {
+                "id": "queue-a",
+                "game_id": "game-a",
+                "state": "ON_COURT",
+                "version": "5",
+            },
+        }
+    )
+    snapshot["games"] = [
+        {
+            "id": "game-a",
+            "draw_id": "draw-a",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "team_a": {"team_id": "team-a1"},
+            "team_b": {"team_id": "team-a2"},
+            "scoring": {"format": "BEST_2_OF_3", "target": 2},
+            "version": "game-a-v1",
+        }
+    ]
+    supabase = FakeSupabase()
+    _install_command_harness(monkeypatch, supabase, snapshot)
+    request = _request(
+        "score_and_release",
+        snapshot,
+        payload={
+            "game_id": "game-a",
+            "score_a": 2,
+            "score_b": 1,
+            "game_scores": [
+                {"game_number": 1, "score_a": 11, "score_b": 7},
+                {"game_number": 2, "score_a": 11, "score_b": 8},
+            ],
+        },
+        draw_version="3",
+        game_version="game-a-v1",
+        court_version="2",
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        _execute(supabase, request)
+    assert supabase.rpc_calls == []
+
+
 def test_unusual_score_requires_acknowledgement_before_atomic_score_rpc(monkeypatch) -> None:
     snapshot = _workspace_snapshot()
     snapshot["courts"][0].update(
@@ -2732,12 +2982,225 @@ def test_retirement_selects_losing_team_allows_blank_note_and_carries_team_cas(
     assert params["p_retirement_max_score"] == 11
     evidence = state["runner_calls"][0]["payload"]["score_evidence"]
     assert evidence["outcome"]["non_playing_team_id"] == "team-a2"
+    assert "game_scores" not in evidence["score_review"]
+    assert "retirement_completed_games_preserved" not in evidence["score_review"]
+    assert "operator_review" not in state["runner_calls"][0]["payload"]
     assert evidence["retirement"] == {
         "team_id": "team-a2",
         "expected_team_updated_at": "team-a2-v1",
         "max_score": 11,
     }
     assert result["snapshot"]["games"][0]["result_type"] == "RETIREMENT"
+
+
+def _best_of_three_retirement_workspace() -> dict:
+    snapshot = _workspace_snapshot()
+    snapshot["draws"][0].update(
+        {
+            "playoff_review": {"default_scoring_format": "BEST_2_OF_3"},
+            "team_rows": [
+                {
+                    "id": "team-a1",
+                    "team_number": 1,
+                    "competition_status": "ACTIVE",
+                    "updated_at": "team-a1-v1",
+                },
+                {
+                    "id": "team-a2",
+                    "team_number": 2,
+                    "competition_status": "ACTIVE",
+                    "updated_at": "team-a2-v1",
+                },
+            ],
+        }
+    )
+    snapshot["games"] = [
+        {
+            "id": "game-a",
+            "draw_id": "draw-a",
+            "state": "ON_COURT",
+            "stage": "ROUND_ROBIN",
+            "team_a_id": "team-a1",
+            "team_b_id": "team-a2",
+            "team_a": {
+                "team_id": "team-a1",
+                "name": "Alpha",
+                "participant_names": [],
+            },
+            "team_b": {
+                "team_id": "team-a2",
+                "name": "Bravo",
+                "participant_names": [],
+            },
+            "scoring_format": "BEST_2_OF_3",
+            "scoring": {
+                "format": "BEST_2_OF_3",
+                "target": 2,
+                "win_by_two": False,
+                "individual_game_format": "GAME_TO_11",
+                "individual_game_target": 11,
+                "individual_game_win_by_two": True,
+            },
+            "version": "game-a-v1",
+            "queue_entry_version": "6",
+            "court_id": "court-row-1",
+        }
+    ]
+    snapshot["courts"][0].update(
+        {
+            "state": "ON_COURT",
+            "current_assignment": {
+                "game_id": "game-a",
+                "version": "6",
+            },
+        }
+    )
+    return snapshot
+
+
+@pytest.mark.parametrize(
+    "game_scores",
+    [
+        [{"game_number": 1, "score_a": 11, "score_b": 7}],
+        [
+            {"game_number": 1, "score_a": 11, "score_b": 7},
+            {"game_number": 2, "score_a": 8, "score_b": 11},
+        ],
+    ],
+)
+def test_mid_series_best_of_three_retirement_preserves_completed_rating_games(
+    monkeypatch,
+    game_scores,
+) -> None:
+    before = _best_of_three_retirement_workspace()
+    after = deepcopy(before)
+    after["courts"][0].update(
+        {"state": "AVAILABLE", "current_assignment": None}
+    )
+    after["games"][0].update(
+        {
+            "state": "COMPLETED",
+            "score_a": 2,
+            "score_b": 0,
+            "winner_team_id": "team-a1",
+            "loser_team_id": "team-a2",
+            "result_type": "RETIREMENT",
+        }
+    )
+    supabase = FakeSupabase()
+    state = _install_command_harness(monkeypatch, supabase, (before, after))
+    supabase.rpc_handlers[
+        "admin_record_tournament_day_non_played_result_cas"
+    ] = lambda _params: {
+        "ok": True,
+        "non_played_result": True,
+        "team_retired": True,
+    }
+    request = _request(
+        "record_non_played_result",
+        before,
+        payload={
+            "game_id": "game-a",
+            "result_type": "RETIREMENT",
+            "non_playing_team_id": "team-a2",
+            "game_scores": game_scores,
+        },
+        game_version="game-a-v1",
+        queue_entry_version="6",
+        court_version="2",
+    )
+
+    _execute(supabase, request)
+
+    params = supabase.rpc_calls[0][1]
+    assert params["p_game_patch"]["score_a"] == 2
+    assert params["p_game_patch"]["score_b"] == 0
+    assert params["p_result_type"] == "RETIREMENT"
+    retained = state["runner_calls"][0]["payload"]
+    assert retained["payload"] == {
+        "game_id": "game-a",
+        "result_type": "RETIREMENT",
+        "non_playing_team_id": "team-a2",
+        "result_note": "",
+    }
+    assert retained["operator_review"] == {
+        "unusual_score_acknowledgement": False,
+        "game_scores": game_scores,
+    }
+    score_review = retained["score_evidence"]["score_review"]
+    assert score_review["retirement_completed_games_preserved"] is True
+    assert score_review["scoring_format"] == "BEST_2_OF_3"
+    assert score_review["score_a"] == 2
+    assert score_review["score_b"] == 0
+    assert [
+        {
+            "game_number": row["game_number"],
+            "score_a": row["score_a"],
+            "score_b": row["score_b"],
+        }
+        for row in score_review["game_scores"]
+    ] == game_scores
+    assert all(
+        set(row) == {"game_number", "score_a", "score_b", "score_review"}
+        and row["score_review"]["accepted"] is True
+        for row in score_review["game_scores"]
+    )
+    assert retained["score_evidence"]["outcome"]["rating_publish_eligible"] is False
+
+
+@pytest.mark.parametrize(
+    ("result_type", "game_scores", "message"),
+    [
+        (
+            "FORFEIT",
+            [{"game_number": 1, "score_a": 11, "score_b": 7}],
+            "only be preserved",
+        ),
+        (
+            "RETIREMENT",
+            [
+                {"game_number": 1, "score_a": 11, "score_b": 7},
+                {"game_number": 2, "score_a": 11, "score_b": 8},
+            ],
+            "already won two games",
+        ),
+        (
+            "RETIREMENT",
+            [
+                {"game_number": 1, "score_a": 11, "score_b": 7},
+                {"game_number": 2, "score_a": 8, "score_b": 11},
+                {"game_number": 3, "score_a": 11, "score_b": 9},
+            ],
+            "one completed game or two split",
+        ),
+    ],
+)
+def test_non_played_best_of_three_completed_games_fail_closed_when_not_partial_retirement(
+    monkeypatch,
+    result_type,
+    game_scores,
+    message,
+) -> None:
+    snapshot = _best_of_three_retirement_workspace()
+    supabase = FakeSupabase()
+    _install_command_harness(monkeypatch, supabase, snapshot)
+    request = _request(
+        "record_non_played_result",
+        snapshot,
+        payload={
+            "game_id": "game-a",
+            "result_type": result_type,
+            "non_playing_team_id": "team-a2",
+            "game_scores": game_scores,
+        },
+        game_version="game-a-v1",
+        queue_entry_version="6",
+        court_version="2",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        _execute(supabase, request)
+    assert supabase.rpc_calls == []
 
 
 def test_playoff_retirement_keeps_round_robin_target_separate_from_game_format(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 import os
 
@@ -20,6 +20,7 @@ from jupr_app.services.admin_tournament_guarded_operation import (
     TournamentAdminRecoveryRequiredError,
 )
 from jupr_app.services.admin_tournament_lifecycle_service import (
+    build_tournament_rating_game_plan,
     require_admin_tournament_official_publish_readiness,
 )
 from jupr_app.services.admin_tournament_service import (
@@ -349,6 +350,54 @@ def _published_date(tournament: dict[str, Any], draw: dict[str, Any], game: dict
     return _now_iso()
 
 
+def _official_rating_application_sort_key(
+    payload: dict[str, Any],
+) -> tuple[datetime, str]:
+    """Match Replay History's chronological application order before insert.
+
+    Replay applies official rows by ``matches.date`` and then the generated
+    ``matches.id``. A stable source-game id supplies the pre-insert tie-break;
+    exact timestamp ties are made unique below so correctness never depends on
+    relational INSERT order determining generated ids.
+    """
+
+    published_at = coerce_utc_datetime(payload.get("date"))
+    if published_at is None:
+        raise ValueError(
+            "Official publish requires every rating-eligible tournament game "
+            "to have a valid finalized date."
+        )
+    game_id = _clean_text(payload.get("tournament_game_id"), limit=120)
+    if not game_id:
+        raise ValueError(
+            "Official publish requires every rating-eligible tournament game "
+            "to have a stable source id."
+        )
+    return published_at, game_id
+
+
+def _stabilize_official_rating_application_order(
+    payloads: list[dict[str, Any]],
+) -> None:
+    """Sort chronologically and make Replay's primary date key unambiguous.
+
+    Source games can share one finalized timestamp. PostgreSQL does not
+    formally promise that an ``INSERT ... SELECT`` without ``ORDER BY`` assigns
+    identity values in JSON array order, so relying on Replay's secondary
+    ``matches.id`` key would be unsafe. Preserve source chronology and the
+    source-id tie-break while spacing collisions by one microsecond.
+    """
+
+    payloads.sort(key=_official_rating_application_sort_key)
+    previous_applied_at: datetime | None = None
+    for payload in payloads:
+        applied_at, _game_id = _official_rating_application_sort_key(payload)
+        if previous_applied_at is not None and applied_at <= previous_applied_at:
+            applied_at = previous_applied_at + timedelta(microseconds=1)
+            payload["date"] = applied_at.isoformat()
+        previous_applied_at = applied_at
+
+
 def _validate_scored_game(game: dict[str, Any], *, game_index: int) -> tuple[int, int]:
     score_a = _safe_int(game.get("score_a"))
     score_b = _safe_int(game.get("score_b"))
@@ -375,9 +424,16 @@ def _validate_bonus_elo(value: Any) -> float:
 
 
 def _bonus_label_for_game(game: dict[str, Any]) -> str | None:
-    if _clean_text(game.get("stage"), limit=80).upper() != "PLAYOFF":
+    series_parent = game.get("_series_parent_game")
+    if isinstance(series_parent, dict):
+        if not bool(game.get("_series_clinching")):
+            return None
+        bonus_source = series_parent
+    else:
+        bonus_source = game
+    if _clean_text(bonus_source.get("stage"), limit=80).upper() != "PLAYOFF":
         return None
-    round_key = _clean_text(game.get("playoff_round"), limit=80).upper()
+    round_key = _clean_text(bonus_source.get("playoff_round"), limit=80).upper()
     return BONUS_PLAYOFF_ROUNDS.get(round_key)
 
 
@@ -406,10 +462,23 @@ def _build_official_match_payloads(
     league_name = f"Tournament · {tournament_name} · {division_label}"
     week_tag = _clean_text(draw.get("name"), limit=120) or division_label
     bonus_elo = _validate_bonus_elo(playoff_winner_bonus_elo)
+    rating_game_plan = build_tournament_rating_game_plan(games)
+    series_errors = list(rating_game_plan.get("errors") or [])
+    if series_errors:
+        details = "; ".join(
+            str(row.get("message") or row.get("code") or "invalid series game")
+            for row in series_errors[:3]
+        )
+        if len(series_errors) > 3:
+            details += f"; and {len(series_errors) - 3} more"
+        raise ValueError(
+            "Best-two-of-three rating evidence is incomplete or inconsistent: "
+            + details
+        )
 
     payloads: list[dict[str, Any]] = []
     detected_format: str | None = None
-    for index, game in enumerate(games, start=1):
+    for index, game in enumerate(rating_game_plan["rating_games"], start=1):
         result_type = _clean_text(game.get("result_type") or "PLAYED", limit=40).upper()
         if result_type != "PLAYED":
             # Day Live stores a synthetic score only so standings and bracket
@@ -455,6 +524,7 @@ def _build_official_match_payloads(
             payload["rating_bonus_elo"] = bonus_elo
             payload["rating_bonus_reason"] = f"tournament_{bonus_label}_winner_bonus"
         payloads.append(payload)
+    _stabilize_official_rating_application_order(payloads)
     return payloads
 
 
@@ -519,9 +589,16 @@ def _official_publish_plan_from_state(
     bonus_elo: float,
 ) -> dict[str, Any]:
     game_ids = [str(row.get("tournament_game_id") or "") for row in match_payloads]
+    if not game_ids:
+        raise ValueError(
+            "Official publish requires at least one played tournament game eligible for rating publication."
+        )
     if len(game_ids) != len(set(game_ids)) or any(not value for value in game_ids):
         raise ValueError("Official publish requires one unique tournament game id per reviewed match.")
     projections = [_official_match_projection(row, club_id=str(club_id)) for row in match_payloads]
+    competition_game_count = len(
+        build_tournament_rating_game_plan(games)["competition_games"]
+    )
     fingerprints = sorted(
         [
             {
@@ -556,12 +633,18 @@ def _official_publish_plan_from_state(
         "team_versions": _reviewed_versions(teams, label="team"),
         "game_versions": _reviewed_versions(games, label="game"),
         "tournament_game_ids": sorted(game_ids),
+        # Preserve the rating-sensitive sequence in the immutable request.
+        # The projection list below is identity-sorted for content comparison,
+        # while this field ensures recovery cannot silently accept a changed
+        # chronological application order.
+        "rating_application_order": list(game_ids),
         "match_payload_projections": sorted(
             projections,
             key=lambda row: str(row.get("tournament_game_id") or ""),
         ),
         "match_payload_fingerprints": fingerprints,
         "match_count": len(game_ids),
+        "competition_game_count": competition_game_count,
         "singles_match_count": singles_count,
         "doubles_match_count": len(game_ids) - singles_count,
         "playoff_winner_bonus_elo": float(bonus_elo),
@@ -748,6 +831,13 @@ def reconcile_admin_tournament_official_publish(
         )
     singles_count = int(expected_plan.get("singles_match_count") or 0)
     doubles_count = int(expected_plan.get("doubles_match_count") or 0)
+    competition_game_count = _safe_int(
+        expected_plan.get("competition_game_count")
+    )
+    if competition_game_count is None or competition_game_count < 1:
+        raise TournamentAdminRecoveryRequiredError(
+            "Official publish recovery is missing its immutable competition-game count. The operation remains recovery-required; do not repeat it."
+        )
     bonus_ids = [str(value) for value in (expected_plan.get("bonus_tournament_game_ids") or [])]
     return {
         "ok": True,
@@ -756,7 +846,7 @@ def reconcile_admin_tournament_official_publish(
         "match_count": len(expected_ids),
         "singles_match_count": singles_count,
         "doubles_match_count": doubles_count,
-        "game_count": len(expected_ids),
+        "game_count": competition_game_count,
         "tournament_game_ids": expected_ids,
         "playoff_winner_bonus_elo": float(expected_plan.get("playoff_winner_bonus_elo") or 0.0),
         "bonus_match_count": len(bonus_ids),
@@ -820,16 +910,6 @@ def publish_admin_tournament_draw_matches(
         playoff_winner_bonus_elo=bonus_elo,
     )
 
-    game_ids = [_clean_text(row.get("id"), limit=120) for row in games if _clean_text(row.get("id"), limit=120)]
-    already_published = _existing_published_game_ids(
-        supabase,
-        club_id=str(club_id),
-        tournament_id=clean_tournament_id,
-        game_ids=game_ids,
-    )
-    if already_published:
-        raise ValueError("Some tournament games are already published as official matches: " + ", ".join(sorted(already_published)))
-
     event_option = _fetch_event_option(
         supabase,
         tournament_id=clean_tournament_id,
@@ -843,6 +923,26 @@ def publish_admin_tournament_draw_matches(
         games=games,
         playoff_winner_bonus_elo=bonus_elo,
     )
+    game_ids = [
+        _clean_text(row.get("tournament_game_id"), limit=120)
+        for row in match_payloads
+        if _clean_text(row.get("tournament_game_id"), limit=120)
+    ]
+    if not game_ids:
+        raise ValueError("This draw has no played tournament games eligible for official rating publication.")
+    source_game_ids = [
+        _clean_text(row.get("id"), limit=120)
+        for row in games
+        if _clean_text(row.get("id"), limit=120)
+    ]
+    already_published = _existing_published_game_ids(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=clean_tournament_id,
+        game_ids=source_game_ids,
+    )
+    if already_published:
+        raise ValueError("Some tournament games are already published as official matches: " + ", ".join(sorted(already_published)))
     current_plan = _official_publish_plan_from_state(
         club_id=str(club_id),
         tournament=tournament,
@@ -853,6 +953,7 @@ def publish_admin_tournament_draw_matches(
         match_payloads=match_payloads,
         bonus_elo=bonus_elo,
     )
+    competition_game_count = int(current_plan["competition_game_count"])
     if expected_plan is not None and current_plan != expected_plan:
         raise StaleTournamentAdminStateError(
             "The draw, team set, game versions, or official match payload changed after review. No matches were published."
@@ -872,7 +973,7 @@ def publish_admin_tournament_draw_matches(
             "match_count": len(match_payloads),
             "singles_match_count": len(singles_payloads),
             "doubles_match_count": len(doubles_payloads),
-            "game_count": len(games),
+            "game_count": competition_game_count,
             "tournament_game_ids": game_ids,
             "playoff_winner_bonus_elo": bonus_elo,
             "bonus_match_count": len(bonus_game_ids),
@@ -1057,7 +1158,10 @@ def publish_admin_tournament_draw_matches(
         action_type="publish_tournament_games_to_matches_admin",
         entity_type="tournament_event_draw",
         entity_id=clean_draw_id,
-        before_json={"draw": _draw_payload(draw), "game_count": len(games)},
+        before_json={
+            "draw": _draw_payload(draw),
+            "game_count": competition_game_count,
+        },
         after_json={
             "source_client": "fastapi/nextjs",
             "source_page": source,
@@ -1096,7 +1200,7 @@ def publish_admin_tournament_draw_matches(
         "match_count": inserted_count,
         "singles_match_count": len(singles_payloads),
         "doubles_match_count": len(doubles_payloads),
-        "game_count": len(games),
+        "game_count": competition_game_count,
         "tournament_game_ids": game_ids,
         "playoff_winner_bonus_elo": bonus_elo,
         "bonus_match_count": len(bonus_game_ids),

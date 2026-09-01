@@ -320,9 +320,20 @@ class AdminTournamentOfficialMatchPublishRequest(BaseModel):
     source: str = "next_tournament_admin_publish_matches"
 
 
+class AdminTournamentGameScoreInput(BaseModel):
+    game_number: int = Field(ge=1, le=3)
+    score_a: int = Field(ge=0)
+    score_b: int = Field(ge=0)
+
+
 class AdminTournamentGameScoreRequest(BaseModel):
     score_a: int
     score_b: int
+    game_scores: list[AdminTournamentGameScoreInput] | None = Field(
+        default=None,
+        min_length=2,
+        max_length=3,
+    )
     unusual_score_acknowledged: bool = False
     expected_state_fingerprint: str | None = None
     expected_game_updated_at: str | None = None
@@ -1584,6 +1595,16 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 "game_id": str(game_id),
                 "score_a": payload.score_a,
                 "score_b": payload.score_b,
+                "game_scores": (
+                    [
+                        row.model_dump()
+                        if hasattr(row, "model_dump")
+                        else row.dict()
+                        for row in payload.game_scores
+                    ]
+                    if payload.game_scores is not None
+                    else None
+                ),
                 "unusual_score_acknowledged": payload.unusual_score_acknowledged,
                 "actor_email": actor_email,
                 "actor_role": actor_role,
@@ -1605,6 +1626,16 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                     "game_id": str(game_id),
                     "score_a": payload.score_a,
                     "score_b": payload.score_b,
+                    "game_scores": (
+                        [
+                            row.model_dump()
+                            if hasattr(row, "model_dump")
+                            else row.dict()
+                            for row in payload.game_scores
+                        ]
+                        if payload.game_scores is not None
+                        else None
+                    ),
                     "unusual_score_acknowledged": payload.unusual_score_acknowledged,
                     "expected_game_updated_at": payload.expected_game_updated_at,
                     "expected_draw_updated_at": payload.expected_draw_updated_at,

@@ -1340,10 +1340,36 @@ def test_admin_match_log_nonretryable_rpc_stale_maps_to_structured_409(
     from postgrest.exceptions import APIError
 
     from tests.test_match_exclusion_durability_service import (
+        FakeQuery as RpcFakeQuery,
         FakeSupabase as RpcFakeSupabase,
     )
 
-    supabase = RpcFakeSupabase(
+    class MatchAwareRpcQuery(RpcFakeQuery):
+        def in_(self, key, values):
+            allowed = {str(value) for value in values}
+            self.rows = [
+                row for row in self.rows if str(row.get(key)) in allowed
+            ]
+            return self
+
+    class MatchAwareRpcFakeSupabase(RpcFakeSupabase):
+        def table(self, name):
+            if name == "matches":
+                return MatchAwareRpcQuery(
+                    [
+                        {
+                            "id": 3,
+                            "club_id": "club",
+                            "tournament_id": None,
+                            "tournament_game_id": None,
+                            "context_type": None,
+                            "context_id": None,
+                        }
+                    ]
+                )
+            return super().table(name)
+
+    supabase = MatchAwareRpcFakeSupabase(
         rpc_handlers={
             "apply_match_exclusions_atomic": APIError(
                 {
@@ -1380,7 +1406,7 @@ def test_admin_match_log_nonretryable_rpc_stale_maps_to_structured_409(
         },
     )
 
-    assert response.status_code == 409
+    assert response.status_code == 409, response.text
     assert response.json()["detail"] == {
         "code": "MATCH_EXCLUSION_STALE",
         "operation_id": None,

@@ -282,6 +282,7 @@ def test_admin_tournament_publish_matches_contract(monkeypatch):
     assert payload["ok"] is True
     assert payload["mode"] == "tournament_official_matches_publish"
     assert payload["match_count"] == 1
+    assert payload["game_count"] == 1
     match_payload = captured["match_list"][0]
     assert match_payload["match_type"] == "Tournament"
     assert match_payload["tournament_id"] == "tour_1"

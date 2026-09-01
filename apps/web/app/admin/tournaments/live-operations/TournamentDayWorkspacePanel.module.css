@@ -616,6 +616,45 @@
   margin: 0.85rem 0;
 }
 
+.seriesScoreEntry {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+  margin: 0.85rem 0;
+  border: 1px solid #93c5fd;
+  border-radius: 12px;
+  padding: 0.85rem;
+  background: #f8fbff;
+}
+
+.seriesScoreEntry legend {
+  padding: 0 0.35rem;
+  font-weight: 850;
+}
+
+.seriesScoreEntry > p {
+  margin: 0;
+}
+
+.seriesGameRow {
+  min-width: 0;
+  border-top: 1px solid #dbeafe;
+  padding-top: 0.65rem;
+}
+
+.seriesGameRow h4 {
+  margin: 0;
+}
+
+.seriesGameRow .scoreGrid {
+  margin: 0.45rem 0 0;
+}
+
+.seriesDecision {
+  color: #1d4ed8;
+  font-weight: 750;
+}
+
 .outcomeGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

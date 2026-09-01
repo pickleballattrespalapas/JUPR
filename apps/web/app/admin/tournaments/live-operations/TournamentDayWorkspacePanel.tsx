@@ -29,6 +29,7 @@ import type {
   AdminTournamentDayCourt,
   AdminTournamentDayDraw,
   AdminTournamentDayGame,
+  AdminTournamentDayGameScore,
   AdminTournamentDayOperation,
   AdminTournamentDayOption,
   AdminTournamentDayPlayoffReview,
@@ -49,6 +50,9 @@ import {
   readyPlayoffReviewDraws,
   retainedDayCommandStorageKey,
   tournamentDayMedalMatchKind,
+  validateBestOfThreeCorrectionDraft,
+  validateBestOfThreeGameScores,
+  validateBestOfThreeRetirementGameScores,
   validateDayCorrectionDraft,
   validateDayScoreDraft,
   validateNonPlayedOutcomeDraft,
@@ -91,9 +95,16 @@ type ReviewedGameTruth = {
   queueEntryVersion: string;
   scoreA: string;
   scoreB: string;
+  gameScores: string;
   resultType: string;
   resultNote: string;
   finalizedAt: string;
+};
+
+type DayGameScoreDraft = {
+  game_number: 1 | 2 | 3;
+  score_a: string;
+  score_b: string;
 };
 
 type ScoreEditor = {
@@ -101,6 +112,7 @@ type ScoreEditor = {
   courtId: string;
   scoreA: string;
   scoreB: string;
+  gameScores: DayGameScoreDraft[];
   error: string;
   unusualScoreAcknowledged: boolean;
   expected: AdminTournamentDayCommandExpected;
@@ -112,6 +124,7 @@ type CorrectionEditor = {
   gameId: string;
   scoreA: string;
   scoreB: string;
+  gameScores: DayGameScoreDraft[];
   reviewing: boolean;
   error: string;
   unusualScoreAcknowledged: boolean;
@@ -124,6 +137,8 @@ type OutcomeEditor = {
   resultType: "FORFEIT" | "NO_SHOW" | "RETIREMENT";
   nonPlayingTeamId: string;
   resultNote: string;
+  gameScores: DayGameScoreDraft[];
+  unusualScoreAcknowledged: boolean;
   error: string;
   expected: AdminTournamentDayCommandExpected;
   reviewedGame: ReviewedGameTruth;
@@ -245,6 +260,205 @@ function resultTypeLabel(game: AdminTournamentDayGame): string {
   return statusLabel(game.result_type || "PLAYED");
 }
 
+function isBestOfThree(game: AdminTournamentDayGame | undefined): boolean {
+  return String(game?.scoring?.format || "").trim().toUpperCase() === "BEST_2_OF_3";
+}
+
+function normalizedGameScores(gameScores: AdminTournamentDayGameScore[] | undefined): AdminTournamentDayGameScore[] {
+  return [...(Array.isArray(gameScores) ? gameScores : [])]
+    .filter((score) => [1, 2, 3].includes(Number(score.game_number)))
+    .map((score) => ({
+      game_number: Number(score.game_number) as 1 | 2 | 3,
+      score_a: Number(score.score_a),
+      score_b: Number(score.score_b)
+    }))
+    .sort((left, right) => left.game_number - right.game_number);
+}
+
+function gameScoreDrafts(game: AdminTournamentDayGame): DayGameScoreDraft[] {
+  const scores = new Map(normalizedGameScores(game.game_scores).map((score) => [score.game_number, score]));
+  return ([1, 2, 3] as const).map((gameNumber) => ({
+    game_number: gameNumber,
+    score_a: scores.has(gameNumber) ? String(scores.get(gameNumber)?.score_a ?? "") : "",
+    score_b: scores.has(gameNumber) ? String(scores.get(gameNumber)?.score_b ?? "") : ""
+  }));
+}
+
+function emptyGameScoreDrafts(): DayGameScoreDraft[] {
+  return ([1, 2, 3] as const).map((gameNumber) => ({
+    game_number: gameNumber,
+    score_a: "",
+    score_b: ""
+  }));
+}
+
+function individualGameScoring(scoring: AdminTournamentDayGame["scoring"] | undefined) {
+  return {
+    format: scoring?.individual_game_format || "GAME_TO_11",
+    target: scoring?.individual_game_target ?? 11,
+    win_by_two: scoring?.individual_game_win_by_two ?? true
+  };
+}
+
+function firstTwoSeriesState(
+  gameScores: DayGameScoreDraft[],
+  scoring?: AdminTournamentDayGame["scoring"]
+): "split" | "straight" | null {
+  const rows = [1, 2].map((gameNumber) => gameScores.find((score) => score.game_number === gameNumber));
+  const validations = rows.map((row) => validateDayScoreDraft(
+    row?.score_a ?? "",
+    row?.score_b ?? "",
+    individualGameScoring(scoring)
+  ));
+  if (validations.some((validation) => !validation.ok)) return null;
+  const winners = validations.map((validation) => (
+    validation.ok && validation.scoreA > validation.scoreB ? "A" : "B"
+  ));
+  return winners[0] === winners[1] ? "straight" : "split";
+}
+
+function updateGameScoreDraft(
+  gameScores: DayGameScoreDraft[],
+  gameNumber: 1 | 2 | 3,
+  side: "score_a" | "score_b",
+  value: string,
+  scoring?: AdminTournamentDayGame["scoring"]
+): DayGameScoreDraft[] {
+  const updated = gameScores.map((score) => (
+    score.game_number === gameNumber ? { ...score, [side]: value } : score
+  ));
+  if (gameNumber !== 3 && firstTwoSeriesState(updated, scoring) === "straight") {
+    return updated.map((score) => (
+      score.game_number === 3 ? { ...score, score_a: "", score_b: "" } : score
+    ));
+  }
+  return updated;
+}
+
+function gameScoresHaveInput(gameScores: DayGameScoreDraft[]): boolean {
+  return gameScores.some((score) => score.score_a.trim() || score.score_b.trim());
+}
+
+function gameScoresReadyForReview(
+  gameScores: DayGameScoreDraft[],
+  scoring?: AdminTournamentDayGame["scoring"]
+): boolean {
+  const firstTwoComplete = ([1, 2] as const).every((gameNumber) => {
+    const score = gameScores.find((candidate) => candidate.game_number === gameNumber);
+    return Boolean(score?.score_a.trim() && score.score_b.trim());
+  });
+  if (!firstTwoComplete) return false;
+  if (firstTwoSeriesState(gameScores, scoring) !== "split") return true;
+  const third = gameScores.find((score) => score.game_number === 3);
+  return Boolean(third?.score_a.trim() && third.score_b.trim());
+}
+
+function gameThreeIsPartial(
+  gameScores: DayGameScoreDraft[],
+  scoring?: AdminTournamentDayGame["scoring"]
+): boolean {
+  if (firstTwoSeriesState(gameScores, scoring) !== "split") return false;
+  const third = gameScores.find((score) => score.game_number === 3);
+  const hasA = Boolean(third?.score_a.trim());
+  const hasB = Boolean(third?.score_b.trim());
+  return hasA !== hasB;
+}
+
+function gameScoreSummary(gameScores: AdminTournamentDayGameScore[] | undefined): string {
+  const scores = normalizedGameScores(gameScores);
+  if (!scores.length) return "Individual game scores unavailable";
+  return scores.map((score) => `Game ${score.game_number}: ${score.score_a}–${score.score_b}`).join(" · ");
+}
+
+function validationGameScores(validation: unknown): AdminTournamentDayGameScore[] | undefined {
+  if (!validation || typeof validation !== "object") return undefined;
+  const gameScores = (validation as { gameScores?: unknown }).gameScores;
+  return Array.isArray(gameScores) ? gameScores as AdminTournamentDayGameScore[] : undefined;
+}
+
+function BestOfThreeScoreFields({
+  idPrefix,
+  gameScores,
+  scoring,
+  teamA,
+  teamB,
+  disabled = false,
+  errorId,
+  invalid = false,
+  autofocus = false,
+  mode = "series",
+  onChange
+}: {
+  idPrefix: string;
+  gameScores: DayGameScoreDraft[];
+  scoring?: AdminTournamentDayGame["scoring"];
+  teamA: string;
+  teamB: string;
+  disabled?: boolean;
+  errorId?: string;
+  invalid?: boolean;
+  autofocus?: boolean;
+  mode?: "series" | "retirement";
+  onChange: (gameNumber: 1 | 2 | 3, side: "score_a" | "score_b", value: string) => void;
+}) {
+  const third = gameScores.find((score) => score.game_number === 3);
+  const showThird = mode === "series" && (firstTwoSeriesState(gameScores, scoring) === "split"
+    || Boolean(third?.score_a.trim() || third?.score_b.trim()));
+  const visibleScores = gameScores.filter((score) => score.game_number < 3 || showThird);
+  return (
+    <fieldset className={styles.seriesScoreEntry}>
+      <legend>{mode === "retirement" ? "Completed games before retirement (optional)" : "Individual game scores"}</legend>
+      <p className={styles.muted}>{mode === "retirement"
+        ? `Enter Game 1, and Game 2 only if the teams split them. Each completed game is played to ${individualGameScoring(scoring).target}, win by two, and will count for ratings. Leave every score blank if retirement happened before play.`
+        : `Each game is played to ${individualGameScoring(scoring).target}, win by two. Game 3 appears only if the teams split the first two games.`}</p>
+      {visibleScores.map((score) => (
+        <section key={score.game_number} className={styles.seriesGameRow} aria-labelledby={`${idPrefix}-game-${score.game_number}-title`}>
+          <h4 id={`${idPrefix}-game-${score.game_number}-title`}>Game {score.game_number}</h4>
+          <div className={styles.scoreGrid}>
+            <label htmlFor={`${idPrefix}-game-${score.game_number}-score-a`}>
+              {teamA} score
+              <input
+                id={`${idPrefix}-game-${score.game_number}-score-a`}
+                {...(autofocus && score.game_number === 1 ? { "data-autofocus": true } : {})}
+                aria-invalid={invalid || undefined}
+                aria-describedby={errorId}
+                value={score.score_a}
+                disabled={disabled}
+                onChange={(event) => onChange(score.game_number, "score_a", event.target.value)}
+                type="number"
+                min={0}
+                step={1}
+                inputMode="numeric"
+              />
+            </label>
+            <span aria-hidden="true">–</span>
+            <label htmlFor={`${idPrefix}-game-${score.game_number}-score-b`}>
+              {teamB} score
+              <input
+                id={`${idPrefix}-game-${score.game_number}-score-b`}
+                aria-invalid={invalid || undefined}
+                aria-describedby={errorId}
+                value={score.score_b}
+                disabled={disabled}
+                onChange={(event) => onChange(score.game_number, "score_b", event.target.value)}
+                type="number"
+                min={0}
+                step={1}
+                inputMode="numeric"
+              />
+            </label>
+          </div>
+        </section>
+      ))}
+      <p className={styles.seriesDecision} aria-live="polite">{mode === "retirement"
+        ? "A completed Game 3 means the series finished and must be recorded as a played score."
+        : showThird
+          ? "The series is tied 1–1. Enter the deciding Game 3 scores."
+          : "Game 3 will open automatically after a 1–1 split."}</p>
+    </fieldset>
+  );
+}
+
 function reviewedGameTruth(
   game: AdminTournamentDayGame,
   context: Partial<Pick<ReviewedGameTruth, "courtId" | "queueEntryVersion">> = {}
@@ -256,6 +470,7 @@ function reviewedGameTruth(
     queueEntryVersion: String(game.queue_entry_version || ""),
     scoreA: game.score_a == null ? "" : String(game.score_a),
     scoreB: game.score_b == null ? "" : String(game.score_b),
+    gameScores: JSON.stringify(normalizedGameScores(game.game_scores)),
     resultType: String(game.result_type || "PLAYED").toUpperCase(),
     resultNote: String(game.result_note || ""),
     finalizedAt: String(game.finalized_at || ""),
@@ -270,6 +485,7 @@ function reviewedGameStillCurrent(game: AdminTournamentDayGame | undefined, revi
     && current.drawId === reviewed.drawId
     && current.scoreA === reviewed.scoreA
     && current.scoreB === reviewed.scoreB
+    && current.gameScores === reviewed.gameScores
     && current.resultType === reviewed.resultType
     && current.resultNote === reviewed.resultNote
     && current.finalizedAt === reviewed.finalizedAt;
@@ -1217,6 +1433,7 @@ export default function TournamentDayWorkspacePanel({
       courtId,
       scoreA: game.score_a == null ? "" : String(game.score_a),
       scoreB: game.score_b == null ? "" : String(game.score_b),
+      gameScores: gameScoreDrafts(game),
       error: "",
       unusualScoreAcknowledged: false,
       expected: expectedVersions({ draw_version: draw.version, game_version: game.version, court_version: court.version }),
@@ -1241,6 +1458,7 @@ export default function TournamentDayWorkspacePanel({
       gameId: game.id,
       scoreA: game.score_a == null ? "" : String(game.score_a),
       scoreB: game.score_b == null ? "" : String(game.score_b),
+      gameScores: gameScoreDrafts(game),
       reviewing: false,
       error: "",
       unusualScoreAcknowledged: false,
@@ -1278,6 +1496,8 @@ export default function TournamentDayWorkspacePanel({
       resultType: "NO_SHOW",
       nonPlayingTeamId: "",
       resultNote: "",
+      gameScores: emptyGameScoreDrafts(),
+      unusualScoreAcknowledged: false,
       error: "",
       expected: expectedVersions({
         draw_version: draw.version,
@@ -1431,12 +1651,18 @@ export default function TournamentDayWorkspacePanel({
     if (!scoreEditor) return;
     const game = gamesById.get(scoreEditor.gameId);
     const court = snapshot?.courts.find((row) => row.id === scoreEditor.courtId);
-    const validation = validateDayScoreDraft(
-      scoreEditor.scoreA,
-      scoreEditor.scoreB,
-      game?.scoring,
-      scoreEditor.unusualScoreAcknowledged
-    );
+    const validation = isBestOfThree(game)
+      ? validateBestOfThreeGameScores(
+          scoreEditor.gameScores,
+          game?.scoring,
+          scoreEditor.unusualScoreAcknowledged
+        )
+      : validateDayScoreDraft(
+          scoreEditor.scoreA,
+          scoreEditor.scoreB,
+          game?.scoring,
+          scoreEditor.unusualScoreAcknowledged
+        );
     if (!validation.ok) {
       setScoreEditor({ ...scoreEditor, error: validation.message });
       return;
@@ -1450,6 +1676,7 @@ export default function TournamentDayWorkspacePanel({
       return;
     }
     setScoreEditor({ ...scoreEditor, error: "" });
+    const validatedGameScores = validationGameScores(validation);
     await resultAction.run(() => submitCommand(
       "score_and_release",
       dayActionConfirmation("score_and_release"),
@@ -1457,6 +1684,7 @@ export default function TournamentDayWorkspacePanel({
         game_id: game.id,
         score_a: validation.scoreA,
         score_b: validation.scoreB,
+        ...(validatedGameScores ? { game_scores: validatedGameScores } : {}),
         unusual_score_acknowledgement: scoreEditor.unusualScoreAcknowledged
       },
       scoreEditor.expected
@@ -1466,14 +1694,21 @@ export default function TournamentDayWorkspacePanel({
   function reviewCorrection() {
     if (!correctionEditor) return;
     const game = gamesById.get(correctionEditor.gameId);
-    const validation = validateDayCorrectionDraft(
-      correctionEditor.scoreA,
-      correctionEditor.scoreB,
-      game?.score_a,
-      game?.score_b,
-      game?.scoring,
-      correctionEditor.unusualScoreAcknowledged
-    );
+    const validation = isBestOfThree(game)
+      ? validateBestOfThreeCorrectionDraft(
+          correctionEditor.gameScores,
+          game?.game_scores || [],
+          game?.scoring,
+          correctionEditor.unusualScoreAcknowledged
+        )
+      : validateDayCorrectionDraft(
+          correctionEditor.scoreA,
+          correctionEditor.scoreB,
+          game?.score_a,
+          game?.score_b,
+          game?.scoring,
+          correctionEditor.unusualScoreAcknowledged
+        );
     if (!validation.ok) {
       setCorrectionEditor({ ...correctionEditor, reviewing: false, error: validation.message });
       return;
@@ -1484,6 +1719,10 @@ export default function TournamentDayWorkspacePanel({
   async function saveOutcome() {
     if (!outcomeEditor) return;
     const game = gamesById.get(outcomeEditor.gameId);
+    if (!game) {
+      setOutcomeEditor({ ...outcomeEditor, error: "Reload the tournament day before recording this result." });
+      return;
+    }
     const validation = validateNonPlayedOutcomeDraft(
       outcomeEditor.resultType,
       outcomeEditor.nonPlayingTeamId,
@@ -1493,10 +1732,25 @@ export default function TournamentDayWorkspacePanel({
       setOutcomeEditor({ ...outcomeEditor, error: validation.message });
       return;
     }
-    if (!game) {
-      setOutcomeEditor({ ...outcomeEditor, error: "Reload the tournament day before recording this result." });
+    const retirementGameValidation = validation.resultType === "RETIREMENT" && isBestOfThree(game)
+      ? validateBestOfThreeRetirementGameScores(
+          outcomeEditor.gameScores,
+          game.scoring,
+          outcomeEditor.unusualScoreAcknowledged
+        )
+      : null;
+    if (retirementGameValidation && !retirementGameValidation.ok) {
+      setOutcomeEditor({ ...outcomeEditor, error: retirementGameValidation.message });
       return;
     }
+    if (retirementGameValidation?.ok && retirementGameValidation.acknowledgementRequired) {
+      setOutcomeEditor({
+        ...outcomeEditor,
+        error: "Acknowledge the unusual completed game score before recording this retirement."
+      });
+      return;
+    }
+    const retirementGameScores = validationGameScores(retirementGameValidation) || [];
     setOutcomeEditor({ ...outcomeEditor, error: "" });
     await resultAction.run(() => submitCommand(
       "record_non_played_result",
@@ -1505,7 +1759,11 @@ export default function TournamentDayWorkspacePanel({
         game_id: game.id,
         result_type: validation.resultType,
         non_playing_team_id: validation.nonPlayingTeamId,
-        result_note: validation.resultNote
+        result_note: validation.resultNote,
+        ...(retirementGameScores.length ? {
+          game_scores: retirementGameScores,
+          unusual_score_acknowledgement: outcomeEditor.unusualScoreAcknowledged
+        } : {})
       },
       outcomeEditor.expected
     ));
@@ -1530,19 +1788,36 @@ export default function TournamentDayWorkspacePanel({
     selectedScoreGame
       && selectedScoreCourt?.current_assignment?.game_id === selectedScoreGame.id
   );
-  const selectedScoreValidation = scoreEditor ? validateDayScoreDraft(
-    scoreEditor.scoreA,
-    scoreEditor.scoreB,
-    selectedScoreGame?.scoring,
-    scoreEditor.unusualScoreAcknowledged
-  ) : null;
-  const selectedScoreDraftComplete = Boolean(
-    scoreEditor?.scoreA.trim() && scoreEditor.scoreB.trim()
-  );
+  const selectedScoreIsBestOfThree = isBestOfThree(selectedScoreGame);
+  const selectedScoreSeriesState = scoreEditor && selectedScoreIsBestOfThree
+    ? firstTwoSeriesState(scoreEditor.gameScores, selectedScoreGame?.scoring)
+    : null;
+  const selectedScoreValidation = scoreEditor
+    ? selectedScoreIsBestOfThree
+      ? validateBestOfThreeGameScores(
+          scoreEditor.gameScores,
+          selectedScoreGame?.scoring,
+          scoreEditor.unusualScoreAcknowledged
+        )
+      : validateDayScoreDraft(
+          scoreEditor.scoreA,
+          scoreEditor.scoreB,
+          selectedScoreGame?.scoring,
+          scoreEditor.unusualScoreAcknowledged
+        )
+    : null;
+  const selectedScoreDraftComplete = Boolean(scoreEditor && (
+    selectedScoreIsBestOfThree
+      ? gameScoresReadyForReview(scoreEditor.gameScores, selectedScoreGame?.scoring)
+      : scoreEditor.scoreA.trim() && scoreEditor.scoreB.trim()
+  ));
+  const selectedScorePartialGameThree = Boolean(scoreEditor && selectedScoreIsBestOfThree
+    && gameThreeIsPartial(scoreEditor.gameScores, selectedScoreGame?.scoring));
   const selectedScoreError = scoreEditor?.error
-    || (selectedScoreDraftComplete && selectedScoreValidation && !selectedScoreValidation.ok
+    || ((selectedScoreDraftComplete || selectedScorePartialGameThree) && selectedScoreValidation && !selectedScoreValidation.ok
       ? selectedScoreValidation.message
       : "");
+  const selectedScoreValidatedGames = validationGameScores(selectedScoreValidation);
   const selectedCorrectionGame = correctionEditor ? gamesById.get(correctionEditor.gameId) : undefined;
   const selectedCorrectionDraw = selectedCorrectionGame
     ? snapshot?.draws.find((draw) => draw.id === selectedCorrectionGame.draw_id)
@@ -1551,16 +1826,25 @@ export default function TournamentDayWorkspacePanel({
     selectedCorrectionGame?.correction_readiness,
     "This completed game's correction readiness is unavailable."
   );
+  const selectedCorrectionIsBestOfThree = isBestOfThree(selectedCorrectionGame);
   const selectedCorrectionValidation = correctionEditor && selectedCorrectionGame
-    ? validateDayCorrectionDraft(
-        correctionEditor.scoreA,
-        correctionEditor.scoreB,
-        selectedCorrectionGame.score_a,
-        selectedCorrectionGame.score_b,
-        selectedCorrectionGame.scoring,
-        correctionEditor.unusualScoreAcknowledged
-      )
+    ? selectedCorrectionIsBestOfThree
+      ? validateBestOfThreeCorrectionDraft(
+          correctionEditor.gameScores,
+          selectedCorrectionGame.game_scores || [],
+          selectedCorrectionGame.scoring,
+          correctionEditor.unusualScoreAcknowledged
+        )
+      : validateDayCorrectionDraft(
+          correctionEditor.scoreA,
+          correctionEditor.scoreB,
+          selectedCorrectionGame.score_a,
+          selectedCorrectionGame.score_b,
+          selectedCorrectionGame.scoring,
+          correctionEditor.unusualScoreAcknowledged
+        )
     : null;
+  const selectedCorrectionValidatedGames = validationGameScores(selectedCorrectionValidation);
   const selectedOutcomeGame = outcomeEditor ? gamesById.get(outcomeEditor.gameId) : undefined;
   const selectedOutcomeCourt = outcomeEditor?.reviewedGame.courtId
     ? snapshot?.courts.find((court) => court.id === outcomeEditor.reviewedGame.courtId)
@@ -1576,6 +1860,32 @@ export default function TournamentDayWorkspacePanel({
         outcomeEditor.resultNote
       )
     : null;
+  const selectedOutcomeIsBestOfThree = isBestOfThree(selectedOutcomeGame);
+  const selectedOutcomeRetirementGameValidation = outcomeEditor
+    && selectedOutcomeGame
+    && outcomeEditor.resultType === "RETIREMENT"
+    && selectedOutcomeIsBestOfThree
+    ? validateBestOfThreeRetirementGameScores(
+        outcomeEditor.gameScores,
+        selectedOutcomeGame.scoring,
+        outcomeEditor.unusualScoreAcknowledged
+      )
+    : null;
+  const selectedOutcomeRetirementGameScores = validationGameScores(
+    selectedOutcomeRetirementGameValidation
+  ) || [];
+  const selectedOutcomeRetirementGameError = outcomeEditor
+    && gameScoresHaveInput(outcomeEditor.gameScores)
+    && selectedOutcomeRetirementGameValidation
+    && !selectedOutcomeRetirementGameValidation.ok
+    ? selectedOutcomeRetirementGameValidation.message
+    : "";
+  const selectedOutcomeReady = Boolean(
+    selectedOutcomeValidation?.ok
+      && (!selectedOutcomeRetirementGameValidation
+        || (selectedOutcomeRetirementGameValidation.ok
+          && !selectedOutcomeRetirementGameValidation.acknowledgementRequired))
+  );
   const selectedOutcomeNonPlayingSide = selectedOutcomeValidation?.ok
     ? selectedOutcomeValidation.nonPlayingTeamId === selectedOutcomeGame?.team_a.team_id
       ? selectedOutcomeGame.team_a
@@ -2027,7 +2337,9 @@ export default function TournamentDayWorkspacePanel({
                       <span className={gameReadiness.ready ? styles.successBadge : styles.warningBadge}>{gameReadiness.ready ? "Correctable" : "Blocked"}</span>
                     </div>
                     {String(game.result_type || "PLAYED").toUpperCase() === "PLAYED" ? (
-                      <p><strong>Played final:</strong> {game.score_a ?? "—"}–{game.score_b ?? "—"} · Winner: {game.winner_name || "Unavailable"}</p>
+                      <p>
+                        <strong>Played final:</strong> {game.score_a ?? "—"}–{game.score_b ?? "—"}{isBestOfThree(game) ? ` series · ${gameScoreSummary(game.game_scores)}` : ""} · Winner: {game.winner_name || "Unavailable"}
+                      </p>
                     ) : (
                       <p className={styles.forfeitBoundary}><strong>{resultTypeLabel(game)} — not played.</strong> Winner: {game.winner_name || "Unavailable"}. {game.result_note || "Operator note unavailable."} The stored score is synthetic progression evidence and is not rating-eligible.</p>
                     )}
@@ -2069,16 +2381,36 @@ export default function TournamentDayWorkspacePanel({
                   <section>
                     <h4>Before correction</h4>
                     <p className={styles.matchup}>{matchupLabel(selectedCorrectionGame)}</p>
-                    <p className={styles.largeScore}>{selectedCorrectionGame.score_a ?? "—"}–{selectedCorrectionGame.score_b ?? "—"}</p>
+                    <p className={styles.largeScore}>{selectedCorrectionGame.score_a ?? "—"}–{selectedCorrectionGame.score_b ?? "—"}{selectedCorrectionIsBestOfThree ? " series" : ""}</p>
+                    {selectedCorrectionIsBestOfThree ? <p>{gameScoreSummary(selectedCorrectionGame.game_scores)}</p> : null}
                     <p>Winner: <strong>{selectedCorrectionGame.winner_name || "Unavailable"}</strong></p>
                   </section>
                   <section>
                     <h4>After correction</h4>
-                    <div className={styles.scoreGrid}>
-                      <label htmlFor="day-correction-score-a">{sideLabel(selectedCorrectionGame.team_a)} score<input id="day-correction-score-a" aria-invalid={Boolean(correctionEditor.error) || undefined} aria-describedby={correctionEditor.error ? "day-correction-score-error" : undefined} value={correctionEditor.scoreA} onChange={(event) => setCorrectionEditor({ ...correctionEditor, scoreA: event.target.value, reviewing: false, error: "", unusualScoreAcknowledged: false })} type="number" min={0} step={1} inputMode="numeric" /></label>
-                      <span aria-hidden="true">–</span>
-                      <label htmlFor="day-correction-score-b">{sideLabel(selectedCorrectionGame.team_b)} score<input id="day-correction-score-b" aria-invalid={Boolean(correctionEditor.error) || undefined} aria-describedby={correctionEditor.error ? "day-correction-score-error" : undefined} value={correctionEditor.scoreB} onChange={(event) => setCorrectionEditor({ ...correctionEditor, scoreB: event.target.value, reviewing: false, error: "", unusualScoreAcknowledged: false })} type="number" min={0} step={1} inputMode="numeric" /></label>
-                    </div>
+                    {selectedCorrectionIsBestOfThree ? (
+                      <BestOfThreeScoreFields
+                        idPrefix="day-correction"
+                        gameScores={correctionEditor.gameScores}
+                        scoring={selectedCorrectionGame.scoring}
+                        teamA={sideLabel(selectedCorrectionGame.team_a)}
+                        teamB={sideLabel(selectedCorrectionGame.team_b)}
+                        errorId={correctionEditor.error ? "day-correction-score-error" : undefined}
+                        invalid={Boolean(correctionEditor.error)}
+                        onChange={(gameNumber, side, value) => setCorrectionEditor({
+                          ...correctionEditor,
+                          gameScores: updateGameScoreDraft(correctionEditor.gameScores, gameNumber, side, value, selectedCorrectionGame.scoring),
+                          reviewing: false,
+                          error: "",
+                          unusualScoreAcknowledged: false
+                        })}
+                      />
+                    ) : (
+                      <div className={styles.scoreGrid}>
+                        <label htmlFor="day-correction-score-a">{sideLabel(selectedCorrectionGame.team_a)} score<input id="day-correction-score-a" aria-invalid={Boolean(correctionEditor.error) || undefined} aria-describedby={correctionEditor.error ? "day-correction-score-error" : undefined} value={correctionEditor.scoreA} onChange={(event) => setCorrectionEditor({ ...correctionEditor, scoreA: event.target.value, reviewing: false, error: "", unusualScoreAcknowledged: false })} type="number" min={0} step={1} inputMode="numeric" /></label>
+                        <span aria-hidden="true">–</span>
+                        <label htmlFor="day-correction-score-b">{sideLabel(selectedCorrectionGame.team_b)} score<input id="day-correction-score-b" aria-invalid={Boolean(correctionEditor.error) || undefined} aria-describedby={correctionEditor.error ? "day-correction-score-error" : undefined} value={correctionEditor.scoreB} onChange={(event) => setCorrectionEditor({ ...correctionEditor, scoreB: event.target.value, reviewing: false, error: "", unusualScoreAcknowledged: false })} type="number" min={0} step={1} inputMode="numeric" /></label>
+                      </div>
+                    )}
                     {correctionEditor.error ? <p id="day-correction-score-error" role="alert" className={styles.errorText}>{correctionEditor.error}</p> : null}
                     {selectedCorrectionValidation?.ok ? <p>Proposed winner: <strong>{selectedCorrectionValidation.scoreA > selectedCorrectionValidation.scoreB ? sideLabel(selectedCorrectionGame.team_a) : sideLabel(selectedCorrectionGame.team_b)}</strong></p> : null}
                   </section>
@@ -2092,6 +2424,9 @@ export default function TournamentDayWorkspacePanel({
                     <p>After correction winner: <strong>{selectedCorrectionValidation.scoreA > selectedCorrectionValidation.scoreB ? sideLabel(selectedCorrectionGame.team_a) : sideLabel(selectedCorrectionGame.team_b)}</strong></p>
                     <div><strong>{sideLabel(selectedCorrectionGame.team_b)}</strong><span>{selectedCorrectionValidation.scoreB}</span></div>
                     <p><strong>Before:</strong> {selectedCorrectionGame.score_a ?? "—"}–{selectedCorrectionGame.score_b ?? "—"}, {selectedCorrectionGame.winner_name || "winner unavailable"}. <strong>After:</strong> {selectedCorrectionValidation.scoreA}–{selectedCorrectionValidation.scoreB}.</p>
+                    {selectedCorrectionValidatedGames ? (
+                      <p><strong>Corrected rating games:</strong> {gameScoreSummary(selectedCorrectionValidatedGames)}</p>
+                    ) : null}
                     {selectedCorrectionValidation.unusual ? (
                       <label className={styles.forfeitBoundary}>
                         <input type="checkbox" checked={correctionEditor.unusualScoreAcknowledged} onChange={(event) => setCorrectionEditor({ ...correctionEditor, unusualScoreAcknowledged: event.target.checked })} />
@@ -2103,7 +2438,7 @@ export default function TournamentDayWorkspacePanel({
                       <ConfirmAction
                         triggerLabel="Confirm correction"
                         title="Confirm this exact completed-score correction?"
-                        description={`${matchupLabel(selectedCorrectionGame)}. Change ${selectedCorrectionGame.score_a ?? "—"}–${selectedCorrectionGame.score_b ?? "—"} to ${selectedCorrectionValidation.scoreA}–${selectedCorrectionValidation.scoreB}.`}
+                        description={`${matchupLabel(selectedCorrectionGame)}. Change ${selectedCorrectionGame.score_a ?? "—"}–${selectedCorrectionGame.score_b ?? "—"} to ${selectedCorrectionValidation.scoreA}–${selectedCorrectionValidation.scoreB}.${selectedCorrectionValidatedGames ? ` Corrected individual games: ${gameScoreSummary(selectedCorrectionValidatedGames)}.` : ""}`}
                         confirmLabel="Confirm & save correction"
                         confirmationText={selectedCorrectionReadiness.confirmation || dayActionConfirmation("correct_completed_score")}
                         disabled={!dayCorrectionOpen || !runtimeWritesEnabled || !selectedCorrectionReadiness.ready || writesFrozen || selectedCorrectionValidation.acknowledgementRequired}
@@ -2112,7 +2447,13 @@ export default function TournamentDayWorkspacePanel({
                         onConfirm={(confirmationText) => submitCommand(
                           "correct_completed_score",
                           confirmationText,
-                          { game_id: selectedCorrectionGame.id, score_a: selectedCorrectionValidation.scoreA, score_b: selectedCorrectionValidation.scoreB, unusual_score_acknowledgement: correctionEditor.unusualScoreAcknowledged },
+                          {
+                            game_id: selectedCorrectionGame.id,
+                            score_a: selectedCorrectionValidation.scoreA,
+                            score_b: selectedCorrectionValidation.scoreB,
+                            ...(selectedCorrectionValidatedGames ? { game_scores: selectedCorrectionValidatedGames } : {}),
+                            unusual_score_acknowledgement: correctionEditor.unusualScoreAcknowledged
+                          },
                           correctionEditor.expected
                         )}
                       />
@@ -2549,7 +2890,9 @@ export default function TournamentDayWorkspacePanel({
                   <p><strong>{matchupLabel(selectedScoreGame)}</strong></p>
                 </div>
               )}
-              dirty={Boolean(scoreEditor.scoreA.trim() || scoreEditor.scoreB.trim())}
+              dirty={selectedScoreIsBestOfThree
+                ? gameScoresHaveInput(scoreEditor.gameScores)
+                : Boolean(scoreEditor.scoreA.trim() || scoreEditor.scoreB.trim())}
               onRequestClose={() => setScoreEditor(null)}
               actions={uncertainResult ? (
                 <button
@@ -2578,7 +2921,7 @@ export default function TournamentDayWorkspacePanel({
                     {resultWorking
                       ? "Saving score…"
                       : selectedScoreValidation?.ok
-                        ? `Save ${selectedScoreValidation.scoreA}–${selectedScoreValidation.scoreB} & release ${selectedScoreCourt.label}`
+                        ? `Save ${selectedScoreValidation.scoreA}–${selectedScoreValidation.scoreB}${selectedScoreIsBestOfThree ? " series" : ""} & release ${selectedScoreCourt.label}`
                         : `Save score & release ${selectedScoreCourt.label}`}
                   </button>
                 </>
@@ -2595,51 +2938,77 @@ export default function TournamentDayWorkspacePanel({
                   <button type="button" aria-pressed="true" disabled={resultWorking}>Played score</button>
                   <button type="button" aria-pressed="false" disabled={resultWorking} onClick={() => openOutcome(selectedScoreGame, selectedScoreCourt.id)}>Non-play result</button>
                 </div>
-                <div className={styles.scoreGrid}>
-                  <label>
-                    {sideLabel(selectedScoreGame.team_a)} score
-                    <input
-                      id="day-score-a"
-                      data-autofocus
-                      aria-invalid={Boolean(selectedScoreError) || undefined}
-                      aria-describedby={selectedScoreError ? "day-score-error" : undefined}
-                      value={scoreEditor.scoreA}
-                      disabled={resultWorking}
-                      onChange={(event) => {
-                        resultAction.reset();
-                        setScoreEditor({ ...scoreEditor, scoreA: event.target.value, error: "", unusualScoreAcknowledged: false });
-                      }}
-                      type="number"
-                      min={0}
-                      step={1}
-                      inputMode="numeric"
-                    />
-                  </label>
-                  <span aria-hidden="true">–</span>
-                  <label>
-                    {sideLabel(selectedScoreGame.team_b)} score
-                    <input
-                      aria-invalid={Boolean(selectedScoreError) || undefined}
-                      aria-describedby={selectedScoreError ? "day-score-error" : undefined}
-                      value={scoreEditor.scoreB}
-                      disabled={resultWorking}
-                      onChange={(event) => {
-                        resultAction.reset();
-                        setScoreEditor({ ...scoreEditor, scoreB: event.target.value, error: "", unusualScoreAcknowledged: false });
-                      }}
-                      type="number"
-                      min={0}
-                      step={1}
-                      inputMode="numeric"
-                    />
-                  </label>
-                </div>
+                {selectedScoreIsBestOfThree ? (
+                  <BestOfThreeScoreFields
+                    idPrefix="day-score"
+                    gameScores={scoreEditor.gameScores}
+                    scoring={selectedScoreGame.scoring}
+                    teamA={sideLabel(selectedScoreGame.team_a)}
+                    teamB={sideLabel(selectedScoreGame.team_b)}
+                    disabled={resultWorking}
+                    errorId={selectedScoreError ? "day-score-error" : undefined}
+                    invalid={Boolean(selectedScoreError)}
+                    autofocus
+                    onChange={(gameNumber, side, value) => {
+                      resultAction.reset();
+                      setScoreEditor({
+                        ...scoreEditor,
+                        gameScores: updateGameScoreDraft(scoreEditor.gameScores, gameNumber, side, value, selectedScoreGame.scoring),
+                        error: "",
+                        unusualScoreAcknowledged: false
+                      });
+                    }}
+                  />
+                ) : (
+                  <div className={styles.scoreGrid}>
+                    <label>
+                      {sideLabel(selectedScoreGame.team_a)} score
+                      <input
+                        id="day-score-a"
+                        data-autofocus
+                        aria-invalid={Boolean(selectedScoreError) || undefined}
+                        aria-describedby={selectedScoreError ? "day-score-error" : undefined}
+                        value={scoreEditor.scoreA}
+                        disabled={resultWorking}
+                        onChange={(event) => {
+                          resultAction.reset();
+                          setScoreEditor({ ...scoreEditor, scoreA: event.target.value, error: "", unusualScoreAcknowledged: false });
+                        }}
+                        type="number"
+                        min={0}
+                        step={1}
+                        inputMode="numeric"
+                      />
+                    </label>
+                    <span aria-hidden="true">–</span>
+                    <label>
+                      {sideLabel(selectedScoreGame.team_b)} score
+                      <input
+                        aria-invalid={Boolean(selectedScoreError) || undefined}
+                        aria-describedby={selectedScoreError ? "day-score-error" : undefined}
+                        value={scoreEditor.scoreB}
+                        disabled={resultWorking}
+                        onChange={(event) => {
+                          resultAction.reset();
+                          setScoreEditor({ ...scoreEditor, scoreB: event.target.value, error: "", unusualScoreAcknowledged: false });
+                        }}
+                        type="number"
+                        min={0}
+                        step={1}
+                        inputMode="numeric"
+                      />
+                    </label>
+                  </div>
+                )}
                 {selectedScoreError ? <p id="day-score-error" role="alert" className={styles.errorText}>{selectedScoreError}</p> : null}
                 {selectedScoreValidation?.ok ? (
                   <div className={styles.scoreConfirmation} aria-label="Live score and court release preview">
-                    <div><strong>{sideLabel(selectedScoreGame.team_a)}</strong><span>{selectedScoreValidation.scoreA}</span></div>
-                    <div><strong>{sideLabel(selectedScoreGame.team_b)}</strong><span>{selectedScoreValidation.scoreB}</span></div>
+                    <div><strong>{sideLabel(selectedScoreGame.team_a)}</strong><span>{selectedScoreValidation.scoreA}{selectedScoreIsBestOfThree ? " games" : ""}</span></div>
+                    <div><strong>{sideLabel(selectedScoreGame.team_b)}</strong><span>{selectedScoreValidation.scoreB}{selectedScoreIsBestOfThree ? " games" : ""}</span></div>
                     <p>Winner: <strong>{selectedScoreValidation.scoreA > selectedScoreValidation.scoreB ? sideLabel(selectedScoreGame.team_a) : sideLabel(selectedScoreGame.team_b)}</strong></p>
+                    {selectedScoreValidatedGames ? (
+                      <p><strong>Rating games:</strong> {gameScoreSummary(selectedScoreValidatedGames)}</p>
+                    ) : null}
                     <p>Saving finalizes the score and releases {selectedScoreCourt.label}. A matchup marked Next on this court moves onto it automatically; all other games remain in the queue.</p>
                     {selectedScoreValidation.unusual ? (
                       <label className={styles.forfeitBoundary}>
@@ -2657,7 +3026,11 @@ export default function TournamentDayWorkspacePanel({
                     ) : null}
                   </div>
                 ) : !selectedScoreDraftComplete ? (
-                  <p className={styles.muted}>Enter both final scores. The winner and court-release action will preview here.</p>
+                  <p className={styles.muted}>{selectedScoreIsBestOfThree
+                    ? selectedScoreSeriesState === "split"
+                      ? "The series is tied 1–1. Enter both Game 3 scores."
+                      : "Enter Games 1 and 2. If the series is tied 1–1, Game 3 will appear."
+                    : "Enter both final scores. The winner and court-release action will preview here."}</p>
                 ) : null}
                 <ActionFeedback
                   phase={resultAction.phase}
@@ -2679,7 +3052,11 @@ export default function TournamentDayWorkspacePanel({
                   <p><strong>{matchupLabel(selectedOutcomeGame)}</strong></p>
                 </div>
               )}
-              dirty={Boolean(outcomeEditor.nonPlayingTeamId || outcomeEditor.resultNote.trim())}
+              dirty={Boolean(
+                outcomeEditor.nonPlayingTeamId
+                || outcomeEditor.resultNote.trim()
+                || gameScoresHaveInput(outcomeEditor.gameScores)
+              )}
               onRequestClose={() => setOutcomeEditor(null)}
               actions={uncertainResult ? (
                 <button
@@ -2696,7 +3073,7 @@ export default function TournamentDayWorkspacePanel({
                     type="submit"
                     form="day-non-play-entry-form"
                     className={styles.primaryButton}
-                    disabled={resultWorking || !dayActive || !runtimeWritesEnabled || writesFrozen || !selectedOutcomeValidation?.ok}
+                    disabled={resultWorking || !dayActive || !runtimeWritesEnabled || writesFrozen || !selectedOutcomeReady}
                   >
                     {resultWorking
                       ? "Recording result…"
@@ -2730,7 +3107,16 @@ export default function TournamentDayWorkspacePanel({
                       disabled={resultWorking}
                       onChange={(event) => {
                         resultAction.reset();
-                        setOutcomeEditor({ ...outcomeEditor, resultType: event.target.value as OutcomeEditor["resultType"], error: "" });
+                        const resultType = event.target.value as OutcomeEditor["resultType"];
+                        setOutcomeEditor({
+                          ...outcomeEditor,
+                          resultType,
+                          gameScores: resultType === "RETIREMENT"
+                            ? outcomeEditor.gameScores
+                            : emptyGameScoreDrafts(),
+                          unusualScoreAcknowledged: false,
+                          error: ""
+                        });
                       }}
                     >
                       <option value="FORFEIT">Forfeit</option>
@@ -2754,6 +3140,66 @@ export default function TournamentDayWorkspacePanel({
                     </select>
                   </label>
                 </div>
+                {outcomeEditor.resultType === "RETIREMENT" && selectedOutcomeIsBestOfThree ? (
+                  <>
+                    <BestOfThreeScoreFields
+                      idPrefix="day-retirement"
+                      gameScores={outcomeEditor.gameScores}
+                      scoring={selectedOutcomeGame.scoring}
+                      teamA={sideLabel(selectedOutcomeGame.team_a)}
+                      teamB={sideLabel(selectedOutcomeGame.team_b)}
+                      disabled={resultWorking}
+                      errorId={selectedOutcomeRetirementGameError ? "day-retirement-score-error" : undefined}
+                      invalid={Boolean(selectedOutcomeRetirementGameError)}
+                      mode="retirement"
+                      onChange={(gameNumber, side, value) => {
+                        resultAction.reset();
+                        setOutcomeEditor({
+                          ...outcomeEditor,
+                          gameScores: updateGameScoreDraft(
+                            outcomeEditor.gameScores,
+                            gameNumber,
+                            side,
+                            value,
+                            selectedOutcomeGame.scoring
+                          ),
+                          unusualScoreAcknowledged: false,
+                          error: ""
+                        });
+                      }}
+                    />
+                    {selectedOutcomeRetirementGameError ? (
+                      <p id="day-retirement-score-error" role="alert" className={styles.errorText}>
+                        {selectedOutcomeRetirementGameError}
+                      </p>
+                    ) : null}
+                    {selectedOutcomeRetirementGameValidation?.ok
+                      && selectedOutcomeRetirementGameScores.length ? (
+                        <div className={styles.scoreConfirmation} aria-label="Completed games retained for ratings">
+                          <p><strong>Completed rating games:</strong> {gameScoreSummary(selectedOutcomeRetirementGameScores)}</p>
+                          <p>The retirement result remains non-rated; only these completed games will be published for player ratings.</p>
+                          {selectedOutcomeRetirementGameValidation.unusual ? (
+                            <label className={styles.forfeitBoundary}>
+                              <input
+                                type="checkbox"
+                                checked={outcomeEditor.unusualScoreAcknowledged}
+                                disabled={resultWorking}
+                                onChange={(event) => {
+                                  resultAction.reset();
+                                  setOutcomeEditor({
+                                    ...outcomeEditor,
+                                    unusualScoreAcknowledged: event.target.checked,
+                                    error: ""
+                                  });
+                                }}
+                              />
+                              <span><strong>Unusual completed game:</strong> {selectedOutcomeRetirementGameValidation.reasons.join(" ")} I reviewed these exact scores and confirm them.</span>
+                            </label>
+                          ) : null}
+                        </div>
+                      ) : null}
+                  </>
+                ) : null}
                 <label className={styles.field}>
                   Operator note <span className={styles.muted}>(optional)</span>
                   <textarea
@@ -2772,6 +3218,9 @@ export default function TournamentDayWorkspacePanel({
                   <div className={styles.scoreConfirmation} aria-label="Live non-play result preview">
                     <p><strong>{statusLabel(selectedOutcomeValidation.resultType)}</strong> · <strong>{selectedOutcomeNonPlayingSide ? sideLabel(selectedOutcomeNonPlayingSide) : "Selected team"}</strong> {selectedOutcomeValidation.resultType === "RETIREMENT" ? "retired" : selectedOutcomeValidation.resultType === "FORFEIT" ? "forfeited" : "did not show"}. <strong>{selectedOutcomeWinningSide ? sideLabel(selectedOutcomeWinningSide) : "The opposing team"}</strong> receives this game.</p>
                     {selectedOutcomeValidation.resultNote ? <p>{selectedOutcomeValidation.resultNote}</p> : null}
+                    {selectedOutcomeRetirementGameScores.length ? (
+                      <p><strong>Played before retirement:</strong> {gameScoreSummary(selectedOutcomeRetirementGameScores)}. These completed games remain rating-eligible.</p>
+                    ) : null}
                     <p>{selectedOutcomeValidation.resultType === "RETIREMENT"
                       ? "This removes the retired team from remaining play, records its remaining games as non-rated max-score losses, and recalculates every round-robin game as a max-score standings loss. Previously played scores remain unchanged for player ratings."
                       : "This records a non-played max-score result, releases any court and participant claims, resolves progression, keeps the next matchup queued for operator assignment, and excludes the synthetic score from rating publication."}</p>

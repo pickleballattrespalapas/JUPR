@@ -114,6 +114,23 @@ function eventOptionEnabled(row: Record<string, unknown>): boolean {
   return enabled && !DISABLED_EVENT_STATUSES.has(status);
 }
 
+function effectiveGameScoringFormat(
+  game: Record<string, unknown>,
+  draw: { event_option_id?: unknown } | null | undefined,
+  eventOptions: Array<Record<string, unknown>>,
+): string {
+  const frozenFormat = String(game.scoring_format || "").trim().toUpperCase();
+  if (frozenFormat) return frozenFormat;
+  const eventOptionId = String(game.event_option_id || draw?.event_option_id || "").trim();
+  const eventOption = eventOptions.find((row) => String(row.id || "") === eventOptionId);
+  return String(
+    eventOption?.scoring_override
+    || eventOption?.division_scoring
+    || eventOption?.scoring_default
+    || "",
+  ).trim().toUpperCase();
+}
+
 function playerLabel(players: AdminTournamentOpsPlayer[], playerId: number | null | undefined): string {
   if (playerId == null) return "Player unavailable";
   return players.find((player) => Number(player.id) === Number(playerId))?.name || "Player unavailable";
@@ -231,7 +248,17 @@ export default function TournamentOpsPanel({
   const selectedDraw = snapshot?.draws?.find((row) => String(row.id || "") === selectedDrawId) || null;
   const players = snapshot?.players || [];
   const teamsById = new Map((snapshot?.teams || []).map((team) => [String(team.id || ""), team]));
-  const scoreableGames = (snapshot?.games || []).filter((game) => !isNonPlayedGame(game));
+  const effectiveScoringFormat = (game: Record<string, unknown>) => effectiveGameScoringFormat(
+    game,
+    selectedDraw,
+    snapshot?.event_options || [],
+  );
+  const bestOfThreeGames = (snapshot?.games || []).filter(
+    (game) => !isNonPlayedGame(game) && effectiveScoringFormat(game) === "BEST_2_OF_3",
+  );
+  const scoreableGames = (snapshot?.games || []).filter(
+    (game) => !isNonPlayedGame(game) && effectiveScoringFormat(game) !== "BEST_2_OF_3",
+  );
   const nonPlayedGames = (snapshot?.games || []).filter(isNonPlayedGame);
   const selectedScoreGame = scoreableGames.find((game) => String(game.id || "") === scoreGameId) || null;
   const teamEditorPlayerChoicesReady = players.length > 0;
@@ -239,8 +266,8 @@ export default function TournamentOpsPanel({
   const reviewedTeamVersions = (snapshot?.teams || [])
     .filter((row) => String(row.draw_id || "") === selectedDrawId)
     .map((row) => ({ id: String(row.id || ""), updated_at: String(row.updated_at || "") }));
-  const reviewedSourceGameVersions = (snapshot?.games || [])
-    .filter((row) => String(row.draw_id || "") === selectedDrawId)
+  const reviewedSourceGameVersions = (snapshot?.source_game_versions || [])
+    .filter((row) => !row.draw_id || String(row.draw_id) === selectedDrawId)
     .map((row) => ({ id: String(row.id || ""), updated_at: String(row.updated_at || "") }));
   const manualTeamRowsReady = teamRows.some((row) => row.player1_id.trim());
   const officialPublishReady = Boolean(snapshot?.operation_runtime?.official_publish_enabled);
@@ -864,6 +891,10 @@ export default function TournamentOpsPanel({
       setMessage("This game has a non-played outcome and cannot be changed through ordinary score entry.");
       throw new Error("This game has a non-played outcome and cannot be changed through ordinary score entry.");
     }
+    if (effectiveScoringFormat(selectedGame) === "BEST_2_OF_3") {
+      setMessage("Best-of-three matchups require each individual game score. Enter this result in the Tournament Day Workspace.");
+      throw new Error("Best-of-three matchups require each individual game score. Enter this result in the Tournament Day Workspace.");
+    }
     if (!scoreA.trim() || !scoreB.trim()) {
       setMessage("Enter both team scores before saving.");
       throw new Error("Enter both team scores before saving.");
@@ -1033,6 +1064,10 @@ export default function TournamentOpsPanel({
     const game = (snapshot?.games || []).find((row) => String(row.id || "") === gameId) || null;
     if (game && isNonPlayedGame(game)) {
       setMessage(`${resultTypeLabel(game)} results are locked as non-played outcomes. Use the guarded Day Workspace to review or change that outcome.`);
+      return;
+    }
+    if (game && effectiveScoringFormat(game) === "BEST_2_OF_3") {
+      setMessage("Best-of-three matchups require each individual game score. Enter this result in the Tournament Day Workspace.");
       return;
     }
     setScoreGameId(gameId);
@@ -1245,7 +1280,14 @@ export default function TournamentOpsPanel({
           {showsLegacyDrawRuntime ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Score game</h2>
-            <p style={{ color: "#475569" }}>Select a matchup and enter the score. The configured scoring format is enforced; unusual but possible scores require an explicit review acknowledgement.</p>
+            <p style={{ color: "#475569" }}>Select a single-game matchup and enter the score. The configured scoring format is enforced; unusual but possible scores require an explicit review acknowledgement.</p>
+            {bestOfThreeGames.length ? (
+              <section aria-label="Best-of-three score entry handoff" style={{ marginBottom: "1rem", padding: "0.85rem", border: "1px solid #bfdbfe", borderRadius: "10px", background: "#eff6ff" }}>
+                <strong>{bestOfThreeGames.length} best-of-three matchup{bestOfThreeGames.length === 1 ? "" : "s"} require individual game scores.</strong>{" "}
+                <Link href={tournamentRouteHref("/admin/tournaments/live-operations", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open the Tournament Day Workspace</Link>
+                {" "}to enter Game 1, Game 2, and the deciding Game 3 when needed.
+              </section>
+            ) : null}
             {scoreableGames.length ? <div style={{ display: "grid", gap: "0.75rem" }}>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(100px, 140px) minmax(100px, 140px) auto", gap: "0.75rem", alignItems: "end" }}>
                 <label><strong>Matchup</strong><br /><select value={scoreGameId} onChange={(event) => selectScoreGame(event.target.value)} style={inputStyle}><option value="">Choose a matchup…</option>{scoreableGames.map((game) => <option key={String(game.id)} value={String(game.id)}>{gameLabel(game, teamsById, players)}</option>)}</select></label>

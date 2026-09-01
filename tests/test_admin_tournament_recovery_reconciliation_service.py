@@ -103,6 +103,71 @@ def test_response_lost_round_robin_reconcile_is_proven_from_exact_schedule(
     assert result["game_count"] == 36
 
 
+def test_response_lost_round_robin_reconcile_ignores_series_rating_children(
+    monkeypatch,
+) -> None:
+    _enable(monkeypatch)
+    tables = _schedule_tables()
+    payload = {
+        "draw_id": "draw-1",
+        "expected_draw_updated_at": UPDATED,
+        "expected_team_versions": _team_versions(tables),
+        "preserve_existing_games": True,
+    }
+    reconcile_admin_tournament_round_robin_games(
+        FakeSupabase(tables),
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+        actor_email="director@example.com",
+        actor_role="club_owner",
+        confirmation_text="RECONCILE GAMES",
+        expected_draw_updated_at=UPDATED,
+        expected_team_versions=payload["expected_team_versions"],
+        allow_non_atomic_test_adapter=True,
+    )
+    parent = tables["tournament_games"][0]
+    tables["tournament_games"].extend(
+        [
+            {
+                **parent,
+                "id": "series-child-linked",
+                "stage": "SERIES_GAME",
+                "series_parent_game_id": parent["id"],
+                "series_game_number": 1,
+                "updated_at": "2026-08-25T12:00:01Z",
+            },
+            {
+                **parent,
+                "id": "series-child-stage-compatible",
+                "stage": "SERIES_GAME",
+                "series_parent_game_id": None,
+                "series_game_number": 2,
+                "updated_at": "2026-08-25T12:00:02Z",
+            },
+        ]
+    )
+
+    result = recovery.reconcile_admin_tournament_ops_recovery(
+        FakeSupabase(tables),
+        club_id="club",
+        tournament_id="tour-1",
+        action="ops_round_robin_reconcile",
+        entity_id="draw-1",
+        operation=_operation(
+            action="ops_round_robin_reconcile",
+            entity_type="tournament_event_draw",
+            entity_id="draw-1",
+            payload=payload,
+        ),
+    )
+
+    assert result is not None
+    assert result["game_count"] == 36
+    assert len(result["games"]) == 36
+    assert not any(row.get("stage") == "SERIES_GAME" for row in result["games"])
+
+
 def test_response_lost_round_robin_rebuild_requires_new_unstarted_rows(
     monkeypatch,
 ) -> None:

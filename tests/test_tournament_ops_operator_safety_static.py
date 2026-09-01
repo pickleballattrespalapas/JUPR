@@ -222,6 +222,24 @@ def test_legacy_tournament_score_surfaces_reject_blank_and_lock_non_played_resul
     assert "guarded Day Workspace" in live
 
 
+def test_standalone_ops_routes_inherited_best_of_three_scoring_to_day_workspace() -> None:
+    ops = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
+
+    resolver = ops.split("function effectiveGameScoringFormat(", 1)[1].split(
+        "function playerLabel(", 1
+    )[0]
+    assert "game.scoring_format" in resolver
+    assert "game.event_option_id || draw?.event_option_id" in resolver
+    assert resolver.index("eventOption?.scoring_override") < resolver.index(
+        "eventOption?.division_scoring"
+    ) < resolver.index("eventOption?.scoring_default")
+    assert ops.count('effectiveScoringFormat(game) === "BEST_2_OF_3"') == 2
+    assert ops.count('effectiveScoringFormat(game) !== "BEST_2_OF_3"') == 1
+    assert 'effectiveScoringFormat(selectedGame) === "BEST_2_OF_3"' in ops
+    assert "String(selectedGame.scoring_format" not in ops
+    assert "Open the Tournament Day Workspace" in ops
+
+
 def test_tournament_home_and_closeout_handle_terminal_publication_without_a_draw() -> None:
     home = _read("apps/web/app/admin/tournaments/tournament/TournamentHomePanel.tsx")
     live = _read("apps/web/app/admin/tournament-live/TournamentLivePanel.tsx")

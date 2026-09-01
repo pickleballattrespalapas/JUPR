@@ -11,6 +11,7 @@ from jupr_app.domain.bulk_match_editor import apply_bulk_match_edits, compute_re
 from jupr_app.domain.match_delete import delete_rated_matches_with_replay
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.replay_history import FULL_RESET_LABEL, replay_history
+from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.singles_match_processing import process_singles_matches
 
 
@@ -366,6 +367,83 @@ def test_replay_history_ignores_soft_deleted_matches():
     )
 
     assert result["matches_rewritten"] == 1
+
+
+def test_doubles_replay_preserves_clinching_game_rating_bonus_and_order():
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players()
+    sb.tables["matches"] = [
+        {
+            "id": 20,
+            "club_id": "club",
+            "date": "2026-08-31T20:00:00.000001Z",
+            "league": "Tournament · Summer Classic · Open",
+            "match_type": "Tournament",
+            "match_format": "doubles",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 9,
+            "rating_bonus_elo": 25,
+            "deleted_at": None,
+            "rating_scope": None,
+            "tournament_game_id": "series-child-2",
+        },
+        {
+            "id": 30,
+            "club_id": "club",
+            "date": "2026-08-31T20:00:00.000000Z",
+            "league": "Tournament · Summer Classic · Open",
+            "match_type": "Tournament",
+            "match_format": "doubles",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 8,
+            "rating_bonus_elo": None,
+            "deleted_at": None,
+            "rating_scope": None,
+            "tournament_game_id": "series-child-1",
+        },
+    ]
+
+    first_delta, _ = calculate_hybrid_elo(1200, 1200, 11, 8)
+    second_delta, _ = calculate_hybrid_elo(
+        1200 + first_delta,
+        1200 + calculate_hybrid_elo(1200, 1200, 11, 8)[1],
+        11,
+        9,
+    )
+
+    result = replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=pd.DataFrame(),
+        target_reset=FULL_RESET_LABEL,
+    )
+
+    winner = next(row for row in sb.tables["players"] if row["id"] == 1)
+    clincher = next(row for row in sb.tables["matches"] if row["id"] == 20)
+    opener = next(row for row in sb.tables["matches"] if row["id"] == 30)
+    assert result["matches_rewritten"] == 2
+    assert winner["rating"] == pytest.approx(
+        1200 + first_delta + second_delta + 25
+    )
+    assert (winner["wins"], winner["losses"], winner["matches_played"]) == (
+        2,
+        0,
+        2,
+    )
+    assert opener["t1_p1_r"] == pytest.approx(1200)
+    assert clincher["t1_p1_r"] == pytest.approx(1200 + first_delta)
+    assert clincher["t1_p1_r_end"] == pytest.approx(
+        1200 + first_delta + second_delta + 25
+    )
+    assert clincher["elo_delta"] == pytest.approx(abs(second_delta) + 25)
 
 
 def test_tracked_replay_fences_every_projection_write_batch():
@@ -2064,6 +2142,35 @@ def test_legacy_singles_exclusion_fails_before_mutation():
     assert sb.tables["matches"][0]["deleted_at"] is None
 
 
+def test_legacy_match_log_cannot_exclude_official_tournament_game():
+    sb = _Supabase()
+    sb.tables["matches"] = [
+        {
+            "id": 10,
+            "club_id": "club",
+            "context_type": "tournament_game",
+            "tournament_game_id": "series-child-1",
+            "match_type": "Tournament",
+            "match_format": "doubles",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "deleted_at": None,
+        }
+    ]
+
+    with pytest.raises(ValueError, match="Official tournament matches"):
+        delete_rated_matches_with_replay(
+            supabase=sb,
+            club_id="club",
+            match_ids=[10],
+            df_meta=pd.DataFrame(),
+        )
+
+    assert sb.tables["matches"][0]["deleted_at"] is None
+
+
 def test_match_exclusion_fails_before_mutation_when_recovery_metadata_is_unavailable():
     sb = _StrictSchemaSupabase(missing_match_columns={"singles_replay_managed"})
     sb.tables["matches"] = [
@@ -2262,6 +2369,47 @@ def test_bulk_editor_validates_duplicate_players_and_negative_scores(monkeypatch
 
     with pytest.raises(ValueError, match="not in this club"):
         apply_bulk_match_edits(sb, "club", [{"id": 1, "t2_p2": 999}], actor="admin")
+
+
+def test_legacy_match_log_cannot_edit_official_tournament_game(monkeypatch):
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players()
+    sb.tables["matches"] = [
+        {
+            "id": 1,
+            "club_id": "club",
+            "context_type": "tournament_game",
+            "tournament_game_id": "series-child-1",
+            "league": "Tournament · Summer Classic · Open",
+            "date": "2026-08-31T20:00:00Z",
+            "week_tag": "Open draw",
+            "match_type": "Tournament",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 8,
+        }
+    ]
+    monkeypatch.setattr(
+        "jupr_app.domain.bulk_match_editor.enqueue_badge_eval",
+        lambda *a, **k: {"queued": False},
+    )
+    monkeypatch.setattr(
+        "jupr_app.domain.bulk_match_editor.run_live_badge_awards",
+        lambda *a, **k: {"mode": "inline"},
+    )
+
+    with pytest.raises(ValueError, match="Official tournament matches"):
+        apply_bulk_match_edits(
+            sb,
+            "club",
+            [{"id": 1, "score_t1": 15}],
+            actor="admin",
+        )
+
+    assert sb.tables["matches"][0]["score_t1"] == 11
 
 
 def test_bulk_editor_recomputes_last_game_for_removed_and_added_players(monkeypatch):

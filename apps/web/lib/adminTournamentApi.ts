@@ -169,6 +169,8 @@ export type AdminTournamentOpsSnapshotResponse = {
   draws: AdminTournamentDraw[];
   teams: AdminTournamentOpsTeam[];
   games: Array<Record<string, unknown>>;
+  /** All parent and SERIES_GAME row versions used by exact draw CAS checks. */
+  source_game_versions?: Array<{ id: string; draw_id?: string; updated_at: string }>;
   podium: Array<Record<string, unknown>>;
   rating_child_draws?: AdminTournamentDraw[];
   rating_child_publish_queue?: Array<{
@@ -222,6 +224,16 @@ export type AdminTournamentLiveReadiness = {
   ready: boolean;
   confirmation: string;
   blockers: string[];
+};
+
+export type AdminTournamentLiveGameScore = {
+  game_number: 1 | 2 | 3;
+  score_a: number;
+  score_b: number;
+};
+
+export type AdminTournamentLiveGame = Record<string, unknown> & {
+  game_scores?: AdminTournamentLiveGameScore[];
 };
 
 export type AdminTournamentLiveOperation = {
@@ -334,6 +346,12 @@ export type AdminTournamentLiveSnapshotResponse = AdminTournamentOpsSnapshotResp
   product_boundary: "draw_scoped_tournament_runner_not_jupr_live";
   state_fingerprint?: string | null;
   ops_state_fingerprint?: string | null;
+  publication_source_game_versions?: Array<{
+    id: string;
+    updated_at: string;
+  }>;
+  publication_rating_game_ids?: string[];
+  games: AdminTournamentLiveGame[];
   runtime: AdminTournamentLiveStatusResponse;
   progression?: {
     phase: string;

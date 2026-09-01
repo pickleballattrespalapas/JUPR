@@ -43,6 +43,29 @@ require_api_dependency("supabase")
 from fastapi.testclient import TestClient
 
 from services.api.main import app
+from services.api.admin_tournament_live_routes import AdminTournamentLiveCommandRequest
+
+
+def test_live_command_api_types_individual_best_of_three_scores() -> None:
+    request = AdminTournamentLiveCommandRequest.model_validate(
+        {
+            "command": "save_score",
+            "expected_state_fingerprint": "a" * 64,
+            "idempotency_key": str(uuid.uuid4()),
+            "confirmation_text": "SAVE SCORE",
+            "expected_draw_updated_at": "2026-08-31T20:35:00Z",
+            "expected_game_updated_at": "2026-08-31T20:35:00Z",
+            "game_id": "game-1",
+            "game_scores": [
+                {"game_number": 1, "score_a": 11, "score_b": 7},
+                {"game_number": 2, "score_a": 8, "score_b": 11},
+                {"game_number": 3, "score_a": 11, "score_b": 9},
+            ],
+        }
+    )
+
+    assert [row.game_number for row in request.game_scores or []] == [1, 2, 3]
+
 
 
 def test_tournament_live_command_permission_matrix_matches_underlying_routes() -> None:
@@ -484,6 +507,96 @@ def test_draw_snapshot_is_stable_python_authority_with_progression_and_readiness
     }
 
 
+def test_live_snapshot_hides_series_children_but_preserves_publish_evidence(
+    monkeypatch,
+) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    parent = tables["tournament_games"][0]
+    parent.update(
+        {
+            "scoring_format": "BEST_2_OF_3",
+            "parent_result_only": True,
+            "score_a": 2,
+            "score_b": 0,
+            "winner_team_id": "team-1",
+            "loser_team_id": "team-2",
+            "finalized_at": "2026-07-19T11:00:00Z",
+            "updated_at": "2026-07-19T11:00:00Z",
+        }
+    )
+    child_reviews = [
+        {
+            "accepted": True,
+            "scoring_format": "GAME_TO_11",
+            "score_a": 11,
+            "score_b": 6 + game_number,
+        }
+        for game_number in (1, 2)
+    ]
+    parent["score_review_json"] = {
+        "accepted": True,
+        "scoring_format": "BEST_2_OF_3",
+        "score_a": 2,
+        "score_b": 0,
+        "game_scores": [
+            {
+                "game_number": game_number,
+                "score_a": 11,
+                "score_b": 6 + game_number,
+                "score_review": child_reviews[game_number - 1],
+            }
+            for game_number in (1, 2)
+        ],
+    }
+    tables["tournament_games"].extend(
+        [
+            {
+                **parent,
+                "id": f"series-game-{game_number}",
+                "stage": "SERIES_GAME",
+                "series_parent_game_id": parent["id"],
+                "series_game_number": game_number,
+                "scoring_format": "GAME_TO_11",
+                "parent_result_only": False,
+                "score_a": 11,
+                "score_b": 6 + game_number,
+                "score_review_json": child_reviews[game_number - 1],
+                "finalized_at": f"2026-07-19T11:00:0{game_number}Z",
+                "updated_at": f"2026-07-19T11:00:0{game_number}Z",
+            }
+            for game_number in (1, 2)
+        ]
+    )
+
+    snapshot = build_admin_tournament_live_snapshot(
+        FakeSupabase(tables),
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    assert [row["id"] for row in snapshot["games"]] == ["game-1"]
+    assert snapshot["games"][0]["game_scores"] == [
+        {"game_number": 1, "score_a": 11, "score_b": 7},
+        {"game_number": 2, "score_a": 11, "score_b": 8},
+    ]
+    assert snapshot["summary"]["games"] == 1
+    assert snapshot["summary"]["completed_games"] == 1
+    assert snapshot["progression"]["completed_games"] == 1
+    assert snapshot["progression"]["open_games"] == 0
+    assert snapshot["publication_rating_game_ids"] == [
+        "series-game-1",
+        "series-game-2",
+    ]
+    assert snapshot["publication_source_game_versions"] == [
+        {"id": "game-1", "updated_at": "2026-07-19T11:00:00Z"},
+        {"id": "series-game-1", "updated_at": "2026-07-19T11:00:01Z"},
+        {"id": "series-game-2", "updated_at": "2026-07-19T11:00:02Z"},
+    ]
+    assert snapshot["source_game_versions"] == snapshot["publication_source_game_versions"]
+
+
 def test_orphan_draw_award_evidence_locks_score_and_progression(monkeypatch) -> None:
     _enable_live(monkeypatch)
     tables = live_tables()
@@ -570,22 +683,87 @@ def test_playoff_score_uses_frozen_game_format_before_event_default(monkeypatch)
 
     result = _execute_score(
         supabase,
-        _command(snapshot, score_a=2, score_b=1),
+        _command(
+            snapshot,
+            score_a=2,
+            score_b=1,
+            game_scores=[
+                {"game_number": 1, "score_a": 11, "score_b": 7},
+                {"game_number": 2, "score_a": 9, "score_b": 11},
+                {"game_number": 3, "score_a": 11, "score_b": 8},
+            ],
+        ),
     )
 
     assert result["game"]["scoring_format"] == "BEST_2_OF_3"
-    assert tables["tournament_games"][0]["score_review_json"] == {
-        "status": "ordinary",
-        "scoring_format": "BEST_2_OF_3",
-        "target": None,
-        "win_by_two": False,
-        "score_a": 2,
-        "score_b": 1,
-        "reasons": [],
-        "acknowledgement_required": False,
-        "acknowledged": False,
-        "accepted": True,
-    }
+    review = tables["tournament_games"][0]["score_review_json"]
+    assert review["status"] == "ordinary"
+    assert review["scoring_format"] == "BEST_2_OF_3"
+    assert review["target"] == 2
+    assert review["individual_game_format"] == "GAME_TO_11"
+    assert (review["score_a"], review["score_b"]) == (2, 1)
+    assert [
+        (row["game_number"], row["score_a"], row["score_b"])
+        for row in review["game_scores"]
+    ] == [(1, 11, 7), (2, 9, 11), (3, 11, 8)]
+    assert all(row["score_review"]["accepted"] is True for row in review["game_scores"])
+    rpc_patch = supabase.rpc_calls[0][1]["p_game_patch"]
+    assert rpc_patch["score_review_json"] == review
+    assert (rpc_patch["score_a"], rpc_patch["score_b"]) == (2, 1)
+
+
+def test_best_of_three_live_score_refuses_aggregate_only_request(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    tables["tournament_games"][0].update(
+        {
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P3",
+            "playoff_round": "FINAL",
+            "scoring_format": "BEST_2_OF_3",
+        }
+    )
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    with pytest.raises(ValueError, match="requires the individual Game 1"):
+        _execute_score(supabase, _command(snapshot, score_a=2, score_b=0))
+
+    assert supabase.rpc_calls == []
+    assert tables["tournament_admin_operations"] == []
+
+
+def test_single_game_live_score_refuses_best_of_three_rows(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    with pytest.raises(ValueError, match="accepted only for BEST_2_OF_3"):
+        _execute_score(
+            supabase,
+            _command(
+                snapshot,
+                score_a=2,
+                score_b=0,
+                game_scores=[
+                    {"game_number": 1, "score_a": 11, "score_b": 7},
+                    {"game_number": 2, "score_a": 11, "score_b": 8},
+                ],
+            ),
+        )
+
+    assert supabase.rpc_calls == []
 
 
 def test_live_fingerprint_binds_frozen_game_scoring_format(monkeypatch) -> None:

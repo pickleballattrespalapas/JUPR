@@ -42,6 +42,8 @@ def test_standard_results_page_renders_all_patron_result_surfaces() -> None:
     assert "public_game_key" in api
     assert "public_draw_key" in api
     assert "PublicTournamentTiebreakExplanation" in api
+    assert "PublicTournamentSeriesGameScore" in api
+    assert "game_scores?: PublicTournamentSeriesGameScore[]" in api
     assert "tiebreak_explanations?: PublicTournamentTiebreakExplanation[]" in api
     assert "round_robin_complete?: boolean" in api
     assert "ranking_policy?:" in api
@@ -52,6 +54,16 @@ def test_standard_results_page_renders_all_patron_result_surfaces() -> None:
     assert "final_team_ids" not in api
     assert "admin_notes" not in api
     assert "email" not in api
+
+
+def test_best_of_three_public_results_keep_series_and_game_scores_together() -> None:
+    page = read("app/clubs/[clubSlug]/tournament-results/page.tsx")
+
+    assert "seriesGameScoresText" in page
+    assert "game.game_scores || []" in page
+    assert "Game ${score.game_number}: ${score.score_a}–${score.score_b}" in page
+    assert page.count("seriesGameScoresText(game)") >= 4
+    assert "scoreText(game)" in page
 
 
 def test_public_tiebreak_explanation_is_compact_collapsed_and_server_authored() -> None:

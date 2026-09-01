@@ -16,6 +16,12 @@ export type PublicTournamentResultsIndex = {
   tournaments: PublicTournamentResultsChoice[];
 };
 
+export type PublicTournamentSeriesGameScore = {
+  game_number: number;
+  score_a: number;
+  score_b: number;
+};
+
 export type PublicTournamentGameResult = {
   public_game_key: string;
   stage: string;
@@ -31,6 +37,7 @@ export type PublicTournamentGameResult = {
   outcome_label?: string | null;
   state: "PENDING" | "READY" | "FINAL";
   finalized_at?: string | null;
+  game_scores?: PublicTournamentSeriesGameScore[];
 };
 
 export type PublicTournamentTiebreakExplanationStep = {

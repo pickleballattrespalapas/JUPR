@@ -165,6 +165,7 @@ def test_official_publish_complete_set_reconstructs_result_without_a_write() -> 
     )
 
     assert result["match_count"] == 2
+    assert result["game_count"] == 2
     assert result["process_result"]["reconciled_from_authoritative_matches"] is True
     assert tables == before
 

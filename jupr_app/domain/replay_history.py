@@ -783,7 +783,7 @@ def replay_history(
     match_cols = (
         "id,date,league,match_type,match_format,"
         "t1_p1,t1_p2,t2_p1,t2_p2,"
-        "score_t1,score_t2,deleted_at,rating_scope"
+        "score_t1,score_t2,rating_bonus_elo,deleted_at,rating_scope"
     )
 
     matches_to_update: list[dict[str, Any]] = []
@@ -943,16 +943,22 @@ def replay_history(
             )
 
             win = s1 > s2
+            winner_bonus = max(
+                0.0,
+                _safe_float(m.get("rating_bonus_elo"), 0.0),
+            )
+            team1_bonus = winner_bonus if win else 0.0
+            team2_bonus = winner_bonus if not win else 0.0
 
             # overall updates
-            for pid, delta, won_flag in [
-                (p1, do1, win),
-                (p2, do1, win),
-                (p3, do2, not win),
-                (p4, do2, not win),
+            for pid, delta, won_flag, bonus in [
+                (p1, do1, win, team1_bonus),
+                (p2, do1, win, team1_bonus),
+                (p3, do2, not win, team2_bonus),
+                (p4, do2, not win, team2_bonus),
             ]:
                 ensure_player(pid)
-                p_map[pid]["r"] += float(delta)
+                p_map[pid]["r"] += float(delta) + float(bonus)
                 p_map[pid]["mp"] += 1
                 if won_flag:
                     p_map[pid]["w"] += 1
@@ -961,17 +967,17 @@ def replay_history(
 
             # league updates
             if do_league:
-                for pid, delta, won_flag in [
-                    (p1, di1, win),
-                    (p2, di1, win),
-                    (p3, di2, not win),
-                    (p4, di2, not win),
+                for pid, delta, won_flag, bonus in [
+                    (p1, di1, win, team1_bonus),
+                    (p2, di1, win, team1_bonus),
+                    (p3, di2, not win, team2_bonus),
+                    (p4, di2, not win, team2_bonus),
                 ]:
                     key = (int(pid), lg)
                     if key not in island_map:
                         gir(int(pid), lg, seed_rating=float(gr(pid)))
 
-                    island_map[key]["r"] += float(delta)
+                    island_map[key]["r"] += float(delta) + float(bonus)
                     island_map[key]["mp"] += 1
                     if won_flag:
                         island_map[key]["w"] += 1
@@ -981,7 +987,9 @@ def replay_history(
             er1, er2, er3, er4 = gr(p1), gr(p2), gr(p3), gr(p4)
 
             if in_scope:
-                stored_elo_delta = abs(do1) if win else abs(do2)
+                stored_elo_delta = (
+                    abs(do1) if win else abs(do2)
+                ) + winner_bonus
                 matches_to_update.append(
                     {
                         "id": int(m["id"]),
