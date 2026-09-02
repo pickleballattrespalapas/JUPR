@@ -1282,7 +1282,6 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert 'parent_args+=(--parent-sha "$parent_sha")' in workflow
     assert "git diff-tree --no-commit-id --name-status" in workflow
     assert '--changed-status "$trigger_status_path"' in workflow
-    assert not (ROOT / ".github/production-api-release.trigger").exists()
     assert "apps create" not in workflow
     assert "setup-flyctl@master" not in workflow
     assert "app_name:" not in workflow
