@@ -4,8 +4,12 @@ import argparse
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.deployment_verifier import PRODUCTION_FEATURE_FLAGS
 from scripts.staging_write_waves import ALL_STAGING_WRITE_FLAGS

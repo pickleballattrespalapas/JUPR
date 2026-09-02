@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import subprocess
+import sys
 
 from scripts import production_schema_window as window
 
@@ -12,6 +14,23 @@ CANDIDATE_SHA = "a" * 40
 PARENT_SHA = "b" * 40
 IMAGE = "registry.fly.io/juprleagues-api@sha256:" + "c" * 64
 PRODUCTION_PROJECT_REF = "dnoockbwfenunhcibwfn"
+
+
+def test_controller_supports_direct_script_execution() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/production_schema_window.py"),
+            "--help",
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "validate-trigger" in result.stdout
 
 
 def _fingerprint(flags: dict[str, bool]) -> str:
