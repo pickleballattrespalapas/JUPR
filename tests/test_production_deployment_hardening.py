@@ -16,7 +16,7 @@ from scripts import deployment_verifier as verifier
 
 
 ROOT = Path(__file__).resolve().parent.parent
-PRODUCTION_REF = "abcdefghijklmnopqrst"
+PRODUCTION_REF = verifier.PRODUCTION_SUPABASE_PROJECT_REF
 CANDIDATE_SHA = "a" * 40
 IMAGE_REF = "registry.fly.io/juprleagues-api:deployment-01ABCDEF"
 IMAGE_DIGEST = "sha256:" + ("1" * 64)
@@ -52,10 +52,8 @@ def _production_env(**overrides: str) -> dict[str, str]:
         "FLY_APP_NAME": verifier.PRODUCTION_FLY_APP,
         "GITHUB_SHA": CANDIDATE_SHA,
         "JUPR_ENV": "production",
+        "SUPABASE_PROD_DATABASE_READ_TOKEN": "sbp_fc_test-read-token-1234567890",
         "SUPABASE_ANON_KEY": "anon-present",
-        "SUPABASE_DATABASE_URL": (
-            f"postgresql://postgres:secret@db.{PRODUCTION_REF}.supabase.co:5432/postgres"
-        ),
         "SUPABASE_SERVICE_ROLE_KEY": "service-role-present",
         "SUPABASE_URL": f"https://{PRODUCTION_REF}.supabase.co",
     }
@@ -672,6 +670,134 @@ def test_migration_schema_contract_requires_hotfix_shape_and_no_duplicates() -> 
     )
 
 
+def _management_migration_attestation() -> list[dict]:
+    return [
+        {
+            "release_attestation": {
+                "ledger": [
+                    {"version": "20250220", "name": "badges_v1"},
+                    {
+                        "version": REMOTE_MIGRATION_HEAD,
+                        "name": "baseline_worker_run_log",
+                    },
+                ],
+                "schema_contract": {
+                    "tournament_registrations_player_id_column": True,
+                    "idx_tournament_registrations_player_id": True,
+                    "uq_tournament_registrations_tournament_player": True,
+                    "tournament_player_duplicate_groups": 0,
+                },
+            }
+        }
+    ]
+
+
+def test_supabase_read_only_migration_attestation_is_strictly_parsed() -> None:
+    ledger, schema_contract = (
+        verifier.parse_supabase_migration_attestation_response(
+            _management_migration_attestation()
+        )
+    )
+
+    assert ledger == [
+        ("20250220", "badges_v1"),
+        (REMOTE_MIGRATION_HEAD, "baseline_worker_run_log"),
+    ]
+    assert schema_contract["tournament_player_duplicate_groups"] == 0
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        [],
+        [{"release_attestation": {}}, {"release_attestation": {}}],
+        [{"unexpected": {}}],
+        [
+            {
+                "release_attestation": {
+                    "ledger": [
+                        {"version": "20250220", "name": "valid", "extra": 1}
+                    ],
+                    "schema_contract": {
+                        "tournament_registrations_player_id_column": True,
+                        "idx_tournament_registrations_player_id": True,
+                        "uq_tournament_registrations_tournament_player": True,
+                        "tournament_player_duplicate_groups": 0,
+                    },
+                }
+            }
+        ],
+        [
+            {
+                "release_attestation": {
+                    "ledger": [
+                        {"version": "not-a-version", "name": "valid"}
+                    ],
+                    "schema_contract": {},
+                }
+            }
+        ],
+        [
+            {
+                "release_attestation": {
+                    "ledger": [{"version": "20250220", "name": "bad\tname"}],
+                    "schema_contract": {},
+                }
+            }
+        ],
+        [
+            {
+                "release_attestation": {
+                    "ledger": [{"version": "20250220", "name": "valid"}],
+                    "schema_contract": {
+                        "tournament_registrations_player_id_column": 1,
+                        "idx_tournament_registrations_player_id": True,
+                        "uq_tournament_registrations_tournament_player": True,
+                        "tournament_player_duplicate_groups": 0,
+                    },
+                }
+            }
+        ],
+        [
+            {
+                "release_attestation": {
+                    "ledger": [{"version": "20250220", "name": "valid"}],
+                    "schema_contract": {
+                        "tournament_registrations_player_id_column": True,
+                        "idx_tournament_registrations_player_id": True,
+                        "uq_tournament_registrations_tournament_player": True,
+                        "tournament_player_duplicate_groups": -1,
+                    },
+                }
+            }
+        ],
+    ],
+)
+def test_supabase_read_only_migration_attestation_rejects_other_shapes(
+    payload: object,
+) -> None:
+    with pytest.raises(ValueError):
+        verifier.parse_supabase_migration_attestation_response(payload)
+
+
+def test_supabase_read_only_migration_query_is_select_only_and_schema_bound() -> None:
+    query = verifier.PRODUCTION_MIGRATION_ATTESTATION_QUERY
+
+    assert query.startswith("select pg_catalog.json_build_object(")
+    assert "select pg_catalog.json_agg(" in query
+    assert query.count("pg_catalog.json_build_object(") == 3
+    assert query.count("pg_catalog.count(*)") == 2
+    assert "from supabase_migrations.schema_migrations as sm" in query
+    assert "from information_schema.columns as c" in query
+    assert "from public.tournament_registrations as tr" in query
+    assert not re.search(
+        r"\b(insert|update|delete|alter|drop|truncate|grant|revoke)\b",
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
@@ -720,15 +846,53 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
         _production_env(
             EXPECTED_SUPABASE_PROJECT_REF="sijpxjxvdtrehmqvirfi",
             SUPABASE_URL="https://sijpxjxvdtrehmqvirfi.supabase.co",
-            SUPABASE_DATABASE_URL=(
-                "postgresql://postgres:secret@"
-                "db.sijpxjxvdtrehmqvirfi.supabase.co:5432/postgres"
-            ),
         ),
         config_path=ROOT / "fly.toml",
         migrations_dir=ROOT / "supabase/migrations",
     )
     assert any("staging Supabase project" in error for error in staging_errors)
+
+    classic_token_errors, _ = verifier.preflight_errors(
+        _production_env(
+            SUPABASE_PROD_DATABASE_READ_TOKEN="sbp_classic-token"
+        ),
+        config_path=ROOT / "fly.toml",
+        migrations_dir=ROOT / "supabase/migrations",
+    )
+    assert any("scoped Supabase" in error for error in classic_token_errors)
+
+    short_scoped_token_errors, _ = verifier.preflight_errors(
+        _production_env(SUPABASE_PROD_DATABASE_READ_TOKEN="sbp_fc_short"),
+        config_path=ROOT / "fly.toml",
+        migrations_dir=ROOT / "supabase/migrations",
+    )
+    assert any(
+        "scoped Supabase" in error for error in short_scoped_token_errors
+    )
+
+    whitespace_token_errors, _ = verifier.preflight_errors(
+        _production_env(
+            SUPABASE_PROD_DATABASE_READ_TOKEN=(
+                "sbp_fc_test read token must be rejected"
+            )
+        ),
+        config_path=ROOT / "fly.toml",
+        migrations_dir=ROOT / "supabase/migrations",
+    )
+    assert any(
+        "scoped Supabase" in error for error in whitespace_token_errors
+    )
+
+    padded_token_errors, _ = verifier.preflight_errors(
+        _production_env(
+            SUPABASE_PROD_DATABASE_READ_TOKEN=(
+                " sbp_fc_test-read-token-1234567890 "
+            )
+        ),
+        config_path=ROOT / "fly.toml",
+        migrations_dir=ROOT / "supabase/migrations",
+    )
+    assert any("scoped Supabase" in error for error in padded_token_errors)
 
 
 def test_runtime_identity_requires_exact_sha_image_project_and_reviewed_policy() -> None:
@@ -1329,11 +1493,27 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert "environment: production" in workflow
     assert "FLY_APP_NAME: juprleagues-api" in workflow
     assert (
-        "EXPECTED_SUPABASE_PROJECT_REF: "
-        "${{ vars.PRODUCTION_SUPABASE_PROJECT_REF || "
-        "'dnoockbwfenunhcibwfn' }}"
-    ) in workflow
-    assert "SUPABASE_PROD_DATABASE_URL" in workflow
+        "EXPECTED_SUPABASE_PROJECT_REF: dnoockbwfenunhcibwfn" in workflow
+    )
+    assert "vars.PRODUCTION_SUPABASE_PROJECT_REF" not in workflow
+    assert "SUPABASE_PROD_DATABASE_URL" not in workflow
+    assert workflow.count("SUPABASE_PROD_DATABASE_READ_TOKEN") == 8
+    assert workflow.count(
+        "https://api.supabase.com/v1/projects/"
+        "$EXPECTED_SUPABASE_PROJECT_REF/database/query/read-only"
+    ) == 2
+    assert workflow.count('--write-out "%{http_code}"') == 2
+    assert workflow.count('if [ "$attestation_status" != "201" ]; then') == 2
+    assert workflow.count("--proto '=https'") == 2
+    assert workflow.count("--max-filesize 1048576") == 2
+    assert workflow.count("--retry 2") == 2
+    assert workflow.count("--retry-delay 2") == 2
+    assert workflow.count("--retry-max-time 20") == 2
+    assert workflow.count("wc -c <") == 2
+    assert workflow.count('--header "Accept: application/json"') == 2
+    assert workflow.count('"parameters":[]') == 1
+    assert "--location" not in workflow
+    assert "/database/query\"" not in workflow
     assert workflow.count(
         "${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}"
     ) == 4
@@ -1370,13 +1550,9 @@ def test_production_workflow_verifies_database_runtime_cors_and_final_write_poli
         ROOT / ".github/workflows/fly_api_deploy.yml"
     ).read_text(encoding="utf-8")
 
-    assert workflow.count(
-        "select version || E'\\t' || coalesce(name, '') "
-        "from supabase_migrations.schema_migrations order by version"
-    ) == 2
-    assert workflow.count(
-        "'tournament_player_duplicate_groups'"
-    ) == 2
+    assert "PRODUCTION_MIGRATION_ATTESTATION_QUERY" in workflow
+    assert workflow.count("--management-query-response") == 2
+    assert "psql" not in workflow
     assert "config/production_migration_contract.json" in workflow
     assert "deployment_verifier.py preflight" in workflow
     assert "deployment_verifier.py migrations" in workflow
@@ -1480,12 +1656,13 @@ def test_staging_deploy_bakes_the_exact_candidate_sha_into_the_image() -> None:
 
 def test_preflight_cli_never_prints_secret_values(tmp_path: Path) -> None:
     github_env = tmp_path / "github-env"
-    secret_marker = "do-not-print-739"
+    secret_marker = "sbp_fc_do-not-print-739-secret-value"
     env = {
         **os.environ,
         **_production_env(
             FLY_API_TOKEN=secret_marker,
             SUPABASE_SERVICE_ROLE_KEY=secret_marker,
+            SUPABASE_PROD_DATABASE_READ_TOKEN=secret_marker,
         ),
         "GITHUB_ENV": str(github_env),
     }
