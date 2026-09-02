@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 45
     environment: production
     env:
-      EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.PRODUCTION_SUPABASE_PROJECT_REF }}
+      EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.PRODUCTION_SUPABASE_PROJECT_REF || 'dnoockbwfenunhcibwfn' }}
       FLY_APP_NAME: juprleagues-api
       PRODUCTION_API_ORIGIN: https://api.juprleagues.com
       PRODUCTION_FLY_ORIGIN: https://juprleagues-api.fly.dev
@@ -93,7 +93,7 @@ jobs:
         shell: bash
         env:
           JUPR_FLY_DEPLOY_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          JUPR_FLY_SSH_TOKEN: ${{ secrets.FLY_SSH_TOKEN }}
+          JUPR_FLY_SSH_TOKEN: ${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$JUPR_FLY_DEPLOY_TOKEN"
@@ -119,7 +119,7 @@ jobs:
         shell: bash
         env:
           JUPR_FLY_DEPLOY_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          JUPR_FLY_SSH_TOKEN: ${{ secrets.FLY_SSH_TOKEN }}
+          JUPR_FLY_SSH_TOKEN: ${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}
         run: |
           set -euo pipefail
           FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl status \
@@ -231,7 +231,7 @@ jobs:
         shell: bash
         env:
           JUPR_FLY_DEPLOY_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          JUPR_FLY_SSH_TOKEN: ${{ secrets.FLY_SSH_TOKEN }}
+          JUPR_FLY_SSH_TOKEN: ${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}
           TRANSITION_ACTION: ${{ steps.provenance.outputs.action }}
         run: |
           set -euo pipefail
