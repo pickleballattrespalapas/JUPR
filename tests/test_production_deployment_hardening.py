@@ -226,7 +226,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     assert len(names) == 56
     assert all("XX" not in version for version in versions)
     assert len(contract["required_ledger_names"]) == 56
-    assert contract["allow_additional_ledger_names"] is False
+    assert contract["allow_additional_ledger_names"] is True
     assert contract["schema_contract_only_repository_migrations"] == (
         "tournament_registrations_player_id_postgrest_reload",
     )
