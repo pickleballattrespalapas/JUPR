@@ -1129,7 +1129,7 @@ def _nonterminal_machine_images(
 
 
 def predeploy_fly_config_fingerprint(path: Path) -> str:
-    """Validate and fingerprint the exact remote config used for rollback."""
+    """Fingerprint the rollback config without flyctl's generated-at timestamp."""
 
     raw = path.read_bytes()
     payload = tomllib.loads(raw.decode("utf-8"))
@@ -1137,7 +1137,19 @@ def predeploy_fly_config_fingerprint(path: Path) -> str:
         raise ValueError(
             "Saved pre-deploy Fly config does not target the exact production app."
         )
-    return hashlib.sha256(raw).hexdigest()
+    generated_header = re.compile(
+        rb"\A(# fly\.toml app configuration file generated for "
+        + re.escape(PRODUCTION_FLY_APP.encode("utf-8"))
+        + rb" on )"
+        + rb"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z"
+        + rb"(?=\r?\n|\Z)"
+    )
+    canonical = generated_header.sub(
+        rb"\g<1><generated-at>",
+        raw,
+        count=1,
+    )
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def predeploy_rollback_snapshot(
