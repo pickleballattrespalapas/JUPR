@@ -158,6 +158,157 @@ export function newlyReadyPlayoffNotice(previous, current) {
     .join(", ")}.`;
 }
 
+const CLOSEOUT_RECOVERY_CODES = new Set(["OPERATION_UNSETTLED"]);
+const CLOSEOUT_MATCH_CODES = new Set([
+  "COURT_ASSIGNMENTS_ACTIVE",
+  "PLAYER_CLAIMS_ACTIVE",
+  "GAMES_UNFINISHED"
+]);
+const CLOSEOUT_PROGRESSION_CODES = new Set([
+  "NO_ACTIVATED_DRAWS",
+  "SCHEDULED_DRAWS_NOT_ACTIVATED",
+  "PLAYOFFS_REQUIRED",
+  "PLAYOFFS_INCOMPLETE"
+]);
+const CLOSEOUT_PODIUM_CODES = new Set([
+  "PODIUM_INCOMPLETE",
+  "PODIUM_RESULT_MISMATCH",
+  "PODIUM_REVIEW_REQUIRED",
+  "AWARDS_INCOMPLETE"
+]);
+const ACTIVE_OPERATION_STATUSES = new Set(["intent", "mutated", "recovery_required"]);
+
+function closeoutBlockerCode(blocker) {
+  return typeof blocker === "string" ? "" : String(blocker?.code || "").trim().toUpperCase();
+}
+
+function readinessBlockerCodes(readiness) {
+  return (Array.isArray(readiness?.blockers) ? readiness.blockers : [])
+    .map(closeoutBlockerCode)
+    .filter(Boolean);
+}
+
+/**
+ * Returns the next operator-facing closeout step once a live day has gone idle.
+ * Active draw labels are intentionally not treated as unfinished work: closing
+ * the day retires those durable day-draw activations after progression, podium,
+ * awards, and recovery evidence have passed the server's close readiness gate.
+ */
+export function tournamentDayCloseoutGuidance(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  const runState = String(snapshot?.day_run?.state || "").trim().toUpperCase();
+  if (runState === "CLOSED") {
+    return {
+      phase: "closed",
+      nextStep: "done",
+      playComplete: true,
+      progressionComplete: true,
+      podiumComplete: true,
+      readyToClose: false,
+      blockerCodes: [],
+      progressionDrawIds: [],
+      podiumDrawIds: []
+    };
+  }
+  if (!["ACTIVE", "PAUSED"].includes(runState)) return null;
+
+  const summary = snapshot?.summary || {};
+  const courts = Array.isArray(snapshot?.courts) ? snapshot.courts : [];
+  const draws = Array.isArray(snapshot?.draws) ? snapshot.draws : [];
+  const completedGames = Number(summary.completed_games || 0);
+  const courtCount = Number(summary.courts || courts.length || 0);
+  const availableCourtCount = Number(summary.available_courts || 0);
+  const queueArraysPresent = ["eligible_queue", "reserved_queue", "held_games", "blocked_games"]
+    .every((key) => Array.isArray(snapshot?.[key]));
+  const assignableQueueIsClear = queueArraysPresent
+    && Number(summary.eligible_games || 0) === 0
+    && Number(summary.reserved_games || 0) === 0
+    && snapshot.eligible_queue.length === 0
+    && snapshot.reserved_queue.length === 0;
+  const courtsAreClear = courtCount > 0
+    && availableCourtCount === courtCount
+    && courts.every((court) => (
+      String(court?.state || "").trim().toUpperCase() === "AVAILABLE"
+      && !court?.current_assignment
+      && !court?.next_assignment
+    ));
+  const drawAssignmentsAreClear = draws.every((draw) => Number(draw?.active_games || 0) === 0);
+  if (completedGames < 1 || !assignableQueueIsClear || !courtsAreClear || !drawAssignmentsAreClear) return null;
+
+  const closeReadiness = snapshot?.readiness?.close_day || {};
+  const closeBlockerRows = (Array.isArray(closeReadiness?.blockers) ? closeReadiness.blockers : [])
+    .map((blocker) => ({
+      code: closeoutBlockerCode(blocker),
+      drawId: typeof blocker === "string" ? "" : String(blocker?.draw_id || "")
+    }));
+  const closeCodes = closeBlockerRows.map((row) => row.code).filter(Boolean);
+  const drawCodeRows = draws.map((draw) => ({
+    drawId: String(draw?.id || ""),
+    codes: readinessBlockerCodes(draw?.readiness?.closeout)
+  }));
+  const blockerCodes = [...new Set([
+    ...closeCodes,
+    ...drawCodeRows.flatMap((row) => row.codes)
+  ])];
+  const hasCode = (codes) => blockerCodes.some((code) => codes.has(code));
+  const unsettledOperation = (Array.isArray(snapshot?.operations) ? snapshot.operations : [])
+    .some((operation) => ACTIVE_OPERATION_STATUSES.has(String(operation?.status || "").trim().toLowerCase()));
+  const unresolvedQueueExceptions = ["held_games", "blocked_games"]
+    .some((key) => Array.isArray(snapshot?.[key]) && snapshot[key].length > 0)
+    || Number(summary.held_games || 0) > 0
+    || draws.some((draw) => (
+      Number(draw?.queued_games || 0) > 0
+      || Number(draw?.held_games || 0) > 0
+    ));
+  const allDrawGamesFinalized = draws.length > 0
+    && draws.every((draw) => (
+      Number(draw?.total_games || 0) > 0
+      && Number(draw?.finalized_games || 0) >= Number(draw?.total_games || 0)
+    ));
+  const playComplete = allDrawGamesFinalized
+    && !unresolvedQueueExceptions
+    && !hasCode(CLOSEOUT_MATCH_CODES);
+  const progressionDrawIds = [...new Set([...drawCodeRows, ...closeBlockerRows]
+    .filter((row) => CLOSEOUT_PROGRESSION_CODES.has(row.code || "")
+      || row.codes?.some((code) => CLOSEOUT_PROGRESSION_CODES.has(code)))
+    .map((row) => row.drawId)
+    .filter(Boolean))];
+  const podiumDrawIds = [...new Set([...drawCodeRows, ...closeBlockerRows]
+    .filter((row) => CLOSEOUT_PODIUM_CODES.has(row.code || "")
+      || row.codes?.some((code) => CLOSEOUT_PODIUM_CODES.has(code)))
+    .map((row) => row.drawId)
+    .filter(Boolean))];
+  const progressionComplete = playComplete && !hasCode(CLOSEOUT_PROGRESSION_CODES);
+  const activatedDraws = draws.filter((draw) => (
+    !["", "INACTIVE", "REMOVED"].includes(String(draw?.activation_state || draw?.state || "").trim().toUpperCase())
+  ));
+  const activatedDrawCloseoutReady = activatedDraws.length > 0
+    && activatedDraws.every((draw) => draw?.readiness?.closeout?.ready === true);
+  const podiumComplete = progressionComplete
+    && !hasCode(CLOSEOUT_PODIUM_CODES)
+    && (closeReadiness.ready === true || activatedDrawCloseoutReady);
+  const readyToClose = closeReadiness.ready === true && !unsettledOperation;
+
+  let nextStep = "review";
+  if (unsettledOperation || hasCode(CLOSEOUT_RECOVERY_CODES)) nextStep = "recovery";
+  else if (!playComplete || hasCode(CLOSEOUT_MATCH_CODES)) nextStep = "matches";
+  else if (hasCode(CLOSEOUT_PROGRESSION_CODES)) nextStep = "draws";
+  else if (hasCode(CLOSEOUT_PODIUM_CODES)) nextStep = "podium";
+  else if (readyToClose) nextStep = "close";
+
+  return {
+    phase: "closeout",
+    nextStep,
+    playComplete,
+    progressionComplete,
+    podiumComplete,
+    readyToClose,
+    blockerCodes,
+    progressionDrawIds,
+    podiumDrawIds
+  };
+}
+
 function roundCode(value) {
   const normalized = String(typeof value === "string" ? value : value?.code || value?.round || "")
     .trim()

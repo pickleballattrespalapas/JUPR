@@ -12,6 +12,7 @@ import {
   readyPlayoffReviewDraws,
   resetFocusForDay,
   retainedDayCommandStorageKey,
+  tournamentDayCloseoutGuidance,
   tournamentDayMedalMatchKind,
   validateBestOfThreeCorrectionDraft,
   validateBestOfThreeGameScores,
@@ -94,6 +95,172 @@ assert.equal(
   newlyReadyPlayoffNotice(beforePlayoffReady, afterPlayoffReady),
   "Round robin complete — Open is ready for playoff review."
 );
+
+function closeoutSnapshot({
+  dayState = "ACTIVE",
+  closeReady = true,
+  closeBlockers = [],
+  drawOverrides = {},
+  operations = [],
+  eligibleQueue = [],
+  reservedQueue = [],
+  heldGames = [],
+  blockedGames = [],
+  courtOverrides = {},
+  summaryOverrides = {}
+} = {}) {
+  return {
+    day_run: { state: dayState },
+    summary: {
+      courts: 2,
+      available_courts: 2,
+      active_draws: 1,
+      eligible_games: eligibleQueue.length,
+      reserved_games: reservedQueue.length,
+      held_games: heldGames.length,
+      completed_games: 8,
+      ...summaryOverrides
+    },
+    courts: [1, 2].map((position) => ({
+      id: `court-${position}`,
+      state: "AVAILABLE",
+      current_assignment: null,
+      next_assignment: null,
+      ...courtOverrides
+    })),
+    draws: [{
+      id: "draw-a",
+      activation_state: "ACTIVE",
+      total_games: 8,
+      finalized_games: 8,
+      queued_games: 0,
+      active_games: 0,
+      held_games: 0,
+      readiness: { closeout: { ready: true, blockers: [] } },
+      ...drawOverrides
+    }],
+    eligible_queue: eligibleQueue,
+    reserved_queue: reservedQueue,
+    held_games: heldGames,
+    blocked_games: blockedGames,
+    operations,
+    readiness: { close_day: { ready: closeReady, blockers: closeBlockers } }
+  };
+}
+
+const readyCloseout = tournamentDayCloseoutGuidance(closeoutSnapshot());
+assert.deepEqual(
+  {
+    phase: readyCloseout?.phase,
+    nextStep: readyCloseout?.nextStep,
+    playComplete: readyCloseout?.playComplete,
+    progressionComplete: readyCloseout?.progressionComplete,
+    podiumComplete: readyCloseout?.podiumComplete,
+    readyToClose: readyCloseout?.readyToClose
+  },
+  {
+    phase: "closeout",
+    nextStep: "close",
+    playComplete: true,
+    progressionComplete: true,
+    podiumComplete: true,
+    readyToClose: true
+  },
+  "active draw labels must not hide a drained, server-ready day closeout"
+);
+
+assert.equal(tournamentDayCloseoutGuidance(closeoutSnapshot({
+  eligibleQueue: [{ game_id: "game-open" }],
+  summaryOverrides: { eligible_games: 1 }
+})), null, "a ready queue must keep the end-of-day guide hidden");
+assert.equal(tournamentDayCloseoutGuidance(closeoutSnapshot({
+  courtOverrides: { state: "ON_COURT" },
+  summaryOverrides: { available_courts: 0 }
+})), null, "an unavailable court must keep the end-of-day guide hidden");
+
+const blockedCloseout = tournamentDayCloseoutGuidance(closeoutSnapshot({
+  closeReady: false,
+  closeBlockers: [{ code: "GAMES_UNFINISHED", message: "Finish every game." }],
+  blockedGames: [{ game_id: "game-blocked" }]
+}));
+assert.equal(blockedCloseout?.nextStep, "matches");
+assert.equal(blockedCloseout?.playComplete, false);
+
+const unfinishedDrawCloseout = tournamentDayCloseoutGuidance(closeoutSnapshot({
+  closeReady: false,
+  closeBlockers: [{ code: "PLAYOFFS_REQUIRED", draw_id: "draw-a" }],
+  drawOverrides: {
+    finalized_games: 7,
+    readiness: { closeout: { ready: false, blockers: [{ code: "PLAYOFFS_REQUIRED" }] } }
+  }
+}));
+assert.equal(
+  unfinishedDrawCloseout?.nextStep,
+  "matches",
+  "an idle draw with an unfinalized game must be reviewed before progression"
+);
+
+const progressionCloseout = tournamentDayCloseoutGuidance(closeoutSnapshot({
+  closeReady: false,
+  closeBlockers: [{ code: "PLAYOFFS_REQUIRED", draw_id: "draw-a" }],
+  drawOverrides: {
+    round_robin_complete: true,
+    progression_status: "READY_FOR_PLAYOFF_REVIEW",
+    readiness: { closeout: { ready: false, blockers: [{ code: "PLAYOFFS_REQUIRED" }] } }
+  }
+}));
+assert.equal(progressionCloseout?.nextStep, "draws");
+assert.deepEqual(progressionCloseout?.progressionDrawIds, ["draw-a"]);
+
+const podiumCloseout = tournamentDayCloseoutGuidance(closeoutSnapshot({
+  closeReady: false,
+  closeBlockers: [{ code: "PODIUM_REVIEW_REQUIRED", draw_id: "draw-a" }],
+  drawOverrides: {
+    readiness: { closeout: { ready: false, blockers: [{ code: "PODIUM_REVIEW_REQUIRED" }] } }
+  }
+}));
+assert.equal(podiumCloseout?.nextStep, "podium");
+assert.deepEqual(podiumCloseout?.podiumDrawIds, ["draw-a"]);
+
+const recoveryCloseout = tournamentDayCloseoutGuidance(closeoutSnapshot({
+  closeReady: false,
+  closeBlockers: [{ code: "PODIUM_REVIEW_REQUIRED", draw_id: "draw-a" }],
+  operations: [{ status: "recovery_required" }]
+}));
+assert.equal(recoveryCloseout?.nextStep, "recovery", "recovery must outrank draw and podium closeout");
+
+const serverRecoveryCloseout = tournamentDayCloseoutGuidance(closeoutSnapshot({
+  closeReady: false,
+  closeBlockers: [{ code: "OPERATION_UNSETTLED" }]
+}));
+assert.equal(
+  serverRecoveryCloseout?.nextStep,
+  "recovery",
+  "the server close-readiness recovery blocker must route to reconciliation even without visible operation history"
+);
+
+const unknownCloseout = tournamentDayCloseoutGuidance(closeoutSnapshot({
+  closeReady: false,
+  closeBlockers: [{ code: "FUTURE_CLOSEOUT_GATE" }]
+}));
+assert.equal(unknownCloseout?.nextStep, "review", "unknown blockers must fail closed to review");
+assert.equal(unknownCloseout?.readyToClose, false);
+
+assert.deepEqual(
+  tournamentDayCloseoutGuidance(closeoutSnapshot({ dayState: "CLOSED" })),
+  {
+    phase: "closed",
+    nextStep: "done",
+    playComplete: true,
+    progressionComplete: true,
+    podiumComplete: true,
+    readyToClose: false,
+    blockerCodes: [],
+    progressionDrawIds: [],
+    podiumDrawIds: []
+  }
+);
+assert.equal(tournamentDayCloseoutGuidance(closeoutSnapshot({ dayState: "DRAFT" })), null);
 
 const queue = [
   { game_id: "g-a-1", draw_id: "draw-a", position: 1 },

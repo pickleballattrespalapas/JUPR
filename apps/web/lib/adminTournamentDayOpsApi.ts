@@ -22,6 +22,8 @@ export type AdminTournamentDayBlocker = {
   detail?: string | null;
   scope?: string | null;
   entity_id?: string | null;
+  draw_id?: string | null;
+  draw_name?: string | null;
 };
 
 export type AdminTournamentDayBlockerValue = AdminTournamentDayBlocker | string;

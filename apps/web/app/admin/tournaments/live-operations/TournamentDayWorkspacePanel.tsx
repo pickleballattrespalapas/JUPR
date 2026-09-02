@@ -49,6 +49,7 @@ import {
   readyActiveDrawQueue,
   readyPlayoffReviewDraws,
   retainedDayCommandStorageKey,
+  tournamentDayCloseoutGuidance,
   tournamentDayMedalMatchKind,
   validateBestOfThreeCorrectionDraft,
   validateBestOfThreeGameScores,
@@ -815,6 +816,10 @@ export default function TournamentDayWorkspacePanel({
   );
   const blockedProgressionAlerts = useMemo(
     () => (snapshot?.progression_alerts || []).filter((alert) => !alert.ready),
+    [snapshot]
+  );
+  const closeoutGuidance = useMemo(
+    () => tournamentDayCloseoutGuidance(snapshot),
     [snapshot]
   );
 
@@ -1776,6 +1781,15 @@ export default function TournamentDayWorkspacePanel({
   const selectedDay = snapshot?.day_scope.selected_day || dayOptions.find((day) => day.id === selectedDayId) || null;
   const activateDayReadiness = readinessOrBlocked(snapshot?.readiness.activate_day, "Day activation readiness is unavailable.");
   const closeDayReadiness = readinessOrBlocked(snapshot?.readiness.close_day, "Day closure readiness is unavailable.");
+  const closeoutClosed = closeoutGuidance?.phase === "closed";
+  const closeoutNextStep = closeoutGuidance?.phase === "closeout" && writesFrozen
+    ? "recovery"
+    : closeoutGuidance?.nextStep;
+  const closeoutPodiumDraws = (snapshot?.draws || []).filter((draw) => (
+    (closeoutGuidance?.podiumDrawIds || []).includes(draw.id)
+  ));
+  const selectedDayIndex = dayOptions.findIndex((day) => day.id === selectedDayId);
+  const nextTournamentDay = selectedDayIndex >= 0 ? dayOptions[selectedDayIndex + 1] || null : null;
   const correctionReadiness = readinessOrBlocked(snapshot?.readiness.correct_completed_score, "Completed-score correction readiness is unavailable.");
   const dayCorrectionOpen = ["ACTIVE", "PAUSED"].includes(dayRunState.toUpperCase());
   const completedGames = (snapshot?.games || []).filter((game) => String(game.state).toUpperCase() === "COMPLETED");
@@ -2071,6 +2085,126 @@ export default function TournamentDayWorkspacePanel({
             <article><span>Held</span><strong>{snapshot.summary.held_games}</strong></article>
             <article><span>Completed</span><strong>{snapshot.summary.completed_games}</strong></article>
           </section>
+
+          {closeoutGuidance ? (
+            <section
+              className={`${styles.dayCloseoutGuide} ${closeoutClosed ? styles.dayCloseoutComplete : ""}`}
+              aria-labelledby="day-closeout-guide-title"
+            >
+              <div className={styles.dayCloseoutHeading}>
+                <div>
+                  <p className={styles.eyebrow}>End-of-day guide</p>
+                  <h2 id="day-closeout-guide-title">{closeoutClosed
+                    ? "Tournament day closed"
+                    : closeoutGuidance.playComplete
+                      ? "Court play is finished — complete day closeout"
+                      : "Court play is idle — resolve unfinished work"}</h2>
+                  <p>{closeoutClosed
+                    ? "Live allocation is locked. Scores, standings, brackets, podiums, queue history, court history, participant claims, and operation evidence remain viewable. Closing this day does not publish matches or ratings, and it does not complete the tournament."
+                    : `${snapshot.summary.completed_games} matchup${snapshot.summary.completed_games === 1 ? " is" : "s are"} complete and every court is available. Follow the remaining server-reviewed steps below.`}</p>
+                  {!closeoutClosed && snapshot.summary.active_draws > 0 ? (
+                    <p className={styles.muted}>Draws may still show Active during closeout. Finish their playoffs, podium review, and medals; closing the day retires those live draw activations together.</p>
+                  ) : null}
+                </div>
+                <span className={closeoutClosed ? styles.successBadge : styles.warningBadge}>
+                  {closeoutClosed ? "Closed" : closeoutNextStep === "close" ? "Ready to close" : "Next steps"}
+                </span>
+              </div>
+
+              <ol className={styles.dayCloseoutSteps} aria-label="Tournament day closeout steps">
+                <li data-state={closeoutClosed || closeoutGuidance.playComplete ? "done" : closeoutNextStep === "matches" ? "current" : "pending"}>
+                  <span className={styles.dayCloseoutStepNumber}>1</span>
+                  <div><strong>Court play complete</strong><p>{closeoutClosed || closeoutGuidance.playComplete
+                    ? "Every draw game is finalized and no court, ready game, hold, or blocked game remains."
+                    : "The courts are empty, but a draw still has an unfinished, held, or blocked matchup."}</p></div>
+                  <span className={styles.dayCloseoutStepStatus}>{closeoutClosed || closeoutGuidance.playComplete ? "Done" : closeoutNextStep === "matches" ? "Next" : "Waiting"}</span>
+                </li>
+                <li data-state={closeoutClosed || closeoutGuidance.progressionComplete ? "done" : closeoutNextStep === "draws" ? "current" : "pending"}>
+                  <span className={styles.dayCloseoutStepNumber}>2</span>
+                  <div><strong>Finish draw progression</strong><p>Generate and finish each required playoff bracket after reviewing its qualifiers, structure, and scoring.</p></div>
+                  <span className={styles.dayCloseoutStepStatus}>{closeoutClosed || closeoutGuidance.progressionComplete ? "Done" : closeoutNextStep === "draws" ? "Next" : "Waiting"}</span>
+                </li>
+                <li data-state={closeoutClosed || closeoutGuidance.podiumComplete ? "done" : closeoutNextStep === "podium" ? "current" : "pending"}>
+                  <span className={styles.dayCloseoutStepNumber}>3</span>
+                  <div><strong>Review podiums &amp; award medals</strong><p>Confirm first, second, and third place against the medal matches, then complete every expected player award.</p></div>
+                  <span className={styles.dayCloseoutStepStatus}>{closeoutClosed || closeoutGuidance.podiumComplete ? "Done" : closeoutNextStep === "podium" ? "Next" : "Waiting"}</span>
+                </li>
+                <li data-state={closeoutClosed ? "done" : closeoutNextStep === "close" ? "current" : "pending"}>
+                  <span className={styles.dayCloseoutStepNumber}>4</span>
+                  <div><strong>Close tournament day</strong><p>Lock live allocation for this day after the server confirms every match, podium, medal, claim, and operation.</p></div>
+                  <span className={styles.dayCloseoutStepStatus}>{closeoutClosed ? "Done" : closeoutNextStep === "close" ? "Next" : "Waiting"}</span>
+                </li>
+              </ol>
+
+              {closeoutClosed ? (
+                <div className={styles.dayCloseoutActions}>
+                  {nextTournamentDay ? (
+                    <button type="button" className={styles.secondaryButton} onClick={() => selectDay(nextTournamentDay.id)}>
+                      Open next day · {nextTournamentDay.label}
+                    </button>
+                  ) : (
+                    <Link
+                      className={styles.closeoutActionLink}
+                      href={tournamentRouteHref("/admin/tournaments/publish", { tournamentId, tournamentName: snapshot.tournament.name, dayId: selectedDayId, drawId: "" })}
+                    >
+                      Continue to Publish
+                    </Link>
+                  )}
+                </div>
+              ) : (
+                <div className={styles.dayCloseoutActions}>
+                  {closeoutNextStep === "recovery" ? (
+                    <p role="alert" className={styles.closeoutRecoveryNotice}>Recovery is the required next step. Reconcile the retained operation before changing scores, progression, podiums, or day status.</p>
+                  ) : null}
+                  {closeoutNextStep === "recovery" ? (
+                    <button type="button" className={styles.primaryButton} onClick={() => setPanel("corrections")}>Open Corrections &amp; recovery</button>
+                  ) : null}
+                  {closeoutNextStep === "matches" ? (
+                    <button type="button" className={styles.primaryButton} onClick={() => setPanel("draws")}>Review unfinished draws and matches</button>
+                  ) : null}
+                  {closeoutNextStep === "draws" ? (
+                    <button type="button" className={styles.primaryButton} onClick={() => setPanel("draws")}>Continue in Draws &amp; progression</button>
+                  ) : null}
+                  {closeoutNextStep === "podium" ? (
+                    closeoutPodiumDraws.length ? closeoutPodiumDraws.map((draw) => (
+                      <Link
+                        key={draw.id}
+                        className={styles.closeoutActionLink}
+                        href={tournamentRouteHref("/admin/tournaments/live-operations/podium", { tournamentId, tournamentName: snapshot.tournament.name, dayId: selectedDayId, drawId: draw.id })}
+                      >
+                        Open {draw.name} podium
+                      </Link>
+                    )) : (
+                      <button type="button" className={styles.primaryButton} onClick={() => setPanel("draws")}>Review podium readiness</button>
+                    )
+                  ) : null}
+                  {closeoutNextStep === "review" ? (
+                    <button type="button" className={styles.primaryButton} onClick={() => setPanel("draws")}>Review closeout blockers</button>
+                  ) : null}
+                  {closeoutNextStep === "close" ? (
+                    <ConfirmAction
+                      triggerLabel="Close tournament day"
+                      title={`Close ${selectedDay?.label || "this tournament day"}?`}
+                      description="The server will recheck every draw, podium, award, participant claim, and operation. Closing locks court assignments, score entry and corrections, draw activation, and playoff changes for this day; scores, standings, brackets, and podiums remain viewable."
+                      preview={<p>{snapshot.summary.completed_games} completed matchup(s) · {snapshot.summary.held_games} held · {snapshot.summary.active_draws} live draw activation(s) will close</p>}
+                      confirmLabel="Yes, close tournament day"
+                      confirmationText={closeDayReadiness.confirmation || dayActionConfirmation("close_day")}
+                      disabled={!runtimeWritesEnabled || !closeDayReadiness.ready || writesFrozen}
+                      disabledReason={!runtimeWritesEnabled ? "Tournament-day writes are unavailable." : writesFrozen ? "Resolve recovery first." : closeDayReadiness.blockers.map(blockerText).join(" ")}
+                      busy={Boolean(busyKey)}
+                      onConfirm={(confirmationText) => submitCommand("close_day", confirmationText, {})}
+                    />
+                  ) : null}
+                  {!closeDayReadiness.ready ? (
+                    <details className={styles.closeoutBlockerDetails}>
+                      <summary>Why the day cannot close yet</summary>
+                      <ReadinessBlockers readiness={closeDayReadiness} />
+                    </details>
+                  ) : null}
+                </div>
+              )}
+            </section>
+          ) : null}
 
           {panelFocus === "draws" && !dayStarted ? (
             <section className={styles.activationCard} aria-labelledby="activate-day-title">
@@ -2539,7 +2673,7 @@ export default function TournamentDayWorkspacePanel({
           </section>
           ) : null}
 
-          {panelFocus === "draws" && dayStarted ? (
+          {panelFocus === "draws" && dayStarted && !closeoutGuidance ? (
             <section className={styles.activationCard} aria-labelledby="close-day-title">
               <div>
                 <p className={styles.eyebrow}>End-of-day control</p>

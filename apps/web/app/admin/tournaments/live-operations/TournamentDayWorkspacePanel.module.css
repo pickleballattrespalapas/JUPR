@@ -303,6 +303,168 @@
   background: #fffbeb;
 }
 
+.dayCloseoutGuide {
+  min-width: 0;
+  box-sizing: border-box;
+  border: 2px solid #60a5fa;
+  border-radius: 16px;
+  padding: clamp(0.9rem, 2vw, 1.3rem);
+  background: linear-gradient(135deg, #eff6ff 0%, #fff 72%);
+  box-shadow: 0 12px 30px rgb(37 99 235 / 10%);
+}
+
+.dayCloseoutComplete {
+  border-color: #4ade80;
+  background: linear-gradient(135deg, #f0fdf4 0%, #fff 72%);
+  box-shadow: 0 12px 30px rgb(22 163 74 / 10%);
+}
+
+.dayCloseoutHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.dayCloseoutHeading > div {
+  min-width: 0;
+}
+
+.dayCloseoutHeading h2,
+.dayCloseoutHeading p,
+.dayCloseoutSteps p {
+  margin-top: 0;
+}
+
+.dayCloseoutHeading p:last-child,
+.dayCloseoutSteps p:last-child {
+  margin-bottom: 0;
+}
+
+.dayCloseoutSteps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dayCloseoutSteps li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: start;
+  gap: 0.45rem 0.6rem;
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: rgb(255 255 255 / 82%);
+}
+
+.dayCloseoutSteps li[data-state="current"] {
+  border-color: #2563eb;
+  background: #dbeafe;
+}
+
+.dayCloseoutSteps li[data-state="done"] {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.dayCloseoutSteps li[data-state="pending"] {
+  color: #64748b;
+}
+
+.dayCloseoutStepNumber {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  font-weight: 850;
+}
+
+.dayCloseoutSteps li[data-state="current"] .dayCloseoutStepNumber {
+  background: #2563eb;
+  color: #fff;
+}
+
+.dayCloseoutSteps li[data-state="done"] .dayCloseoutStepNumber {
+  background: #16a34a;
+  color: #fff;
+}
+
+.dayCloseoutSteps strong {
+  display: block;
+  color: #0f172a;
+}
+
+.dayCloseoutSteps p {
+  margin-bottom: 0;
+  color: #475569;
+  font-size: 0.86rem;
+}
+
+.dayCloseoutStepStatus {
+  grid-column: 2;
+  justify-self: start;
+  color: #475569;
+  font-size: 0.75rem;
+  font-weight: 850;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.dayCloseoutActions {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.closeoutActionLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  box-sizing: border-box;
+  border: 1px solid #0f172a;
+  border-radius: 999px;
+  padding: 0.55rem 0.85rem;
+  background: #0f172a;
+  color: #fff;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.closeoutRecoveryNotice {
+  flex-basis: 100%;
+  margin: 0;
+  border-left: 4px solid #dc2626;
+  padding: 0.65rem 0.75rem;
+  background: #fef2f2;
+  color: #991b1b;
+  font-weight: 750;
+}
+
+.closeoutBlockerDetails {
+  flex-basis: 100%;
+  border-top: 1px solid #bfdbfe;
+  padding-top: 0.7rem;
+}
+
+.closeoutBlockerDetails summary {
+  cursor: pointer;
+  color: #1e3a8a;
+  font-weight: 800;
+}
+
 .sectionHeading,
 .cardHeading,
 .recoveryRow,
@@ -1259,12 +1421,24 @@
     grid-template-columns: 1fr;
   }
 
+  .dayCloseoutSteps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .courtBoard {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 760px) {
+  .dayCloseoutHeading {
+    display: grid;
+  }
+
+  .dayCloseoutSteps {
+    grid-template-columns: 1fr;
+  }
+
   .courtBoard {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1335,7 +1509,9 @@
   .buttonRow > button,
   .scopeStatus > button,
   .playoffReadyActions button,
-  .playoffAlertRow > button {
+  .playoffAlertRow > button,
+  .dayCloseoutActions > button,
+  .dayCloseoutActions > a {
     width: 100%;
   }
 
