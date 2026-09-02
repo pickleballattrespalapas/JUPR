@@ -116,11 +116,53 @@ def test_day_console_places_global_actions_with_their_labeled_tab() -> None:
     panel = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.tsx")
 
     assert 'panelFocus === "draws" && !dayStarted' in panel
-    assert 'panelFocus === "draws" && dayStarted' in panel
+    assert 'panelFocus === "draws" && dayStarted && !closeoutGuidance' in panel
     assert 'panelFocus === "corrections" && writesFrozen' in panel
     assert 'panelFocus === "corrections" ? (\n            <details className={styles.technicalDetails}' in panel
     assert 'setPanelFocus("queue")' not in panel
     assert 'panel: "queue"' in panel
+
+
+def test_idle_day_renders_one_global_guided_closeout_sequence() -> None:
+    panel = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.tsx")
+    css = read_web("app/admin/tournaments/live-operations/TournamentDayWorkspacePanel.module.css")
+    state = read_web("lib/tournamentDayWorkspaceState.mjs")
+    declarations = read_web("lib/tournamentDayWorkspaceState.d.mts")
+    client = read_web("lib/adminTournamentDayOpsApi.ts")
+
+    assert "tournamentDayCloseoutGuidance" in state
+    assert "tournamentDayCloseoutGuidance" in declarations
+    assert "() => tournamentDayCloseoutGuidance(snapshot)" in panel
+    guide = panel.index('aria-labelledby="day-closeout-guide-title"')
+    assert panel.index('aria-label="Tournament day summary"') < guide
+    assert guide < panel.index('id="day-workspace-board"')
+    assert "Court play is finished — complete day closeout" in panel
+    assert "Court play is idle — resolve unfinished work" in panel
+    assert "Draws may still show Active during closeout" in panel
+    for step in (
+        "Court play complete",
+        "Finish draw progression",
+        "Review podiums &amp; award medals",
+        "Close tournament day",
+    ):
+        assert step in panel
+    assert 'setPanel("corrections")' in panel
+    assert "Review unfinished draws and matches" in panel
+    assert "Continue in Draws &amp; progression" in panel
+    assert 'tournamentRouteHref("/admin/tournaments/live-operations/podium"' in panel
+    assert 'submitCommand("close_day", confirmationText, {})' in panel
+    assert "Recovery is the required next step" in panel
+    assert "Tournament day closed" in panel
+    assert "Closing this day does not publish matches or ratings" in panel
+    assert "Closing locks court assignments, score entry and corrections" in panel
+    assert "Open next day ·" in panel
+    assert 'tournamentRouteHref("/admin/tournaments/publish"' in panel
+    assert "nextTournamentDay ? (" in panel
+    assert "draw_id?: string | null" in client
+    assert ".dayCloseoutGuide" in css
+    assert ".dayCloseoutSteps" in css
+    assert 'li[data-state="current"]' in css
+    assert ".closeoutRecoveryNotice" in css
 
 
 def test_day_console_renders_authoritative_courts_and_progression_controls() -> None:

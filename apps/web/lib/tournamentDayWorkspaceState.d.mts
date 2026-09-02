@@ -82,6 +82,18 @@ export type TournamentDayMedalGame = {
   playoff_round?: string | null;
 };
 
+export type TournamentDayCloseoutGuidance = {
+  phase: "closeout" | "closed";
+  nextStep: "recovery" | "matches" | "draws" | "podium" | "close" | "review" | "done";
+  playComplete: boolean;
+  progressionComplete: boolean;
+  podiumComplete: boolean;
+  readyToClose: boolean;
+  blockerCodes: string[];
+  progressionDrawIds: string[];
+  podiumDrawIds: string[];
+};
+
 export function dayActionConfirmation(action: TournamentDayCommandAction): string;
 export function dayRunHasStarted(state: string | null | undefined): boolean;
 export function dayRunAcceptsLiveCommands(state: string | null | undefined): boolean;
@@ -109,6 +121,9 @@ export function newlyReadyPlayoffNotice(
   previous: PlayoffProgressionSnapshot | null | undefined,
   current: PlayoffProgressionSnapshot | null | undefined
 ): string | null;
+export function tournamentDayCloseoutGuidance(
+  snapshot: unknown
+): TournamentDayCloseoutGuidance | null;
 export function playoffTemplateRoundCodes(template: PlayoffReviewTemplate | null | undefined): string[];
 export function validatePlayoffReviewConfiguration(
   review: PlayoffReviewContract | null | undefined,
