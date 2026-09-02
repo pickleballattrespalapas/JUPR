@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
-      EXPECTED_MIGRATION_HEAD: ${{ vars.PRODUCTION_MIGRATION_LEDGER_HEAD }}
+      EXPECTED_MIGRATION_HEAD: ${{ vars.PRODUCTION_MIGRATION_LEDGER_HEAD || '20261022000000' }}
       EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.PRODUCTION_SUPABASE_PROJECT_REF || 'dnoockbwfenunhcibwfn' }}
       FLY_APP_NAME: juprleagues-api
       JUPR_ENV: production

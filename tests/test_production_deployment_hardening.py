@@ -1268,7 +1268,8 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert "github.event.repository.default_branch" not in workflow
     assert (
         "EXPECTED_MIGRATION_HEAD: "
-        "${{ vars.PRODUCTION_MIGRATION_LEDGER_HEAD }}"
+        "${{ vars.PRODUCTION_MIGRATION_LEDGER_HEAD || "
+        "'20261022000000' }}"
     ) in workflow
     assert 'if [ "$GITHUB_REF" != "refs/heads/$PRODUCTION_SOURCE_BRANCH" ]; then' in workflow
     assert '"$HEAD_SHA" != "$GITHUB_SHA"' in workflow
